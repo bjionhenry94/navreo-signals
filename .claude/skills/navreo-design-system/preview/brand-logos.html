@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- @dsCard group="Brand" name="Logos in context" subtitle="On cream · on ink · on orange" viewport="1100x240" -->
+<html><head><meta charset="utf-8"><title>Logos</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body { padding: 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; }
+  .cell { aspect-ratio: 2 / 1; display: flex; align-items: center; justify-content: center; padding: 20px; }
+  .cell img { max-width: 75%; height: auto; }
+  .cell .tag { position: absolute; font-family: var(--font-mono); font-size: 10.5px; }
+  .c1 { background: #F9F0E7; }
+  .c2 { background: #14110E; }
+  .c3 { background: #FF4D00; }
+  .grid > div { position: relative; }
+  .grid > div .tag { left: 12px; top: 12px; }
+  .c1 .tag { color: var(--nav-ink-3); }
+  .c2 .tag { color: rgba(249,240,231,0.55); }
+  .c3 .tag { color: rgba(249,240,231,0.7); }
+</style></head>
+<body>
+  <div class="grid">
+    <div class="c1"><span class="tag">on cream</span><div class="cell"><img src="../assets/logo-navreo.png" alt="Navreo"></div></div>
+    <div class="c2"><span class="tag">on ink</span><div class="cell"><img src="../assets/logo-navreo-white.png" alt="Navreo"></div></div>
+    <div class="c3"><span class="tag">on orange</span><div class="cell"><img src="../assets/logo-navreo-white.png" alt="Navreo"></div></div>
+  </div>
+</body></html>

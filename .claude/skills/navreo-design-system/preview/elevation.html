@@ -1,0 +1,23 @@
+<!doctype html>
+<!-- @dsCard group="Spacing" name="Elevation" subtitle="Borders > shadows. 4 levels." viewport="900x200" -->
+<html><head><meta charset="utf-8"><title>Elevation</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body { padding: 28px; }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; }
+  .cell { display: flex; flex-direction: column; gap: 10px; align-items: center; }
+  .card3 { width: 100%; height: 86px; background: var(--nav-cream-50); border-radius: 14px; border: 1px solid var(--border); }
+  .name { font-family: var(--font-mono); font-size: 10.5px; color: var(--nav-ink-3); }
+  .s0 { box-shadow: none; }
+  .s1 { box-shadow: 0 1px 0 rgba(20,17,14,0.04), 0 1px 2px rgba(20,17,14,0.05); }
+  .s2 { box-shadow: 0 2px 4px rgba(20,17,14,0.05), 0 6px 16px -6px rgba(20,17,14,0.10); }
+  .s3 { box-shadow: 0 4px 8px rgba(20,17,14,0.06), 0 18px 40px -12px rgba(20,17,14,0.18); }
+</style></head>
+<body>
+  <div class="grid">
+    <div class="cell"><div class="card3 s0"></div><div class="name">shadow-0 · flat</div></div>
+    <div class="cell"><div class="card3 s1"></div><div class="name">shadow-1 · resting</div></div>
+    <div class="cell"><div class="card3 s2"></div><div class="name">shadow-2 · hover</div></div>
+    <div class="cell"><div class="card3 s3"></div><div class="name">shadow-3 · floating</div></div>
+  </div>
+</body></html>

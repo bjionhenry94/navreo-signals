@@ -1,0 +1,52 @@
+<!doctype html>
+<!-- @dsCard group="Type" name="Body & support" subtitle="DM Sans — body, small, caption, eyebrow, mono" viewport="900x320" -->
+<html><head><meta charset="utf-8"><title>Body & support</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body {
+    padding: 24px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 28px;
+    font-family: "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  .stack { display: flex; flex-direction: column; gap: 8px; }
+  .body-lg, .body, .small, .caption, .eyebrow {
+    font-family: "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  .body-lg { font-size: 20px; line-height: 1.45; letter-spacing: -0.015em; max-width: 38ch; }
+  .body    { font-size: 16px; line-height: 1.5;  letter-spacing: -0.01em;  max-width: 42ch; }
+  .small   { font-size: 14px; line-height: 1.45; }
+  .caption { font-size: 13px; color: var(--nav-ink-3); }
+  .eyebrow { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.12em; color: var(--nav-ink-3); font-weight: 500; }
+  .mono { font-family: var(--font-mono); font-size: 13px; background: var(--nav-light-brown); padding: 2px 6px; border-radius: 4px; display: inline-block; }
+  .meta { font-family: var(--font-mono); font-size: 10.5px; color: var(--nav-ink-3); }
+  .header {
+    grid-column: 1 / -1;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--nav-ink-3); font-weight: 500;
+    display: flex; align-items: center; gap: 10px;
+  }
+  .header::after {
+    content: ""; flex: 1; height: 1px; background: var(--divider);
+  }
+</style></head>
+<body>
+  <div class="header">Body &amp; support — DM Sans</div>
+  <div class="stack">
+    <div class="body-lg">Body large — sets the tone on lead paragraphs and feature copy.</div>
+    <div class="meta">DM Sans · 20 / 29 · −0.015em</div>
+    <div class="body">Body — the workhorse. Reads cleanly on cream from 14 to 20 inches; tracks slightly tight to feel current.</div>
+    <div class="meta">DM Sans · 16 / 24 · −0.01em</div>
+  </div>
+  <div class="stack">
+    <div class="small">Small — used in dense UI rows, tables, secondary metadata.</div>
+    <div class="meta">DM Sans · 14 / 20</div>
+    <div class="caption">Caption — timestamps, helper text, footnotes.</div>
+    <div class="meta">DM Sans · 13 / 19 · ink-3</div>
+    <div class="eyebrow">Eyebrow label</div>
+    <div class="meta">DM Sans · 11.5 · +0.12em · uppercase</div>
+    <div><span class="mono">monospace.code()</span></div>
+    <div class="meta">JetBrains Mono · 13</div>
+  </div>
+</body></html>

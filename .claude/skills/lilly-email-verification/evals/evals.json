@@ -1,0 +1,19 @@
+{
+  "skill_name": "lilly-email-verification",
+  "evals": [
+    {
+      "id": 0,
+      "eval_name": "test1-aiark-all-emails",
+      "prompt": "I've got this CSV at /Users/bjionhenry/Library/Mobile Documents/com~apple~CloudDocs/Bjion [2023]/Navreo/Claude/Navreo/.claude/skills/lilly-email-verification/evals/test1_aiark_all_emails.csv — can you verify the emails and clean it up before I upload to Smartlead? Save the cleaned CSV and any audit/log files into the output directory I gave you.",
+      "expected_output": "An enriched CSV with all 10 rows kept (AI-ARK is auto-detected, Stage 1 skipped because list is from AI-ARK, no missing emails so Stage 2 skipped). Output should have normalised columns including a 'source' column with value 'ai_ark_verified'.",
+      "files": ["test1_aiark_all_emails.csv"]
+    },
+    {
+      "id": 1,
+      "eval_name": "test2-generic-mixed",
+      "prompt": "Here's a lead list at /Users/bjionhenry/Library/Mobile Documents/com~apple~CloudDocs/Bjion [2023]/Navreo/Claude/Navreo/.claude/skills/lilly-email-verification/evals/test2_generic_mixed.csv — got it from a partner, not from AI-ARK. Can you check the emails and find the missing ones? I'd like the cleaned-up list ready to import to Smartlead. Save outputs to the output directory.",
+      "expected_output": "If the API keys are missing from ~/.navreo-keys.env (or not present in the process env), the skill should bail upfront with a clear message naming which keys are missing (MILLIONVERIFIER_API_KEY for Stage 1 verification, PROSPEO_API_KEY for Stage 2a finder, and/or AI_ARK_API_KEY for Stage 2b finder fallback). Should not attempt API calls without keys. Should not silently produce a partial CSV.",
+      "files": ["test2_generic_mixed.csv"]
+    }
+  ]
+}

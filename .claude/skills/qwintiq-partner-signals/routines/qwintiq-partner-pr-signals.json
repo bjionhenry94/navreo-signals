@@ -1,0 +1,110 @@
+{
+  "routine_id": "qwintiq-partner-pr-signals",
+  "routine_name": "Partner and PR signals",
+  "client": "Qwintiq",
+  "created_at": "2026-06-23",
+  "status": "draft: wizard must fill company_type, decision_makers confirmation, and lemlist before first live run",
+
+  "signals": {
+    "recency_days": 14,
+    "target_count": 20,
+    "ranked": [
+      {
+        "id": "partner-programme-launch",
+        "label": "Just launched a partner / channel / reseller / affiliate programme",
+        "where": "news, press releases, company blog",
+        "search_terms": [
+          "launches partner program",
+          "announces partner programme",
+          "new channel partner program",
+          "launches reseller program",
+          "affiliate program launch",
+          "partner ecosystem launch",
+          "introduces partner program"
+        ]
+      },
+      {
+        "id": "hiring-pr-director",
+        "label": "Hiring a PR Director or comms lead",
+        "where": "job posts, hiring announcements",
+        "search_terms": [
+          "hiring PR Director",
+          "Head of Communications job",
+          "VP Communications hiring",
+          "Director of Public Relations opening",
+          "Head of PR vacancy",
+          "Director of Communications role"
+        ]
+      },
+      {
+        "id": "hiring-partnerships-lead",
+        "label": "Hiring a Head of Partnerships or partnerships lead",
+        "where": "job posts, hiring announcements",
+        "search_terms": [
+          "hiring Head of Partnerships",
+          "VP Partnerships job",
+          "Director of Partnerships opening",
+          "Head of Channel hiring",
+          "Partnerships Manager vacancy",
+          "Partnerships Lead role"
+        ]
+      }
+    ]
+  },
+
+  "company_type": {
+    "note": "TODO (wizard): the qualifying rule a company must pass before any credit spend.",
+    "description": null,
+    "size_min": null,
+    "size_max": null,
+    "countries": [],
+    "self_check": null,
+    "exclusions": []
+  },
+
+  "decision_makers": {
+    "note": "Default partner/PR role set. Wizard confirms or changes before first run.",
+    "target_roles": [
+      "Head of Partnerships",
+      "VP Partnerships",
+      "Director of Partnerships",
+      "Head of Channel",
+      "Head of PR",
+      "Communications Director",
+      "Head of Communications",
+      "Founder",
+      "CEO",
+      "CMO"
+    ],
+    "ai_ark_dials_hint": {
+      "partnerships": {
+        "department": ["business_development"],
+        "seniority": ["head", "vp", "director"],
+        "title": ["partnerships", "partner", "channel"]
+      },
+      "pr_comms": {
+        "title": ["communications", "public relations", "PR"],
+        "seniority": ["head", "director", "vp"]
+      },
+      "senior_sponsor": {
+        "seniority": ["founder", "owner", "c_suite"]
+      }
+    },
+    "max_per_company": 3,
+    "linkedin_only": true
+  },
+
+  "icebreaker": {
+    "anchor": "the signal that surfaced the company (partner-programme launch, or the PR / partnerships hire)",
+    "recency_months": 3,
+    "off_limits": ["layoffs", "lawsuits", "scandals", "anything negative or sensitive"],
+    "fallback_order": ["signal", "colleague-in-list", "honest role/company line"]
+  },
+
+  "lemlist": {
+    "note": "TODO (wizard): which campaign the finished people go into.",
+    "campaign_name": null,
+    "campaign_id": null,
+    "channel": "multichannel (email + LinkedIn)"
+  }
+}

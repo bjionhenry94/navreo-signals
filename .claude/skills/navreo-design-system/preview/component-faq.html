@@ -1,0 +1,26 @@
+<!doctype html>
+<!-- @dsCard group="Components" name="FAQ accordion" subtitle="Open → orange + rotation; rest hairline-divided" viewport="800x380" -->
+<html><head><meta charset="utf-8"><title>FAQ accordion</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body { padding: 28px; }
+  .wrap { max-width: 720px; }
+  .item { border-bottom: 1px solid var(--divider); padding: 18px 4px; }
+  .q { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .q .text { font-weight: 500; font-size: 18px; letter-spacing: -0.015em; }
+  .q .plus { font-size: 22px; color: var(--nav-ink-3); font-weight: 300; }
+  .a { font-size: 15px; line-height: 1.55; color: var(--nav-ink-2); margin: 12px 0 0; max-width: 60ch; }
+  .open .plus { color: var(--nav-orange); transform: rotate(45deg); display: inline-block; }
+</style></head>
+<body>
+  <div class="wrap">
+    <div class="item open">
+      <div class="q"><span class="text">How long before I see results?</span><span class="plus">+</span></div>
+      <p class="a">Outbound campaigns can generate meetings within 1–2 weeks. Content takes 2–6 weeks to ramp. The full system starts compounding within 30–90 days.</p>
+    </div>
+    <div class="item"><div class="q"><span class="text">What happens when I join?</span><span class="plus">+</span></div></div>
+    <div class="item"><div class="q"><span class="text">What makes this different from a lead gen agency?</span><span class="plus">+</span></div></div>
+    <div class="item"><div class="q"><span class="text">Who is this for?</span><span class="plus">+</span></div></div>
+    <div class="item" style="border-bottom:0"><div class="q"><span class="text">How much time do I need to commit?</span><span class="plus">+</span></div></div>
+  </div>
+</body></html>

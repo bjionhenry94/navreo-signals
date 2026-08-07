@@ -1,0 +1,6 @@
+first_name,last_name,email,company_name,company_domain,linkedin_url,title,country
+Sarah,Mills,sarah.mills@northstarconsulting.com,Northstar Consulting,northstarconsulting.com,https://www.linkedin.com/in/sarah-mills-northstar,Director of Sales,United Kingdom
+Tom,Becker,,Becker Holdings,becker-holdings.de,https://www.linkedin.com/in/tombecker,CRO,Germany
+Lina,Park,lina@invalid-test-domain-zzz.io,Park Studio,invalid-test-domain-zzz.io,,Founder,Singapore
+Jake,O'Hara,jake.ohara@redleafgroup.com.au,Redleaf Group,redleafgroup.com.au,https://www.linkedin.com/in/jakeohara,VP Sales,Australia
+Priya,Nair,,Nair & Co,nairandco.in,https://www.linkedin.com/in/priyanair,Head of BD,India

@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- @dsCard group="Components" name="Badges & chips" subtitle="Status badges, filter chips, eyebrows" viewport="900x280" -->
+<html><head><meta charset="utf-8"><title>Badges & chips</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body { padding: 24px; }
+  .row3 { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .label2 { width: 84px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--nav-ink-3); font-weight: 500; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500; letter-spacing: -0.005em; }
+  .b-orange { background: #FFE4D6; color: #A83100; }
+  .b-orange-solid { background: #FF4D00; color: #F9F0E7; }
+  .b-neutral { background: #F2E5D9; color: #3A332C; border: 1px solid rgba(20,17,14,0.08); }
+  .b-success { background: #E2F1E9; color: #195C3F; }
+  .b-warning { background: #F8EAC4; color: #6B4A00; }
+  .b-danger { background: #F7DCD5; color: #861E10; }
+  .dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 8px;
+    padding: 6px 12px 6px 8px; border-radius: 999px;
+    background: var(--nav-cream-50); border: 1px solid rgba(20,17,14,0.10);
+    font-size: 13px; font-weight: 500;
+  }
+  .chip .x { color: var(--nav-ink-3); cursor: pointer; }
+  .eyebrow { font-size: 11px; font-weight: 500; letter-spacing: 0.12em; text-transform: uppercase; color: var(--nav-ink-3); padding: 4px 8px; border: 1px solid var(--border); border-radius: 4px; }
+</style></head>
+<body>
+  <div class="row3"><span class="label2">Solid</span>
+    <span class="badge b-orange-solid">Beta</span>
+    <span class="badge b-orange"><span class="dot"></span>Live</span>
+    <span class="badge b-neutral">v1.4</span>
+    <span class="badge b-success">Synced</span>
+    <span class="badge b-warning">Pending</span>
+    <span class="badge b-danger">Failed</span>
+  </div>
+  <div class="row3"><span class="label2">Chips</span>
+    <span class="chip">acme-prod <span class="x">×</span></span>
+    <span class="chip">us-east <span class="x">×</span></span>
+    <span class="chip">last 30 days <span class="x">×</span></span>
+  </div>
+  <div class="row3"><span class="label2">Eyebrow</span>
+    <span class="eyebrow">What's new</span>
+    <span class="eyebrow">Changelog · 04 / 25</span>
+  </div>
+</body></html>

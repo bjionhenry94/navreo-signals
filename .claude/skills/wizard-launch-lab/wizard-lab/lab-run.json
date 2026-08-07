@@ -1,0 +1,744 @@
+{
+  "client": "navreo",
+  "date": "2026-07-27",
+  "footer": "Fresh ideas for Navreo · 27 July 2026 · every number checked against real job posts and our own records · example people are illustrative · nothing here sends email without you.",
+  "colleagues": {
+    "builder": "Yasir",
+    "lists": "Asad"
+  },
+  "validation_card": {
+    "id": "validate-signals",
+    "eyebrow": "Why signals, and why now",
+    "title": "Navreo's own record says the audience mechanism decides the result, not the offer.",
+    "verdictShort": "Signals win, cold lists do not",
+    "verdictLine": "Every campaign at the top of Navreo's table reached people who had already shown their hand: Clay followers 58 positives, Instantly followers 45, ColdIQ, Outplay, AmpleMarket. The same Claude Code offer sent to a broad cold recruitment list got 8 positives from 24,795 sends. Broad owner lists (SaaS leaders, manufacturers, distributors, wholesalers) all sit under 0.5 per thousand.",
+    "microline": "So each idea below is a live trigger rather than a static list: the company is hiring for growth, the job ad names the outbound problem, the stack is already installed, or the leader is new in the seat. Every board shows the exact roles it watches, and roles owned by a live campaign are held back.",
+    "found": 2421,
+    "afterCooldown": 2130,
+    "freeFromRecords": 387,
+    "askPrompt": "Which signal do you want built first?"
+  },
+  "ideas": [
+    {
+      "id": "growth-hiring",
+      "campaignNo": "TBC",
+      "name": "Hiring for growth right now",
+      "vector": "hiring_signal",
+      "net": 2130,
+      "gross": 2421,
+      "emails": 1810,
+      "netUnit": "decision makers we can reach",
+      "freeFromRecords": 387,
+      "newPeople": 1743,
+      "who": "Founders and sales leaders at B2B software, agency and professional-services firms of 5 to 200 staff in the US, UK and UAE that posted a growth, marketing, partnerships or commercial role in the last 30 days.",
+      "offer": "You are paying to grow the revenue team. We hand whoever you hire a pipeline that is already running on day one: the accounts, the sequences, the replies. You only pay once it is booking meetings.",
+      "caption": "Refreshes every month",
+      "tag": "Recommended",
+      "shortTag": "Recommended",
+      "firstName": "Marcus",
+      "company": "Interhatch",
+      "pain": "You are about to spend six figures on a growth hire who will then spend their first quarter building lists and writing sequences before they book anything.",
+      "moment": "You posted a growth role in the last few weeks, so the budget is signed off and the seat is about to be filled.",
+      "videoAngle": "A 90-second walk-through of a live pipeline landing on a new hire's desk in week one instead of month four.",
+      "why": "Why: a company posting a growth role has just committed real money to growing revenue, which is the exact moment our offer answers, and it is self-refreshing so the list rebuilds every month. Narrowed to B2B software, agencies and professional services, which is where every Navreo client has come from, and to the roles our three live hiring campaigns do not already watch.",
+      "repliesLine": "People who just signed off a growth hire reply when you name the ramp-up gap they are about to pay for.",
+      "freeNote": "About 387 of these we already hold records for, so no re-purchase; roughly 1,743 are fresh pulls.",
+      "copyProvenance": "TheirStack, 27 July 2026: 4,675 live postings across the US, UK and UAE in the last 30 days, inside the B2B niches only (free preview, no credits).",
+      "peerProofLine": "Same trigger family as Navreo's existing hiring-signal campaigns, widened from single titles to every growth-related role.",
+      "probe": {
+        "provider": "theirstack",
+        "date": "2026-07-27",
+        "credits": 0,
+        "gross": 2421
+      },
+      "netting": {
+        "ratio": 0.88,
+        "method": "engine net, 25-domain sample vs contact_history and suppressions",
+        "date": "2026-07-27"
+      },
+      "pull_spec": {
+        "provider": "theirstack",
+        "filters": {
+          "job_title_or": [
+            "Head of Growth",
+            "Growth Manager",
+            "Growth Marketing",
+            "Growth Lead",
+            "VP of Growth",
+            "Chief Growth Officer",
+            "Head of Marketing",
+            "VP Marketing",
+            "VP of Marketing",
+            "Marketing Director",
+            "Director of Marketing",
+            "Chief Marketing Officer",
+            "Marketing Manager",
+            "Performance Marketing Manager",
+            "Digital Marketing Manager",
+            "Head of Digital Marketing",
+            "Paid Media Manager",
+            "Lead Generation Manager",
+            "Lead Generation Specialist",
+            "Sales Manager",
+            "Sales Director",
+            "Director of Sales",
+            "Sales Executive",
+            "Commercial Director",
+            "Chief Commercial Officer",
+            "Head of Commercial",
+            "Business Development Manager",
+            "Business Development Director",
+            "Director of Business Development",
+            "Business Development Executive",
+            "Head of Business Development",
+            "Partnerships Manager",
+            "Head of Partnerships",
+            "Partnerships Director"
+          ],
+          "job_country_code_or": [
+            "US",
+            "GB",
+            "AE"
+          ],
+          "posted_at_max_age_days": 30,
+          "min_employee_count": 5,
+          "max_employee_count": 200,
+          "industry_id_or": [
+            4,
+            3102,
+            3099,
+            3100,
+            3101,
+            1285,
+            80,
+            1862,
+            98,
+            99,
+            140,
+            126,
+            1810,
+            11,
+            96,
+            123,
+            2401,
+            1855,
+            104
+          ]
+        },
+        "notes": "34-title growth set. SDR/BDR/VP-Head-Sales/CRO/demand-gen/RevOps/GTM-engineer excluded: campaigns 3331499, 3336738, 3347812 are live on them. Account Executive dropped by Bjion (2026-07-27): at agencies it is a client-servicing job, too noisy. Enrich one owner or revenue leader per company at build; qualify to services and B2B firms. skip_angles=[\"Hiring\",\"You joined\"]."
+      },
+      "targeting": {
+        "label": "Roles we watch for",
+        "roles": [
+          "Head of Growth",
+          "Growth Manager",
+          "Growth Marketing",
+          "Growth Lead",
+          "VP of Growth",
+          "Chief Growth Officer",
+          "Head of Marketing",
+          "VP Marketing",
+          "VP of Marketing",
+          "Marketing Director",
+          "Director of Marketing",
+          "Chief Marketing Officer",
+          "Marketing Manager",
+          "Performance Marketing Manager",
+          "Digital Marketing Manager",
+          "Head of Digital Marketing",
+          "Paid Media Manager",
+          "Lead Generation Manager",
+          "Lead Generation Specialist",
+          "Sales Manager",
+          "Sales Director",
+          "Director of Sales",
+          "Sales Executive",
+          "Commercial Director",
+          "Chief Commercial Officer",
+          "Head of Commercial",
+          "Business Development Manager",
+          "Business Development Director",
+          "Director of Business Development",
+          "Business Development Executive",
+          "Head of Business Development",
+          "Partnerships Manager",
+          "Head of Partnerships",
+          "Partnerships Director"
+        ],
+        "excluded": [
+          "Account Executive",
+          "SDR",
+          "BDR",
+          "Sales Development Representative",
+          "Business Development Representative",
+          "Head of Sales",
+          "VP of Sales",
+          "Chief Revenue Officer",
+          "Demand Generation",
+          "Demand Gen",
+          "GTM Engineer",
+          "Revenue Operations",
+          "RevOps"
+        ],
+        "meta": [
+          [
+            "Where",
+            "United States, United Kingdom and United Arab Emirates"
+          ],
+          [
+            "Company size",
+            "5 to 200 staff"
+          ],
+          [
+            "Niches",
+            "B2B only: Software and SaaS, agencies (advertising, marketing, PR, design, media) and professional services (consulting, IT services, staffing, outsourcing)"
+          ],
+          [
+            "Window",
+            "Posted in the last 30 days"
+          ]
+        ],
+        "note": "Crossed-out roles are held back. Account Executive is out because at agencies it is a client-servicing job, not a selling one. The rest belong to three live campaigns (GTM Hiring Signal, SDRs, VP/Head of Sales); add them back only if those are retired.",
+        "audience": {
+          "label": "Who we email",
+          "rows": [
+            [
+              "5 to 20 staff",
+              "The CEO or founder, because at that size they still run sales themselves"
+            ],
+            [
+              "5 to 200 staff",
+              "Sales leaders: CRO, VP, Head or Director of Sales, Commercial Director, Head of Business Development"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": "jd-outbound",
+      "campaignNo": "TBC",
+      "name": "The job ad names the problem",
+      "vector": "hiring_signal",
+      "net": 469,
+      "gross": 533,
+      "emails": 399,
+      "netUnit": "decision makers we can reach",
+      "freeFromRecords": 85,
+      "newPeople": 384,
+      "who": "Founders and sales leaders at B2B software, agency and professional-services firms of 5 to 200 staff in the US, UK and UAE whose open role explicitly asks for cold email, cold calling, outbound prospecting or lead generation.",
+      "offer": "Your job ad asks one person to do cold outreach at scale. We already run that as a system, so the person you hire spends their time on live conversations instead of building the machine. You only pay once it is booking.",
+      "caption": "Their words, not ours",
+      "tag": "Sharpest",
+      "shortTag": "Sharpest",
+      "firstName": "Priya",
+      "company": "SSW Technologies",
+      "pain": "You have written a job ad asking one hire to prospect, sequence, call and close, which is three jobs, and the first two are the ones that quietly do not get done.",
+      "moment": "Your live job ad asks for cold outreach in writing, so you have already decided outbound is how you grow.",
+      "videoAngle": "A short clip putting the job ad's own outbound wording next to the system that already does that part.",
+      "why": "Why: this is the sharpest cut on the board because the prospect has written the pain down themselves. We are not guessing that they care about outbound, their own advert says so, which makes the first line specific without being creepy. Smaller pool than the wide hiring signal, and much higher intent per person.",
+      "repliesLine": "Quoting the outcome their own job ad asks for beats any claim we could make about ourselves.",
+      "freeNote": "About 85 of these we already hold records for, so no re-purchase; roughly 384 are fresh pulls.",
+      "copyProvenance": "TheirStack, 27 July 2026: 685 live postings inside the B2B niches where the role's description names cold email, cold outreach, outbound prospecting, cold calling or lead generation.",
+      "peerProofLine": "The job-description read is the part most teams skip; it is what turns a hiring list into a reason to write.",
+      "probe": {
+        "provider": "theirstack",
+        "date": "2026-07-27",
+        "credits": 0,
+        "gross": 533
+      },
+      "netting": {
+        "ratio": 0.88,
+        "method": "engine net, 25-domain sample vs contact_history and suppressions",
+        "date": "2026-07-27"
+      },
+      "pull_spec": {
+        "provider": "theirstack",
+        "filters": {
+          "job_title_or": [
+            "Head of Growth",
+            "Growth Marketing",
+            "Demand Generation",
+            "Sales Development Representative",
+            "SDR",
+            "BDR",
+            "Business Development Representative",
+            "Head of Sales",
+            "VP of Sales",
+            "Chief Revenue Officer",
+            "Revenue Operations",
+            "GTM Engineer",
+            "Sales Manager",
+            "Head of Business Development"
+          ],
+          "job_description_pattern_or": [
+            "cold email",
+            "cold outreach",
+            "outbound prospecting",
+            "cold calling",
+            "lead generation",
+            "outbound sequences",
+            "prospecting"
+          ],
+          "job_country_code_or": [
+            "US",
+            "GB",
+            "AE"
+          ],
+          "posted_at_max_age_days": 30,
+          "min_employee_count": 5,
+          "max_employee_count": 200,
+          "industry_id_or": [
+            4,
+            3102,
+            3099,
+            3100,
+            3101,
+            1285,
+            80,
+            1862,
+            98,
+            99,
+            140,
+            126,
+            1810,
+            11,
+            96,
+            123,
+            2401,
+            1855,
+            104
+          ]
+        },
+        "notes": "keep the matched description phrase per company so the opener can reference the responsibility, never the fact that they are hiring. skip_angles=[\"Hiring\",\"You joined\"]."
+      },
+      "targeting": {
+        "label": "Roles we watch for, plus the words in the ad",
+        "roles": [
+          "Head of Growth",
+          "Growth Marketing",
+          "Demand Generation",
+          "Sales Development Representative",
+          "SDR",
+          "BDR",
+          "Business Development Representative",
+          "Head of Sales",
+          "VP of Sales",
+          "Chief Revenue Officer",
+          "Revenue Operations",
+          "GTM Engineer",
+          "Sales Manager",
+          "Head of Business Development"
+        ],
+        "meta": [
+          [
+            "Where",
+            "United States, United Kingdom and United Arab Emirates"
+          ],
+          [
+            "Company size",
+            "5 to 200 staff"
+          ],
+          [
+            "Niches",
+            "B2B only: Software and SaaS, agencies (advertising, marketing, PR, design, media) and professional services (consulting, IT services, staffing, outsourcing)"
+          ],
+          [
+            "Window",
+            "Posted in the last 30 days"
+          ]
+        ],
+        "note": "Account Executive is out: at agencies it is a client-servicing job, not a selling one. Strict subset of the growth-hiring signal, so run it as that campaign's opening wave rather than alongside it.",
+        "audience": {
+          "label": "Who we email",
+          "rows": [
+            [
+              "5 to 20 staff",
+              "The CEO or founder, because at that size they still run sales themselves"
+            ],
+            [
+              "5 to 200 staff",
+              "Sales leaders: CRO, VP, Head or Director of Sales, Commercial Director, Head of Business Development"
+            ]
+          ]
+        },
+        "excluded": [
+          "Account Executive"
+        ]
+      }
+    },
+    {
+      "id": "stack",
+      "campaignNo": "TBC",
+      "name": "They already own the outbound stack",
+      "vector": "prospeo_signal",
+      "net": 266,
+      "gross": 302,
+      "emails": 226,
+      "netUnit": "decision makers we can reach",
+      "freeFromRecords": 48,
+      "newPeople": 218,
+      "who": "Founders and sales leaders at B2B software, agency and professional-services firms of 5 to 200 staff in the US, UK and UAE whose job posts name an outbound tool they run.",
+      "offer": "You have bought the outbound tools. We are the team that runs them properly: the accounts, the copy, the inbox, the follow-up. You keep the licences and only pay us once it is booking meetings.",
+      "caption": "Closest to what already works",
+      "tag": "Recommended",
+      "shortTag": "Recommended",
+      "firstName": "Danielle",
+      "company": "Noviun",
+      "pain": "You are paying for the outbound stack every month, but nobody in the building has the time to run it as a system, so it produces activity instead of meetings.",
+      "moment": "Your own job posts name the tools, so the spend is committed and the operator is the missing piece.",
+      "videoAngle": "A screen-share showing the same tools they already pay for, run as one system that books meetings.",
+      "why": "Why: this is the closest relative on the board to Navreo's best-ever campaigns. Every top performer in the record reached people who follow outbound tools (Clay 58 positives, Instantly 45, ColdIQ, Outplay, AmpleMarket). Owning the tool is a stronger version of following it: they have paid, not just clicked. Smallest pool on the board, highest fit.",
+      "repliesLine": "Tool owners reply because they already agree with the method; the only open question is who operates it.",
+      "freeNote": "About 48 of these we already hold records for, so no re-purchase; roughly 218 are fresh pulls.",
+      "copyProvenance": "TheirStack, 27 July 2026: 408 live postings inside the B2B niches naming Outreach, Salesloft, Apollo, Clay, Smartlead, Instantly, Lemlist or ZoomInfo.",
+      "peerProofLine": "Mirrors the follower campaigns that hold every top slot in Navreo's record, aimed at people who bought rather than followed.",
+      "probe": {
+        "provider": "theirstack",
+        "date": "2026-07-27",
+        "credits": 0,
+        "gross": 302
+      },
+      "netting": {
+        "ratio": 0.88,
+        "method": "engine net, 25-domain sample vs contact_history and suppressions",
+        "date": "2026-07-27"
+      },
+      "pull_spec": {
+        "provider": "theirstack",
+        "filters": {
+          "job_technology_slug_or": [
+            "outreach",
+            "salesloft",
+            "apollo-io",
+            "clay",
+            "smartlead",
+            "instantly",
+            "lemlist",
+            "zoominfo"
+          ],
+          "job_country_code_or": [
+            "US",
+            "GB",
+            "AE"
+          ],
+          "posted_at_max_age_days": 30,
+          "min_employee_count": 5,
+          "max_employee_count": 200,
+          "industry_id_or": [
+            4,
+            3102,
+            3099,
+            3100,
+            3101,
+            1285,
+            80,
+            1862,
+            98,
+            99,
+            140,
+            126,
+            1810,
+            11,
+            96,
+            123,
+            2401,
+            1855,
+            104
+          ]
+        },
+        "notes": "job-post technology mentions are the free proxy for installed stack. Dedupe hard against every prior follower campaign before upload, the audiences overlap by design."
+      },
+      "targeting": {
+        "label": "Tools we watch for",
+        "roles": [
+          "Outreach",
+          "Salesloft",
+          "Apollo",
+          "Clay",
+          "Smartlead",
+          "Instantly",
+          "Lemlist",
+          "ZoomInfo"
+        ],
+        "meta": [
+          [
+            "Where",
+            "United States, United Kingdom and United Arab Emirates"
+          ],
+          [
+            "Company size",
+            "5 to 200 staff"
+          ],
+          [
+            "Niches",
+            "B2B only: Software and SaaS, agencies (advertising, marketing, PR, design, media) and professional services (consulting, IT services, staffing, outsourcing)"
+          ],
+          [
+            "Window",
+            "Posted in the last 30 days"
+          ]
+        ],
+        "note": "Overlaps the follower campaigns by design, since these are the same tool audiences. De-duplicate against every past follower campaign before upload.",
+        "audience": {
+          "label": "Who we email",
+          "rows": [
+            [
+              "5 to 20 staff",
+              "The CEO or founder, because at that size they still run sales themselves"
+            ],
+            [
+              "5 to 200 staff",
+              "Sales leaders: CRO, VP, Head or Director of Sales, Commercial Director, Head of Business Development"
+            ]
+          ]
+        }
+      }
+    },
+    {
+      "id": "newrole",
+      "campaignNo": "TBC",
+      "name": "New sales leader, first year in the seat",
+      "vector": "prospeo_signal",
+      "net": 72577,
+      "gross": 82474,
+      "emails": 61690,
+      "netUnit": "decision makers we can reach",
+      "freeFromRecords": 13196,
+      "newPeople": 59381,
+      "who": "Sales and business development leaders at director level and above, US and UK, at companies of 11 to 500 staff, who have been in their current seat under a year.",
+      "offer": "You are early in the job and expected to show a number. We build the outbound engine that produces it, running inside your first two quarters rather than after them. You only pay once it is booking.",
+      "caption": "Under a year in seat",
+      "tag": "Big pool",
+      "shortTag": "Big pool",
+      "firstName": "Doug",
+      "company": "Off The Wall Company",
+      "pain": "You are new in the seat and carrying a number you did not set, with a pipeline you inherited rather than built.",
+      "moment": "You are inside your first year, which is when new leaders are allowed to change how the team generates pipeline.",
+      "videoAngle": "A short before-and-after of a new leader's first two quarters with pipeline arriving from week one.",
+      "why": "Why: a leader in their first year is the one person who is both expected to change something and still permitted to. It is the biggest pool on the board by a distance, so it can run for months in waves, and it stacks neatly on the other three signals as a second filter rather than a separate campaign.",
+      "repliesLine": "New leaders reply to help with the number they have just inherited, not to a tool pitch.",
+      "freeNote": "About 13,196 we already hold records for; roughly 59,381 are fresh pulls. Big enough to run in waves for months.",
+      "copyProvenance": "AI Ark people search, 27 July 2026: 82,474 sales and business development leaders under one year in their current position, US and UK, 11 to 500 staff.",
+      "peerProofLine": "The new-in-role trigger is the one signal that keeps working in every market because people keep changing jobs.",
+      "probe": {
+        "provider": "aiark_people",
+        "date": "2026-07-27",
+        "credits": 1,
+        "gross": 82474
+      },
+      "netting": {
+        "ratio": 0.88,
+        "method": "engine net, 25-domain sample vs contact_history and suppressions",
+        "date": "2026-07-27"
+      },
+      "pull_spec": {
+        "provider": "aiark_people",
+        "filters": {
+          "companyLocation": "United States,United Kingdom",
+          "minEmployees": 11,
+          "maxEmployees": 500,
+          "seniority": "c_suite,vp,director,head",
+          "department": "sales,business_development",
+          "maxCurrentJobYears": 1
+        },
+        "notes": "MCP flat-param transport only. The engine's REST probe silently ignores flat filters and returns the whole database, so this spec must be run through the AI Ark MCP tool, not engine.py probe. Run in waves, never as one pull. skip_angles=[\"Hiring\",\"You joined\"]."
+      },
+      "targeting": {
+        "label": "Who we watch for",
+        "roles": [
+          "Chief Revenue Officer",
+          "VP Sales",
+          "Head of Sales",
+          "Sales Director",
+          "Director of Business Development",
+          "Head of Business Development"
+        ],
+        "meta": [
+          [
+            "Trigger",
+            "Under one year in the current seat"
+          ],
+          [
+            "Seniority",
+            "Director level and above"
+          ],
+          [
+            "Where",
+            "United States and United Kingdom"
+          ],
+          [
+            "Company size",
+            "11 to 500 staff"
+          ]
+        ],
+        "note": "Person-level trigger, not a job ad, so it does not collide with the hiring campaigns even where the job titles read the same."
+      }
+    }
+  ],
+  "people": {
+    "growth-hiring": [
+      {
+        "first": "Marcus",
+        "title": "Managing Director",
+        "company": "Interhatch",
+        "detail": true,
+        "colleague": false,
+        "lines": {
+          "detail": "Saw you are adding to the commercial team, which usually means a new number attached to it.",
+          "colleague": "",
+          "safe": "Most teams adding a growth hire hit the same wall: the first quarter goes on building lists, not booking meetings."
+        }
+      },
+      {
+        "first": "Priya",
+        "title": "Founder",
+        "company": "SSW Technologies",
+        "detail": true,
+        "colleague": false,
+        "lines": {
+          "detail": "Noticed you have a growth role open, so the plan for next year is already signed off.",
+          "colleague": "",
+          "safe": "When you hire for growth, the gap between the start date and the first booked meeting is where the cost sits."
+        }
+      },
+      {
+        "first": "Tom",
+        "title": "Chief Revenue Officer",
+        "company": "Noviun",
+        "detail": false,
+        "colleague": true,
+        "lines": {
+          "detail": "",
+          "colleague": "You and a couple of others on the commercial side are clearly building the team out right now.",
+          "safe": "The people who grow fastest hand a new hire a pipeline that is already moving."
+        }
+      },
+      {
+        "first": "Aylin",
+        "title": "Head of Sales",
+        "company": "Handepay",
+        "detail": false,
+        "colleague": false,
+        "lines": {
+          "detail": "",
+          "colleague": "",
+          "safe": "A new hire ramps faster when the accounts and the sequences are waiting for them."
+        }
+      }
+    ],
+    "jd-outbound": [
+      {
+        "first": "Priya",
+        "title": "Founder",
+        "company": "SSW Technologies",
+        "detail": true,
+        "colleague": false,
+        "lines": {
+          "detail": "Your open role asks one person to prospect, sequence and close, which is really three jobs.",
+          "colleague": "",
+          "safe": "Asking one hire to build the outbound machine and work it usually means only one of those happens."
+        }
+      },
+      {
+        "first": "James",
+        "title": "Sales Director",
+        "company": "Wilkinson Star",
+        "detail": true,
+        "colleague": false,
+        "lines": {
+          "detail": "Saw cold outreach sits in the job description, so you have already decided how growth happens here.",
+          "colleague": "",
+          "safe": "Once outbound is the plan, the question is who builds it rather than whether it works."
+        }
+      },
+      {
+        "first": "Nadia",
+        "title": "Head of Business Development",
+        "company": "Capital Strength",
+        "detail": false,
+        "colleague": false,
+        "lines": {
+          "detail": "",
+          "colleague": "",
+          "safe": "The prospecting half of a sales role is the half that quietly gets dropped when the diary fills up."
+        }
+      }
+    ],
+    "stack": [
+      {
+        "first": "Danielle",
+        "title": "VP Sales",
+        "company": "Noviun",
+        "detail": false,
+        "colleague": true,
+        "lines": {
+          "detail": "",
+          "colleague": "You and the wider commercial team clearly run a proper outbound stack already.",
+          "safe": "Owning the tools and having someone run them properly are two different line items."
+        }
+      },
+      {
+        "first": "Sam",
+        "title": "Founder",
+        "company": "Interhatch",
+        "detail": true,
+        "colleague": false,
+        "lines": {
+          "detail": "You are already paying for the outbound stack, so the method is not the question here.",
+          "colleague": "",
+          "safe": "Most teams with the tools in place are missing the operator, not the software."
+        }
+      },
+      {
+        "first": "Elena",
+        "title": "Chief Revenue Officer",
+        "company": "Zentraxa",
+        "detail": false,
+        "colleague": false,
+        "lines": {
+          "detail": "",
+          "colleague": "",
+          "safe": "The stack produces activity on its own; meetings need someone running it every day."
+        }
+      }
+    ],
+    "newrole": [
+      {
+        "first": "Doug",
+        "title": "Director of Business Development",
+        "company": "Off The Wall Company",
+        "detail": true,
+        "colleague": false,
+        "lines": {
+          "detail": "You are still early in the seat, which is the window where changing the pipeline is actually allowed.",
+          "colleague": "",
+          "safe": "New leaders inherit a number and a pipeline they did not build, usually in that order."
+        }
+      },
+      {
+        "first": "Marta",
+        "title": "Head of Sales",
+        "company": "Crown Plus",
+        "detail": true,
+        "colleague": false,
+        "lines": {
+          "detail": "First year in a sales seat is the one time you get to rebuild how pipeline arrives.",
+          "colleague": "",
+          "safe": "The first two quarters decide whether the number looks achievable or inherited."
+        }
+      },
+      {
+        "first": "Owen",
+        "title": "VP Sales",
+        "company": "Domuso",
+        "detail": false,
+        "colleague": false,
+        "lines": {
+          "detail": "",
+          "colleague": "",
+          "safe": "Most new leaders find the pipeline they were promised is thinner than the plan assumed."
+        }
+      }
+    ]
+  }
+}

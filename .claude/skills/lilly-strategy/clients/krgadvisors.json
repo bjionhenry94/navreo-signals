@@ -1,0 +1,45 @@
+{
+  "client_slug": "krgadvisors",
+  "client_name": "KRG Advisors",
+  "what_they_sell": "Senior-led strategic communications, corporate & public affairs, reputation and go-to-market advisory. Flat structure = direct senior access; AI-augmented. Helps companies and non-profits thrive amid societal and geopolitical volatility (crisis, executive positioning, investor/financial comms, sustainability/ESG, geopolitical risk & narrative intelligence).",
+  "website": "https://krgadvisors.com",
+  "icp": {
+    "verticals": ["food & beverage / CPG", "financial services / banking / asset management / fintech", "pharma / biotech / healthcare / medical devices", "technology / AI / enterprise / telecom", "energy / climate / utilities / oil & gas", "media / entertainment / streaming / sports", "luxury / retail / consumer brands", "non-profit / NGO / foundations / multilateral", "industrial / manufacturing / automotive"],
+    "roles": ["Chief Communications Officer", "Head of Corporate Affairs", "Head of Communications", "Head of Public Affairs", "Head of Investor Relations", "Head of Sustainability / ESG", "Head of Brand", "CEO / Founder", "Executive Director (non-profit)"],
+    "geo": ["US", "GB", "CA", "DE", "FR", "NL", "CH", "IE", "IT", "AU"],
+    "headcount_bands": ["1000+"],
+    "dm_titles": ["Chief Communications Officer", "Head of Corporate Affairs", "Head of Communications", "Head of Public Affairs", "Head of Investor Relations", "Head of Sustainability"]
+  },
+  "named_team_and_experience": {
+    "concept": "Every campaign is a lookalike: KRG's consultants have worked with marquee brands; we outreach to companies that look like those brands in one niche, and position the consultant's past client work as KRG's active, deployable experience.",
+    "highlights": {
+      "Chris Deri (Founder)": ["Amnesty International", "Coca-Cola", "Government of Abu Dhabi", "Huawei", "J&J", "FIFA", "HSBC", "IBM", "Qualcomm", "Liquid.ai"],
+      "Kasia Reterska": ["AB InBev", "General Mills", "Nestle", "Perdue Farms", "Dell", "HP", "IBM", "Microsoft", "Samsung", "Ford", "Mazda", "Haleon", "Pfizer", "J&J", "Kate Spade", "Tiffany & Co", "UNDP", "UNEP", "WHO", "CDC", "Save the Children", "IRC", "USAID", "Bezos Family Foundation"],
+      "Jonathan Wootliff": ["McDonald's/Arcos Dorados", "Kraft/Mondelez", "Colgate-Palmolive", "P&G", "Subway", "Bunge", "BP", "Unocal", "Tata Steel", "Eastman Chemicals", "Owens Corning", "Whirlpool", "Greenpeace", "World Resources Institute"],
+      "Richard Mahony": ["J.P. Morgan (ex-IB)", "financial institutions", "activist-defence", "capital raises", "regulatory inquiries"],
+      "Sri Ramaswami": ["Galapagos", "GSK", "Caris Life Sciences", "J&J Medical Devices", "Pfizer", "Merck"],
+      "Nathan Strauss": ["Amazon", "AWS (responsible AI)", "Tiffany & Co (LVMH acquisition)"],
+      "Noah Lerner": ["HBO", "Disney", "HULU", "ESPN", "NFL Films", "FIFA", "Major League Pickleball", "Warner Bros", "Sony Pictures", "Moderna", "Ford", "Citibank"],
+      "David Bloomgren": ["U.S. EPA", "advanced nuclear", "renewables", "oil & gas", "plastics"],
+      "Bob Knott": ["GE ecomagination", "Walmart", "Exelon", "DuPont", "Allstate", "Wells Fargo", "Fannie Mae", "American Red Cross", "Nature Conservancy", "United Way", "American Clean Energy Association"],
+      "Vivienne Hsu": ["BNY Mellon", "S&P", "SWIFT", "FIS", "Goldman Sachs", "InvestCloud", "Nestle", "Mattel", "Pfizer", "Volkswagen"],
+      "Henry Cho": ["GE", "AT&T", "Microsoft", "Honeywell", "Verizon", "HP", "Toyota", "Volkswagen", "Citicorp", "Chase", "MasterCard", "GSK", "Cisco"],
+      "David Michaelson": ["Coca-Cola", "Citigroup", "AT&T", "McDonald's", "Nissan", "IBM", "J&J"],
+      "Chris Nelson": ["McKinsey (crisis)", "FleishmanHillard", "product recalls", "data breaches", "chemical incidents"],
+      "Sam Huxley": ["Samsung", "Saudi Aramco", "HP", "AT&T", "NBC", "Chrysler", "Sony Pictures", "Honda"],
+      "Michael Turner": ["US-China", "market entry", "US Embassy Beijing"],
+      "Anabelle Greene": ["Bombay Sapphire", "MARTINI", "Destination Canada", "Air New Zealand"],
+      "Ross Kleinrock": ["COJHO (food & bev)", "EY", "Weber Shandwick (Myriant)", "telecom/media/tech GTM"],
+      "Naveena Ponnusamy": ["mission-driven / philanthropy"],
+      "Thomas Shea": ["Teneo (founding MD)", "White House", "philanthropies"],
+      "Brett San Pietro": ["Norfolk Southern", "Fortune 100 CPG", "research hospitals", "PE firms"],
+      "Madyson Epplin": ["Weber Shandwick crisis", "Norfolk Southern (SABRE)", "pharma/tech/CPG"]
+    }
+  },
+  "existing_campaigns": { "smartlead_client_key": null, "campaign_names": [], "history": "greenfield" },
+  "constraints": {
+    "notes": "Email template = the KRG one-sentence style: problem question -> 'Reason I ask, we helped [consultant experience] achieve XYZ, and thought we could help [company] do the same' -> ask to share a one-pager -> signed by the most relevant consultant. Hard result stats (the 'XYZ') must be confirmed with each consultant before send; do not invent client outcome numbers."
+  },
+  "first_briefed_at": "2026-07-30",
+  "last_refreshed_at": "2026-07-30"
+}

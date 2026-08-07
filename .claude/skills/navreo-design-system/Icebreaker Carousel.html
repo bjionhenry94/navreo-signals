@@ -1,0 +1,775 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>How we build icebreakers · Carousel</title>
+<link rel="stylesheet" href="colors_and_type.css">
+<style>
+  /* ========== PRINT: only the slides, one per page ========== */
+  @page { size: 1080px 1350px; margin: 0; }
+  @media print {
+    @page { size: 1080px 1350px; margin: 0; }
+    html, body {
+      background: #ffffff !important;
+      overflow: visible !important;
+      height: auto !important; width: auto !important;
+      margin: 0 !important; padding: 0 !important;
+    }
+    body * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    *, *::before, *::after {
+      animation-delay: -99s !important; animation-duration: .001s !important;
+      animation-iteration-count: 1 !important; animation-fill-mode: both !important;
+      animation-play-state: running !important; transition-duration: 0s !important;
+    }
+    #prev, #next, .dots, .nav { display: none !important; }
+    #stage { position: static !important; inset: auto !important; display: block !important; }
+    #frame {
+      width: 1080px !important; height: auto !important;
+      transform: none !important; overflow: visible !important;
+      border-radius: 0 !important; box-shadow: none !important; margin: 0 !important;
+    }
+    #track {
+      display: block !important; height: auto !important;
+      transform: none !important; transition: none !important; width: 1080px !important;
+    }
+    .slide {
+      width: 1080px !important; height: 1350px !important; flex: none !important;
+      break-inside: avoid !important; page-break-inside: avoid !important;
+      break-after: page !important; page-break-after: always !important;
+      overflow: hidden !important;
+    }
+    .slide:last-child { break-after: auto !important; page-break-after: auto !important; }
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: #17120f;
+    font-family: var(--font-sans);
+    overflow: hidden;
+  }
+
+  /* ---- stage / scaling ---- */
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #frame {
+    width: 1080px; height: 1350px;
+    transform-origin: center center; overflow: hidden;
+    border-radius: 8px; box-shadow: 0 40px 120px -30px rgba(0,0,0,0.6); position: relative;
+  }
+  #track { display: flex; height: 100%; transition: transform 480ms cubic-bezier(0.2,0.7,0.2,1); will-change: transform; }
+  .slide { width: 1080px; height: 1350px; flex: none; position: relative; }
+
+  /* ============ ANGLE CARD ============ */
+  .angle {
+    background: var(--nav-cream); color: var(--nav-ink);
+    padding: 74px 78px 60px; display: flex; flex-direction: column; height: 100%;
+  }
+  .row-top { display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+  .iccat { display: flex; align-items: center; gap: 22px; }
+  .ic {
+    width: 86px; height: 86px; flex: none; border-radius: 22px;
+    background: var(--nav-orange-100); color: var(--nav-orange);
+    display: flex; align-items: center; justify-content: center;
+  }
+  .ic svg { width: 46px; height: 46px; }
+  .cat {
+    font-family: var(--font-mono); font-size: 22px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--nav-ink-3); font-weight: 500; line-height: 1.25; max-width: 320px;
+  }
+  .badge {
+    font-family: var(--font-mono); font-size: 28px; font-weight: 500;
+    color: var(--nav-ink); border: 2px solid var(--nav-ink); border-radius: 8px;
+    padding: 8px 18px; box-shadow: 4px 4px 0 rgba(20,17,14,0.14); flex: none;
+  }
+  .angle.net .ic { background: rgba(255,77,0,0.12); }
+  .angle.net .badge { color: var(--nav-orange); border-color: var(--nav-orange); box-shadow: 4px 4px 0 rgba(255,77,0,0.2); }
+  .name {
+    font-family: var(--font-display); font-weight: 400; font-size: 104px;
+    line-height: 0.95; letter-spacing: -0.035em; margin: 40px 0 0;
+  }
+
+  /* ---- the signal → line diagram ---- */
+  .diagram { margin-top: 40px; }
+  .blab {
+    font-family: var(--font-mono); font-size: 20px; letter-spacing: 0.12em;
+    text-transform: uppercase; font-weight: 500;
+    display: flex; align-items: center; gap: 11px; margin-bottom: 16px;
+  }
+  .blab::before { content: ""; width: 9px; height: 9px; border-radius: 999px; }
+  .signal { background: var(--nav-cream-50); border: 1px solid var(--border); border-radius: 20px; padding: 28px 32px; }
+  .signal .blab { color: var(--nav-ink-3); }
+  .signal .blab::before { background: var(--nav-dark-brown); }
+
+  /* signal building blocks */
+  .av {
+    width: 60px; height: 60px; flex: none; border-radius: 999px;
+    background: var(--nav-orange-100); color: var(--nav-orange);
+    font-family: var(--font-mono); font-weight: 500; font-size: 24px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .row { display: flex; align-items: center; gap: 20px; }
+  .row + .row { margin-top: 16px; border-top: 1px solid var(--divider); padding-top: 16px; }
+  .ttl { font-family: var(--font-display); font-weight: 400; font-size: 42px; line-height: 1; letter-spacing: -0.02em; }
+  .meta { font-family: var(--font-mono); font-size: 21px; color: var(--nav-ink-3); margin-top: 8px; }
+  .grow { flex: 1; min-width: 0; }
+  .pill {
+    font-family: var(--font-mono); font-size: 19px; letter-spacing: 0.08em; text-transform: uppercase;
+    font-weight: 500; color: var(--nav-orange); background: var(--nav-orange-100);
+    padding: 8px 16px; border-radius: 999px; flex: none;
+  }
+  .live { width: 18px; height: 18px; border-radius: 999px; background: var(--nav-orange); flex: none;
+    box-shadow: 0 0 0 6px rgba(255,77,0,0.18); }
+  .bars { display: flex; align-items: flex-end; gap: 10px; height: 76px; flex: none; }
+  .bars i { width: 24px; background: var(--nav-orange); border-radius: 6px 6px 0 0; display: block; }
+  .techs { display: flex; flex-wrap: wrap; gap: 14px; }
+  .tech {
+    font-family: var(--font-mono); font-size: 26px; padding: 14px 22px; border-radius: 12px;
+    border: 1px solid var(--border-strong); color: var(--nav-ink-3); background: var(--nav-white);
+  }
+  .tech.on { background: var(--nav-orange); color: var(--nav-cream); border-color: var(--nav-orange); font-weight: 500; }
+
+  .conn { display: flex; flex-direction: column; align-items: center; gap: 4px; margin: 16px 0; }
+  .conn svg { width: 36px; height: 36px; color: var(--nav-orange); }
+  .conn span {
+    font-family: var(--font-mono); font-size: 18px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--nav-ink-3);
+  }
+
+  .line-card { background: var(--nav-ink); color: var(--nav-cream); border-radius: 20px; padding: 30px 36px; }
+  .line-card .blab { color: rgba(249,240,231,0.6); }
+  .line-card .blab::before { background: var(--nav-orange); }
+  .line-card .line { font-size: 36px; line-height: 1.38; letter-spacing: -0.012em; text-wrap: pretty; }
+  .line-card .line b { font-weight: 600; color: var(--nav-orange-300); }
+
+  .foot {
+    margin-top: auto; padding-top: 32px;
+    display: flex; align-items: center; justify-content: space-between;
+    border-top: 1px solid var(--divider);
+  }
+  .foot .brand { display: flex; align-items: center; gap: 16px; }
+  .foot .brand img { height: 26px; width: auto; display: block; }
+  .foot .brand span { font-family: var(--font-mono); font-size: 20px; color: var(--nav-ink-3); letter-spacing: 0.02em; }
+  .foot .count { font-family: var(--font-mono); font-size: 22px; color: var(--nav-ink-3); letter-spacing: 0.06em; }
+
+  /* ============ EXPLAINER (cream/ink reusable) ============ */
+  .outro { padding: 80px 78px 60px; display: flex; flex-direction: column; height: 100%; position: relative; overflow: hidden; }
+  .outro.cream { background: var(--nav-cream); color: var(--nav-ink); }
+  .outro.ink   { background: var(--nav-ink);   color: var(--nav-cream); }
+  .outro .eyebrow {
+    font-family: var(--font-mono); font-size: 24px; letter-spacing: 0.14em; text-transform: uppercase;
+    font-weight: 500; display: inline-flex; align-items: center; gap: 14px;
+  }
+  .outro.cream .eyebrow { color: var(--nav-ink-3); }
+  .outro.ink   .eyebrow { color: rgba(249,240,231,0.6); }
+  .outro .eyebrow::before { content: ""; width: 10px; height: 10px; border-radius: 999px; background: var(--nav-orange); }
+  .outro h2 {
+    font-family: var(--font-display); font-weight: 400; font-size: 100px;
+    line-height: 0.98; letter-spacing: -0.035em; margin: 32px 0 0; text-wrap: balance;
+  }
+  .outro h2.sm { font-size: 84px; }
+  .outro h2 em { font-style: italic; color: var(--nav-orange); }
+
+  .outro.cream::after {
+    content: ""; position: absolute; left: -260px; bottom: -260px;
+    width: 720px; height: 720px; border-radius: 999px;
+    background: radial-gradient(circle at 60% 40%, rgba(255,77,0,0.16), transparent 64%);
+    pointer-events: none; z-index: 0;
+  }
+  .outro > * { position: relative; z-index: 1; }
+
+  /* ---- email mockup (intro) ---- */
+  .mock {
+    margin-top: 52px; background: var(--nav-white);
+    border: 1px solid var(--border-strong); border-radius: 24px;
+    box-shadow: 0 30px 70px -28px rgba(20,17,14,0.4); overflow: hidden;
+  }
+  .mock-bar { display: flex; align-items: center; gap: 20px; padding: 26px 32px; border-bottom: 1px solid var(--divider); background: var(--nav-cream-50); }
+  .mock-bar .ds { display: flex; gap: 11px; }
+  .mock-bar .ds i { width: 16px; height: 16px; border-radius: 999px; background: var(--nav-light-300); display: block; }
+  .mock-bar .subj { font-family: var(--font-mono); font-size: 22px; color: var(--nav-ink-3); }
+  .mock-body { padding: 46px 48px 52px; }
+  .mock-body .greet { font-size: 36px; color: var(--nav-ink); }
+  .mock-hl {
+    position: relative; display: block; margin: 26px 0;
+    font-size: 40px; line-height: 1.34; font-weight: 500; color: var(--nav-ink);
+    background: var(--nav-orange-100); border-left: 6px solid var(--nav-orange);
+    border-radius: 12px; padding: 26px 28px; text-wrap: pretty;
+  }
+  .mock-tag {
+    position: absolute; top: -18px; right: 22px;
+    font-family: var(--font-mono); font-size: 19px; letter-spacing: 0.12em; text-transform: uppercase;
+    background: var(--nav-orange); color: var(--nav-cream); padding: 7px 16px; border-radius: 999px;
+  }
+  .mock-body .dim { font-size: 33px; line-height: 1.4; color: var(--nav-dark-brown); margin: 20px 0 0; }
+  .mock-body .dim.short { width: 64%; }
+
+  /* ---- the waterfall ---- */
+  .flow { margin: 48px 0 0; display: flex; flex-direction: column; }
+  .flow .step { display: flex; align-items: center; gap: 26px; padding: 21px 0; border-top: 1px solid rgba(249,240,231,0.16); }
+  .flow .step:first-child { border-top: 0; }
+  .flow .step.last { border-top: 1px solid var(--nav-orange); }
+  .flow .num { font-family: var(--font-mono); font-size: 24px; font-weight: 500; color: rgba(249,240,231,0.45); width: 44px; flex: none; }
+  .flow .step.last .num { color: var(--nav-orange); }
+  .flow .nm { font-family: var(--font-display); font-weight: 400; font-size: 50px; letter-spacing: -0.02em; line-height: 1; flex: none; min-width: 320px; }
+  .flow .step.last .nm { color: var(--nav-orange); }
+  .flow .wh { font-size: 27px; line-height: 1.25; color: rgba(249,240,231,0.6); letter-spacing: -0.01em; text-align: right; margin-left: auto; }
+  .winner {
+    margin-top: 36px; display: inline-flex; align-items: center; gap: 16px;
+    font-family: var(--font-mono); font-size: 24px; letter-spacing: 0.04em; color: var(--nav-cream);
+    background: rgba(255,77,0,0.16); border: 1px solid rgba(255,77,0,0.4);
+    padding: 16px 24px; border-radius: 999px; align-self: flex-start;
+  }
+  .winner b { color: var(--nav-orange); font-weight: 500; }
+  .winner svg { width: 26px; height: 26px; color: var(--nav-orange); }
+
+  /* stats */
+  .stats { display: grid; grid-template-columns: 1fr; gap: 34px; margin-top: 64px; }
+  .stat { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid rgba(20,17,14,0.16); padding-top: 22px; }
+  .stat .num { font-family: var(--font-display); font-weight: 400; font-size: 112px; line-height: 0.95; letter-spacing: -0.04em; }
+  .stat .num.accent { color: var(--nav-orange); }
+  .stat .lab { font-size: 26px; letter-spacing: -0.01em; color: var(--nav-ink-2); }
+
+  /* CTA */
+  .cta-mega { margin-top: 56px; font-family: var(--font-display); font-weight: 400; font-size: 150px; line-height: 0.92; letter-spacing: -0.04em; text-wrap: balance; }
+  .cta-mega em { font-style: italic; color: var(--nav-orange); }
+  .cta-prompt { margin-top: 56px; font-family: var(--font-mono); font-size: 28px; letter-spacing: 0.08em; text-transform: uppercase; color: rgba(249,240,231,0.55); font-weight: 500; }
+  .cta-url-big { margin-top: 14px; font-family: var(--font-display); font-weight: 400; font-size: 88px; line-height: 1; letter-spacing: -0.03em; color: var(--nav-orange); word-break: break-word; }
+
+  .outro .foot { margin-top: auto; padding-top: 36px; display: flex; align-items: center; justify-content: space-between; }
+  .outro.cream .foot { border-top: 1px solid var(--divider); }
+  .outro.ink   .foot { border-top: 1px solid rgba(249,240,231,0.18); }
+  .outro .foot .brand { display: flex; align-items: center; gap: 16px; }
+  .outro .foot .brand img { height: 26px; width: auto; display: block; }
+  .outro .foot .brand span { font-family: var(--font-mono); font-size: 20px; letter-spacing: 0.02em; }
+  .outro.cream .foot .brand span { color: var(--nav-ink-3); }
+  .outro.ink   .foot .brand span { color: rgba(249,240,231,0.5); }
+  .outro .foot .count { font-family: var(--font-mono); font-size: 22px; letter-spacing: 0.06em; }
+  .outro.cream .foot .count { color: var(--nav-ink-3); }
+  .outro.ink   .foot .count { color: rgba(249,240,231,0.5); }
+
+  /* ---- cover ---- */
+  .cover { background: var(--nav-cream); color: var(--nav-ink); padding: 76px 78px 60px; display: flex; flex-direction: column; height: 100%; position: relative; overflow: hidden; }
+  .cover::after {
+    content: ""; position: absolute; right: -200px; top: -200px;
+    width: 640px; height: 640px; border-radius: 999px;
+    background: radial-gradient(circle at 30% 30%, rgba(255,77,0,0.16), transparent 64%);
+    pointer-events: none; z-index: 0;
+  }
+  .cc-badge { align-self: flex-end; width: 160px; height: 160px; position: relative; z-index: 2; transform: rotate(12deg); transform-origin: center; margin-right: 8px; }
+  .cc-badge img { width: 100%; height: 100%; object-fit: contain; display: block; }
+  .cover .kicker { font-family: var(--font-mono); font-size: 24px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--nav-ink-3); margin: 12px 0 0; position: relative; z-index: 2; }
+  .cover h1 { font-family: var(--font-display); font-weight: 400; font-size: 128px; line-height: 0.95; letter-spacing: -0.035em; margin: 22px 0 0; position: relative; z-index: 2; text-wrap: balance; }
+  .cover h1 em { font-style: normal; color: var(--nav-orange); }
+  /* cover diagram — signals fan into one line */
+  .fan { margin: auto 0 0; position: relative; z-index: 2; }
+  .fan-sigs { display: flex; flex-wrap: wrap; gap: 12px; }
+  .fan-sigs .chip {
+    font-family: var(--font-mono); font-size: 22px; color: var(--nav-ink-2);
+    border: 1px solid var(--border-strong); border-radius: 999px; padding: 12px 22px; background: var(--nav-cream-50);
+    display: inline-flex; align-items: center; gap: 11px;
+  }
+  .fan-sigs .chip::before { content: ""; width: 9px; height: 9px; border-radius: 999px; background: var(--nav-orange); }
+  .fan-arrow { display: flex; align-items: center; gap: 16px; margin: 20px 0; color: var(--nav-ink-3); }
+  .fan-arrow svg { width: 30px; height: 30px; color: var(--nav-orange); }
+  .fan-arrow span { font-family: var(--font-mono); font-size: 20px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .fan-out {
+    background: var(--nav-ink); color: var(--nav-cream); border-radius: 18px; padding: 26px 30px;
+    font-size: 33px; line-height: 1.35; text-wrap: pretty;
+  }
+  .fan-out b { color: var(--nav-orange-300); font-weight: 600; }
+  .cover .foot { margin-top: 28px; border-top: 1px solid var(--divider); padding-top: 24px; display: flex; align-items: center; justify-content: space-between; position: relative; z-index: 2; }
+  .cover .foot .brand { display: flex; align-items: center; gap: 16px; }
+  .cover .foot .brand img { height: 28px; }
+  .cover .foot .brand span { font-family: var(--font-mono); font-size: 20px; }
+  .cover .foot .brand span, .cover .foot .count { color: var(--nav-ink-3); }
+  .cover .foot .count { font-family: var(--font-mono); font-size: 22px; letter-spacing: 0.06em; }
+
+  /* ---- per-card data source ---- */
+  .source { margin-top: 24px; display: flex; align-items: center; gap: 16px; }
+  .source .sl { width: 56px; height: 56px; flex: none; border-radius: 13px; background: var(--nav-white); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .source .sl img { width: 36px; height: 36px; object-fit: contain; }
+  .source .scap { font-family: var(--font-mono); font-size: 17px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--nav-ink-3); }
+  .source .snm { font-size: 26px; letter-spacing: -0.01em; color: var(--nav-ink-2); margin-top: 3px; }
+  .source.netsrc { font-family: var(--font-mono); font-size: 23px; color: var(--nav-ink-3); }
+  .source.netsrc::before { content: ""; width: 14px; height: 14px; border-radius: 999px; background: var(--nav-dark-brown); flex: none; }
+
+  /* ---- pipeline (waterfall overview) ---- */
+  .pipe { margin-top: 38px; display: flex; flex-direction: column; }
+  .pstage { display: flex; align-items: center; gap: 22px; background: var(--nav-cream-50); border: 1px solid var(--border); border-radius: 20px; padding: 24px 28px; }
+  .pstage .pn { width: 54px; height: 54px; flex: none; border-radius: 999px; background: var(--nav-orange); color: var(--nav-cream); font-family: var(--font-mono); font-weight: 500; font-size: 25px; display: flex; align-items: center; justify-content: center; }
+  .pstage .pbody { flex: 1; min-width: 0; }
+  .pstage .pttl { font-family: var(--font-display); font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: -0.02em; }
+  .pstage .psub { font-family: var(--font-mono); font-size: 21px; color: var(--nav-ink-3); margin-top: 8px; }
+  .plogos { display: flex; gap: 11px; flex: none; }
+  .ltile { width: 62px; height: 62px; flex: none; border-radius: 14px; background: var(--nav-white); border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .ltile img { width: 40px; height: 40px; object-fit: contain; }
+  .pchips { display: flex; flex-wrap: wrap; gap: 9px; margin-top: 13px; }
+  .pchips span { font-family: var(--font-mono); font-size: 18px; color: var(--nav-ink-2); border: 1px solid var(--border-strong); border-radius: 999px; padding: 6px 14px; }
+  .pconn { display: flex; justify-content: center; color: var(--nav-orange); margin: 9px 0; }
+  .pconn svg { width: 32px; height: 32px; }
+
+  /* ---- the stack (tools grid) ---- */
+  .stackg { margin-top: 38px; display: flex; flex-direction: column; gap: 16px; }
+  .sgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+  .scard { display: flex; align-items: center; gap: 20px; background: var(--nav-cream-50); border: 1px solid var(--border); border-radius: 18px; padding: 22px 24px; }
+  .scard .ltile { width: 78px; height: 78px; border-radius: 16px; }
+  .scard .ltile image-slot { width: 100%; height: 100%; display: block; }
+  .scard .ltile img { width: 50px; height: 50px; }
+  .scard .sn { font-family: var(--font-display); font-weight: 400; font-size: 38px; line-height: 1; letter-spacing: -0.02em; }
+  .scard .sr { font-family: var(--font-mono); font-size: 19px; color: var(--nav-ink-3); margin-top: 8px; line-height: 1.25; }
+  .scard.run { background: var(--nav-ink); color: var(--nav-cream); border-color: var(--nav-ink); }
+  .scard.run .sr { color: rgba(249,240,231,0.7); }
+  .scard.run .ltile { background: rgba(249,240,231,0.08); border-color: rgba(249,240,231,0.16); }
+  .scard.send { border-color: var(--nav-orange); }
+
+  /* reorder note under waterfall */
+  .reorder { margin-top: 22px; font-family: var(--font-mono); font-size: 22px; color: rgba(249,240,231,0.62); letter-spacing: -0.005em; line-height: 1.4; max-width: 30ch; }
+  .reorder b { color: var(--nav-cream); font-weight: 500; }
+
+  /* ---- waterfall (how) ---- */
+  .wf { margin-top: 32px; position: relative; padding-left: 6px; }
+  .wf::before { content: ""; position: absolute; left: 29px; top: 40px; bottom: 40px; width: 2px; background: rgba(249,240,231,0.16); }
+  .wstep { display: flex; align-items: center; gap: 18px; padding: 15px 0; }
+  .wstep + .wstep { border-top: 1px solid rgba(249,240,231,0.1); }
+  .wn { width: 46px; height: 46px; flex: none; border-radius: 999px; border: 2px solid rgba(249,240,231,0.3); background: var(--nav-ink); color: rgba(249,240,231,0.7); font-family: var(--font-mono); font-size: 22px; display: flex; align-items: center; justify-content: center; position: relative; z-index: 1; }
+  .wstep.last .wn { border-color: var(--nav-orange); color: var(--nav-orange); }
+  .wlogo { width: 52px; height: 52px; flex: none; border-radius: 12px; background: var(--nav-white); border: 1px solid rgba(249,240,231,0.16); display: flex; align-items: center; justify-content: center; overflow: hidden; }
+  .wlogo img { width: 34px; height: 34px; object-fit: contain; }
+  .wlogo.gen { background: rgba(255,77,0,0.14); border-color: rgba(255,77,0,0.3); color: var(--nav-orange); }
+  .wlogo.gen svg { width: 30px; height: 30px; }
+  .wnm { font-family: var(--font-display); font-weight: 400; font-size: 46px; line-height: 1; letter-spacing: -0.02em; }
+  .wstep.last .wnm { color: var(--nav-orange); }
+  .wwh { margin-left: auto; text-align: right; font-family: var(--font-mono); font-size: 21px; color: rgba(249,240,231,0.58); }
+
+  /* ---- breakdown table ---- */
+  .bd { margin-top: 34px; }
+  .bdhead, .bdrow { display: grid; grid-template-columns: 250px 1fr 86px 132px; align-items: center; gap: 22px; }
+  .bdhead { font-family: var(--font-mono); font-size: 18px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--nav-ink-3); padding-bottom: 14px; border-bottom: 1px solid var(--border-strong); }
+  .bdhead .r { text-align: right; }
+  .bdrow { padding: 16px 0; border-top: 1px solid var(--divider); }
+  .bdnm { display: flex; align-items: center; gap: 14px; font-family: var(--font-display); font-weight: 400; font-size: 36px; letter-spacing: -0.02em; }
+  .bdnm img { width: 34px; height: 34px; object-fit: contain; flex: none; }
+  .bdbar { height: 22px; background: var(--nav-light-200); border-radius: 999px; overflow: hidden; }
+  .bdbar i { display: block; height: 100%; background: var(--nav-orange); border-radius: 999px; }
+  .bdpct { font-family: var(--font-display); font-weight: 400; font-size: 40px; text-align: right; letter-spacing: -0.02em; }
+  .bdcnt { font-family: var(--font-mono); font-size: 23px; color: var(--nav-ink-3); text-align: right; }
+  .bdrow.net .bdbar i { background: var(--nav-dark-brown); }
+  .bdnote { margin-top: 26px; font-family: var(--font-mono); font-size: 22px; color: var(--nav-ink-2); }
+  .bdnote b { color: var(--nav-orange); font-weight: 500; }
+
+  /* ---- why chain ---- */
+  .chain { margin-top: 42px; display: flex; align-items: stretch; gap: 14px; flex-wrap: wrap; }
+  .cnode { flex: 1; min-width: 210px; background: rgba(249,240,231,0.06); border: 1px solid rgba(249,240,231,0.16); border-radius: 18px; padding: 28px 26px; display: flex; align-items: center; font-family: var(--font-display); font-weight: 400; font-size: 40px; line-height: 1.04; letter-spacing: -0.02em; text-wrap: balance; }
+  .cnode.hot { background: var(--nav-orange); color: var(--nav-cream); border-color: var(--nav-orange); }
+  .carrow { display: flex; align-items: center; color: var(--nav-orange); }
+  .carrow svg { width: 34px; height: 34px; }
+  .whytext { margin-top: 32px; font-size: 34px; line-height: 1.34; letter-spacing: -0.015em; color: var(--nav-cream); text-wrap: pretty; max-width: 32ch; }
+  .whytext b { color: var(--nav-orange); }
+  .catch { margin-top: 26px; background: rgba(255,77,0,0.1); border: 1px solid rgba(255,77,0,0.32); border-radius: 18px; padding: 24px 30px; }
+  .catch-lab { font-family: var(--font-mono); font-size: 19px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--nav-orange); }
+  .catch-txt { margin-top: 10px; font-size: 27px; line-height: 1.36; color: rgba(249,240,231,0.82); text-wrap: pretty; }
+
+  /* mock highlight emphasis + CTA lede */
+  .mock-hl b { color: var(--nav-orange-600); font-weight: 600; }
+  .ctalede { margin-top: 34px; font-size: 36px; line-height: 1.32; letter-spacing: -0.015em; color: rgba(249,240,231,0.85); max-width: 26ch; text-wrap: pretty; }
+
+  /* ---- controls ---- */
+  .nav {
+    position: fixed; top: 50%; transform: translateY(-50%);
+    width: 64px; height: 64px; border-radius: 999px;
+    background: rgba(249,240,231,0.1); border: 1px solid rgba(249,240,231,0.2); color: var(--nav-cream);
+    display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 50;
+    backdrop-filter: blur(8px); transition: background 160ms, opacity 160ms; -webkit-tap-highlight-color: transparent;
+  }
+  .nav:hover { background: rgba(249,240,231,0.2); }
+  .nav svg { width: 26px; height: 26px; }
+  #prev { left: 28px; } #next { right: 28px; }
+  .nav[disabled] { opacity: 0.25; pointer-events: none; }
+
+  .dots { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); display: flex; gap: 10px; z-index: 50; padding: 10px 16px; border-radius: 999px; background: rgba(23,18,15,0.5); backdrop-filter: blur(8px); }
+  .dot { width: 9px; height: 9px; border-radius: 999px; background: rgba(249,240,231,0.3); cursor: pointer; transition: background 160ms, transform 160ms; }
+  .dot.active { background: var(--nav-orange); transform: scale(1.25); }
+
+  @media (max-width: 700px) { .nav { width: 48px; height: 48px; } #prev { left: 10px; } #next { right: 10px; } }
+</style>
+</head>
+<body>
+  <div id="stage"><div id="frame"><div id="track"></div></div></div>
+
+  <template id="__bundler_thumbnail" data-bg-color="#F9F0E7">
+    <svg viewBox="0 0 1200 1500" xmlns="http://www.w3.org/2000/svg">
+      <rect width="1200" height="1500" fill="#F9F0E7"/>
+      <circle cx="1080" cy="240" r="150" fill="#FF4D00" opacity="0.16"/>
+      <rect x="150" y="360" width="620" height="60" rx="14" fill="#14110E"/>
+      <rect x="150" y="450" width="820" height="60" rx="14" fill="#14110E"/>
+      <rect x="150" y="540" width="420" height="60" rx="14" fill="#FF4D00"/>
+      <rect x="150" y="900" width="900" height="230" rx="28" fill="#14110E"/>
+      <rect x="200" y="960" width="500" height="34" rx="10" fill="#FF4D00"/>
+      <rect x="200" y="1020" width="760" height="30" rx="10" fill="#F9F0E7" opacity="0.5"/>
+      <circle cx="200" cy="1290" r="26" fill="#FF4D00"/>
+    </svg>
+  </template>
+
+  <button id="prev" class="nav" aria-label="Previous">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M15 5l-7 7 7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <button id="next" class="nav" aria-label="Next">
+    <svg viewBox="0 0 24 24" fill="none"><path d="M9 5l7 7-7 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+  </button>
+  <div class="dots" id="dots"></div>
+
+  <script src="carousel/image-slot.js"></script>
+  <script>
+    const DOWN = '<svg viewBox="0 0 24 24" fill="none"><path d="M12 4v15M6 13l6 6 6-6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+    const RIGHT = '<svg viewBox="0 0 24 24" fill="none"><path d="M4 12h15M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+
+    const ICONS = {
+      colleague: '<svg viewBox="0 0 24 24" fill="none"><circle cx="9" cy="8" r="3.2" stroke="currentColor" stroke-width="2"/><path d="M3.5 19c0-3 2.5-5 5.5-5s5.5 2 5.5 5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="17" cy="7" r="2.6" stroke="currentColor" stroke-width="2"/><path d="M16 13.2c2.6 0 4.5 1.8 4.5 4.3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+      hire: '<svg viewBox="0 0 24 24" fill="none"><rect x="3.5" y="7.5" width="17" height="12" rx="2.2" stroke="currentColor" stroke-width="2"/><path d="M9 7.5V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5" stroke="currentColor" stroke-width="2"/><path d="M12 12v3M10.5 13.5h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+      raise: '<svg viewBox="0 0 24 24" fill="none"><path d="M4 19h16" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><rect x="5" y="12" width="3.4" height="5" rx="1" fill="currentColor"/><rect x="10.3" y="8.5" width="3.4" height="8.5" rx="1" fill="currentColor"/><rect x="15.6" y="5" width="3.4" height="12" rx="1" fill="currentColor"/></svg>',
+      role: '<svg viewBox="0 0 24 24" fill="none"><path d="M14 4h4a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M10 8l4 4-4 4M14 12H3.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      stack: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3l9 5-9 5-9-5 9-5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M3 13l9 5 9-5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+      net: '<svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v5c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M9 12l2 2 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    };
+
+    const ANGLES = [
+      { n:'01', icon:'hire', cat:'Signal · live job posting', name:'The hire',
+        sigLabel:'We find at the company',
+        signal:`<div class="row"><span class="live"></span><div class="grow"><div class="ttl">SDR</div><div class="meta">Open role · posted 4 days ago</div></div><span class="pill">Hiring</span></div>`,
+        line:'I noticed Acme is hiring <b>an SDR</b>, and so <b>I assumed you might be interested in working with a 3rd-party agency to drive even more leads.</b>' },
+
+      { n:'02', icon:'role', cat:'Signal · prospect tenure', name:'The new role',
+        sigLabel:'We find on the prospect',
+        signal:`<div class="row"><span class="av">SD</span><div class="grow"><div class="ttl">Sales Director</div><div class="meta">Started 6 weeks ago</div></div><span class="pill">New</span></div>`,
+        line:'I saw you recently joined Acme <b>as Sales Director</b>, <b>often the moment teams rethink outbound, so I thought I’d reach out.</b>' },
+
+      { n:'03', icon:'raise', cat:'Signal · recent funding', name:'The raise',
+        sigLabel:'We find at the company',
+        signal:`<div class="row"><div class="bars"><i style="height:32%"></i><i style="height:60%"></i><i style="height:100%"></i></div><div class="grow"><div class="ttl">Series B</div><div class="meta">Closed 2 months ago</div></div><span class="pill">+ Budget</span></div>`,
+        line:'I saw Acme raised <b>a Series B</b> recently, <b>which usually means growth mode, so I thought our outbound systems might be relevant.</b>' },
+
+      { n:'04', icon:'stack', cat:'Signal · tech stack · opt-in', name:'The stack',
+        sigLabel:'We find at the company',
+        signal:`<div class="techs"><span class="tech on">Smartlead</span><span class="tech">Clay</span><span class="tech">Lemlist</span></div>`,
+        line:'I noticed Acme is using <b>Smartlead</b>, <b>so I assumed you’re running outbound, and thought we could help you scale it.</b>' },
+
+      { n:'05', icon:'colleague', cat:'Signal · senior peers', name:'The colleague',
+        sigLabel:'We pulled from the list',
+        signal:`<div class="row"><span class="av">SF</span><div class="grow"><div class="ttl">Sarah F.</div><div class="meta">Head of Sales</div></div><span class="pill">Prospect</span></div>
+                <div class="row"><span class="av">MJ</span><div class="grow"><div class="ttl">Marcus J.</div><div class="meta">Regional Director</div></div><span class="pill">Also pulled</span></div>`,
+        line:'I wasn’t sure if you or <b>Marcus (Regional Director)</b> was the best person at Acme to speak to about this.' },
+
+      { n:'06', icon:'net', cat:'Always available', name:'The safety net', net:true,
+        sigLabel:'When no signal fits — drop in your topic',
+        signal:`<div class="techs"><span class="tech on">growth</span><span class="tech">accounts payable</span><span class="tech">employee welfare</span></div>`,
+        line:'I wasn’t sure who the best person at Acme is to speak to about <b>driving more growth</b>.' },
+    ];
+
+    const SRC = {
+      '01': { logo:'TheirStack', file:'TheirStack', cap:'Live job postings' },
+      '02': { logo:'Prospeo',    file:'Prospeo',    cap:'Tenure from the list' },
+      '03': { logo:'Prospeo',    file:'Prospeo',    cap:'Funding \u00b7 or PredictLeads' },
+      '04': { logo:'AI Ark',     file:'AI Ark',     cap:'Tech-stack data' },
+      '05': { logo:'Prospeo',    file:'Prospeo',    cap:'Decision-maker list' },
+    };
+
+    const total = ANGLES.length;
+    const track = document.getElementById('track');
+
+    // cover
+    const cover = document.createElement('div');
+    cover.className = 'slide';
+    cover.innerHTML = `
+      <div class="cover">
+        <div class="cc-badge"><img src="assets/claude-code-mascot.png" alt="Claude Code"></div>
+        <div class="kicker">How we work · personalisation</div>
+        <h1>How we create <em>personalised icebreakers</em> at scale</h1>
+        <div class="fan">
+          <div class="fan-sigs">
+            <span class="chip">Hire</span><span class="chip">New role</span><span class="chip">Raise</span>
+            <span class="chip">Tech stack</span><span class="chip">Colleague</span><span class="chip">Safety net</span>
+          </div>
+          <div class="fan-arrow">${DOWN}<span>one line per lead</span></div>
+          <div class="fan-out">I noticed Acme is hiring <b>an SDR</b>, and so <b>I assumed you might be interested in working with a 3rd-party agency to drive even more leads.</b></div>
+        </div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo.png" alt="navreo"><span>· swipe to see how</span></div>
+          <div class="count">${total} signals</div>
+        </div>
+      </div>`;
+    track.appendChild(cover);
+
+    // intro — what an icebreaker is (email mockup)
+    const intro = document.createElement('div');
+    intro.className = 'slide';
+    intro.innerHTML = `
+      <div class="outro cream">
+        <div class="eyebrow">What it is</div>
+        <h2 class="sm">One line. <em>It does all the work.</em></h2>
+        <div class="mock">
+          <div class="mock-bar">
+            <span class="ds"><i></i><i></i><i></i></span>
+            <span class="subj">Re: a quick idea for Acme</span>
+          </div>
+          <div class="mock-body">
+            <div class="greet">Hi Sarah,</div>
+            <span class="mock-hl"><span class="mock-tag">The icebreaker</span>I noticed Acme is hiring an SDR, and so <b>I assumed you might be interested in working with a 3rd-party agency to drive even more leads.</b></span>
+            <p class="dim">We help B2B teams turn outbound into a system that</p>
+            <p class="dim short">compounds, not a headcount problem&hellip;</p>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo.png" alt="navreo"><span>· navreo.ai</span></div>
+          <div class="count">Why it matters</div>
+        </div>
+      </div>`;
+    track.appendChild(intro);
+
+    // why it works
+    const why = document.createElement('div');
+    why.className = 'slide';
+    why.innerHTML = `
+      <div class="outro ink">
+        <div class="eyebrow">Why it works</div>
+        <h2 class="sm">Relevance is the <em>whole game.</em></h2>
+        <div class="chain">
+          <div class="cnode">A more relevant line</div>
+          <div class="carrow">${RIGHT}</div>
+          <div class="cnode">A higher reply rate</div>
+          <div class="carrow">${RIGHT}</div>
+          <div class="cnode hot">More leads</div>
+        </div>
+        <p class="whytext">Time and again, the more we tie the line to something real going on at their company, the higher the reply rate. Every line needs <b>a reason we’re reaching out</b> — that’s what moves the needle.</p>
+        <div class="catch">
+          <div class="catch-lab">The catch</div>
+          <div class="catch-txt">Pulling this data and personalising it is hit-and-miss. And now everyone’s doing it, so the bar has risen — you have to be far more sophisticated to stand out.</div>
+        </div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo-white.png" alt="navreo"><span>· navreo.ai</span></div>
+          <div class="count">Why it matters</div>
+        </div>
+      </div>`;
+    track.appendChild(why);
+
+    // the waterfall — pipeline overview
+    const pipe = document.createElement('div');
+    pipe.className = 'slide';
+    pipe.innerHTML = `
+      <div class="outro cream">
+        <div class="eyebrow">The waterfall</div>
+        <h2 class="sm">From a raw list to <em>a line that lands.</em></h2>
+        <div class="pipe">
+          <div class="pstage">
+            <div class="pn">1</div>
+            <div class="pbody"><div class="pttl">Pull the list</div><div class="psub">Decision-makers, funding, tenure &amp; tech</div></div>
+            <div class="plogos">
+              <span class="ltile"><img src="assets/tools/logo/Prospeo.png" alt="Prospeo"></span>
+              <span class="ltile"><img src="assets/tools/logo/AI%20Ark.png" alt="AI Ark"></span>
+              <span class="ltile"><img src="assets/tools/logo/Apollo.io.png" alt="Apollo"></span>
+            </div>
+          </div>
+          <div class="pconn">${DOWN}</div>
+          <div class="pstage">
+            <div class="pn">2</div>
+            <div class="pbody"><div class="pttl">Walk the six signals</div><div class="psub">Claude Code checks each one in priority order</div>
+              <div class="pchips"><span>Hire</span><span>New role</span><span>Raise</span><span>Tech stack</span><span>Colleague</span><span>Safety net</span></div>
+            </div>
+          </div>
+          <div class="pconn">${DOWN}</div>
+          <div class="pstage">
+            <div class="pn">3</div>
+            <div class="pbody"><div class="pttl">First fit wins, then send</div><div class="psub">One personalised line, delivered in the campaign</div></div>
+            <div class="plogos"><span class="ltile"><img src="assets/tools/logo/Smartlead.png" alt="Smartlead"></span></div>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo.png" alt="navreo"><span>· navreo.ai</span></div>
+          <div class="count">Overview</div>
+        </div>
+      </div>`;
+    track.appendChild(pipe);
+
+    // how it works — the waterfall
+    const how = document.createElement('div');
+    how.className = 'slide';
+    how.innerHTML = `
+      <div class="outro ink">
+        <div class="eyebrow">How it works</div>
+        <h2 class="sm">A waterfall. <em>First signal with data wins.</em></h2>
+        <div class="wf">
+          <div class="wstep"><span class="wn">1</span><span class="wlogo"><img src="assets/tools/logo/TheirStack.png" alt="TheirStack"></span><div class="wnm">The hire</div><div class="wwh">a live sales role</div></div>
+          <div class="wstep"><span class="wn">2</span><span class="wlogo"><img src="assets/tools/logo/Prospeo.png" alt="Prospeo"></span><div class="wnm">The new role</div><div class="wwh">joined recently</div></div>
+          <div class="wstep"><span class="wn">3</span><span class="wlogo"><img src="assets/tools/logo/Prospeo.png" alt="Prospeo"></span><span class="wlogo"><img src="assets/tools/logo/PredictLeads.png" alt="PredictLeads"></span><div class="wnm">The raise</div><div class="wwh">funding in the last 6 months</div></div>
+          <div class="wstep"><span class="wn">4</span><span class="wlogo"><img src="assets/tools/logo/TheirStack.png" alt="TheirStack"></span><div class="wnm">The tech stack</div><div class="wwh">a relevant tool · opt-in</div></div>
+          <div class="wstep"><span class="wn">5</span><span class="wlogo"><img src="assets/tools/logo/Prospeo.png" alt="Prospeo"></span><span class="wlogo"><img src="assets/tools/logo/AI%20Ark.png" alt="AI Ark"></span><span class="wlogo"><img src="assets/tools/logo/Apollo.io.png" alt="Apollo"></span><div class="wnm">The colleague</div><div class="wwh">another decision-maker</div></div>
+          <div class="wstep last"><span class="wn">6</span><span class="wlogo gen">${ICONS.net}</span><div class="wnm">The safety net</div><div class="wwh">always fires</div></div>
+        </div>
+        <div class="winner">${DOWN}<span>no data? <b>fall to the next — the safety net (6) always catches.</b></span></div>
+        <div class="reorder">We moved from Clay to Claude Code so we can <b>reorder the angles per campaign</b> in seconds — no rebuild.</div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo-white.png" alt="navreo"><span>· navreo.ai</span></div>
+          <div class="count">The waterfall</div>
+        </div>
+      </div>`;
+    track.appendChild(how);
+
+    // angle cards
+    ANGLES.forEach((a) => {
+      const s = document.createElement('div');
+      s.className = 'slide';
+      s.innerHTML = `
+        <div class="angle${a.net ? ' net' : ''}">
+          <div class="row-top">
+            <div class="iccat"><span class="ic">${ICONS[a.icon]}</span><div class="cat">${a.cat}</div></div>
+            <div class="badge">${a.n}</div>
+          </div>
+          <h2 class="name">${a.name}</h2>
+          <div class="diagram">
+            <div class="signal">
+              <div class="blab">${a.sigLabel}</div>
+              ${a.signal}
+            </div>
+            <div class="conn">${DOWN}<span>generates</span></div>
+            <div class="line-card">
+              <div class="blab">The line we send</div>
+              <div class="line">${a.line}</div>
+            </div>
+          </div>
+          ${a.net
+            ? '<div class="source netsrc">No data needed \u2014 the fallback always fires</div>'
+            : `<div class="source"><span class="sl"><img src="assets/tools/logo/${encodeURI(SRC[a.n].file)}.png" alt="${SRC[a.n].logo}"></span><div><div class="scap">Data source</div><div class="snm">${SRC[a.n].logo} \u00b7 ${SRC[a.n].cap}</div></div></div>`}
+          <div class="foot">
+            <div class="brand"><img src="assets/logo-navreo.png" alt="navreo"><span>· angle ${a.n} of ${total}</span></div>
+            <div class="count">Icebreakers</div>
+          </div>
+        </div>`;
+      track.appendChild(s);
+    });
+
+    // the stack — tools we use (logo slots)
+    const stack = document.createElement('div');
+    stack.className = 'slide';
+    stack.innerHTML = `
+      <div class="outro cream">
+        <div class="eyebrow">The stack</div>
+        <h2 class="sm">Six tools. <em>One workflow.</em></h2>
+        <div class="stackg">
+          <div class="scard run">
+            <span class="ltile"><img src="assets/claude-code-mascot.png" alt="Claude Code"></span>
+            <div><div class="sn">Claude Code</div><div class="sr">Runs the whole waterfall — reorder any campaign in seconds</div></div>
+          </div>
+          <div class="sgrid">
+            <div class="scard"><span class="ltile"><image-slot id="stk-prospeo" shape="rounded" radius="14" fit="contain" src="assets/tools/logo/Prospeo.png" placeholder="Prospeo"></image-slot></span><div><div class="sn">Prospeo</div><div class="sr">Prospect list · funding · tenure</div></div></div>
+            <div class="scard"><span class="ltile"><image-slot id="stk-aiark" shape="rounded" radius="14" fit="contain" src="assets/tools/logo/AI%20Ark.png" placeholder="AI Ark"></image-slot></span><div><div class="sn">AI Ark</div><div class="sr">Alternate prospect data</div></div></div>
+            <div class="scard"><span class="ltile"><image-slot id="stk-theirstack" shape="rounded" radius="14" fit="contain" src="assets/tools/logo/TheirStack.png" placeholder="TheirStack"></image-slot></span><div><div class="sn">TheirStack</div><div class="sr">Live hiring signals</div></div></div>
+            <div class="scard"><span class="ltile"><image-slot id="stk-predictleads" shape="rounded" radius="14" fit="contain" placeholder="PredictLeads"></image-slot></span><div><div class="sn">PredictLeads</div><div class="sr">Funding signals</div></div></div>
+          </div>
+          <div class="scard send">
+            <span class="ltile"><image-slot id="stk-smartlead" shape="rounded" radius="14" fit="contain" src="assets/tools/logo/Smartlead.png" placeholder="Smartlead"></image-slot></span>
+            <div><div class="sn">Smartlead</div><div class="sr">Sends the personalised campaign</div></div>
+          </div>
+        </div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo.png" alt="navreo"><span>· navreo.ai</span></div>
+          <div class="count">The stack</div>
+        </div>
+      </div>`;
+    track.appendChild(stack);
+
+    // outro — never empty principle
+    const principle = document.createElement('div');
+    principle.className = 'slide';
+    principle.innerHTML = `
+      <div class="outro cream">
+        <div class="eyebrow">What actually fires</div>
+        <h2 class="sm">One list of <em>20,000 leads.</em></h2>
+        <div class="bd">
+          <div class="bdhead"><div>Angle</div><div></div><div class="r">Share</div><div class="r">Leads</div></div>
+          <div class="bdrow"><div class="bdnm"><img src="assets/tools/logo/TheirStack.png" alt="">The hire</div><div class="bdbar"><i style="width:26%"></i></div><div class="bdpct">13%</div><div class="bdcnt">2,600</div></div>
+          <div class="bdrow"><div class="bdnm"><img src="assets/tools/logo/Prospeo.png" alt="">The new role</div><div class="bdbar"><i style="width:16%"></i></div><div class="bdpct">8%</div><div class="bdcnt">1,600</div></div>
+          <div class="bdrow"><div class="bdnm"><img src="assets/tools/logo/Prospeo.png" alt="">The raise</div><div class="bdbar"><i style="width:12%"></i></div><div class="bdpct">6%</div><div class="bdcnt">1,200</div></div>
+          <div class="bdrow"><div class="bdnm"><img src="assets/tools/logo/AI%20Ark.png" alt="">The tech stack</div><div class="bdbar"><i style="width:18%"></i></div><div class="bdpct">9%</div><div class="bdcnt">1,800</div></div>
+          <div class="bdrow"><div class="bdnm"><img src="assets/tools/logo/Prospeo.png" alt="">The colleague</div><div class="bdbar"><i style="width:28%"></i></div><div class="bdpct">14%</div><div class="bdcnt">2,800</div></div>
+          <div class="bdrow net"><div class="bdnm">The safety net</div><div class="bdbar"><i style="width:100%"></i></div><div class="bdpct">50%</div><div class="bdcnt">10,000</div></div>
+        </div>
+        <div class="bdnote">~50% lean on the safety net — <b>which is exactly why it has to be good.</b></div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo.png" alt="navreo"><span>· navreo.ai</span></div>
+          <div class="count">The breakdown</div>
+        </div>
+      </div>`;
+    track.appendChild(principle);
+
+    // CTA
+    const cta = document.createElement('div');
+    cta.className = 'slide';
+    cta.innerHTML = `
+      <div class="outro ink">
+        <div class="eyebrow">What we do</div>
+        <div class="cta-mega">Book more. <em>Not more hires.</em></div>
+        <p class="ctalede">We build go-to-market systems that help B2B sales teams book more meetings, without growing the team.</p>
+        <div class="cta-prompt">Book a free call at</div>
+        <div class="cta-url-big">navreo.ai/book-a-call</div>
+        <div class="foot">
+          <div class="brand"><img src="assets/logo-navreo-white.png" alt="navreo"><span>· last slide</span></div>
+          <div class="count">Thanks for swiping</div>
+        </div>
+      </div>`;
+    track.appendChild(cta);
+
+    const slides = track.children.length;
+
+    // dots
+    const dotsEl = document.getElementById('dots');
+    for (let i=0;i<slides;i++){
+      const d = document.createElement('div');
+      d.className = 'dot';
+      d.addEventListener('click', ()=>go(i));
+      dotsEl.appendChild(d);
+    }
+
+    let idx = parseInt(localStorage.getItem('ib-carousel-idx')||'0',10);
+    if (isNaN(idx) || idx<0 || idx>=slides) idx = 0;
+
+    const prevBtn = document.getElementById('prev');
+    const nextBtn = document.getElementById('next');
+
+    function render(){
+      track.style.transform = `translateX(${-idx*1080}px)`;
+      [...dotsEl.children].forEach((d,i)=>d.classList.toggle('active', i===idx));
+      prevBtn.toggleAttribute('disabled', idx===0);
+      nextBtn.toggleAttribute('disabled', idx===slides-1);
+      localStorage.setItem('ib-carousel-idx', idx);
+    }
+    function go(i){ idx = Math.max(0, Math.min(slides-1, i)); render(); }
+    window.go = go;
+
+    prevBtn.addEventListener('click', ()=>go(idx-1));
+    nextBtn.addEventListener('click', ()=>go(idx+1));
+    window.addEventListener('keydown', e=>{
+      if (e.key==='ArrowRight') go(idx+1);
+      if (e.key==='ArrowLeft') go(idx-1);
+    });
+
+    // swipe
+    let sx=0, sy=0, dragging=false;
+    const stage = document.getElementById('stage');
+    stage.addEventListener('pointerdown', e=>{ dragging=true; sx=e.clientX; sy=e.clientY; });
+    window.addEventListener('pointerup', e=>{
+      if(!dragging) return; dragging=false;
+      const dx=e.clientX-sx, dy=e.clientY-sy;
+      if (Math.abs(dx)>60 && Math.abs(dx)>Math.abs(dy)) go(idx + (dx<0?1:-1));
+    });
+
+    // scaling
+    function fit(){
+      const pad = 0.92;
+      const s = Math.min(window.innerWidth/1080, window.innerHeight/1350) * pad;
+      document.getElementById('frame').style.transform = `scale(${s})`;
+    }
+    window.addEventListener('resize', fit);
+    fit(); render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,584 @@
+<title>Navreo Tool — GTME Field Guide</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --ground:#FAF8F5; --panel:#FFFFFF; --sunken:#F3F0EB;
+    --ink:#1B1712; --ink-soft:#6C6259; --line:#E7E1D8;
+    --accent:#DC5A28; --accent-soft:#FBEADF;
+    --good:#2E7D51; --good-soft:#E4F0E8;
+    --info:#2C6E8F; --info-soft:#E1EEF4;
+    --shadow:0 1px 2px rgba(27,23,18,.04),0 8px 24px rgba(27,23,18,.05);
+    --maxw:820px;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --ground:#17130E; --panel:#211C16; --sunken:#1B1610;
+      --ink:#F1EBE2; --ink-soft:#A99E90; --line:#332B22;
+      --accent:#F0774A; --accent-soft:#3A2117;
+      --good:#5FB585; --good-soft:#18271E;
+      --info:#6FB6D6; --info-soft:#132630;
+      --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --ground:#17130E; --panel:#211C16; --sunken:#1B1610;
+    --ink:#F1EBE2; --ink-soft:#A99E90; --line:#332B22;
+    --accent:#F0774A; --accent-soft:#3A2117;
+    --good:#5FB585; --good-soft:#18271E;
+    --info:#6FB6D6; --info-soft:#132630;
+    --shadow:0 1px 2px rgba(0,0,0,.3),0 10px 30px rgba(0,0,0,.35);
+  }
+  :root[data-theme="light"]{
+    --ground:#FAF8F5; --panel:#FFFFFF; --sunken:#F3F0EB;
+    --ink:#1B1712; --ink-soft:#6C6259; --line:#E7E1D8;
+    --accent:#DC5A28; --accent-soft:#FBEADF;
+    --good:#2E7D51; --good-soft:#E4F0E8;
+    --info:#2C6E8F; --info-soft:#E1EEF4;
+    --shadow:0 1px 2px rgba(27,23,18,.04),0 8px 24px rgba(27,23,18,.05);
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0;background:var(--ground);color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    line-height:1.6;font-size:16px;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:32px 22px 96px}
+  a{color:var(--accent)}
+
+  .mast{padding:14px 0 26px;border-bottom:2px solid var(--ink);margin-bottom:22px}
+  .kicker{font-size:12px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);font-weight:700;margin:0 0 10px}
+  .mast h1{font-size:clamp(30px,5vw,44px);line-height:1.05;margin:0;font-weight:800;letter-spacing:-.02em;text-wrap:balance}
+  .mast p{margin:14px 0 0;color:var(--ink-soft);max-width:60ch;font-size:17px}
+  .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:18px}
+  .chip{font-size:12.5px;font-weight:600;padding:5px 11px;border-radius:999px;background:var(--sunken);color:var(--ink-soft);border:1px solid var(--line)}
+  .chip b{color:var(--ink)}
+
+  /* callout banner (chat or website) */
+  .banner{display:flex;gap:12px;align-items:flex-start;background:var(--info-soft);border:1px solid var(--line);
+    border-left:3px solid var(--info);border-radius:12px;padding:14px 16px;margin:0 0 26px;font-size:15px}
+  .banner .bi{font-size:18px;line-height:1.3}
+  .banner b{color:var(--ink)}
+
+  h2.part{font-size:13px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);font-weight:700;
+    margin:52px 0 6px;padding-top:20px;border-top:1px solid var(--line)}
+  .part-sub{margin:0 0 22px;color:var(--ink-soft);font-size:15px}
+
+  .intro{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:22px 24px;box-shadow:var(--shadow);margin-bottom:16px}
+  .intro h3{margin:0 0 6px;font-size:20px;font-weight:750}
+  .intro p{margin:0 0 14px;color:var(--ink-soft)}
+  .intro strong{color:var(--ink)}
+  table.rail{width:100%;border-collapse:collapse;font-size:15px}
+  table.rail td{padding:9px 10px;border-top:1px solid var(--line);vertical-align:top}
+  table.rail tr td:first-child{white-space:nowrap;font-weight:700;color:var(--accent);width:150px}
+
+  .task{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:20px 22px;margin:16px 0;box-shadow:var(--shadow)}
+  .task-h{display:flex;align-items:center;gap:12px;margin-bottom:4px}
+  .num{font-size:13.5px;font-weight:800;color:var(--panel);background:var(--accent);min-width:30px;height:26px;padding:0 6px;border-radius:8px;
+    display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto;letter-spacing:-.01em}
+  .task-h h3{margin:0;font-size:19px;font-weight:750;letter-spacing:-.01em;text-wrap:balance}
+  .when{color:var(--ink-soft);font-size:14.5px;margin:2px 0 14px}
+  .when b{color:var(--ink)}
+  .do{margin:0;padding-left:1.2em}
+  .do li{margin:5px 0}
+  .do em{color:var(--accent);font-style:normal;font-weight:600}
+  .good{display:flex;gap:9px;align-items:flex-start;margin-top:14px;padding:10px 13px;background:var(--good-soft);border-radius:10px;font-size:14.5px}
+  .good svg{flex:0 0 auto;margin-top:3px}
+  .good b{color:var(--good)}
+
+  .vid{margin-top:14px;border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:10px;background:var(--sunken);padding:13px 15px}
+  .vid-h{display:flex;align-items:center;gap:10px;font-weight:700;font-size:14.5px}
+  .play{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--accent);display:inline-flex;align-items:center;justify-content:center;color:#fff;font-size:11px}
+  .dur{margin-left:auto;font-size:12px;font-weight:700;color:var(--ink-soft);background:var(--panel);border:1px solid var(--line);padding:2px 8px;border-radius:999px;white-space:nowrap}
+  .vid ul{margin:10px 0 2px;padding-left:1.15em;font-size:14px;color:var(--ink-soft)}
+  .vid ul li{margin:3px 0}
+  .vid .ph{font-size:11.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent);font-weight:700}
+
+  .lite{padding:18px 22px}
+  .lite .task-h h3{font-size:17.5px}
+  .lite p{margin:0 0 10px;color:var(--ink-soft);font-size:15px}
+  .lite p strong{color:var(--ink)}
+  .lite .flav{margin:8px 0;padding:9px 13px;background:var(--sunken);border-radius:9px;font-size:14.5px}
+  .lite .flav b{color:var(--ink)}
+
+  .setter-intro{background:var(--accent-soft);border:1px solid var(--line);border-radius:12px;padding:14px 18px;margin:2px 0 6px;font-size:15px;color:var(--ink)}
+  .setter-intro b{color:var(--accent)}
+
+  .cheat-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:14px;box-shadow:var(--shadow);margin-top:6px}
+  table.cheat{width:100%;border-collapse:collapse;font-size:14.5px;min-width:600px;background:var(--panel)}
+  table.cheat th{text-align:left;font-size:11.5px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-soft);padding:12px 14px;background:var(--sunken);border-bottom:1px solid var(--line)}
+  table.cheat td{padding:11px 14px;border-top:1px solid var(--line);vertical-align:top}
+  table.cheat td:first-child{font-weight:650;white-space:nowrap}
+  table.cheat td.say{color:var(--accent);font-style:italic}
+  table.cheat td.page b{color:var(--ink)}
+  table.cheat tr.grp td{background:var(--sunken);font-weight:700;color:var(--ink)}
+  .rules{display:grid;gap:10px;margin-top:20px}
+  .rule{display:flex;gap:12px;align-items:flex-start;background:var(--accent-soft);border-radius:12px;padding:14px 16px}
+  .rule .n{font-weight:800;color:var(--accent);font-size:18px;line-height:1.2}
+  .rule p{margin:0;font-size:15px}
+  .rule b{color:var(--ink)}
+
+  .shot{background:var(--panel);border:1px dashed var(--line);border-radius:14px;padding:20px 22px;margin-top:16px}
+  .shot h3{margin:0 0 4px;font-size:17px}
+  .shot p{margin:0 0 16px;color:var(--ink-soft);font-size:14.5px}
+  .shot h4{margin:14px 0 6px;font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--accent)}
+  .shot ol{margin:0;padding-left:1.4em;font-size:14px}
+  .shot ol li{margin:4px 0}
+  .foot{margin-top:40px;color:var(--ink-soft);font-size:13px;text-align:center}
+</style>
+
+<div class="wrap">
+  <header class="mast">
+    <p class="kicker">Team Onboarding · Standard Operating Procedure</p>
+    <h1>Navreo Tool — GTME Field Guide</h1>
+    <p>You've just joined as a Go-To-Market Engineer. This gets you delivering for clients <strong>inside the Navreo tool</strong> on day one. Read the text to know <strong>which page to open</strong>; watch the video to know <strong>exactly how</strong>.</p>
+    <div class="meta">
+      <span class="chip"><b>Skim it</b> in one sitting</span>
+      <span class="chip"><b>20 videos</b> · ~85 min total</span>
+      <span class="chip">Covers <b>Tier 1–4</b> + Setter</span>
+    </div>
+  </header>
+
+  <div class="banner">
+    <span class="bi">⚖️</span>
+    <div><b>Chat or website — your choice.</b> Everything here can be done two ways: by <b>talking to a chat</b>, or by <b>clicking around the website</b>. Use whichever is easier for you. For campaign changes we recommend doing them <b>in-app</b>.</div>
+  </div>
+
+  <!-- INTRO -->
+  <section class="intro">
+    <h3>How the tool works — 60 seconds</h3>
+    <p>You don't click your way through Navreo. You <strong>talk to it in plain English in the chat</strong>, and the <strong>tool is your cockpit</strong> — where everything lands and where you take action.</p>
+    <p><strong>You type what you want</strong> → the work happens → the <strong>result shows up on a page.</strong> Five places on the left rail, that's the whole map:</p>
+    <table class="rail">
+      <tr><td>Campaigns</td><td>Every campaign, a health scoreboard, and your <b>daily to-do</b> (optimisations)</td></tr>
+      <tr><td>Lists</td><td>Every <b>prospect list</b> you've built + where you <b>add more prospects</b></td></tr>
+      <tr><td>Analytics</td><td><b>Account health</b> — deliverability, reply / bounce, mailboxes</td></tr>
+      <tr><td>Setter</td><td>Your <b>AI-SDRs</b> — they draft replies to people who respond</td></tr>
+      <tr><td>Settings</td><td>Your account bits</td></tr>
+    </table>
+    <div class="vid" style="margin-top:16px">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · The tour<span class="dur">2 min</span></div>
+      <ul>
+        <li>The left rail: Campaigns, Lists, Analytics, Setter — what each is for</li>
+        <li>The golden rule: <em>ask in chat → check the page</em> (one live example end-to-end)</li>
+        <li>Chat vs. website — same result, pick what suits you</li>
+        <li>What NOT to worry about (the tech behind the scenes runs itself)</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- SETUP -->
+  <h2 class="part">Setup — do this once (5 minutes)</h2>
+  <p class="part-sub">Pin three chats you'll open every day, so each is one click away.</p>
+  <section class="intro">
+    <table class="rail">
+      <tr><td>/navreo-inbox</td><td>Manage the inbox — read and handle replies. <b>Your daily inbox home.</b></td></tr>
+      <tr><td>/navreo-analytics</td><td>Deliverability &amp; the account at a <b>high level</b>. <b>Account-wide view.</b></td></tr>
+      <tr><td>/navreo-campaigns</td><td><b>Campaign-by-campaign</b> insights (deeper than Analytics). <b>Make the changes in-app.</b></td></tr>
+    </table>
+    <p style="margin:14px 0 0;color:var(--ink-soft);font-size:14.5px"><strong style="color:var(--ink)">How they differ:</strong> <em style="color:var(--accent);font-style:normal;font-weight:600">/navreo-analytics</em> is the account-level picture (is the whole account healthy?). <em style="color:var(--accent);font-style:normal;font-weight:600">/navreo-campaigns</em> zooms into each campaign and tells you what to change — then you make that change in the app.</p>
+    <div class="vid" style="margin-top:16px">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Set up &amp; pin your daily chats<span class="dur">2 min</span></div>
+      <ul>
+        <li>Adding /navreo-inbox, /navreo-analytics, /navreo-campaigns</li>
+        <li>How to pin them so they're one click away each morning</li>
+        <li>When to reach for each one</li>
+        <li>Chat or in-app: doing a change either way</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- PART 1 -->
+  <h2 class="part">Part 1 — Your Daily 5</h2>
+  <p class="part-sub">The five things you'll do most. Master these and you can run a client.</p>
+
+  <article class="task">
+    <div class="task-h"><span class="num">1</span><h3>Check for campaign optimisations</h3></div>
+    <p class="when"><b>Every morning</b> — the tool tells you which campaigns need a tweak. Your <b>/navreo-campaigns</b> chat gives the campaign-by-campaign read.</p>
+    <ol class="do">
+      <li>Open <em>Campaigns</em> (or your <em>/navreo-campaigns</em> chat).</li>
+      <li>Work the <b>action cards / to-do</b> at the top — each is a suggested fix in plain English (swap a losing version, pause a dead angle, top up leads…).</li>
+      <li>Click a card → it opens the <b>Optimise cockpit</b> with the change teed up.</li>
+      <li>Approve it, or ask in chat if unsure. Clear the list. <b>Make the changes in-app.</b></li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> the to-do is empty (or every item deliberately left). Every same-day optimisation actioned.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · The morning optimisation run<span class="dur">4 min</span></div>
+      <ul>
+        <li>Opening Campaigns / the /navreo-campaigns chat and reading the health scoreboard</li>
+        <li>What an action card is telling you and how to trust it</li>
+        <li>Clicking into the Optimise cockpit → approving a version swap in-app</li>
+        <li>When to just do it vs. when to ask in chat first</li>
+        <li>Finishing: clearing the to-do for every client you cover</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task">
+    <div class="task-h"><span class="num">2</span><h3>Daily account-health check</h3></div>
+    <p class="when"><b>Once a day</b> — keep sending accounts healthy so emails land. Your <b>/navreo-analytics</b> chat gives the high-level read.</p>
+    <ol class="do">
+      <li>Open <em>Analytics</em> (or your <em>/navreo-analytics</em> chat).</li>
+      <li>Scan the top: <b>reply rate</b>, <b>bounce rate</b>, <b>in-warm-up / held</b> mailboxes.</li>
+      <li>Look at the <b>Inbox &amp; Domain Manager</b> inline — anything red needs action (the tool spells it out).</li>
+      <li>If something's off, work it right there in the Inbox &amp; Domain Manager (deeper follow-ups → task 13).</li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> bounce is low, reply rate steady, no un-explained red mailboxes.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · The 5-minute health check<span class="dur">4 min</span></div>
+      <ul>
+        <li>The three numbers that matter: reply rate, bounce rate, held mailboxes</li>
+        <li>Reading the Inbox &amp; Domain Manager — what red vs amber means</li>
+        <li>The client + date-range filters (7 / 14 / 30 days)</li>
+        <li>What to do when a domain gets flagged (and what to leave alone)</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task">
+    <div class="task-h"><span class="num">3</span><h3>Launch a new campaign</h3></div>
+    <p class="when"><b>When a client needs</b> a new outreach campaign built and set live.</p>
+    <ol class="do">
+      <li>In chat, say what you want: <em>"Launch a campaign for [client] targeting [who], offering [offer]."</em></li>
+      <li>The tool opens the <b>Strategy walkthrough</b> — reach, audience, first line, the emails.</li>
+      <li>Walk the steps, approve the copy and targeting.</li>
+      <li>On launch it <b>opens the new campaign on its Overview page.</b></li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> the campaign appears in <b>Campaigns</b>, leads loaded, status green.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Zero to live campaign<span class="dur">6 min</span></div>
+      <ul>
+        <li>The one sentence to type to start a launch</li>
+        <li>Walking the Strategy steps: reach → audience → first line → the emails</li>
+        <li>Approving copy vs. asking for changes in chat</li>
+        <li>Hitting live and landing on the campaign Overview</li>
+        <li>The proof it worked: leads loaded, status green</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task">
+    <div class="task-h"><span class="num">4</span><h3>Find prospects you've already added</h3></div>
+    <p class="when"><b>Before you build or add anyone</b> — check who we've already got so you never double-contact.</p>
+    <ol class="do">
+      <li>Open <em>Lists</em> to browse/search every prospect list already pulled (by client, niche, source).</li>
+      <li>To check a specific company/person, ask in chat: <em>"Have we ever contacted anyone at [company]?"</em> — straight yes/no with the campaign.</li>
+      <li>To see who's inside a campaign, open it → <b>Leads</b> tab.</li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> you can answer "do we already have these people?" in under a minute, before spending on new data.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Who do we already have?<span class="dur">3 min</span></div>
+      <ul>
+        <li>Searching the Lists page by client / niche / source</li>
+        <li>The chat question that checks contact history instantly</li>
+        <li>Opening a campaign's Leads tab to see who's enrolled</li>
+        <li>Why you always check this first (no double-contacting)</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task">
+    <div class="task-h"><span class="num">5</span><h3>Add new prospects to an existing campaign</h3></div>
+    <p class="when"><b>When a campaign is running dry</b> and needs fresh leads topped in.</p>
+    <ol class="do">
+      <li>Open <em>Lists → Sources</em> and use <b>Pull More</b>, <b>or</b> say in chat <em>"top up [campaign] with fresh leads."</em></li>
+      <li>Review the pulled prospects; the <b>upload gate opens in the chat</b> to confirm.</li>
+      <li>Confirm → new leads added, and a <b>record shows on the campaign's Leads page</b> (it tells you if only part of the pool went in).</li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> the campaign's lead count goes up, and the Leads page shows the new upload record.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Topping up a dry campaign<span class="dur">5 min</span></div>
+      <ul>
+        <li>Spotting a campaign that's running out (where the tool flags it)</li>
+        <li>Sources → Pull More to get matching prospects</li>
+        <li>The upload gate in chat — reviewing and confirming</li>
+        <li>Checking the Leads page for the upload record</li>
+        <li>What "only part of the pool uploaded" means and what to do</li>
+      </ul>
+    </div>
+  </article>
+
+  <!-- PART 2 -->
+  <h2 class="part">Part 2 — The wider toolkit</h2>
+  <p class="part-sub">Things you'll do several times a week. Same rule: <strong>ask in chat, check the page.</strong> Each has a video.</p>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">6</span><h3>Get prospects — a niche list, or verified people at named companies</h3></div>
+    <p>Two flavours of the same job — both live in <strong style="color:var(--accent)">/lilly-tam</strong>, and both land on the <strong>Lists</strong> page, company-matched, with verified emails.</p>
+    <div class="flav"><b>A · Build a niche list</b> — in <b style="color:var(--accent)">/lilly-tam</b>: "build me a list of freight forwarders / MSPs / roofers." Ask for the niche + geo → review → lands on Lists.</div>
+    <div class="flav"><b>B · Verify DMs at a company list</b> — in <b style="color:var(--accent)">/lilly-tam</b>: "pull the DMs for these companies and verify the emails." It finds the right decision-makers <b>and verifies their emails</b> → lands on Lists.</div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Get prospects with /lilly-tam: niche list &amp; verified DMs<span class="dur">5 min</span></div>
+      <ul>
+        <li>Opening /lilly-tam</li>
+        <li>Flavour A: the phrase to build a niche list (niche + location + who)</li>
+        <li>Flavour B: handing over a company list to pull + verify decision-makers</li>
+        <li>Reviewing quality and seeing verified emails before it lands</li>
+        <li>Where both appear on the Lists page → straight into a campaign</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">7</span><h3>Size a market <span style="font-weight:500;color:var(--ink-soft);font-size:15px">(TAM = how many could we email?) · /lilly-tam</span></h3></div>
+    <p>"How big is the market for [segment]? Worth running?" In <strong style="color:var(--accent)">/lilly-tam</strong> → you get <strong>one honest number</strong> (findable decision-makers, minus anyone we've already contacted). If it's big enough, ask it to <strong>draft the campaign</strong> (targeting saved so you can Pull More later).</p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Is this market big enough? (/lilly-tam)<span class="dur">3 min</span></div>
+      <ul>
+        <li>Asking for a TAM in chat</li>
+        <li>The one number that matters (net findable decision-makers)</li>
+        <li>Turning a "yes" into a saved, ready-to-build campaign</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">8</span><h3>Write &amp; QA cold email copy</h3></div>
+    <p>Ask in chat to write the copy (happens right in chat, no page needed). Before any launch, ask it to <strong>QA the campaign</strong> — copy, spintax, variables, lead fill.</p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Copy: write it &amp; QA it<span class="dur">4 min</span></div>
+      <ul>
+        <li>Asking for copy in chat and iterating</li>
+        <li>The pre-launch QA check and reading its report</li>
+        <li>The green light: variables filled, no spintax errors, leads mapped</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">9</span><h3>Add or swap A/B versions <span style="font-weight:500;color:var(--ink-soft);font-size:15px">· /lilly-bot</span></h3></div>
+    <p>A version losing, or want to test new angles/CTAs? In <strong style="color:var(--accent)">/lilly-bot</strong> — <em>"add 4 problem-statement variants and turn off the losing one."</em> The <strong>losing-versions card</strong> on the campaign shows what's winning.</p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · A/B versions with /lilly-bot<span class="dur">3 min</span></div>
+      <ul>
+        <li>Opening /lilly-bot, adding new variants and disabling losers in one ask</li>
+        <li>Reading the losing-versions traffic-light card</li>
+        <li>When to swap vs. when to wait for more data</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">10</span><h3>Add icebreakers / personalisation</h3></div>
+    <p>An underperforming campaign needs a personal first line per lead. In chat — <em>"add icebreakers to [campaign]."</em> Every lead gets a personalised opener; nobody is left blank.</p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Personalise with icebreakers<span class="dur">3 min</span></div>
+      <ul>
+        <li>The one ask that fills every lead's opener</li>
+        <li>Where the icebreaker angles come from (role change, hiring, funding…)</li>
+        <li>Checking a few before it goes live</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">11</span><h3>Signal campaigns (hiring &amp; engagement)</h3></div>
+    <p>Build a campaign that fires off a trigger. In chat — <em>"set up the [company] hiring-signal pipeline for [client]"</em> or <em>"scrape [competitor]'s LinkedIn engagers and build a campaign."</em> It builds the pipeline and the draft.</p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Signal-based campaigns<span class="dur">5 min</span></div>
+      <ul>
+        <li>Hiring signal vs. engagement/follower signal — when to use each</li>
+        <li>The phrase to set one up</li>
+        <li>Where the leads flow and how to launch it</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">12</span><h3>Build a recontact campaign <span style="font-weight:500;color:var(--ink-soft);font-size:15px">· /lilly-recontact</span></h3></div>
+    <p>Re-approach people from old/finished campaigns without double-contacting. In <strong style="color:var(--accent)">/lilly-recontact</strong> — <em>"build a recontact campaign from [old campaign]."</em> It nets out anyone still active or suppressed and opens a ready draft.</p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Recontact done safely with /lilly-recontact<span class="dur">4 min</span></div>
+      <ul>
+        <li>The one ask to rebuild an audience cleanly</li>
+        <li>How it avoids double-contacting (suppressions + active campaigns)</li>
+        <li>Seeing the ready draft in the tool before it goes live</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">13</span><h3>Deliverability audit &amp; follow-ups <span style="font-weight:500;color:var(--ink-soft);font-size:15px">· Analytics → Inbox &amp; Domain Manager</span></h3></div>
+    <p>Reply rates drop, bounces spike, or a weekly sweep. Open <strong>Analytics → the "Inbox &amp; Domain Manager"</strong> section. It shows domain + inbox health and the follow-ups to make right there — swap a flagged domain, retire stale inboxes, rotate sending accounts.</p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Deliverability: the Inbox &amp; Domain Manager<span class="dur">5 min</span></div>
+      <ul>
+        <li>Finding the Inbox &amp; Domain Manager on the Analytics page</li>
+        <li>Reading domain + inbox health and what's flagged</li>
+        <li>The follow-ups: swap a flagged domain, retire stale inboxes, rotate sending accounts</li>
+        <li>Confirming the fix updates on the page</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task lite">
+    <div class="task-h"><span class="num">14</span><h3>Housekeeping (occasional)</h3></div>
+    <p>Tidy-ups that keep an account clean — all in chat: <em>"add a subsequence to [campaign]"</em> · <em>"refresh the vertical drafts, copy only, no launch"</em> · <em>"retire the [dead angle] campaign."</em></p>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Account housekeeping<span class="dur">3 min</span></div>
+      <ul>
+        <li>Adding a subsequence</li>
+        <li>Refreshing draft campaigns without launching</li>
+        <li>Retiring a dead campaign or angle cleanly</li>
+      </ul>
+    </div>
+  </article>
+
+  <!-- PART 3 — SETTER -->
+  <h2 class="part">Part 3 — The Setter (your AI-SDRs)</h2>
+  <p class="part-sub">Your team of AI sales reps. They watch for replies and draft the response so no conversation goes cold.</p>
+  <div class="setter-intro">Manage your <b>daily inbox</b> from <b>/navreo-inbox</b>; manage the <b>agents themselves</b> here. Four things to know, in order.</div>
+
+  <article class="task">
+    <div class="task-h"><span class="num">S1</span><h3>Create an agent (do it in chat)</h3></div>
+    <p class="when"><b>When a client or set of campaigns</b> needs its own AI-SDR.</p>
+    <ol class="do">
+      <li>In chat — <em>"create a setter agent for [client] on [campaigns]."</em></li>
+      <li>It asks for the brief — the <b>pricing</b>, the <b>resources</b> to offer (Loom, Calendly, breakdown doc…), and <b>when to send each</b>.</li>
+      <li>It builds the agent and assigns it to those campaigns.</li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> the agent exists, is assigned to the right campaigns, and knows what to offer and when.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Create a setter agent<span class="dur">4 min</span></div>
+      <ul>
+        <li>The one ask to spin up an agent</li>
+        <li>The brief it needs: pricing, resources, when to send each</li>
+        <li>Assigning it to the right campaigns</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task">
+    <div class="task-h"><span class="num">S2</span><h3>Train the AI-SDRs</h3></div>
+    <p class="when"><b>Before it goes near a real reply</b> — make the agent sound like us.</p>
+    <ol class="do">
+      <li>Share the <b>training link</b> so example replies can be approved or redrafted.</li>
+      <li>Teach <b>standing corrections</b> in chat (<em>"always offer the demo, never quote price on the first reply"</em>).</li>
+      <li>It remembers what you teach it.</li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> drafts come back in our tone, and a correction you taught once stops coming back.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Train your AI-SDRs<span class="dur">4 min</span></div>
+      <ul>
+        <li>Sharing the training link</li>
+        <li>Approving / redrafting example replies to teach tone</li>
+        <li>Teaching a standing correction that sticks</li>
+        <li>Checking the next draft reflects it</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task">
+    <div class="task-h"><span class="num">S3</span><h3>Draft responses</h3></div>
+    <p class="when"><b>Day to day</b>, as replies come in.</p>
+    <ol class="do">
+      <li>Open <em>Setter</em>. For each incoming reply it shows a <b>drafted response</b>.</li>
+      <li>Read it, edit if needed, approve to send. Newest-relevant first.</li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> every reply has a good draft; you're reviewing and approving, not writing from scratch.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Drafting &amp; approving responses<span class="dur">4 min</span></div>
+      <ul>
+        <li>The Setter queue: what needs a reply first</li>
+        <li>Reading a drafted reply, editing, approving to send</li>
+        <li>When to escalate instead of send</li>
+      </ul>
+    </div>
+  </article>
+
+  <article class="task">
+    <div class="task-h"><span class="num">S4</span><h3>Add them to automated follow-ups</h3></div>
+    <p class="when"><b>When a lead goes quiet</b> and needs chasing without you remembering to.</p>
+    <ol class="do">
+      <li>In chat or from the conversation — <em>"add this to automated follow-ups."</em></li>
+      <li>The agent keeps nudging on a schedule until they reply or the sequence ends.</li>
+    </ol>
+    <div class="good"><svg width="16" height="16" viewBox="0 0 16 16"><path fill="var(--good)" d="M6.5 11.4 3 7.9l1.1-1.1 2.4 2.3 5.4-5.4L13 4.8z"/></svg><span><b>What good looks like:</b> quiet leads get chased automatically, and you can see a follow-up actually fired.</span></div>
+    <div class="vid">
+      <div class="vid-h"><span class="play">▶</span><span class="ph">Video</span> · Automated follow-ups<span class="dur">3 min</span></div>
+      <ul>
+        <li>Turning on automated follow-ups for a conversation</li>
+        <li>The cadence and when it stops</li>
+        <li>Checking a follow-up actually fired</li>
+      </ul>
+    </div>
+  </article>
+
+  <!-- CHEAT SHEET -->
+  <h2 class="part">Cheat-sheet — say it, then check the page</h2>
+  <div class="cheat-wrap">
+    <table class="cheat">
+      <thead><tr><th>You want to…</th><th>Say this in chat (or click the site)</th><th>Then check</th></tr></thead>
+      <tbody>
+        <tr class="grp"><td colspan="3">Your daily chats</td></tr>
+        <tr><td>Manage the inbox today</td><td class="say">open /navreo-inbox</td><td class="page"><b>Setter</b></td></tr>
+        <tr><td>Account health, high level</td><td class="say">open /navreo-analytics</td><td class="page"><b>Analytics</b></td></tr>
+        <tr><td>Campaign-by-campaign insights</td><td class="say">open /navreo-campaigns</td><td class="page"><b>Campaigns</b> (change in-app)</td></tr>
+        <tr class="grp"><td colspan="3">Campaigns &amp; prospects</td></tr>
+        <tr><td>See today's fixes</td><td class="say">(nothing — just open it)</td><td class="page"><b>Campaigns</b> → to-do</td></tr>
+        <tr><td>Approve a fix</td><td class="say">click the action card</td><td class="page"><b>Optimise cockpit</b></td></tr>
+        <tr><td>Launch a campaign</td><td class="say">"launch a campaign for [client] targeting [who], offering [offer]"</td><td class="page"><b>Strategy</b> → <b>Campaigns</b></td></tr>
+        <tr><td>Check who we already have</td><td class="say">"have we contacted anyone at [company]?"</td><td class="page"><b>Lists</b> / campaign <b>Leads</b></td></tr>
+        <tr><td>Top up a dry campaign</td><td class="say">"top up [campaign] with fresh leads"</td><td class="page">upload gate → <b>Leads</b></td></tr>
+        <tr><td>Build a niche list</td><td class="say"><b>/lilly-tam</b> → "build a list of [niche] in [geo]"</td><td class="page"><b>Lists</b></td></tr>
+        <tr><td>Get + verify DMs at companies</td><td class="say"><b>/lilly-tam</b> → "pull the DMs for these companies and verify the emails"</td><td class="page"><b>Lists</b></td></tr>
+        <tr><td>Size a market</td><td class="say"><b>/lilly-tam</b> → "size the TAM for [segment]"</td><td class="page">chat</td></tr>
+        <tr><td>Set a draft campaign live</td><td class="say">"set [campaign] live"</td><td class="page"><b>Campaigns</b> (status green)</td></tr>
+        <tr><td>Write / QA copy</td><td class="say">"write copy for [campaign]" / "QA [campaign]"</td><td class="page">chat</td></tr>
+        <tr><td>A/B versions</td><td class="say"><b>/lilly-bot</b> → "add [N] variants, disable the loser"</td><td class="page">campaign card</td></tr>
+        <tr><td>Add icebreakers</td><td class="say">"add icebreakers to [campaign]"</td><td class="page">campaign</td></tr>
+        <tr><td>Recontact</td><td class="say"><b>/lilly-recontact</b> → "build a recontact campaign from [campaign]"</td><td class="page">tool draft</td></tr>
+        <tr class="grp"><td colspan="3">Setter (AI-SDRs)</td></tr>
+        <tr><td>Create a setter agent</td><td class="say">"create a setter agent for [client] on [campaigns]"</td><td class="page"><b>Setter</b></td></tr>
+        <tr><td>Train an agent</td><td class="say">"share the training link" / teach a correction</td><td class="page"><b>Setter</b></td></tr>
+        <tr><td>Auto follow-up a quiet lead</td><td class="say">"add this to automated follow-ups"</td><td class="page"><b>Setter</b></td></tr>
+        <tr><td>Reply to a lead</td><td class="say">(open it)</td><td class="page"><b>Setter</b></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rules">
+    <div class="rule"><span class="n">1</span><p><b>Ask in plain English.</b> You never need to know how it works underneath.</p></div>
+    <div class="rule"><span class="n">2</span><p>You can always do it in <b>chat OR on the website</b> — pick what's easier.</p></div>
+    <div class="rule"><span class="n">3</span><p><b>Always check who we already have</b> before you add or spend on new prospects.</p></div>
+  </div>
+
+  <!-- SHOT LIST -->
+  <div class="shot">
+    <h3>📹 Video shot-list — for whoever records these</h3>
+    <p>20 videos, ~85 min total. Record in order; each is short and shows one real, live example end-to-end.</p>
+    <h4>Getting started</h4>
+    <ol>
+      <li>Set up &amp; pin your daily chats (2m)</li>
+      <li>The tour (2m)</li>
+    </ol>
+    <h4>Daily 5</h4>
+    <ol start="3">
+      <li>Morning optimisation run (4m)</li>
+      <li>5-minute health check (4m)</li>
+      <li>Zero to live campaign (6m)</li>
+      <li>Who do we already have? (3m)</li>
+      <li>Topping up a dry campaign (5m)</li>
+    </ol>
+    <h4>Wider toolkit</h4>
+    <ol start="8">
+      <li>Get prospects with /lilly-tam: niche list &amp; verified DMs (5m)</li>
+      <li>Is this market big enough? — /lilly-tam (3m)</li>
+      <li>Copy: write &amp; QA (4m)</li>
+      <li>A/B versions with /lilly-bot (3m)</li>
+      <li>Personalise with icebreakers (3m)</li>
+      <li>Signal-based campaigns (5m)</li>
+      <li>Recontact done safely with /lilly-recontact (4m)</li>
+      <li>Deliverability: the Inbox &amp; Domain Manager (5m)</li>
+      <li>Account housekeeping (3m)</li>
+    </ol>
+    <h4>Setter (AI-SDRs)</h4>
+    <ol start="17">
+      <li>Create a setter agent (4m)</li>
+      <li>Train your AI-SDRs (4m)</li>
+      <li>Drafting &amp; approving responses (4m)</li>
+      <li>Automated follow-ups (3m)</li>
+    </ol>
+  </div>
+
+  <p class="foot">Navreo · GTME Field Guide · keep this in sync with the Notion use-case audit (Tier 1–4)</p>
+</div>

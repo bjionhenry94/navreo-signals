@@ -1,0 +1,33 @@
+{
+  "client_slug": "arnic",
+  "client_name": "Arnic",
+  "what_they_sell": "Sales-enablement / rep-adoption consulting. Fixes the gap where the sales process holds up in QBRs but reps don't follow it in real deals; gets reps to actually adopt the sales process, playbook and tech stack. Proof point: GitLab, +15% registered deals in 3 months. Lead magnet in market: a 1-pager on the root causes reps don't adopt the process / abandon the sales tech stack.",
+  "icp": {
+    "verticals": ["All B2B companies with a direct sales team (SaaS/software is the proven core + GitLab proof; broadened to all B2B per 2026-05-26 strategy)"],
+    "roles": ["Head of Sales", "Head of Sales Enablement", "Sales Operations", "Revenue Operations"],
+    "geo": ["US", "GB", "CA", "AU", "IE"],
+    "headcount_bands": ["101-200", "201-500", "501-1000"],
+    "headcount_range": "100-1000 (locked 2026-05-26)",
+    "best_responding_persona": "Heads of Sales at 100-200 employee companies",
+    "dm_titles": ["Head of Sales", "Head of Sales Enablement", "Sales Operations", "Revenue Operations"]
+  },
+  "named_clients": ["GitLab"],
+  "existing_campaigns": {
+    "smartlead_workspace": "Navreo master key (Arnic lives in the master account, NOT the 1417c9a6/Asteri workspace)",
+    "active_campaign_names": [
+      "Arnic – Sales Leaders – Navreo – [May] (workhorse: 23,510 sent / 299 replies / 1.2% RR)",
+      "Arnic – SaaS Sales Leaders (50-1K) – Focused – [May 2026] (just launched)",
+      "Arnic – Sales Enablement Roles (drafted)",
+      "Navreo - Arnic List + [May 2026] (0.4-0.6% RR)"
+    ],
+    "mechanisms_already_tried": ["Direct Sales-Leader targeted lists (workhorse)", "Volume with/without Industry (broad)", "Event: Sparkle Global Conference", "LinkedIn Followers", "Partner-focused angle"],
+    "untried_mechanisms": ["Hiring-signal intent (TheirStack)", "LinkedIn engagement-signal intent (Trigify)", "Tech-install / news / funding intent (Prospeo signal filters)"]
+  },
+  "constraints": {
+    "contract_end": "2026-05-29 (renewal decision imminent as of late May 2026)",
+    "capacity": "~75k email sends/month (50k contracted + backup infra)",
+    "copy_note": "Proof point and copy are SaaS-flavoured; broad B2B lists leak staffing/recruiting/media firms that fit poorly"
+  },
+  "first_briefed_at": "2026-05-26",
+  "last_refreshed_at": "2026-05-26"
+}

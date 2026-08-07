@@ -1,0 +1,79 @@
+[
+ {
+  "prim": 0,
+  "n": 45493,
+  "title_conf": 5451,
+  "geo_known": 10781,
+  "segment": "SaaS Sales Leaders/CEOs"
+ },
+ {
+  "prim": 1,
+  "n": 3427,
+  "title_conf": 3427,
+  "geo_known": 3427,
+  "segment": "Catch-All Sales Leaders"
+ },
+ {
+  "prim": 2,
+  "n": 3314,
+  "title_conf": 86,
+  "geo_known": 77,
+  "segment": "Sales Worldwide 20-200"
+ },
+ {
+  "prim": 3,
+  "n": 9787,
+  "title_conf": 6794,
+  "geo_known": 2302,
+  "segment": "SEO/GEO Agencies"
+ },
+ {
+  "prim": 4,
+  "n": 6444,
+  "title_conf": 122,
+  "geo_known": 104,
+  "segment": "Other Sales Leaders"
+ },
+ {
+  "prim": 5,
+  "n": 10592,
+  "title_conf": 347,
+  "geo_known": 451,
+  "segment": "CEOs"
+ },
+ {
+  "prim": 6,
+  "n": 30218,
+  "title_conf": 407,
+  "geo_known": 9283,
+  "segment": "Vertical (industry)"
+ },
+ {
+  "prim": 7,
+  "n": 28835,
+  "title_conf": 6486,
+  "geo_known": 3726,
+  "segment": "Other Navreo verticals"
+ },
+ {
+  "prim": 8,
+  "n": 1383,
+  "title_conf": 1382,
+  "geo_known": 1042,
+  "segment": "Followers"
+ },
+ {
+  "prim": 9,
+  "n": 13676,
+  "title_conf": 665,
+  "geo_known": 157,
+  "segment": "Recruitment"
+ },
+ {
+  "prim": 10,
+  "n": 8684,
+  "title_conf": 87,
+  "geo_known": 666,
+  "segment": "Other Navreo"
+ }
+]

@@ -1,0 +1,164 @@
+{
+  "brief_id": "navreo-gtm-hiring-signal",
+  "brief_name": "Navreo GTM Hiring Signal",
+  "client": "Navreo (internal)",
+  "created_at": "2026-05-13",
+
+  "ideation": {
+    "icp_description": "Companies hiring for roles that signal building a GTM system internally — Demand Gen, GTM Engineer, RevOps, Founding/First GTM hires. Company size 10-200, in high-GDP countries, direct employers (not recruiting agencies).",
+    "offer": "We help companies set up go-to-market systems. They only pay after we've built it for them. We can also set it up and run it for them on a performance basis — often cheaper and less risky than a full-time hire.",
+    "why_signal_fits_angles": [
+      "Agency experience — we've built GTM systems for 50+ businesses across industries, we know what works and can apply it",
+      "No long-term commitment — we build, run, and hand over with no lock-in",
+      "Continuous tool/tech-stack optimisation — full-time hires get wedded to one stack, we adapt based on market signal"
+    ],
+    "angles_tested": [
+      { "id": "A", "type": "title", "patterns": ["Demand Generation","Demand Gen","GTM Engineer","Go-To-Market Engineer","Go to Market Engineer"], "30d_tam": 292, "fit_pct": 100, "kept": true },
+      { "id": "B", "type": "description", "patterns": ["Clay","Apollo","Outreach","Smartlead","Lemlist","Instantly"], "30d_tam": 23717, "fit_pct": 40, "kept": false, "drop_reason": "Too noisy — Apollo matches candidate-sourcing-tool mentions, 'outreach' matches generic verb usage" },
+      { "id": "C", "type": "title", "patterns": ["RevOps","Revenue Operations","Sales Operations","Marketing Operations","GTM Operations"], "30d_tam": 1001, "fit_pct": 80, "kept": true },
+      { "id": "D", "type": "title", "patterns": ["First Sales Hire","Founding Account Executive","Founding GTM","Founding Sales","Founding Marketer","Founding Marketing","First Growth Hire"], "30d_tam": 184, "fit_pct": 100, "kept": true },
+      { "id": "E", "type": "description", "patterns": ["cold outbound","outbound sequences","GTM stack","build the GTM"], "30d_tam": 292, "fit_pct": 100, "kept": false, "drop_reason": "Likely overlaps Angle A — saving a redundant saved search" }
+    ]
+  },
+
+  "qualification": {
+    "_purpose": "Role-only judgement layer applied by lilly-theirstack-data-processing Phase 2.5. Classifies each new Jobs row as QUALIFIED / BORDERLINE / OFF_BRIEF based on whether the role signals 'building or scaling a GTM system internally'. Companies are NEVER excluded by this gate — only specific roles. A company hiring an intern today is still a fine prospect under a different brief tomorrow.",
+    "role_signal_definition": "The new hire will own, build, or strongly influence the company's internal GTM system — process, tooling, or growth motion. Not a person running orders inside an established operational structure.",
+    "qualified_role_patterns": [
+      "Manager / Senior Manager / Director / Lead / VP / Head / Chief of (Demand Gen | RevOps | Sales Operations | Marketing Operations | GTM Operations)",
+      "GTM Engineer / Go-to-Market Engineer / Growth Engineer",
+      "Founding / First (Sales | Marketing | Growth | GTM | AE | BDR) hire",
+      "Demand Generation Specialist or Manager at <100 emp B2B SaaS (likely first dedicated demand-gen hire)"
+    ],
+    "disqualified_role_patterns": [
+      "Intern / Junior / Associate level — no system-build authority",
+      "Coordinator-level — admin/execution layer, not GTM owner",
+      "Branch / Regional / Area / Field Manager — field P&L role, not GTM-stack buyer",
+      "Software / Backend / Frontend Engineer for internal GTM Platform / Growth Platform — product engineer, not GTM buyer",
+      "Wholesale / Distribution Sales Operations — account ops, not GTM build",
+      "VP / Director of Operations & Sales at brokerages / dealerships / distributors — transactional commercial ops, not GTM stack"
+    ],
+    "borderline_role_patterns": [
+      "Specialist (RevOps | Marketing Ops) at 50-200 emp — could be first dedicated hire OR admin layer",
+      "Sales / Marketing Ops Manager at <30 emp — likely first-of-kind, may need company-context check"
+    ]
+  },
+
+  "filter": {
+    "posted_at_max_age_days": 1,
+    "job_country_code_or": ["US","CA","GB","AU","IE","NZ","DE","NL","CH","SE","NO","DK","FI","SG"],
+    "min_employee_count": 10,
+    "max_employee_count": 200,
+    "company_type": "direct_employer",
+    "job_title_or": ["Demand Generation","Demand Gen","GTM Engineer","Go-To-Market Engineer","Go to Market Engineer","RevOps","Revenue Operations","Sales Operations","Marketing Operations","GTM Operations","First Sales Hire","Founding Account Executive","Founding GTM","Founding Sales","Founding Marketer","Founding Marketing","First Growth Hire"],
+    "limit": 50,
+    "_expected_daily_volume": "~49 jobs/day pre-dedup, ~40-45 unique companies/day post-dedup"
+  },
+
+  "dm_finder": {
+    "target_titles": ["Head of Sales","Head of GTM","Head of Marketing","Head of Growth","Head of Revenue","VP Sales","VP Marketing","VP Revenue","VP GTM","Chief Revenue Officer","CRO","Chief Marketing Officer","CMO","Chief Sales Officer","CSO","Founder","Co-Founder","CEO"],
+    "providers_preference": ["prospeo","ai_ark"],
+    "max_dms_per_company": 3
+  },
+
+  "infrastructure": {
+    "template_sheet_id": "1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ",
+    "template_sheet_url": "https://docs.google.com/spreadsheets/d/1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ/edit",
+    "sheet_id": "1wngZB9o-5uWlOzO8lpYmClUdz6XsGVOtJuNHyQ1QsYI",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1wngZB9o-5uWlOzO8lpYmClUdz6XsGVOtJuNHyQ1QsYI/edit",
+    "jobs_scenario_id": 9226982,
+    "jobs_scenario_url": "https://eu2.make.com/536258/scenarios/9226982",
+    "jobs_webhook_url": "https://hook.eu2.make.com/vrkpwp19ssknaa74aukxut1u1rqwkx9o",
+    "jobs_webhook_payload_shape": "TheirStack job.new event: { id, type: 'job.new', payload: {job + company_object fields} }",
+    "dms_scenario_id": 9228940,
+    "dms_scenario_url": "https://eu2.make.com/536258/scenarios/9228940",
+    "dms_webhook_url": "https://hook.eu2.make.com/kdwgdqq4dt9jkk6nmikuothp3d8yt9yb",
+    "dms_webhook_payload_shape": "Skill 2 push: { rows: [{...17 DM fields...}] } — simple array, no wrap",
+    "smartlead_campaign_id": 3331499,
+    "smartlead_campaign_url": "https://app.smartlead.ai/app/email-campaign/3331499/analytics",
+    "smartlead_campaign_status": "LINKED_2026-05-13",
+    "schedule_task_id": "theirstack-navreo-gtm-daily",
+    "schedule_task_path": "/Users/bjionhenry/.claude/scheduled-tasks/theirstack-navreo-gtm-daily/SKILL.md",
+    "schedule_cron": "0 9 * * 1-5",
+    "schedule_timezone": "Europe/London (local)",
+    "schedule_created_at": "2026-05-14"
+  },
+
+  "theirstack_saved_search": {
+    "ui_label": "GTM hiring signals — Navreo",
+    "user_must_create_in_ui": false,
+    "created_in_ui_at": "2026-05-13",
+    "negative_title_keywords": [
+      "Intern",
+      "Coordinator",
+      "Branch Manager",
+      "Wholesale",
+      "Software Engineer"
+    ],
+    "negative_title_keywords_optional": [
+      {"keyword": "Specialist", "caution": "Catches off-brief 'Sales Operations Specialist' but ALSO 'Demand Generation Specialist' which IS qualified per the brief. Only add if you want to drop the narrow 'Sales Operations Specialist' — preferable to add that exact phrase instead."},
+      {"keyword": "Senior Software Engineer", "caution": "Narrower than just 'Software Engineer' — use this if you want to keep broader Engineer titles eligible. Either-or with 'Software Engineer' above."}
+    ],
+    "negative_title_keywords_history": [
+      {"added_at": "2026-05-14", "keyword": "Intern", "off_brief_rows_caught_first_pass": 1, "rationale": "Kahuna 'Sales Operations Intern' — junior level, no system-build authority"},
+      {"added_at": "2026-05-14", "keyword": "Coordinator", "off_brief_rows_caught_first_pass": 3, "rationale": "Esusu, Integration International, Meeder — admin-execution layer, not GTM owner"},
+      {"added_at": "2026-05-14", "keyword": "Branch Manager", "off_brief_rows_caught_first_pass": 1, "rationale": "Green Mountain — regional P&L role, not GTM-stack buyer"},
+      {"added_at": "2026-05-14", "keyword": "Wholesale", "off_brief_rows_caught_first_pass": 1, "rationale": "Mackintosh — wholesale account ops, not GTM build"},
+      {"added_at": "2026-05-14", "keyword": "Software Engineer", "off_brief_rows_caught_first_pass": 1, "rationale": "Ramp 'Senior Software Engineer | GTM Platform, Backend' — internal product engineer for their own GTM platform team, not a GTM-system buyer"}
+    ],
+    "geography_filter_note": "Saved search MUST filter by 'Company HQ Location' country code, NOT 'Job Location'. Rationale (updated 2026-05-15 by user): we target companies whose HQ is in a high-GDP country (money / decision-making lives at HQ) — we don't care which office posted the role. Esusu (US-HQ posting PH role) and Bluefin (US-HQ posting CN role) on 2026-05-14 should have been QUALIFIED, not off-brief — those rejections were under the old (now-reversed) rule. Likewise Beam AI (DE-HQ posting PK role) and GVW Group (US-HQ posting ZA role) on 2026-05-15."
+  },
+
+  "personalization": {
+    "_note": "Email copy is ground truth for what to personalise. Skill 2 reads the campaign email body → identifies all {{merge_variables}} → looks up generation instructions in per_lead_variables below. Variables present in copy but missing here will halt the run. The 'ideation.offer' field above provides SENDER CONTEXT (what the sender does) which the LLM uses as background when generating per-lead values — it is NOT a Smartlead merge variable, it's not in the email body. The email copy itself contains all sales language.",
+    "per_lead_variables": {
+      "Role": {
+        "instructions": "Direct field lookup WITH email-readability normalisation. Copy the Jobs row's 'Job Title' value, then normalise so it reads naturally after the hardcoded 'Saw you were hiring a ___' hook. Rules: (1) Replace ', ' separating a level word from a function area with ' of ' — e.g. 'Director, Revenue Operations' → 'Director of Revenue Operations', 'Manager, Sales & Customer Experience Operations' → 'Manager of Sales & Customer Experience Operations'. (2) Drop bracketed/parenthetical text and reformulate if it changes the noun phrase — e.g. 'Demand Generation Lead (Integrated Programmes)' → 'Demand Generation Lead'; 'AI Automation Engineer (GTM)' → 'GTM Engineer for AI automation' (avoids the 'a AI' article clash too). (3) Trim whitespace and ensure it starts with a consonant where the article-clash is awkward (the email's hook hardcodes 'a', not 'a/an'). (4) Preserve seniority words ('Senior', 'Director', 'Manager', 'Head', 'VP', 'Lead'). No LLM call needed for cases (1)-(3); only escalate to LLM if the title is genuinely ambiguous after rule-based normalisation.",
+        "validation": "Non-empty. Must read naturally after 'Saw you were hiring a ___'. Must NOT contain commas in the level-word/function-area position. Must NOT contain parens. Preserves the semantic role from the joined Jobs row."
+      },
+      "Icebreaker": {
+        "instructions": "Delegate to the lilly-icebreaker skill. CRITICAL: SKIP both the Hiring angle AND the 'You joined' (change-of-roles) angle for this brief. The entire campaign is already triggered by a hiring signal (referenced explicitly via {{Role}} in the email's hook), so duplicating the hiring angle in the Icebreaker would feel redundant. Change-of-roles is also excluded because referencing the DM's own recent role change compounds the personal-detective signal in a way that reads stalkerish when paired with the hiring-hook (rule set 2026-05-17 — applies to ALL hiring-signal briefs). Allowed angle waterfall for this brief: Colleague → Funding → Tech → Fallback. Pass the DM's company + title + LinkedIn URL to the skill, plus an explicit 'skip_angles: [Hiring, You joined]' instruction.",
+        "validation": "Non-empty. Must NOT reference 'hiring', 'open role', 'looking for', or any active-hiring language. Must NOT reference the DM's recent role change ('stepped into', 'took over', 'new in your seat', 'X years in role'). Per lilly-icebreaker's other validation rules."
+      },
+      "HowWeCanHelp": {
+        "generation_strategy": "angle_waterfall",
+        "_note": "Mirrors lilly-icebreaker's waterfall pattern. Skill 2 evaluates triggers in priority order; first matching angle fires; if no specific angle matches, fallback (priority 99) always fires. Each angle produces a sentence-completion clause that drops into the email's 'wanted to reach out because ___' stem.",
+        "angles": [
+          {
+            "id": "founding_or_first_hire",
+            "priority": 1,
+            "trigger": "hiring_for matches /(Founding|First)/i",
+            "instructions": "When the company is making a founding or first-of-its-kind GTM hire, the new person is expected to set strategy AND execute. Position Navreo as the RevOps execution layer so the founding hire can stay focused on strategy. Reference the founding nature explicitly. Make clear the divide: their strategic hire owns the GTM vision, Navreo handles the RevOps build.",
+            "example": "founding roles get stretched between strategy and execution from day one, and we handle the RevOps build so they can stay focused on the strategy side"
+          },
+          {
+            "id": "value_prop_branched",
+            "priority": 2,
+            "trigger": "always (after Priority 1 Founding/First check fails) — fires for every lead. The output branches based on (a) create-vs-run signal AND (b) seniority of the role being HIRED.",
+            "instructions": "Three sub-branches: CREATE, RUN-senior, RUN-junior. Branch decision order:\n\n1. CREATE BRANCH (when tech_stack empty/minimal OR role signals first-dedicated function-builder OR company_size < 50): position outbound as a VALIDATION step — they can prove the channel works on a pay-per-result basis BEFORE fully committing to the new hire. Reference {{company_name}} and 'the hire' (the role they're currently making).\n\n2. RUN-JUNIOR BRANCH (when company has established motion AND `hiring_for` matches IC-level patterns: Engineer / Specialist / Associate / IC roles): position Navreo as a COST-EFFECTIVE alternative to scaling internal headcount. The buyer is hiring at the IC level, which means they're scaling execution capacity. A full-time IC hire is a real cost commitment before pipeline shows up — Navreo on performance basis is cheaper and de-risks. Use the literal phrase 'full-time hire' to anchor the cost comparison. End on 'performance basis'.\n\n3. RUN-SENIOR BRANCH (when company has established motion AND `hiring_for` matches senior-leadership patterns: Manager / Senior Manager / Lead / Director / VP / Head / Chief / Senior+): position Navreo via the STRATEGY-vs-EXECUTION SPLIT framing. Even with a senior hire, GTM execution still bleeds into senior leadership's calendar — Navreo handles that layer cleanly on performance basis so leadership stays at the strategy level. DO NOT use cost-efficiency framing for senior hires — they're not as price-sensitive, the strategy/execution lens is stronger.\n\nDefault to RUN-senior when ambiguous. All three branches end with 'on a performance basis' or equivalent (anchors to the offer).",
+            "example_create": "we can validate cold outbound for {{company_name}} on a pay-per-result basis before you commit to the hire",
+            "example_run_senior": "GTM execution often pulls senior leadership off strategy, and we can help by handling that layer on a performance basis",
+            "example_run_junior": "a full-time hire is a big cost commitment before pipeline shows up, and we can help by running outbound on a performance basis"
+          },
+          {
+            "id": "fallback_create_or_run",
+            "priority": 99,
+            "trigger": "always — fires when no priority 1-2 angle matches (the established-motion default)",
+            "instructions": "Single-sentence fallback with a CREATE-vs-RUN branch based on job-description signal: 'we can [create your GTM system | run your existing GTM system] on a performance basis'. Branch logic: pick 'run your existing GTM system' when the tech_stack lists 2+ outbound/CRM tools (HubSpot/Salesforce/Clay/Apollo/Outreach/Gong/ZoomInfo/Salesloft/Lemlist/Smartlead) OR the role is Senior+/Director/VP/Head/Manager at company_size>50 OR open_roles>1. Otherwise pick 'create your GTM system'. This MUST always fire last so {{HowWeCanHelp}} is never empty. Trailing 'on a performance basis' is non-negotiable — it anchors to the brief's offer.",
+            "example_run": "we can run your existing GTM system on a performance basis",
+            "example_create": "we can create your GTM system on a performance basis"
+          }
+        ],
+        "validation": "10-25 words. Starts mid-sentence (lowercase, since 'because' precedes it). Follows the matched angle's instructions. Must NOT duplicate {{Cold Email Video Angle}}'s content (that variable handles the company-specific sales outcome later in the email). For the fallback specifically: 12 words exact, ends with 'on a performance basis'."
+      },
+      "Cold Email Video Angle": {
+        "instructions": "Generate a one-line sentence-completion for the email stem 'I recorded a short-video for {{company_name}} showing a teaser of what we'd build to ___'. The angle is PURE ICP-connection: how we'd help the company connect with their target buyers (their ICP). Reference what THE COMPANY's ICP looks like (e.g. for Fullbay → heavy-duty repair shops; Osmind → psychiatry practices; Canopy → accounting firms; Xelix → AP teams). Form: starts with an infinitive verb (drive / fill / open / build), references a sales outcome anchored to the company's specific ICP segment.\n\nEXPLICITLY DO NOT INCLUDE:\n- Commercial model language ('on a pay-per-result basis' / 'on a performance basis' / 'guaranteed' etc.) — that's already covered in {{HowWeCanHelp}} earlier in the email. Including it here is redundant.\n- The channel/method ('through outbound' / 'through cold outbound') — implied by the email being a cold outreach, not needed in the angle.\n- The prospect's title or role — covered in the email's hook via {{Role}}.\n- The company name — '{{company_name}}' already appears immediately before this slot in the template.\n\nThe angle should be PURE: company's ICP segment + a sales-outcome verb (drive demos / open accounts / fill pipeline). Nothing else.\n\nOVERRIDE NOTE: This instruction OVERRIDES Navreo's global memory rule 'feedback_cold_email_angle_title_relevance' (which says the angle must reference the prospect's title) FOR THIS BRIEF ONLY. For future briefs where the hook doesn't already reference the role, the global rule may still apply.",
+        "validation": "5-12 words, sentence-completion form (starts with infinitive 'drive' / 'fill' / 'open' / 'build' / etc., NOT a full sentence). Must reference the company's specific ICP segment (their target buyer type). Must NOT repeat the company name. Must NOT reference the prospect's title or role. Must NOT include commercial model language ('pay-per-result' / 'performance basis' / 'guaranteed'). Must NOT include channel/method ('through outbound' / 'cold outbound') — keep it pure ICP-connection."
+      },
+      "CaseStudy": {
+        "instructions": "Delegate to lilly-personalisation's bucketed CaseStudy generation. Match a case study to the DM's role/vertical/company-size bucket (Navreo's standard bucket scheme). The skill maintains the bucket → case-study mapping; this brief inherits Navreo's default mapping unless explicitly overridden.",
+        "validation": "Per lilly-personalisation's CaseStudy validation. Must include hard numbers (revenue, lead count, conversion lift, etc.) per Navreo's case-study convention."
+      }
+    }
+  }
+}

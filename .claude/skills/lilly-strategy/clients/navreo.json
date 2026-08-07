@@ -1,0 +1,104 @@
+{
+  "client_slug": "navreo",
+  "client_name": "Navreo",
+  "what_they_sell": "Done-for-you outbound system for B2B services firms. Builds + runs Smartlead cold email, LinkedIn (HeyReach), hiring-signal (TheirStack), and engagement-signal (Trigify) pipelines. Alternative to a full-time GTM/Head-of-Sales/Demand-Gen hire \u2014 performance-priced, no lock-in.",
+  "icp_synthesised_from_named_clients_2026_05_18": {
+    "verticals_observed": [
+      "E-commerce services (Amazon agencies, Shopify agencies, marketplace specialists)",
+      "Sales-ops / sales-enablement consultancies (RevOps boutiques, sales-tech implementors)",
+      "PR / communications agencies (especially tech-enabled and pay-on-results models)",
+      "Staffing / recruiting agencies (vertical-specialised \u2014 tech, manufacturing, etc.)",
+      "(Plausible adjacent \u2014 to confirm): dev agencies, AI/digital transformation consultancies, B2B marketing agencies, accounting/bookkeeping firms"
+    ],
+    "umbrella": "B2B services firms whose own sales function is led by a founder or under-resourced sales head",
+    "roles": [
+      "Founder / CEO (small firms 2-50 emp where founder still owns sales)",
+      "Chief Revenue Officer / Chief Growth Officer / Chief Commercial Officer",
+      "VP / Head / Director of Sales / Revenue / Business Development / Growth"
+    ],
+    "geo": [
+      "US",
+      "GB",
+      "CA",
+      "AU",
+      "IE",
+      "NZ",
+      "DE",
+      "NL",
+      "CH",
+      "SE",
+      "NO",
+      "DK",
+      "FI",
+      "SG"
+    ],
+    "headcount_bands": [
+      "2-10",
+      "11-50",
+      "51-200"
+    ],
+    "why_this_works": "All 4 named clients are services firms with no in-house GTM infrastructure team. Founders / VP Sales are buying because hiring a full-time GTME or Head of Demand Gen takes 3-6 months and ~$120K base; Navreo gets a system running in weeks on performance."
+  },
+  "named_clients": [
+    {
+      "name": "Amplifyy",
+      "domain": "amplifyy.com",
+      "vertical": "Amazon agency",
+      "geo": "US",
+      "size_est": "10-50",
+      "linkedin_slug": "amplifyy"
+    },
+    {
+      "name": "Arnic Business Solutions",
+      "domain": "arnicbizsolutions.com",
+      "vertical": "Sales enablement + tech-stack consulting",
+      "geo": "US (Houston)",
+      "size_est": "10-50",
+      "linkedin_slug": "arnic-business-solutions"
+    },
+    {
+      "name": "Pathos Communications",
+      "domain": "pathoscommunications.co.uk",
+      "vertical": "Tech-enabled PR (pay-on-results)",
+      "geo": "UK + UAE",
+      "size_est": "60",
+      "linkedin_slug": "pathos-communications"
+    },
+    {
+      "name": "TalentStream",
+      "domain": "talentstreamstaffing.com",
+      "vertical": "Staffing (tech / mfg / supply chain)",
+      "geo": "US (GA)",
+      "size_est": "2-10",
+      "linkedin_slug": "talentstream"
+    }
+  ],
+  "existing_campaigns": {
+    "history_mode": "greenfield_assumed_per_user_directive_2026_05_18",
+    "note": "User requested fresh ideation as if Navreo is brand-new. Existing 3 TheirStack briefs (GTM / SDR / VP-Head Sales) + Smartlead campaigns NOT used as dead-angle filter for this run."
+  },
+  "constraints": {
+    "taboo_verticals": [
+      "Product / SaaS companies (different buying motion, in-house teams)",
+      "Pure freelance shops (no budget for DFY)"
+    ],
+    "geo_exclusions": [],
+    "lead_magnet_blockers": [],
+    "regulatory": [
+      "Can't promise financial outcomes (no specific revenue / lead-volume guarantees in copy)"
+    ]
+  },
+  "first_briefed_at": "2026-05-18",
+  "last_refreshed_at": "2026-06-11",
+  "operating_mode": "greenfield",
+  "dm_titles": [
+    "VP / Head / Director of Sales",
+    "Founder / CEO"
+  ],
+  "dm_titles_N": 2,
+  "dm_findable_multiplier_2026_06_11": 1.5,
+  "dm_findable_multiplier_note": "Bjion's realistic planning figure: ~1.5 DMs actually found per company (vs the x2 title target). Niche bar: 10,000+ findable DMs, so ~6,700+ probe-confirmed companies.",
+  "local_campaign_strategy_2026_06_11": "Bjion wants to try LOCAL campaigns: Navreo scrapes Google Maps on the client's behalf to find companies that may need their stuff. This relaxes the 10k-DM hard bar to a min TOTAL SCORE of 15/25, and makes niches whose buyers are local physical Maps-listed businesses MORE attractive, not less. Liked + approved via this lens (wave 4): customs brokers/duty reclaim, outsourced HR/employment compliance, equipment rental/plant hire. Wave 5 (local-audience family) probed and scored in sessions/navreo-2026-06-11.md Addendum 5. Niche presentation rule: only show ideas scoring >=15/25, always with per-gate score columns. GATE 6 added later same day: PAIN FREQUENCY (is the recipient actively living the problem daily, e.g. overdue invoices/denied claims, vs dormant-episodic, e.g. pest/inspections/roof). Scoring now /30, floor 18/30 (same 60% ratio). Commercial roofing approved + tasked (2026-06-19) before G6 landed. Wave 6 (always-on-pain family) in session Addendum 6: collections/AR recovery 24/30 is the standout.",
+  "icp_scope_directive_2026_06_07": "NICHE ideas \u2014 drill into tight sub-niches of the 3 services verticals (software dev agencies, AI-transformation firms, digital-transformation firms). 51-200 emp. Not broad services lists.",
+  "niche_directive_2026_06_11": "NEW track: high-ticket big-audience niches for the pay-per-meeting offer. Two gates: (1) the niche's own market supports 20-30k+ prospect outreach, (2) ticket size structurally high AND visible from outside (recurring contracts / project minimums / regulated commissions / success fees). Agencies excluded (deal ~$2-3k, invisible). Already tried: manufacturing, distributors, wholesalers, recruitment, SaaS. Probed shortlist in sessions/navreo-2026-06-11.md: MSPs, commercial insurance brokerages, cybersecurity services, M&A advisory, commercial solar EPCs, industrial automation integrators, freight forwarders/3PLs, benefits/401k advisories. GATE 3 added same day: the niche's own outbound offer must be a no-brainer (near-universally relevant, frictionless ask, e.g. M&A 'would you sell?', ITAD 'we buy your old equipment', freight 'we quote one lane cheaper'). GATE 4 (bonus): niche already runs/buys cold outreach itself. GATE 5 (KILL gate): the niche's own recipient audience must respond to cold email; CYBERSECURITY IS PERMANENTLY KILLED per Bjion (security buyers never convert on cold); commercial lending/financing also killed (most spam-burned vertical). All future niche tables must show per-gate scores /5 + total /25 with my own judgment. ITAD probed at 1,351 cos. Master scoreboard in sessions/navreo-2026-06-11.md Addendum 3. Approved for list build: #7 freight/3PL and #1 MSPs (tasks in Notion Client Tasks, due 2026-06-19). UPDATE 2026-06-12: commercial cleaning REVIVED from the discard list by Bjion (copy brief created in Notion); discard rule still applies to the rest of the Addendum 3 board."
+}

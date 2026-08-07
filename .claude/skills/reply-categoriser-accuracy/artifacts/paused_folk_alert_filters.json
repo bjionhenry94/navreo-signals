@@ -1,0 +1,28 @@
+{
+ "321": null,
+ "303": {
+  "name": "Person NOT found in Folk \u2192 alert",
+  "conditions": [
+   [
+    {
+     "a": "{{301.id}}",
+     "b": "",
+     "o": "text:equal"
+    }
+   ]
+  ]
+ },
+ "44": null,
+ "46": {
+  "name": "Person NOT found in Folk \u2192 alert",
+  "conditions": [
+   [
+    {
+     "a": "{{41.id}}",
+     "b": "",
+     "o": "text:equal"
+    }
+   ]
+  ]
+ }
+}

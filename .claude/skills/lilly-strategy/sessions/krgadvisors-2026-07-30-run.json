@@ -1,0 +1,1292 @@
+{
+ "client": "krgadvisors",
+ "date": "2026-07-30",
+ "footer": "Lookalike growth-campaign menu for KRG Advisors, updated 30 July 2026. Nine niches, each a lookalike of the marquee brands the team has advised, aligned to KRG's four growth services (earned media -> sales, GTM + vendor sourcing, experts published/speaking, GEO / AI-search). Buyer: marketing + comms leaders, 200-10,000 staff, 10 core markets. Emails are first-person plural ('we helped X'), signed by the most relevant consultant. Each campaign sends to its full reachable pool - 5,000 is the minimum capacity, never a cap (pools run ~8,500 to ~50,000; Food 14,288, Financial 27,706, Pharma 21,341 measured live, the rest estimated). Example people are illustrative; the board's draft emails render in Navreo's voice - the exact KRG emails are in each idea and the session record. Nothing sends without your sign-off.",
+ "colleagues": {
+  "lists": "Asad",
+  "builder": "Yasir"
+ },
+ "ideas": [
+  {
+   "id": "food-bev",
+   "campaignNo": "01",
+   "name": "Food & Beverage / CPG",
+   "vector": "lookalike",
+   "service": "Earned media -> top-of-funnel sales",
+   "net": 14288,
+   "gross": 14288,
+   "emails": 14288,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 14288,
+   "reachablePoolLabel": "measured live",
+   "freeFromRecords": 0,
+   "newPeople": 14288,
+   "who": "Big food, drink & consumer-goods brands whose press coverage looks good but isn't measurably bringing in buyers.",
+   "offer": "Earned media run as a real customer-acquisition channel (plus GTM, expert visibility and AI-search on the same one-pager).",
+   "caption": "Press that actually sells",
+   "tag": "Recommended",
+   "shortTag": "Recommended",
+   "firstName": "Elena",
+   "company": "Danone",
+   "pain": "Is the press coverage [Company] earns actually bringing in new buyers, or is it visibility that looks nice and sells nothing?",
+   "moment": "A launch or campaign is coming and PR needs to justify itself in pipeline, not clippings.",
+   "videoAngle": "turn earned media into a channel that actually moves product",
+   "why": "Deep bench for earned media that converts: Anabelle (media placements), David Michaelson (measurement - proves press drove sales), Chris (Coca-Cola), Kasia (Nestle, AB InBev, General Mills). 14,288 reachable; we email the whole pool (5,000 is the floor, not a cap).",
+   "repliesLine": "Framing press as an acquisition channel (not visibility) lands with marketing leaders who own a number.",
+   "peerProofLine": "we turned earned media into a real acquisition channel for Coca-Cola, Nestle and General Mills, coverage that moved product, not just sentiment",
+   "email": "Hi [First name]\n\nIs the press coverage [Company] earns actually bringing in new buyers, or is it visibility that looks nice and sells nothing?\n\nReason I ask is that we turned earned media into a real acquisition channel for Coca-Cola, Nestle and General Mills, coverage that moved product, not just sentiment, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nKasia",
+   "freeNote": "Full reachable pool ~14,288 (measured live); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Kasia Reterska.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 14288,
+    "note": null
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "food and beverage, food and beverage manufacturing, beverage manufacturing, brewing, confectionery, dairy, snack food, consumer goods, fast-moving consumer goods, food processing",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": true,
+   "minCapacity": 5000,
+   "anchors": [
+    "Coca-Cola",
+    "Nestl\u00e9",
+    "McDonald's",
+    "AB InBev",
+    "General Mills",
+    "Mondelez",
+    "P&G",
+    "Molson Coors"
+   ],
+   "cases": [
+    "Kasia Reterska \u2014 AB InBev \u00b7 Nestl\u00e9 \u00b7 General Mills",
+    "Jonathan Wootliff \u2014 McDonald's \u00b7 P&G \u00b7 Colgate",
+    "Chris Deri \u2014 Coca-Cola",
+    "David Michaelson \u2014 press ROI measurement",
+    "Anabelle Greene \u2014 earned-media placements"
+   ]
+  },
+  {
+   "id": "financial",
+   "campaignNo": "02",
+   "name": "Financial Services / Banking / Asset Mgmt / Fintech",
+   "vector": "lookalike",
+   "service": "GTM strategy + vendor sourcing",
+   "net": 27706,
+   "gross": 27706,
+   "emails": 27706,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 27706,
+   "reachablePoolLabel": "measured live",
+   "freeFromRecords": 0,
+   "newPeople": 27706,
+   "who": "Banks, asset managers, insurers and fintechs taking a new product or market to market without a resourced go-to-market plan.",
+   "offer": "A built and resourced go-to-market plan - strategy, vendors, execution (plus earned media, expert visibility and AI-search).",
+   "caption": "Launch that makes revenue",
+   "tag": "Recommended",
+   "shortTag": "Recommended",
+   "firstName": "James",
+   "company": "Nationwide",
+   "pain": "As [Company] takes a new product or market to market, is the go-to-market plan built and resourced, or is the team figuring it out as they launch?",
+   "moment": "A new product, segment or market launch is coming and the GTM engine isn't built yet.",
+   "videoAngle": "turn a launch into a real revenue line, not a scramble",
+   "why": "GTM depth: Vivienne (BNY Mellon, S&P, SWIFT, fintech - new revenue streams), Ross (B2B GTM, vendor sourcing), Chris (HSBC). 27,706 reachable; we email the whole pool (5,000 is the floor, not a cap).",
+   "repliesLine": "A concrete upcoming launch is a real deadline; the revenue framing beats a generic comms pitch.",
+   "peerProofLine": "we've built go-to-market strategies, and the teams and vendors behind them, for BNY Mellon, S&P and fast-growing fintechs, turning launches into real revenue lines",
+   "email": "Hi [First name]\n\nAs [Company] takes a new product or market to market, is the go-to-market plan built and resourced, or is the team figuring it out as they launch?\n\nReason I ask is that we've built go-to-market strategies, and the teams and vendors behind them, for BNY Mellon, S&P and fast-growing fintechs, turning launches into real revenue lines, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nVivienne",
+   "freeNote": "Full reachable pool ~27,706 (measured live); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Vivienne Hsu.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 27706,
+    "note": null
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "banking, financial services, investment banking, investment management, asset management, capital markets, wealth management, insurance, fintech",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Chief Revenue Officer",
+     "Head of Go-to-Market"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": true,
+   "minCapacity": 5000,
+   "anchors": [
+    "HSBC",
+    "Goldman Sachs",
+    "J.P. Morgan",
+    "BNY Mellon",
+    "S&P",
+    "Citigroup",
+    "Mastercard",
+    "fintech scale-ups"
+   ],
+   "cases": [
+    "Vivienne Hsu \u2014 BNY Mellon \u00b7 S&P \u00b7 SWIFT \u00b7 fintech GTM",
+    "Ross Kleinrock \u2014 B2B GTM \u00b7 vendor sourcing",
+    "Chris Deri \u2014 HSBC"
+   ]
+  },
+  {
+   "id": "pharma",
+   "campaignNo": "03",
+   "name": "Pharma / Biotech / Healthcare / Med Devices",
+   "vector": "lookalike",
+   "service": "Experts published + speaking",
+   "net": 21341,
+   "gross": 21341,
+   "emails": 21341,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 21341,
+   "reachablePoolLabel": "measured live",
+   "freeFromRecords": 0,
+   "newPeople": 21341,
+   "who": "Drug, biotech and device companies whose scientific and medical experts aren't reaching the buyers, physicians and partners they should.",
+   "offer": "Experts placed in print and on the right stages (plus GTM for launches, earned media and AI-search).",
+   "caption": "Experts in front of buyers",
+   "tag": "Ready",
+   "shortTag": "Ready",
+   "firstName": "Anika",
+   "company": "Incyte",
+   "pain": "Are [Company]'s scientific and medical experts getting published and on the right stages, or are the buyers and partners who should hear from them never seeing them?",
+   "moment": "A launch, a readout or a new indication needs the company's experts building authority now.",
+   "videoAngle": "put your experts in front of the audiences that drive decisions",
+   "why": "Thought-leadership depth: Sri (GSK, Galapagos, J&J - oncology, respiratory, vaccines), Chris (J&J), Kasia (Haleon, Pfizer), Madyson (publications). >10,000 reachable; we email the whole pool (5,000 is the floor, not a cap).",
+   "repliesLine": "Expert-visibility is how healthcare buyers and partners are actually won; the GSK/Galapagos proof is credible.",
+   "peerProofLine": "we put the experts at GSK, Galapagos and J&J in front of exactly those audiences, in print and on stage",
+   "email": "Hi [First name]\n\nAre [Company]'s scientific and medical experts getting published and on the right stages, or are the buyers and partners who should hear from them never seeing them?\n\nReason I ask is that we put the experts at GSK, Galapagos and J&J in front of exactly those audiences, in print and on stage, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nSri",
+   "freeNote": "Full reachable pool ~21,341 (measured live); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Sri Ramaswami.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 21341,
+    "note": null
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "pharmaceutical, pharmaceutical manufacturing, biotechnology, biotechnology research, medical device, medical equipment manufacturing, hospitals and health care",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Head of Medical Affairs"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": true,
+   "minCapacity": 5000,
+   "anchors": [
+    "Johnson & Johnson",
+    "GSK",
+    "Pfizer",
+    "Merck",
+    "Moderna",
+    "Galapagos",
+    "Haleon"
+   ],
+   "cases": [
+    "Sri Ramaswami \u2014 GSK \u00b7 Galapagos \u00b7 J&J",
+    "Chris Deri \u2014 J&J",
+    "Kasia Reterska \u2014 Haleon \u00b7 Pfizer",
+    "Madyson Epplin \u2014 publications"
+   ]
+  },
+  {
+   "id": "tech-ai",
+   "campaignNo": "04",
+   "name": "Technology / AI / Enterprise & Telecom",
+   "vector": "lookalike",
+   "service": "GEO / AI-search visibility",
+   "net": 38000,
+   "gross": 38000,
+   "emails": 38000,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 38000,
+   "reachablePoolLabel": "estimated (scaled from live baseline)",
+   "freeFromRecords": 0,
+   "newPeople": 38000,
+   "who": "Tech and telecom companies invisible when buyers ask AI tools for the best in their category.",
+   "offer": "GEO strategy so [Company] surfaces in AI answers (plus earned media, GTM and expert visibility).",
+   "caption": "Show up in AI search",
+   "tag": "Recommended",
+   "shortTag": "Recommended",
+   "firstName": "Ravi",
+   "company": "Cloudflare",
+   "pain": "When a buyer asks ChatGPT or Google's AI for the best [category] company, does [Company] come up, or does a competitor?",
+   "moment": "Buyers are starting their search in AI tools, and the brand isn't showing up there.",
+   "videoAngle": "get you surfacing in the AI answers where buying now starts",
+   "why": "GEO is Nathan Strauss's stated specialty (AWS, Amazon - responsible AI + GEO); plus Greg (media analytics/AI), Henry, Nicco. >10,000 reachable; we email the whole pool (5,000 is the floor, not a cap).",
+   "repliesLine": "GEO is new, board-level, and almost nobody is doing it well - the opener names a gap they feel.",
+   "peerProofLine": "we led GEO and responsible-AI strategy at AWS and Amazon, getting brands to surface in exactly those AI answers where the buying now starts",
+   "email": "Hi [First name]\n\nWhen a buyer asks ChatGPT or Google's AI for the best [category] company, does [Company] come up, or does a competitor?\n\nReason I ask is that we led GEO and responsible-AI strategy at AWS and Amazon, getting brands to surface in exactly those AI answers where the buying now starts, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nNathan",
+   "freeNote": "Full reachable pool ~38,000 (estimated); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Nathan Strauss.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 38000,
+    "note": "estimated by scaling the live comms-only baseline x~1.85; exact live count pending (exceeds AI-Ark 10k count cap at page level)"
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "software, software development, enterprise software, information technology, internet, computer hardware manufacturing, semiconductor, telecommunications, technology, information and internet",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Head of Demand Generation",
+     "Head of SEO"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": false,
+   "minCapacity": 5000,
+   "anchors": [
+    "Microsoft",
+    "IBM",
+    "Qualcomm",
+    "Cisco",
+    "HP",
+    "Dell",
+    "Samsung",
+    "Amazon / AWS"
+   ],
+   "cases": [
+    "Nathan Strauss \u2014 AWS \u00b7 Amazon (GEO + responsible AI)",
+    "Greg Young \u2014 media analytics / AI",
+    "Henry Cho \u2014 Microsoft \u00b7 HP \u00b7 Cisco",
+    "Nicco Mele \u2014 tech/media innovation"
+   ]
+  },
+  {
+   "id": "energy",
+   "campaignNo": "05",
+   "name": "Energy / Climate / Utilities / Oil & Gas",
+   "vector": "lookalike",
+   "service": "Experts published + speaking",
+   "net": 8500,
+   "gross": 8500,
+   "emails": 8500,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 8500,
+   "reachablePoolLabel": "estimated (scaled from live baseline)",
+   "freeFromRecords": 0,
+   "newPeople": 8500,
+   "who": "Energy, utility and climate companies letting others define the transition story that decides their projects and markets.",
+   "offer": "Your experts shaping the transition conversation, in media and on stage (plus earned media, GTM and AI-search).",
+   "caption": "Own the transition story",
+   "tag": "Recommended",
+   "shortTag": "Recommended",
+   "firstName": "Karin",
+   "company": "Orsted",
+   "pain": "On the energy transition, is [Company] shaping the conversation with its own experts out front, or watching others define the story that decides your projects?",
+   "moment": "A project, market or policy fight is coming and the narrative is being set by everyone but you.",
+   "videoAngle": "put your experts out front so you shape the story, not react to it",
+   "why": "Authority bench: David Bloomgren (U.S. EPA, nuclear, renewables), Bob (GE ecomagination, DuPont), Sam (Aramco), Jonathan (BP, Greenpeace). >10,000 reachable; we email the whole pool (5,000 is the floor, not a cap).",
+   "repliesLine": "Whoever owns the transition narrative wins the projects; the EPA/developer proof is rare.",
+   "peerProofLine": "we put energy and climate leaders in front of regulators, media and industry audiences, from inside the U.S. EPA to advanced-nuclear and renewable developers",
+   "email": "Hi [First name]\n\nOn the energy transition, is [Company] shaping the conversation with its own experts out front, or watching others define the story that decides your projects?\n\nReason I ask is that we put energy and climate leaders in front of regulators, media and industry audiences, from inside the U.S. EPA to advanced-nuclear and renewable developers, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nDavid",
+   "freeNote": "Full reachable pool ~8,500 (estimated); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: David Bloomgren.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 8500,
+    "note": "estimated by scaling the live comms-only baseline x~1.85; exact live count pending (exceeds AI-Ark 10k count cap at page level)"
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "energy, oil and gas, utilities, renewable energy, clean energy, nuclear, power grid, mining",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Head of Public Affairs",
+     "Head of Sustainability"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": false,
+   "minCapacity": 5000,
+   "anchors": [
+    "Saudi Aramco",
+    "BP",
+    "Exelon",
+    "GE",
+    "DuPont",
+    "advanced-nuclear & renewable developers"
+   ],
+   "cases": [
+    "David Bloomgren \u2014 U.S. EPA \u00b7 nuclear \u00b7 renewables",
+    "Bob Knott \u2014 GE ecomagination \u00b7 DuPont",
+    "Sam Huxley \u2014 Saudi Aramco",
+    "Jonathan Wootliff \u2014 BP \u00b7 Greenpeace"
+   ]
+  },
+  {
+   "id": "media-sports",
+   "campaignNo": "06",
+   "name": "Media / Entertainment / Streaming / Sports",
+   "vector": "lookalike",
+   "service": "Brand & launch marketing",
+   "net": 50000,
+   "gross": 50000,
+   "emails": 50000,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 50000,
+   "reachablePoolLabel": "estimated (scaled from live baseline)",
+   "freeFromRecords": 0,
+   "newPeople": 50000,
+   "who": "Studios, streamers, leagues and teams whose releases aren't getting the earned coverage that actually drives an audience.",
+   "offer": "Brand and launch marketing that gets an audience to actually show up (plus earned media, expert visibility and AI-search).",
+   "caption": "Launches people show up for",
+   "tag": "Ready",
+   "shortTag": "Ready",
+   "firstName": "Alex",
+   "company": "Lionsgate",
+   "pain": "With so many platforms competing for the same eyeballs, is [Company]'s next release getting the brand and launch marketing to actually pull an audience to it?",
+   "moment": "A release, season or event is coming and it needs to break through a crowded market.",
+   "videoAngle": "get the brand and launch marketing that actually pulls an audience to your release",
+   "why": "Noah Lerner's real strength is brand and launch marketing / content (led marketing at HBO, Showtime, ESPN; campaigns for Disney, FIFA, NFL Films) - framed honestly as marketing, not press. Plus Nicco, Greg. Reachable pool ~50,000 (estimated); 5,000 is the floor, not a cap.",
+   "repliesLine": "A concrete upcoming release is a deadline; blockbuster proof earns the reply.",
+   "peerProofLine": "we built the brand and launch campaigns that got HBO, Disney and ESPN audiences to show up",
+   "email": "Hi [First name]\n\nWith so many platforms competing for the same eyeballs, is [Company]'s next release getting the brand and launch marketing to actually pull an audience to it?\n\nReason I ask is that we built the brand and launch campaigns that got HBO, Disney and ESPN audiences to show up, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nNoah",
+   "freeNote": "Full reachable pool ~50,000 (estimated); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Noah Lerner.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 50000,
+    "note": "estimated by scaling the live comms-only baseline x~1.85; exact live count pending (exceeds AI-Ark 10k count cap at page level)"
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "media and entertainment, broadcasting, broadcast media production and distribution, film production, digital media, video streaming, spectator sports, sports leagues and teams, entertainment providers",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Head of Content Marketing",
+     "Head of Audience"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": false,
+   "minCapacity": 5000,
+   "anchors": [
+    "HBO",
+    "Disney",
+    "ESPN",
+    "Warner Bros",
+    "Sony Pictures",
+    "FIFA",
+    "NFL",
+    "MLP"
+   ],
+   "cases": [
+    "Noah Lerner \u2014 HBO \u00b7 Disney \u00b7 ESPN \u00b7 FIFA (brand & launch marketing)",
+    "Nicco Mele \u2014 media innovation / audience models",
+    "Greg Young \u2014 audience analytics",
+    "Chris Deri \u2014 FIFA"
+   ]
+  },
+  {
+   "id": "luxury-retail",
+   "campaignNo": "07",
+   "name": "Luxury / Retail / Consumer Brands",
+   "vector": "lookalike",
+   "service": "Brand reputation & earned media",
+   "net": 11500,
+   "gross": 11500,
+   "emails": 11500,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 11500,
+   "reachablePoolLabel": "estimated (scaled from live baseline)",
+   "freeFromRecords": 0,
+   "newPeople": 11500,
+   "who": "Luxury maisons and retailers whose coverage and search presence keep the brand admired but aren't pulling new customers in.",
+   "offer": "Brand reputation and earned media that turn admiration into demand (plus GTM for new lines/markets, expert visibility and AI-search).",
+   "caption": "Admiration into demand",
+   "tag": "Ready",
+   "shortTag": "Ready",
+   "firstName": "Claire",
+   "company": "Mulberry",
+   "pain": "Is the coverage and reputation [Company] earns actually pulling new customers in, or just keeping the brand admired by people who already buy?",
+   "moment": "A collection, market or channel launch needs to convert attention into sales.",
+   "videoAngle": "turn the brand's reputation and coverage into new customers, not just admiration",
+   "why": "Kasia Reterska (Kate Spade, Tiffany & Co) and Awa Seck (luxury brand strategy) genuinely sit in luxury brand-reputation; Bob (Walmart). Nathan freed to be GEO-only on Tech. Reachable pool ~11,500 (estimated); 5,000 is the floor, not a cap.",
+   "repliesLine": "The demand framing (not prestige) is what a marketing leader with a target responds to.",
+   "peerProofLine": "we built brand and reputation for Kate Spade, Tiffany & Co. and other luxury names, keeping them desired while everything around them shifted",
+   "email": "Hi [First name]\n\nIs the coverage and reputation [Company] earns actually pulling new customers in, or just keeping the brand admired by people who already buy?\n\nReason I ask is that we built brand and reputation for Kate Spade, Tiffany & Co. and other luxury names, keeping them desired while everything around them shifted, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nKasia",
+   "freeNote": "Full reachable pool ~11,500 (estimated); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Nathan Strauss.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 11500,
+    "note": "estimated by scaling the live comms-only baseline x~1.85; exact live count pending (exceeds AI-Ark 10k count cap at page level)"
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "retail, retail luxury goods and jewelry, retail apparel and fashion, apparel, fashion, cosmetics, jewelry",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Head of Content"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": false,
+   "minCapacity": 5000,
+   "anchors": [
+    "Tiffany & Co",
+    "Kate Spade",
+    "LVMH / Richemont maisons",
+    "Walmart",
+    "Amazon retail"
+   ],
+   "cases": [
+    "Kasia Reterska \u2014 Kate Spade \u00b7 Tiffany & Co",
+    "Awa Seck \u2014 luxury brand strategy",
+    "Bob Knott \u2014 Walmart"
+   ]
+  },
+  {
+   "id": "nonprofit",
+   "campaignNo": "08",
+   "name": "Non-profit / NGO / Foundations / Multilateral",
+   "vector": "lookalike",
+   "service": "Experts + earned media -> funding",
+   "net": 11000,
+   "gross": 11000,
+   "emails": 11000,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 11000,
+   "reachablePoolLabel": "estimated (scaled from live baseline)",
+   "freeFromRecords": 0,
+   "newPeople": 11000,
+   "who": "Large non-profits and foundations whose experts and mission aren't reaching the funders and partners who decide their budget.",
+   "offer": "Coverage and platforms that put the mission in front of funders (plus GTM for new programs, expert visibility, AI-search).",
+   "caption": "Reach the funders",
+   "tag": "Recommended",
+   "shortTag": "Recommended",
+   "firstName": "Grace",
+   "company": "Wellcome Trust",
+   "pain": "Are [Organisation]'s experts and mission reaching the funders and partners who decide your budget, or is the best work going unseen by the people who matter most?",
+   "moment": "A campaign, program or funding cycle needs the mission in front of donors and partners now.",
+   "videoAngle": "put your mission and experts in front of the funders who decide your budget",
+   "why": "Unmatched bench: Kasia (UNDP, WHO, Save the Children, IRC), Chris (Amnesty), Bob (Red Cross, Nature Conservancy), Naveena (philanthropy), Nicco. >10,000 reachable; we email the whole pool (5,000 is the floor, not a cap).",
+   "repliesLine": "Tying visibility to funding (not awareness) is what an ED or development lead acts on.",
+   "peerProofLine": "we've put the UNDP, WHO, Save the Children and Amnesty International in front of exactly those audiences, coverage and platforms that brought funding and partners in",
+   "email": "Hi [First name]\n\nAre [Organisation]'s experts and mission reaching the funders and partners who decide your budget, or is the best work going unseen by the people who matter most?\n\nReason I ask is that we've put the UNDP, WHO, Save the Children and Amnesty International in front of exactly those audiences, coverage and platforms that brought funding and partners in, and I think we could do the same for [Organisation].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nKasia",
+   "freeNote": "Full reachable pool ~11,000 (estimated); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Kasia Reterska.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 11000,
+    "note": "estimated by scaling the live comms-only baseline x~1.85; exact live count pending (exceeds AI-Ark 10k count cap at page level)"
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "non-profit organizations, civic and social organizations, international affairs, international trade and development, think tanks",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Executive Director",
+     "Head of Development",
+     "Head of External Affairs",
+     "Head of Advocacy"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": false,
+   "minCapacity": 5000,
+   "anchors": [
+    "Amnesty International",
+    "UNDP",
+    "WHO",
+    "Red Cross",
+    "Save the Children",
+    "IRC",
+    "Nature Conservancy",
+    "Greenpeace"
+   ],
+   "cases": [
+    "Kasia Reterska \u2014 UNDP \u00b7 WHO \u00b7 Save the Children \u00b7 IRC",
+    "Chris Deri \u2014 Amnesty",
+    "Bob Knott \u2014 Red Cross \u00b7 Nature Conservancy",
+    "Naveena Ponnusamy \u2014 philanthropy"
+   ]
+  },
+  {
+   "id": "industrial",
+   "campaignNo": "09",
+   "name": "Industrial / Manufacturing / Automotive",
+   "vector": "lookalike",
+   "service": "Earned media + thought leadership",
+   "net": 21000,
+   "gross": 21000,
+   "emails": 21000,
+   "netUnit": "reachable decision-makers",
+   "reachablePool": 21000,
+   "reachablePoolLabel": "estimated (scaled from live baseline)",
+   "freeFromRecords": 0,
+   "newPeople": 21000,
+   "who": "Automotive, chemical, materials and heavy-industry firms pushing into a new market, product line or channel on a stretched team.",
+   "offer": "Earned media and thought leadership that build authority in your sector (plus GTM and vendor sourcing when you launch a new market, product or channel).",
+   "caption": "Lead your sector's story",
+   "tag": "Ready",
+   "shortTag": "Ready",
+   "firstName": "Peter",
+   "company": "Cummins",
+   "pain": "On the issues that shape your sector, is [Company] leading the conversation with its own experts and coverage, or leaving others to define it?",
+   "moment": "A sector issue, transition or expansion means the narrative is being set - by everyone but you.",
+   "videoAngle": "put your experts and coverage out front so you lead your sector's story",
+   "why": "Bob Knott genuinely does industrial thought leadership (GE ecomagination, DuPont, 'promote CEOs' thought-leadership'); GTM stays a cross-sell via Ross where a launch needs it. Plus Henry (Toyota, VW). Reachable pool ~21,000 (estimated); 5,000 is the floor, not a cap.",
+   "repliesLine": "A concrete expansion is a real deadline; the revenue framing beats a comms pitch to industrial buyers.",
+   "peerProofLine": "we built the thought leadership and reputation for GE, DuPont and other industrial leaders",
+   "email": "Hi [First name]\n\nOn the issues that shape your sector, is [Company] leading the conversation with its own experts and coverage, or leaving others to define it?\n\nReason I ask is that we built the thought leadership and reputation for GE, DuPont and other industrial leaders, and I think we could do the same for [Company].\n\nWould you be open to me sharing a one-pager on how we'd help you?\n\nBob",
+   "freeNote": "Full reachable pool ~21,000 (estimated); we send to all of it, with 5,000 as the minimum, never a cap. Greenfield. Signer: Ross Kleinrock.",
+   "copyProvenance": "KRG one-sentence template, FIRST-PERSON PLURAL ('we helped X'), signed by the most relevant consultant. Board auto-drafts render in Navreo's voice; the exact KRG email is in each idea's 'email' field + the session record.",
+   "probe": {
+    "provider": "aiark_people",
+    "date": "2026-07-30",
+    "credits": 1,
+    "gross": 21000,
+    "note": "estimated by scaling the live comms-only baseline x~1.85; exact live count pending (exceeds AI-Ark 10k count cap at page level)"
+   },
+   "netting": {
+    "ratio": 1.0,
+    "method": "greenfield - KRG has no prior outreach to suppress",
+    "date": "2026-07-30"
+   },
+   "pull_spec": {
+    "provider": "aiark_people",
+    "filters": {
+     "companyIndustry": "automotive, motor vehicle manufacturing, manufacturing, industrial manufacturing, machinery manufacturing, chemical, chemical manufacturing, aerospace, advanced materials, industrial machinery manufacturing",
+     "companyLocation": "United States, United Kingdom, Canada, Germany, France, Netherlands, Switzerland, Ireland, Italy, Australia",
+     "department": "marketing,media_and_communication",
+     "seniority": "c_suite,vp,head,director",
+     "minEmployees": 200,
+     "maxEmployees": 10000
+    },
+    "notes": "reachable marketing+comms leaders; lookalike of the anchor brands at build"
+   },
+   "targeting": {
+    "label": "Who we email (marketing + comms leaders)",
+    "roles": [
+     "Chief Marketing Officer",
+     "VP Marketing",
+     "Head of Marketing",
+     "Marketing Director",
+     "Head of Growth",
+     "Chief Growth Officer",
+     "Head of Demand Generation",
+     "Head of Digital Marketing",
+     "Head of Content",
+     "Chief Communications Officer",
+     "VP Communications",
+     "Head of Communications",
+     "Head of Corporate Communications",
+     "Head of Corporate Affairs",
+     "Head of Public Relations",
+     "Head of Brand",
+     "Chief Revenue Officer",
+     "Head of Go-to-Market",
+     "Head of Sustainability"
+    ],
+    "excluded": [
+     "Social Media Coordinator",
+     "Marketing Intern",
+     "Content Writer",
+     "PR Intern",
+     "Communications Assistant"
+    ],
+    "meta": "200-10,000 staff - 10 core markets",
+    "note": "Lookalikes of the anchor brands"
+   },
+   "poolMeasured": false,
+   "minCapacity": 5000,
+   "anchors": [
+    "GE",
+    "Honeywell",
+    "DuPont",
+    "Toyota",
+    "Volkswagen",
+    "Ford",
+    "Tata Steel",
+    "Whirlpool"
+   ],
+   "cases": [
+    "Bob Knott \u2014 GE ecomagination \u00b7 DuPont (thought leadership)",
+    "Ross Kleinrock \u2014 GTM \u00b7 vendor sourcing (for launches)",
+    "Henry Cho \u2014 Toyota \u00b7 VW",
+    "Jonathan Wootliff \u2014 Tata Steel \u00b7 Owens Corning"
+   ]
+  }
+ ],
+ "people": {
+  "food-bev": [
+   {
+    "first": "Elena",
+    "title": "Head of Marketing",
+    "company": "Danone",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Most food brands get coverage that looks great and can't be traced to a single new customer."
+    }
+   },
+   {
+    "first": "Marcus",
+    "title": "VP Communications",
+    "company": "Conagra Brands",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "PR that can't show pipeline is the first budget line questioned in a tight year."
+    }
+   },
+   {
+    "first": "Sofia",
+    "title": "Chief Marketing Officer",
+    "company": "Ferrero",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "A launch earns a wave of press, then nobody measures whether it moved product."
+    }
+   }
+  ],
+  "financial": [
+   {
+    "first": "James",
+    "title": "Head of Growth",
+    "company": "Nationwide",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "New products launch on a stretched team with no dedicated GTM plan behind them."
+    }
+   },
+   {
+    "first": "Priya",
+    "title": "Chief Marketing Officer",
+    "company": "Man Group",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Entering a new segment without vendors and a plan means the first year is mostly setup."
+    }
+   },
+   {
+    "first": "Daniel",
+    "title": "Head of Go-to-Market",
+    "company": "Ally Financial",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "A launch without a resourced GTM engine slips quietly from revenue to cost."
+    }
+   }
+  ],
+  "pharma": [
+   {
+    "first": "Anika",
+    "title": "Head of Corporate Communications",
+    "company": "Incyte",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "The best science in the building never reaches the physicians and partners who should hear it."
+    }
+   },
+   {
+    "first": "Thomas",
+    "title": "Head of Marketing",
+    "company": "Galderma",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Competitors' experts own the stages and the journals while ours stay in the lab."
+    }
+   },
+   {
+    "first": "Mei",
+    "title": "VP Communications",
+    "company": "BeiGene",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "A new indication needs authority built in public, not just a press release."
+    }
+   }
+  ],
+  "tech-ai": [
+   {
+    "first": "Ravi",
+    "title": "Head of Marketing",
+    "company": "Cloudflare",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Half our category's buyers now start in an AI tool, and we have no idea if we show up."
+    }
+   },
+   {
+    "first": "Hannah",
+    "title": "Head of Growth",
+    "company": "UiPath",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Competitors are being recommended by AI answers we never even see."
+    }
+   },
+   {
+    "first": "Lucas",
+    "title": "Chief Marketing Officer",
+    "company": "Infineon",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Our SEO team optimises for Google while the buyers move to ChatGPT."
+    }
+   }
+  ],
+  "energy": [
+   {
+    "first": "Karin",
+    "title": "Head of Corporate Affairs",
+    "company": "Orsted",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "On the transition, the loudest voices define our projects before we even respond."
+    }
+   },
+   {
+    "first": "Diego",
+    "title": "Head of Public Affairs",
+    "company": "Sempra",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Our experts could shape policy and public opinion, but they're never in the room."
+    }
+   },
+   {
+    "first": "Ingrid",
+    "title": "Head of Communications",
+    "company": "Vestas",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "We have the credibility to lead the conversation and we're not using it."
+    }
+   }
+  ],
+  "media-sports": [
+   {
+    "first": "Alex",
+    "title": "Head of Brand",
+    "company": "Lionsgate",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Every release fights a dozen platforms for the same attention on the same weekend."
+    }
+   },
+   {
+    "first": "Naomi",
+    "title": "Head of Marketing",
+    "company": "DAZN",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "A great season is wasted if the earned coverage never drives anyone to watch."
+    }
+   },
+   {
+    "first": "Ben",
+    "title": "Head of Content Marketing",
+    "company": "Endeavor",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "We make things people would love and can't get them to notice in time."
+    }
+   }
+  ],
+  "luxury-retail": [
+   {
+    "first": "Claire",
+    "title": "Head of Marketing",
+    "company": "Mulberry",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Our press is beautiful and none of it is measured against new customers."
+    }
+   },
+   {
+    "first": "Marco",
+    "title": "Chief Marketing Officer",
+    "company": "Zegna",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Admiration is not demand, and we keep confusing the two."
+    }
+   },
+   {
+    "first": "Yuki",
+    "title": "Head of Brand",
+    "company": "Shiseido",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "New buyers now discover us through AI and search, where we barely show up."
+    }
+   }
+  ],
+  "nonprofit": [
+   {
+    "first": "Grace",
+    "title": "Head of Communications",
+    "company": "Wellcome Trust",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "The people who fund us never see the work that would make them fund more."
+    }
+   },
+   {
+    "first": "Samuel",
+    "title": "Executive Director",
+    "company": "Mercy Corps",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Our experts could move funders and partners, but they're never in front of them."
+    }
+   },
+   {
+    "first": "Lena",
+    "title": "Head of Development",
+    "company": "Rainforest Alliance",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Awareness is nice; we need visibility that actually converts to funding."
+    }
+   }
+  ],
+  "industrial": [
+   {
+    "first": "Peter",
+    "title": "Head of Marketing",
+    "company": "Cummins",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "We enter new markets faster than we can build the go-to-market behind them."
+    }
+   },
+   {
+    "first": "Andrea",
+    "title": "Head of Growth",
+    "company": "Covestro",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "A new product line lands on a team already at capacity, with no vendor plan."
+    }
+   },
+   {
+    "first": "Tomas",
+    "title": "Chief Revenue Officer",
+    "company": "Faurecia",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "detail": "",
+     "colleague": "",
+     "safe": "Expansion keeps slipping from a revenue plan to an internal scramble."
+    }
+   }
+  ]
+ }
+}

@@ -1,0 +1,284 @@
+{
+ "flow": [
+  {
+   "id": 1,
+   "mapper": {
+    "qs": [],
+    "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/replies?select=email,smartlead_campaign_id,replied_at,category,reply_body&and=(replied_at.gte.{{formatDate(addHours(now; -30); \"YYYY-MM-DD\")}}T00:00:00Z,replied_at.lte.{{formatDate(addMinutes(now; -60); \"YYYY-MM-DDTHH:mm:ss\")}}Z)&category=in.(%22Interested%22,%22Meeting%20Request%22,%22Information%20Request%22,%22Call%20Booked%22)&order=replied_at.asc&limit=200",
+    "data": "",
+    "gzip": true,
+    "method": "get",
+    "headers": [
+     {
+      "name": "apikey",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     },
+     {
+      "name": "Authorization",
+      "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     }
+    ],
+    "useMtls": false,
+    "bodyType": "raw",
+    "serializeUrl": false,
+    "shareCookies": false,
+    "parseResponse": true,
+    "followRedirect": true,
+    "useQuerystring": false,
+    "followAllRedirects": false,
+    "rejectUnauthorized": true
+   },
+   "module": "http:ActionSendData",
+   "version": 3,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 0,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   }
+  },
+  {
+   "id": 2,
+   "mapper": {
+    "array": "{{1.data}}"
+   },
+   "module": "builtin:BasicFeeder",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "designer": {
+     "x": 300,
+     "y": 0
+    }
+   }
+  },
+  {
+   "id": 3,
+   "mapper": {
+    "email": "{{2.email}}",
+    "fullName": ""
+   },
+   "module": "folk:findPerson",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 600,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   },
+   "parameters": {
+    "__IMTCONN__": 9252689
+   }
+  },
+  {
+   "id": 10,
+   "mapper": null,
+   "module": "builtin:BasicRouter",
+   "routes": [
+    {
+     "flow": [
+      {
+       "id": 6,
+       "filter": {
+        "name": "Not found in Folk",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "o": "notexist"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "text": "\u26a0\ufe0f *Folk fail-safe*: positive lead *{{2.email}}* (campaign {{2.smartlead_campaign_id}}, tagged {{2.category}}) is NOT in Folk. Attempting automatic re-push through the pipeline now \u2014 if this alert repeats next run, add manually.",
+        "parse": false,
+        "mrkdwn": true,
+        "channel": "C096Q9LHQGZ",
+        "username": "NAVREO BOT",
+        "channelWType": "manualy"
+       },
+       "module": "slack:CreateMessage",
+       "version": 4,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1200,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9254394
+       }
+      },
+      {
+       "id": 4,
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/leads/?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5&email={{2.email}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1500,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       }
+      },
+      {
+       "id": 5,
+       "filter": {
+        "name": "Lead found in Smartlead",
+        "conditions": [
+         [
+          {
+           "a": "{{4.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          },
+          {
+           "a": "{{4.data.id}}",
+           "o": "exist"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{2.smartlead_campaign_id}}?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1800,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       }
+      },
+      {
+       "id": 7,
+       "filter": {
+        "name": "Campaign resolved",
+        "conditions": [
+         [
+          {
+           "a": "{{5.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://hook.eu2.make.com/qt3b07kefg9ogusrgd044qh1uae7hu27",
+        "data": "{\"event_type\": \"EMAIL_REPLY\", \"lead_category\": {\"new_name\": \"Interested\"}, \"campaign_name\": \"{{5.data.name}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"from_email\": \"{{2.email}}\", \"app_url\": \"https://app.smartlead.ai/app/master-inbox\", \"last_reply\": {\"time\": \"{{2.replied_at}}\", \"email_body\": \"{{replace(replace(2.reply_body; newline; \\\" \\\"); \\\"\\\\\\\"\\\"; \\\"'\\\")}}\"}, \"history\": [{\"type\": \"SENT\", \"email_body\": \"\"}], \"lead_id\": \"{{4.data.id}}\", \"sl_email_lead_id\": \"{{4.data.id}}\", \"lead_data\": {\"first_name\": \"{{4.data.first_name}}\", \"last_name\": \"{{4.data.last_name}}\", \"company_name\": \"{{4.data.company_name}}\", \"email\": \"{{4.data.email}}\", \"website\": \"{{4.data.website}}\", \"linkedin_profile\": \"{{4.data.linkedin_profile}}\", \"location\": \"{{4.data.location}}\", \"custom_fields\": {\"role\": \"\"}}}",
+        "gzip": true,
+        "method": "post",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       }
+      }
+     ]
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "designer": {
+     "x": 900,
+     "y": 0
+    }
+   }
+  }
+ ],
+ "name": "folk-failsafe-watchdog",
+ "metadata": {
+  "instant": false,
+  "version": 1,
+  "scenario": {
+   "dlq": true,
+   "dataloss": false,
+   "maxErrors": 10,
+   "autoCommit": true,
+   "roundtrips": 1,
+   "sequential": false,
+   "confidential": false,
+   "freshVariables": false,
+   "autoCommitTriggerLast": true
+  }
+ }
+}

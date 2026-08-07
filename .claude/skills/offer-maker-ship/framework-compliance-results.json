@@ -1,0 +1,62 @@
+{
+ "navreo.ai": {
+  "offers": 16,
+  "all4": "16/16",
+  "new_money": "16/16",
+  "pct": 100,
+  "types": {
+   "pay_after_result": 7,
+   "pay_per_result": 5,
+   "guarantee_refund": 4
+  },
+  "PASS": true
+ },
+ "allbirds.com": {
+  "offers": 16,
+  "all4": "16/16",
+  "new_money": "16/16",
+  "pct": 100,
+  "types": {
+   "pay_after_result": 7,
+   "pay_per_result": 3,
+   "guarantee_refund": 6
+  },
+  "PASS": true
+ },
+ "flexport.com": {
+  "offers": 15,
+  "all4": "15/15",
+  "new_money": "15/15",
+  "pct": 100,
+  "types": {
+   "pay_after_result": 4,
+   "pay_per_result": 6,
+   "guarantee_refund": 5
+  },
+  "PASS": true
+ },
+ "mrhandyman.com": {
+  "offers": 17,
+  "all4": "17/17",
+  "new_money": "17/17",
+  "pct": 100,
+  "types": {
+   "pay_after_result": 9,
+   "pay_per_result": 4,
+   "guarantee_refund": 4
+  },
+  "PASS": true
+ },
+ "netguru.com": {
+  "offers": 16,
+  "all4": "16/16",
+  "new_money": "16/16",
+  "pct": 100,
+  "types": {
+   "pay_after_result": 4,
+   "pay_per_result": 7,
+   "guarantee_refund": 5
+  },
+  "PASS": true
+ }
+}

@@ -1,0 +1,2902 @@
+[
+ {
+  "path": "./applift-borderline-2026-06-03.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "AppLift",
+  "folder": "TAM + DMs 2026-06",
+  "list_name": "AppLift Companies - Borderline",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#7ba2c1c0-7973-4279-a18d-1819ee7672d5",
+  "row_count": 73
+ },
+ {
+  "path": "./Boomerang DEDUPED - Prospects WITHOUT Emails.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./Asteri_CorporateDevelopment_unique_leads.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Asteri Partners",
+  "folder": "Corporate Development",
+  "list_name": "Asteri Corp-Dev Unique Leads",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#b9797bab-7f50-4fc1-83b7-33ffd47009f6",
+  "row_count": 15953
+ },
+ {
+  "path": "./applift-QUALIFIED-strict-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./applift-prospeo-gapfill-missing-from-aiark-2026-06-03.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "AppLift",
+  "folder": "TAM + DMs 2026-06",
+  "list_name": "AppLift DMs - Prospeo Gapfill",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#0533f178-e381-43de-a532-91a0867033da",
+  "row_count": 85
+ },
+ {
+  "path": "./signature_audit_MISMATCHES.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./domains-chat-filtered.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "domain/infra file"
+ },
+ {
+  "path": "./navreo.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "domain/infra file, not a prospect list"
+ },
+ {
+  "path": "./Boomerang DEDUPED - Final Outreach List.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./navreo_recontact_non_repliers.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Recontact",
+  "list_name": "Navreo Recontact Non-Repliers",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#639862e1-a7aa-4f44-80a2-2cf4f9202998",
+  "row_count": 40080
+ },
+ {
+  "path": "./prospeo-companies-batch2-of-2-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./podcast_founders_list.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Research",
+  "list_name": "Podcast Founders List",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#8f6e08f8-17bb-424b-9412-bb1ee85877ee",
+  "row_count": 20
+ },
+ {
+  "path": "./company_followers_exclusion_list.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "exclusion/suppression list - never upload"
+ },
+ {
+  "path": "./amplifyy_batch1.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Boomerang DEDUPED - Prospects WITHOUT Emails (Scored).csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./applift-B2C-companies-for-DM-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./navreo_3229010_manual_review.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./amplifyy_batch2.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./prospeo-companies-batch1-of-2-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./applift-DMs-COMBINED-FINAL-2026-06-03.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "AppLift",
+  "folder": "TAM + DMs 2026-06",
+  "list_name": "AppLift DMs - COMBINED FINAL",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#78f75d89-2092-4257-b59f-a89c2f9e64ca",
+  "row_count": 9439
+ },
+ {
+  "path": "./cold-outreach-tools-linkedin-tam.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Research",
+  "list_name": "Cold Outreach Tools LinkedIn TAM",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#82a7ad2b-f459-42c8-865c-719901109c10",
+  "row_count": 7
+ },
+ {
+  "path": "./navreo_batch1.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_never_replied.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Exporters 2026-06",
+  "list_name": "Exporters Never-Replied Recontact",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#f6bad33d-3d70-4ea1-8744-b175044820d7",
+  "row_count": 9094
+ },
+ {
+  "path": "./navreo_batch2.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Interdependence_Consulting_Prospects_2026-06-03.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Interdependence",
+  "folder": "Prospects 2026-06",
+  "list_name": "Interdependence Consulting Prospects",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#b6e0c372-43f5-40a0-b7b6-1e9729aed2a9",
+  "row_count": 10
+ },
+ {
+  "path": "./marketing_exclusion_domains.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "exclusion/suppression list - never upload"
+ },
+ {
+  "path": "./signature_audit_full.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./company-signals.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./applift-QUALIFIED-FINAL-2026-06-03.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "AppLift",
+  "folder": "TAM + DMs 2026-06",
+  "list_name": "AppLift Companies - QUALIFIED FINAL",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#542fb512-d35d-470a-a5c5-550b5b69d419",
+  "row_count": 4991
+ },
+ {
+  "path": "./applift-banks-creditunions-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./applift-unqualified-B2C-verdict-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./prospeo-mobileapp-b2c-b2b2c-prospects-2026-06-03.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "AppLift",
+  "folder": "TAM + DMs 2026-06",
+  "list_name": "Mobile App B2C/B2B2C Prospects (Prospeo)",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#84c68d07-6348-4947-8066-0a9fcb17e6f0",
+  "row_count": 2837
+ },
+ {
+  "path": "./company_updates.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./amplifyy_batch2_dnsimple.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Boomerang DEDUPED - Final Outreach List_enriched.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./june2026_mailbox_audit_discrepancies.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./applift-ocean-unique-companies-batch1-of-2-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./navreo_3229010_audit_v2.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./applift-ocean-unique-companies-batch2-of-2-2026-06-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Boomerang DEDUPED - Final Outreach List_ready_for_upload.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Boomerang",
+  "list_name": "Boomerang Final Outreach - Upload Ready",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#7922a11d-412b-4128-aa7b-7ac3c110967a",
+  "row_count": 10525
+ },
+ {
+  "path": "./qwintiq_au_accounting_mockup_5.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "mockup/copy doc, not a prospect list"
+ },
+ {
+  "path": "./navreo_3229010_audit_final.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./campaign_3396124_backup_2026-05-25.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./saas_exclusion_domains.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "exclusion/suppression list - never upload"
+ },
+ {
+  "path": "./navreo_3229010_audit.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./generics.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "domain/infra file, not a prospect list"
+ },
+ {
+  "path": "./applift-banks-creditunions-FINAL-2026-06-03.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "AppLift",
+  "folder": "TAM + DMs 2026-06",
+  "list_name": "AppLift Banks & Credit Unions - FINAL",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#256c5e7c-0ccd-4c0b-b144-21996dca7d5e",
+  "row_count": 4736
+ },
+ {
+  "path": "./MSP-TAM-2026-06-11/off_brief.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./MSP-TAM-2026-06-11/borderline.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "MSP TAM 2026-06",
+  "list_name": "MSP TAM - Borderline",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#4317fc92-8fb3-46c9-86c8-9b345dd40f93",
+  "row_count": 44
+ },
+ {
+  "path": "./MSP-TAM-2026-06-11/qualified.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "MSP TAM 2026-06",
+  "list_name": "MSP TAM - Qualified",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#75e3add9-1035-40c8-8b00-1cc85de25ce9",
+  "row_count": 35
+ },
+ {
+  "path": "./PestCo-TAM-2026-04-28/PestCo-Prospeo-Raw.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./PestCo-TAM-2026-04-28/PestCo-Ocean-Scored.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./PestCo-TAM-2026-04-28/seed-high-fit.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./PestCo-TAM-2026-04-28/PestCo-Prospeo-Scored.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./PestCo-TAM-2026-04-28/PestCo-NEW-Scored-MERGED.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./PestCo-TAM-2026-04-28/PestCo-Ocean-Raw.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./PestCo-TAM-2026-04-28/PestCo-MASTER-Scored.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Asteri Partners",
+  "folder": "PestCo TAM 2026-04",
+  "list_name": "PestCo TAM - MASTER Scored",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#b21c2de1-3e1e-44cf-97ba-44f0d761b0ca",
+  "row_count": 12127
+ },
+ {
+  "path": "./Deduped-NoReply-Lists-2026-06-16/manufacturer_noreply.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "NoReply Recontact 2026-06",
+  "list_name": "Manufacturer No-Reply Recontact",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#9ec37db9-a26d-4d91-aecf-79b008234a0f",
+  "row_count": 12895
+ },
+ {
+  "path": "./Deduped-NoReply-Lists-2026-06-16/distributor_noreply.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "NoReply Recontact 2026-06",
+  "list_name": "Distributor No-Reply Recontact",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#65606442-daa0-41b1-be8a-1a0a466f2fa1",
+  "row_count": 19346
+ },
+ {
+  "path": "./Deduped-NoReply-Lists-2026-06-16/wholesale_noreply.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "NoReply Recontact 2026-06",
+  "list_name": "Wholesale No-Reply Recontact",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#80022bc2-5c78-48bf-91e0-0eaeed0f8203",
+  "row_count": 13761
+ },
+ {
+  "path": "./runs/2026-05-08-cee3-agencies/stage1_borderline.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "CEE3 Agencies 2026-05",
+  "list_name": "CEE3 Agencies - Borderline",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#4ab40156-6b15-45fa-b178-88c2d0067050",
+  "row_count": 17
+ },
+ {
+  "path": "./runs/2026-05-08-cee3-agencies/stage1_off_brief.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./runs/2026-05-08-cee3-agencies/stage1_master.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./runs/2026-05-08-cee3-agencies/stage1_qualified.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "CEE3 Agencies 2026-05",
+  "list_name": "CEE3 Agencies - Qualified",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#be551e4a-9f0e-4d4a-a45f-bfca1235a64f",
+  "row_count": 115
+ },
+ {
+  "path": "./Amazon-Agencies-2026-04-27/amazon-agencies-tam.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Amazon-Agencies-2026-04-27/amazon-agencies-decision-makers.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Amplifyy",
+  "folder": "Amazon Agencies TAM",
+  "list_name": "Amazon Agencies - Decision Makers",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#ef0b3e4d-adec-4d7d-ad54-445f2a9cbc2e",
+  "row_count": 373
+ },
+ {
+  "path": "./Amazon-Agencies-2026-04-27/amazon-agencies-current-role-DMs-2026-06-25.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Amplifyy",
+  "folder": "Amazon Agencies TAM",
+  "list_name": "Amazon Agencies - Current-Role DMs 2026-06-25",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#6fec92c7-914f-4a51-a777-851dfa2a0cbd",
+  "row_count": 62
+ },
+ {
+  "path": "./Amazon-Agencies-2026-04-27/amazon-agencies-tam-merged-v2.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Amplifyy",
+  "folder": "Amazon Agencies TAM",
+  "list_name": "Amazon Agencies - TAM Merged v2",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#d8abf969-3729-4790-bd61-2cf8cd1d24a5",
+  "row_count": 625
+ },
+ {
+  "path": "./Amazon-Agencies-2026-04-27/amazon-agencies-tam-merged.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/recontact_RECOVERED.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/arch_2825791.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/arch_2962237.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/RECONTACT_clay_ENROL_1724.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Clay Recontact 2026-06",
+  "list_name": "Clay Recontact - ENROL 1724",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#eb805d66-3766-46d9-ada8-f9fda6553181",
+  "row_count": 1724
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/RECONTACT_clay_HOLD_2149.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Clay Recontact 2026-06",
+  "list_name": "Clay Recontact - HOLD 2149",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#525fb801-69d3-4073-9a60-20fedeb35632",
+  "row_count": 2149
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/raw_3119584.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/arch_2870486.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/raw_3279290.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/active_3396215.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/raw_3235711.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/raw_3278780.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/recontact_default.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/raw_3175081.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/arch_2960366.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/recontact_strict.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Clay-Recontact-2026-06-02/recontact_FINAL.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Clay Recontact 2026-06",
+  "list_name": "Clay Recontact - FINAL",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#30a05c0f-775b-461a-8151-b63fe9489f09",
+  "row_count": 1723
+ },
+ {
+  "path": "./d2c-app-tam-2026-04-25/d2c_classification_100.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "TAM methodology test artifact"
+ },
+ {
+  "path": "./campaign_mv_reverify_2026-05-28/_test_result.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./campaign_mv_reverify_2026-05-28/lead_index.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./campaign_mv_reverify_2026-05-28/catch_all_leads.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./campaign_mv_reverify_2026-05-28/delete_log.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./campaign_mv_reverify_2026-05-28/mv_results.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./campaign_mv_reverify_2026-05-28/all_leads_raw.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./campaign_mv_reverify_2026-05-28/bad_leads.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./exporters_enrichment_run/exporters_combined_enriched.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Exporters 2026-06",
+  "list_name": "Exporters Combined Enriched (AI-ARK)",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#5e3f8522-36bf-4698-bd58-04bd61bb1dd9",
+  "row_count": 7871
+ },
+ {
+  "path": "./exporters_enrichment_run/exporters_skipped_no_email.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./WordBank-Tiering-2026-06-03/fresh_dm_list.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "WordBank",
+  "folder": "Tiering 2026-06",
+  "list_name": "WordBank Fresh DM List",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#3d7f78f9-5c39-4da3-a5af-598075063103",
+  "row_count": 84
+ },
+ {
+  "path": "./WordBank-Tiering-2026-06-03/no_dm_found.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./WordBank-Tiering-2026-06-03/b12_tab0.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./WordBank-Tiering-2026-06-03/b12_tab1.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./WordBank-Tiering-2026-06-03/noemail_dm_list.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "WordBank",
+  "folder": "Tiering 2026-06",
+  "list_name": "WordBank No-Email DM List (LinkedIn)",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#81a677a9-23e2-4eaa-a25f-a14ba91be67d",
+  "row_count": 128
+ },
+ {
+  "path": "./Freight-3PL-TAM-2026-06-11/off-brief.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./Freight-3PL-TAM-2026-06-11/borderline.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Freight-3PL TAM 2026-06",
+  "list_name": "Freight-3PL TAM - Borderline",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#b1bfed8f-b9f2-4ff7-bfe8-c35731b3ef13",
+  "row_count": 65
+ },
+ {
+  "path": "./Freight-3PL-TAM-2026-06-11/qualified.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Freight-3PL TAM 2026-06",
+  "list_name": "Freight-3PL TAM - Qualified",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#609da6b6-de0b-4193-a000-d907044050bc",
+  "row_count": 94
+ },
+ {
+  "path": "./Amplifyy-AI-Ark-2026-04-27/amplifyy_campaign_messaging_v1.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "mockup/copy doc, not a prospect list"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/mobile-app-tam-1k-disqualified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/mobile-app-tam-1k-verified-v2.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "AppLift",
+  "folder": "Mobile App TAM 2026-04",
+  "list_name": "Mobile App TAM 1k - Verified v2",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#3427c434-5176-4b2b-9738-1b873712d4dd",
+  "row_count": 658
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/mobile-app-tam-1k-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/mobile-app-tam-1k-unclear.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/mobile-app-tam-1k-quarantine.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/mobile-app-tam-1k.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/strict_rerun_to_verify.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_requalify/bucket_low_gdp - Final Outreach List.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_requalify/bucket_low_gdp.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_requalify/bucket_high_gdp.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_requalify/bucket_high_gdp - Final Outreach List.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./reply-suppression/replier_matches_all.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "exclusion/suppression list - never upload"
+ },
+ {
+  "path": "./reply-suppression/pause_candidates.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "exclusion/suppression list - never upload"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-picofilm-deliverable.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-FINAL-top3.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-FINAL-emails-only.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-DELIVERABLE-clean.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-brief-aligned-final.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-FINAL-deliverable.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-TOP3-deliverable.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-FINAL-v5.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Sihl",
+  "folder": "PICOFILM 2026-04",
+  "list_name": "Sihl PICOFILM DMs - FINAL v5",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#1da39ef0-770d-4843-b1f1-58ba1030bc51",
+  "row_count": 97
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-FINAL-v4.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-FINAL-v3.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Sihl-PICOFILM-2026-04-27/sihl-FINAL-v2.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/final_list_build.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/final_list.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Salesloft Recontact 2026-06",
+  "list_name": "Salesloft Recontact - Final",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#50ffa779-cfd4-47d9-869b-0e26a0708c51",
+  "row_count": 2203
+ },
+ {
+  "path": "./boomerang_email_verification/new_leads_to_personalise.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/new_leads_to_personalise_cleaned.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/boomerang_remaining_filtered.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/boomerang_remaining_21342.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/tool_lookup_3235711.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/smartlead_followers_to_add_cleaned.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Boomerang",
+  "list_name": "Boomerang Followers To Add - Cleaned",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#1e496c83-5c53-4f5d-b573-51e0ddd2cc56",
+  "row_count": 622
+ },
+ {
+  "path": "./boomerang_email_verification/progress_v2.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/boomerang_sample_100.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/boomerang_sample_100_enriched.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/boomerang_remaining_enriched.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/smartlead_followers_casestudy.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/slice_03_upload_ready.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/progress.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/new_leads_upload_ready.csv",
+  "origin": "prospeo/ai-ark/tam-final",
+  "client": "Navreo",
+  "folder": "Boomerang",
+  "list_name": "Boomerang New Leads - Upload Ready",
+  "status": "uploaded",
+  "reason": "final deliverable",
+  "link": "https://navreo-signals.onrender.com/app/lists.html#a4ea5cc2-8685-4fa6-ab97-93252bea344c",
+  "row_count": 2389
+ },
+ {
+  "path": "./boomerang_email_verification/snapshot_for_cleaning_cleaned.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/disqualified_titles_ranked.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "off-brief/disqualified pot"
+ },
+ {
+  "path": "./boomerang_email_verification/smartlead_followers_to_add.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./boomerang_email_verification/personalisation_concat.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/tool_lookup_unmatched.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/snapshot_for_cleaning.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_07.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_06.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_04.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_05.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_09.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_08.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_00.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_3221039_all_leads.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_06.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_07.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_05.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_04.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_08.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_00.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job1_slice_09.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/job2_slice_02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./tam-tests/applift/phase2-top10.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "TAM methodology test artifact"
+ },
+ {
+  "path": "./tam-tests/applift/off-brief.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "TAM methodology test artifact"
+ },
+ {
+  "path": "./tam-tests/applift/borderline.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "TAM methodology test artifact"
+ },
+ {
+  "path": "./tam-tests/applift/qualified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "TAM methodology test artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_09.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_08.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_test_manual.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "audit/QA artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/REMOVE_FROM_CAMPAIGN.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_00.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_05.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_04.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_06.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/manual_review/job1_v3_07.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./exporters_personalisation_run/work_06/generated.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/strict_verify_batches/strict-batch-01-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/strict_verify_batches/strict-batch-02-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/strict_verify_batches/strict-batch-01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/strict_verify_batches/strict-batch-02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/strict_verify_batches/strict-batch-03-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/strict_verify_batches/strict-batch-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/recreate-2026-06-01-appgate/mobile-app-tam-recreate.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/recreate-2026-06-01/mobile-app-tam-recreate.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "superseded/intermediate version (final variant uploaded instead)"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-07-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-01-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-06-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-09.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-08.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-08-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-06.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-07.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-05.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-10.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-04.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-09-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-04-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-03-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-10-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-02-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Mobile-App-TAM-2026-04-26/verification_batches/batch-05-verified.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279343.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278854.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3119584.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3322794.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3234684.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3285066.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3174752.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3407205.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3285048.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3175061.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279540.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3396124.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3356274.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3407077.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3235711.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3285011.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3356261.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3124117.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3285012.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3401559.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3189284.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3174725.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3221039.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3252217.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279290.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3224801.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3317159.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279324.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3174448.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3175030.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279467.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3174689.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279261.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3324615.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278550.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278380.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3324616.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3285033.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3174884.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278780.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278743.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3294310.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3294311.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3422167.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/2885322.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3285034.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3294307.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3294313.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3422166.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278782.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3174666.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3175047.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3315723.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3317530.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3324844.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3315482.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3315483.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3315481.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3236066.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3324891.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279374.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278907.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3396217.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3279359.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3278906.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3175081.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3407227.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3396215.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3322612.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./Salesloft-Recontact-2026-06-02/leads_cache/3324539.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "smartlead campaign export/backup"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_02_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_06.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_03_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_07.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_05.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_00_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_04.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_01_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_00.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_07_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_06_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_05_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_04_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/slices/slice_02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/new_slices/new_slice_01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/new_slices/new_slice_00.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/new_slices/new_slice_01_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/new_slices/new_slice_00_personalisation.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_out_03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_out_02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_out_00.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_out_01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_in_00.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_in_01.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_in_03.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ },
+ {
+  "path": "./boomerang_email_verification/rebalance/rebalance_in_02.csv",
+  "origin": "n/a",
+  "client": null,
+  "folder": null,
+  "list_name": null,
+  "status": "skip",
+  "reason": "intermediate working artifact"
+ }
+]

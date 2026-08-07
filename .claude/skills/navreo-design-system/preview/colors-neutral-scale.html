@@ -1,0 +1,30 @@
+<!doctype html>
+<!-- @dsCard group="Colors" name="Neutral scale" subtitle="Cream → light brown → dark brown → ink" viewport="1100x240" -->
+<html><head><meta charset="utf-8"><title>Neutral scale</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  .scale { display: grid; grid-template-columns: repeat(7, 1fr); gap: 8px; }
+  .stop {
+    aspect-ratio: 1 / 1.2;
+    border-radius: 8px;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    border: 1px solid var(--border);
+  }
+  .stop .name { font-weight: 500; font-size: 11px; }
+  .stop .hex { font-family: var(--font-mono); font-size: 9.5px; opacity: 0.7; }
+</style></head>
+<body>
+  <div class="label" style="margin-bottom:10px">Neutral — cream → light brown → dark brown → ink</div>
+  <div class="scale">
+    <div class="stop" style="background:#FCF7F1"><span class="name">cream-50</span><span class="hex">#FCF7F1</span></div>
+    <div class="stop" style="background:#F9F0E7"><span class="name">cream-100</span><span class="hex">#F9F0E7</span></div>
+    <div class="stop" style="background:#F2E5D9"><span class="name">light-100</span><span class="hex">#F2E5D9</span></div>
+    <div class="stop" style="background:#E8D7C4"><span class="name">light-200</span><span class="hex">#E8D7C4</span></div>
+    <div class="stop" style="background:#C0B0A0"><span class="name">brown-300</span><span class="hex">#C0B0A0</span></div>
+    <div class="stop" style="background:#5C4E40"><span class="name" style="color:#fff">brown-600</span><span class="hex" style="color:#fff">#5C4E40</span></div>
+    <div class="stop" style="background:#14110E"><span class="name" style="color:#fff">ink</span><span class="hex" style="color:#fff">#14110E</span></div>
+  </div>
+</body></html>

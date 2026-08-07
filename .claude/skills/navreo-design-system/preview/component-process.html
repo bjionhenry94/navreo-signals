@@ -1,0 +1,68 @@
+<!doctype html>
+<!-- @dsCard group="Components" name="Process steps" subtitle="01 / 02 / 03 — active step inverts to ink" viewport="1100x280" -->
+<html><head><meta charset="utf-8"><title>Process steps</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  /* Glass language applied to process steps. The card background stays
+     on the cream page (no hue field) — glass reads as a soft tint over
+     a faint warm wash directly behind the cards. */
+  body { padding: 28px; position: relative; isolation: isolate; }
+  body::before {
+    content: "";
+    position: absolute;
+    inset: 14px 28px;
+    z-index: -1;
+    background:
+      radial-gradient(36% 80% at 16% 50%, rgba(150,120,220,0.22) 0%, transparent 70%),
+      radial-gradient(36% 80% at 50% 50%, rgba(255,140,80,0.20) 0%, transparent 70%),
+      radial-gradient(36% 80% at 84% 50%, rgba(192,176,160,0.32) 0%, transparent 70%);
+    filter: blur(14px);
+    border-radius: 24px;
+  }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+  .step {
+    border-radius: 18px;
+    padding: 22px;
+    display: flex; flex-direction: column; gap: 10px;
+    min-height: 200px;
+    background: rgba(255,255,255,0.42);
+    border: 1px solid rgba(255,255,255,0.7);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.7);
+    color: var(--nav-ink);
+  }
+  .head { display: flex; align-items: baseline; justify-content: space-between; }
+  .num { font-family: var(--font-mono); font-size: 13px; color: var(--nav-orange); letter-spacing: 0.04em; }
+  .month { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--nav-ink-3); font-weight: 500; }
+  .h { font-family: var(--font-display); font-weight: 400; font-size: 22px; line-height: 1.15; letter-spacing: -0.02em; margin: 4px 0 6px; }
+  .p { font-size: 14px; line-height: 1.5; color: var(--nav-ink-2); margin: 0; }
+  .step.active {
+    background: rgba(20,17,14,0.78);
+    border-color: rgba(255,255,255,0.18);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.18);
+    color: var(--nav-cream);
+  }
+  .step.active .p { color: rgba(249,240,231,0.85); }
+  .step.active .num { color: var(--nav-orange); }
+  .step.active .month { color: rgba(249,240,231,0.6); }
+</style></head>
+<body>
+  <div class="grid">
+    <div class="step active">
+      <div class="head"><span class="num">01</span><span class="month">Month 1</span></div>
+      <h3 class="h">Build and Launch</h3>
+      <p class="p">Define your ICP, build infrastructure, ship every core system live.</p>
+    </div>
+    <div class="step">
+      <div class="head"><span class="num">02</span><span class="month">Month 2</span></div>
+      <h3 class="h">Learn and Amplify</h3>
+      <p class="p">Structured tests across angles, triggers, and content formats. Learn what your audience responds to before scaling anything.</p>
+    </div>
+    <div class="step">
+      <div class="head"><span class="num">03</span><span class="month">Month 3</span></div>
+      <h3 class="h">Scale</h3>
+      <p class="p">More of what works. Every channel compounds and pipeline grows month on month.</p>
+    </div>
+  </div>
+</body></html>

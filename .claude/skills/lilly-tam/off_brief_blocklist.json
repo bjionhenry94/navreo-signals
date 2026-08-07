@@ -1,0 +1,19 @@
+{
+  "_comment": "Persistent off-brief domain blocklist. Auto-prepend to seed exclude list at Stage 1 start (rule #30). After each TAM run, prompt the user: 'Any new drift attractors to add?' and append confirmed entries.",
+  "_last_updated": "2026-05-04",
+  "_source": "Backlog item #5 — Influencer-marketing TAM run (Run A) drift retro",
+  "domains": [
+    "tesla.com",
+    "meltwater.com",
+    "netsuite.com",
+    "chargebee.com",
+    "lusha.com",
+    "cognism.com",
+    "belkins.io",
+    "hawkemedia.com",
+    "patreon.com",
+    "jasper.ai",
+    "ogilvy.com",
+    "mcsaatchiperformance.com"
+  ]
+}

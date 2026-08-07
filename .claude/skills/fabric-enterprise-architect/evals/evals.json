@@ -1,0 +1,258 @@
+{
+  "skill_name": "fabric-enterprise-architect",
+  "notes": "30 real-world prompts covering teach mode, consult mode, challenge mode, incident mode, scaffold triggers, cross-cutting lenses, delegation, and negative/control cases. expected_output describes the behavior a reviewer should look for, not exact text.",
+  "evals": [
+    {
+      "id": 1,
+      "category": "teach-mode",
+      "prompt": "Teach me what OneLake is and why it exists.",
+      "expected_output": "Teach mode: single-concept explanation with the analytical lens (what/why/when), grounded in an analogy or scenario, closing with Enterprise Perspective, Common Mistakes, and Recommended Next Topic. No consult scaffolds.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "category": "teach-mode",
+      "prompt": "Explain Direct Lake mode and when it falls back to DirectQuery.",
+      "expected_output": "Teach mode. Covers what/why, the guardrail/fallback mechanism, and the three closing sections. Mentions gold star schema keeps it in Direct Lake. May point to faisal-powerbi-model for model build.",
+      "files": []
+    },
+    {
+      "id": 3,
+      "category": "teach-mode",
+      "prompt": "I keep hearing about the medallion architecture. Walk me through it.",
+      "expected_output": "Teach mode. Bronze/silver/gold with purpose of each and why separation matters (replay, audit, clean serving). Three closing sections. Connects to downstream Direct Lake/serving.",
+      "files": []
+    },
+    {
+      "id": 4,
+      "category": "teach-mode-prerequisite",
+      "prompt": "How does incremental loading with watermarks work? I'm still fuzzy on control tables.",
+      "expected_output": "Detects the stated prerequisite gap (control tables) and teaches that briefly first, then watermarks. One-concept-at-a-time. Closing sections.",
+      "files": []
+    },
+    {
+      "id": 5,
+      "category": "teach-mode",
+      "prompt": "What's the difference between a lakehouse and a warehouse in Fabric, and how do I choose?",
+      "expected_output": "Teach/compare. Explains both, the SQL-endpoint-read-only vs full-T-SQL distinction, default guidance (lakehouse for ingestion/transform, warehouse/Direct Lake for serving), avoid duplicating data. May use a small decision cue.",
+      "files": []
+    },
+    {
+      "id": 6,
+      "category": "consult-decision-tree",
+      "prompt": "Should I use a Copy Activity or a Notebook to load raw tables from Azure SQL into bronze?",
+      "expected_output": "Consult mode, focused. Recommends Copy for straight ingestion, explains why not Notebook (Spark startup, transform belongs in silver). Decision Tree + Decision Summary appropriate; Scorecard optional. Should NOT dump blueprint/checklist for this narrow question.",
+      "files": []
+    },
+    {
+      "id": 7,
+      "category": "consult-scorecard",
+      "prompt": "Compare Copy Activity, Dataflow Gen2, Notebook, and Mirroring for daily ingestion of 150 tables.",
+      "expected_output": "Consult mode. Four options compete, so Scorecard fires. Recommends metadata-driven Copy with incremental watermarks; names Mirroring as the alternative if near-real-time needed. Decision Summary. Operational layer (Key Vault, run-ID logging, capacity) included.",
+      "files": []
+    },
+    {
+      "id": 8,
+      "category": "consult-blueprint",
+      "prompt": "Design an end-to-end analytics platform on Fabric for a retail company ingesting from Azure SQL and a REST API, serving Power BI.",
+      "expected_output": "Full architecture. Blueprint fires (source -> bronze -> silver -> gold -> semantic model -> Power BI with monitoring/security/CI-CD layers). Production Checklist fires. Likely cost view and 10x check. Decision Summary. Deep, not padded.",
+      "files": []
+    },
+    {
+      "id": 9,
+      "category": "challenge-mode",
+      "prompt": "I'm going to build 40 separate pipelines, one per table, each writing straight into gold. How do I set that up?",
+      "expected_output": "Challenge Mode fires. Does NOT just explain how. Questions the 40-pipeline and direct-to-gold choices, raises scale/monitoring/maintenance and medallion/replay risks, then recommends metadata-driven pipeline + bronze/silver/gold. Pushes back with reasoning, not reflexively.",
+      "files": []
+    },
+    {
+      "id": 10,
+      "category": "challenge-mode",
+      "prompt": "My plan is one giant notebook that does bronze, silver, and gold in sequence. Good enough?",
+      "expected_output": "Challenge Mode. Flags monolith risks: no layer isolation, hard to test/monitor/reprocess, blast radius, no reuse. Recommends separated notebooks per layer. Respectful pushback with the stronger design.",
+      "files": []
+    },
+    {
+      "id": 11,
+      "category": "challenge-mode",
+      "prompt": "I'll store my SQL connection password in the control table so pipelines can read it. Fine?",
+      "expected_output": "Challenge Mode + security. Clear no: secrets belong in Key Vault, use managed identity. Explains the risk (leak surface, least privilege) and the fix. Does not rubber-stamp.",
+      "files": []
+    },
+    {
+      "id": 12,
+      "category": "incident-mode",
+      "prompt": "My nightly ingestion pipeline suddenly started failing halfway through last night. Where do I even start?",
+      "expected_output": "Incident Mode. Reasons through root causes ranked, evidence, logs/identifiers (run/correlation IDs), monitoring views, metrics, reproduction, mitigation, prevention, postmortem. Fix comes after diagnosis, not first.",
+      "files": []
+    },
+    {
+      "id": 13,
+      "category": "incident-mode",
+      "prompt": "All my Power BI reports on this capacity went slow this afternoon and some pipeline runs are queuing. What's going on?",
+      "expected_output": "Incident Mode with capacity focus. Suspects CU throttling/contention on shared capacity; points to Capacity Metrics app, top consumers, throttling/smoothing. Diagnostic path before fix. Mentions isolating workloads.",
+      "files": []
+    },
+    {
+      "id": 14,
+      "category": "incident-mode",
+      "prompt": "A notebook that ran fine for months is now throwing out-of-memory errors. Help me debug it.",
+      "expected_output": "Incident Mode. Ranks causes (data growth, skew, small-file explosion, wide transform, bad partitioning), evidence to check (input size trend, Spark UI stages), reproduction, short-term (resize/repartition) vs long-term (optimize, partition strategy). May defer code specifics to faisal-pyspark.",
+      "files": []
+    },
+    {
+      "id": 15,
+      "category": "cost-lens",
+      "prompt": "Is Dataflow Gen2 or a notebook cheaper for my silver transformations?",
+      "expected_output": "Total-cost view fires: not just compute but engineering, maintenance, operational, and team-skill cost. Recommends notebook at engineering scale, notes Dataflow's fit for analyst-owned modest volume. Honest cost trade-off.",
+      "files": []
+    },
+    {
+      "id": 16,
+      "category": "evolution-lens",
+      "prompt": "I built a single-pipeline metadata-driven load for 20 tables. Will this hold as we grow?",
+      "expected_output": "10x evolution check fires. Explains the design largely holds (rows not pipelines), names where real ceilings appear (source concurrency, capacity, control-table paging), and the redesign point. Does not over-engineer.",
+      "files": []
+    },
+    {
+      "id": 17,
+      "category": "company-tier-lens",
+      "prompt": "What's the right CI/CD setup for Fabric?",
+      "expected_output": "Company-tier contrast fires: startup (Git + simple deployment pipelines, minimal ceremony) vs mid-size (formalized promotion, review) vs Fortune 500 (multi-env, approvals, governance, DR). Explains context determines 'right'. Concrete Fabric mechanics (Git integration, deployment pipelines, parameterized connections).",
+      "files": []
+    },
+    {
+      "id": 18,
+      "category": "engineer-first",
+      "prompt": "We need sub-second streaming analytics on millions of events per second. Is Fabric the answer?",
+      "expected_output": "Engineer-first, not product-loyal. Discusses Fabric Real-Time Intelligence (Eventstream/Eventhouse/KQL) honestly but weighs Azure-native (Event Hub, Stream Analytics, Databricks) where they fit better. Names the trade-off; doesn't force Fabric.",
+      "files": []
+    },
+    {
+      "id": 19,
+      "category": "engineer-first",
+      "prompt": "Should we adopt Fabric or stick with our existing Databricks + Synapse stack?",
+      "expected_output": "Balanced engineering judgment, not a Fabric sales pitch. Weighs migration cost, team skill, feature fit, lock-in, workload profile. Company-tier/cost lenses likely. Ends with a defensible recommendation acknowledging it depends on context.",
+      "files": []
+    },
+    {
+      "id": 20,
+      "category": "security-governance",
+      "prompt": "How should I handle authentication and secrets for pipelines connecting to Azure SQL and an external API?",
+      "expected_output": "Consultant depth on security: managed identity preferred, service principal with Key Vault where needed, never inline secrets, least privilege, dedicated service account over personal account. Operational framing.",
+      "files": []
+    },
+    {
+      "id": 21,
+      "category": "governance-rbac",
+      "prompt": "We're setting up workspaces for a 50-person data team across three business units. How should we organize access?",
+      "expected_output": "Workspace + domain strategy, environment separation, Entra group-based RBAC (not per-user), least privilege, capacity considerations. Company-tier awareness. Possibly checklist for the governance dimensions.",
+      "files": []
+    },
+    {
+      "id": 22,
+      "category": "performance",
+      "prompt": "My gold Delta tables have thousands of tiny files and queries are slow. How do I fix and prevent this?",
+      "expected_output": "Diagnoses small-file problem: OPTIMIZE to compact, VACUUM with retention awareness, right partitioning (low-cardinality, not over-partitioned), MERGE vs overwrite habits. Prevention as much as fix. May defer exact code to faisal-fabric/faisal-pyspark.",
+      "files": []
+    },
+    {
+      "id": 23,
+      "category": "scd-pattern",
+      "prompt": "When should I use SCD Type 2 versus Type 1 in my silver layer, and what does it cost me?",
+      "expected_output": "Teach/consult hybrid. Type 1 overwrite vs Type 2 history with effective dates; apply to descriptive attributes not measures; SCD2 cost and 'not on everything' warning. Points to enterprise-patterns.md; defers MERGE code to sibling skills.",
+      "files": []
+    },
+    {
+      "id": 24,
+      "category": "delegation-boundary",
+      "prompt": "Write me the exact PySpark MERGE statement to upsert into my silver.customers table.",
+      "expected_output": "Delegation boundary: this is pure mechanics. Should hand off to faisal-pyspark/faisal-fabric rather than becoming the code author, or give minimal code while noting the sibling skill owns this. Not a place for architecture scaffolds.",
+      "files": []
+    },
+    {
+      "id": 25,
+      "category": "delegation-boundary",
+      "prompt": "Give me a DAX measure for year-over-year revenue growth.",
+      "expected_output": "Delegation boundary: defers to faisal-dax. Should not launch into architecture teaching or scaffolds.",
+      "files": []
+    },
+    {
+      "id": 26,
+      "category": "control-simple",
+      "prompt": "Does a Fabric lakehouse store data in Delta format?",
+      "expected_output": "Control case: simple factual question. Short, direct yes with a sentence of context. Should NOT trigger full consultant depth, scaffolds, or the three teach-mode sections. Tests that depth scales down.",
+      "files": []
+    },
+    {
+      "id": 27,
+      "category": "control-simple",
+      "prompt": "What does the OPTIMIZE command do on a Delta table?",
+      "expected_output": "Control case: concise answer (compacts small files). Maybe one line on when to run it. No scaffolds, no forced depth.",
+      "files": []
+    },
+    {
+      "id": 28,
+      "category": "monitoring-ops",
+      "prompt": "What should I be logging and monitoring in a production Fabric ingestion pipeline?",
+      "expected_output": "Operational depth: log table keyed by run ID (start/end/rows/status/error), Monitoring Hub, Capacity Metrics, alerts on failure path, correlation IDs for tracing. Pulls from monitoring-ops.md. Possibly checklist.",
+      "files": []
+    },
+    {
+      "id": 29,
+      "category": "disaster-recovery",
+      "prompt": "How do I think about backup and disaster recovery for a Fabric data platform?",
+      "expected_output": "DR reasoning: RPO/RTO framing, bronze retention + reproducible silver/gold as a recovery strategy, what OneLake provides vs what you must arrange, tested runbook. Honest about limits. Company-tier awareness likely.",
+      "files": []
+    },
+    {
+      "id": 30,
+      "category": "metadata-framework",
+      "prompt": "Explain how to build a fully metadata-driven ingestion framework and why it beats per-table pipelines.",
+      "expected_output": "Deep consult/teach. Control table schema, Lookup + ForEach + Execute Pipeline, parent/child, parameterization, watermark, paging the control table, idempotency. Why it beats per-table at scale, and when per-table is acceptable (small POC). Pulls metadata-driven.md. Experience Notes relevant.",
+      "files": []
+    },
+    {
+      "id": 31,
+      "category": "code-review-pyspark",
+      "prompt": "Review this silver-load cell: df = spark.read.format('delta').load(bronze_path); df2 = df.dropDuplicates(); df2.write.format('delta').mode('overwrite').saveAsTable('silver.customers')",
+      "expected_output": "Code Review Mode. Flags: dropDuplicates with no subset (whole-row, likely wrong key), overwrite instead of MERGE (loses history, not incremental, non-idempotent for appends), no schema/null handling. Grounds in Spark execution (shuffle from dropDuplicates). Shows a better MERGE-based version and explains why. Defers deep syntax to faisal-pyspark but owns the judgment.",
+      "files": []
+    },
+    {
+      "id": 32,
+      "category": "code-review-sql",
+      "prompt": "Is this warehouse query production-ready? SELECT * FROM sales s JOIN customer c ON s.cust_id = c.id WHERE YEAR(s.order_date) = 2024",
+      "expected_output": "Code Review Mode. Flags SELECT * (projection cost, fragility), non-sargable YEAR() on a column preventing predicate pushdown/partition elimination (use a date range), and asks about join cardinality. Offers the rewritten version and explains the performance reasoning.",
+      "files": []
+    },
+    {
+      "id": 33,
+      "category": "code-review-spark-concepts",
+      "prompt": "My PySpark join between a 2-billion-row fact and a 500-row lookup is shuffling huge amounts of data and running slow. Why, and how do I fix it?",
+      "expected_output": "Code Review + Spark execution depth. Identifies the shuffle-join on a tiny dimension as the problem; recommends a broadcast join so the 500-row side is sent to executors, avoiding the shuffle. Explains lazy eval, shuffle cost, and when broadcast is/ isn't appropriate (size threshold). May reference faisal-pyspark for exact syntax.",
+      "files": []
+    },
+    {
+      "id": 34,
+      "category": "team-collaboration",
+      "prompt": "A teammate opened a PR that adds a new notebook writing directly to the gold lakehouse, bypassing silver. How should I raise this in review without stepping on toes?",
+      "expected_output": "Team Collaboration Mode. Teaches respectful-but-honest framing: ask questions ('what's the reason for skipping silver here?') rather than verdicts, name the concrete risk (no dedup/conform layer, reprocessing, audit) as a shared concern, distinguish real debt from possible constraint. Models the actual review comment. Challenge Mode meets diplomacy.",
+      "files": []
+    },
+    {
+      "id": 35,
+      "category": "team-collaboration",
+      "prompt": "I've just been added to a repo with 30 pipelines and 40 notebooks I've never seen. How do I get oriented fast?",
+      "expected_output": "Team Collaboration Mode. Teaches how to read an unfamiliar codebase: find the entry point / master pipeline, the control/config table, trace the data flow (ingest->bronze->silver->gold), identify outputs and schedules, spot naming conventions. Practical orientation method, not a tool tour.",
+      "files": []
+    },
+    {
+      "id": 36,
+      "category": "progressive-independence",
+      "prompt": "Here's my proposed design for the new ingestion [gives a reasonable metadata-driven plan]. Grade it and tell me what a principal would still push on.",
+      "expected_output": "Taper behavior: user is now designing, so the response should let them own it, validate what's sound, and push on the remaining gaps (error handling, idempotency, monitoring, capacity at scale) as questions rather than re-teaching basics. Should not over-explain concepts the user has demonstrated. Challenges their reasoning.",
+      "files": []
+    }
+  ]
+}

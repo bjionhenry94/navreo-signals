@@ -1,0 +1,167 @@
+{
+  "brief_id": "amplifyy-amazon-hiring-signal",
+  "brief_name": "Amplifyy Amazon Hiring Signal",
+  "client": "Amplifyy",
+  "client_smartlead_id": 429350,
+  "created_at": "2026-05-27",
+
+  "ideation": {
+    "icp_description": "Brands that sell on Amazon (or are clearly building toward it), surfaced by the fact they are hiring for an Amazon / e-commerce / marketplace / DTC role. Company size 10-1,000 employees, HQ in North America or high-GDP Europe (US, CA, GB, IE, DE, NL, CH, SE, NO, DK, FI). Direct employers only (not recruiters). NOT Amazon agencies/consultancies (they are competitors), NOT brand aggregators/roll-ups, NOT AWS/cloud technical roles.",
+    "offer": "Amplifyy is an Amazon growth agency. They grow a brand's Amazon sales (listings, Amazon advertising / PPC, account management, strategy) and stop climbing PPC spend bleeding into unprofitable growth. Navreo runs the cold outreach for Amplifyy and books discovery calls. Proven proof points: helped brands like Coleman and Yamaha scale to six figures a month on Amazon; Coleman to over $4M a month. Discovery-call incentive: $25 Amazon gift card regardless of fit. Soft CTA: free 15-minute screen-share teardown of one of the brand's Amazon listings.",
+    "why_signal_fits": "A company hiring for an Amazon or e-commerce role is actively investing in that channel right now. Either they have a gap to fill (an agency like Amplifyy can be faster and lower-risk than waiting months for a full-time hire to ramp) or they are scaling the channel (and want expert execution on listings + PPC while the new hire focuses on strategy). Either way it is a warm moment to reach out."
+  },
+
+  "qualification": {
+    "_purpose": "Role-only judgement layer applied by lilly-theirstack-data-processing Phase 2.5. Classifies each new Jobs row as QUALIFIED / BORDERLINE / OFF_BRIEF based on whether the role signals 'a brand investing in its own Amazon / e-commerce selling channel'. Companies are NEVER excluded by this gate on industry/type alone — but note this signal's noise is dominated by look-alike ROLES (AWS engineers, agency-team roles, aggregator M&A roles, logistics) that share keywords without being a brand-side channel owner, and those roles ARE disqualified.",
+    "role_signal_definition": "The new hire will own, build, or strongly influence the company's Amazon / marketplace / e-commerce SELLING operation (the channel through which the brand sells its own products to consumers). NOT a logistics/warehouse/fulfilment role, NOT a software engineer building on Amazon Web Services, NOT an agency/consultancy team member who sells Amazon services to others (a competitor), NOT an M&A/investment role at a brand aggregator.",
+    "qualified_role_patterns": [
+      "Head of / VP / Director of Amazon (incl. Amazon Strategy / Growth / Vendor / Marketplace)",
+      "Amazon Brand / Channel / Account / Marketing / Advertising / Ads / PPC / Operations / Growth Manager (brand-side, selling own products)",
+      "Head of / VP / Director of E-commerce / Ecommerce; E-commerce Manager / Director (description confirms Amazon)",
+      "Head of / VP / Director of Marketplace(s); Marketplace Manager / Director",
+      "Head of / VP / Director of D2C / DTC; DTC Manager",
+      "Head of / Director of Online Sales; Online Sales Manager",
+      "Senior Amazon & Retail Media Manager; eCommerce Key Accounts Manager (brand-side)"
+    ],
+    "disqualified_role_patterns": [
+      "AWS / Amazon Web Services / Amazon Bedrock / Cloud / Software / Backend / Frontend Engineer / Developer — technical roles on Amazon's cloud, unrelated to selling products",
+      "Warehouse / Logistics / Fulfilment / Fulfillment / Supply Chain / Driver / Picker / Packer / Delivery / Amazon Flex — operations/logistics, not a channel-growth decision-maker",
+      "Cold Caller / Sales Setter / Appointment Setter / Inbound Sales Qualifier / SDR / BDR — junior sales, usually at an Amazon agency (a competitor)",
+      "Amazon / E-commerce Strategieberater / Berater / Consultant — agency/consultancy team member selling Amazon services to others (competitor, not a brand)",
+      "Deal Execution / M&A / Investment / Acquisition (E-commerce) — brand aggregator / roll-up buying Amazon businesses, not a brand growing its own channel",
+      "Intern / Working Student / Werkstudent / Praktikum / Graduate / Apprentice / Part-Time Student — no decision authority",
+      "Customer Service / Customer Support / Seller Support — support layer, not channel owner"
+    ],
+    "borderline_role_patterns": [
+      "Account Manager (E-commerce / Marketplaces) — could be a brand's internal e-comm AM OR an agency's client-facing AM; check the company is a brand",
+      "Supply Chain / Operations Manager (E-commerce) — leans logistics, but at a small brand may be the de-facto channel owner",
+      "Content / Content Operations Manager (E-commerce) — content-leaning; qualifies only if they own listings / the channel",
+      "Any role at a company that looks like an agency or consultancy despite a clean title — check it is an actual brand that sells its own products on Amazon",
+      "Sales Director of E-commerce Channels / eCommerce Key Accounts — channel-sales leaning; qualifies if brand-side"
+    ]
+  },
+
+  "filter": {
+    "posted_at_max_age_days": 1,
+    "job_country_code_or": ["US","CA","GB","IE","DE","NL","CH","SE","NO","DK","FI"],
+    "min_employee_count": 10,
+    "max_employee_count": 1000,
+    "company_type": "direct_employer",
+    "job_title_or": ["amazon","Amazon Manager","Senior Amazon Manager","Amazon Brand Manager","Amazon Channel Manager","Amazon Account Manager","Amazon Marketing Manager","Amazon Advertising Manager","Amazon Ads Manager","Amazon Ads Director","Amazon PPC Manager","Amazon Operations Manager","Amazon Operations Director","Amazon Strategist","Amazon Growth Manager","Head of Amazon","Head of Amazon Strategy","Head of Amazon Growth","VP Amazon","VP of Amazon","Director of Amazon","Amazon Director","Senior Director Amazon","Senior Director of Amazon","Head of E-commerce","Head of Ecommerce","VP E-commerce","VP of E-commerce","VP Ecommerce","VP of Ecommerce","Vice President Ecommerce","Director of E-commerce","Director of Ecommerce","E-commerce Director","Ecommerce Director","E-commerce Manager","Ecommerce Manager","Head of Marketplace","Head of Marketplaces","VP Marketplaces","VP of Marketplaces","Director of Marketplace","Director of Marketplaces","Marketplace Director","Marketplace Manager","Head of D2C","Head of DTC","Director of D2C","Director of DTC","VP DTC","DTC Manager","Head of Online Sales","Director of Online Sales","Online Sales Manager"],
+    "job_description_pattern_or": ["Amazon"],
+    "limit": 50,
+    "_expected_daily_volume": "~16 jobs/day, ~12 companies/day (30-day blurred test: 487 jobs / 367 companies with floor=10). Title-only would be ~41/day; the 'Amazon in description' filter cuts ~52% non-Amazon e-comm noise.",
+    "_filter_design_note": "Title list AND description-contains-Amazon are ANDed in a single search. The description filter is the 'clever bit' that lets broad titles (Head of E-commerce, Head of DTC, etc.) through ONLY when the post actually mentions Amazon. job_description_pattern_or is the verified-working TheirStack API field for the live preview/dry-run (the live UI uses the Job Description 'contains any of' chip = 'Amazon')."
+  },
+
+  "dm_finder": {
+    "target_titles": ["Head of E-commerce","Head of Ecommerce","Director of E-commerce","Director of Ecommerce","VP E-commerce","VP of Ecommerce","E-commerce Manager","Ecommerce Manager","Head of Amazon","Director of Amazon","Head of Marketplace","Head of Marketplaces","Marketplace Manager","Head of Online Sales","Head of D2C","Head of DTC","Chief Digital Officer"],
+    "providers_preference": ["prospeo","ai_ark"],
+    "max_dms_per_company": 3,
+    "_note": "Target the senior e-commerce decision-maker, NOT founders/CEOs by default (earlier Amplifyy outreach skewed to founders, who were the wrong buyer). For a very small brand with no e-commerce lead, find the most senior person available (e.g. Founder/Owner) as a fallback. Skip 'Account Manager' as a primary DM title for agency-looking companies (client-relationship role).",
+    "_email_rules": "User 2026-05-27: (1) Prospeo is primary. (2) EVERY Prospeo-sourced email MUST be MillionVerifier-verified before push — drop anything not 'ok'/deliverable. (3) If Prospeo returns no email, use the AI Ark API to find one (AI-Ark-sourced emails are MV-EXEMPT). (4) If no provider returns a verified email, the lead goes to the LinkedIn/HeyReach fallback, NOT an email campaign. Live verification example: kate@gutology.co.uk (Prospeo) -> MillionVerifier result 'ok' -> pushed."
+  },
+
+  "infrastructure": {
+    "template_sheet_id": "1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ",
+    "template_sheet_url": "https://docs.google.com/spreadsheets/d/1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ/edit",
+    "sheet_id": "1kYs8gQhrqb0Ovqz4UWOcmHANtO1d1XMEaL_ljIGE9W4",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1kYs8gQhrqb0Ovqz4UWOcmHANtO1d1XMEaL_ljIGE9W4/edit",
+    "jobs_scenario_id": 9297874,
+    "jobs_scenario_url": "https://eu2.make.com/536258/scenarios/9297874",
+    "jobs_webhook_id": 4157006,
+    "jobs_webhook_url": "https://hook.eu2.make.com/ql2wqfn3wzar9cntubra671b74ro2tez",
+    "jobs_webhook_payload_shape": "TheirStack job.new event: { id, type: 'job.new', payload: {job + company_object fields} }. Single job per POST, no iterator.",
+    "dms_scenario_id": 9297879,
+    "dms_scenario_url": "https://eu2.make.com/536258/scenarios/9297879",
+    "dms_webhook_id": 4157007,
+    "dms_webhook_url": "https://hook.eu2.make.com/5kupy807dgacca0wj9nyp1ggolh19mt2",
+    "dms_webhook_payload_shape": "Skill 2 push: { rows: [{...18 DM fields...}] } — array under 'rows', iterator splits to one row each.",
+    "smartlead_client_id": 429350,
+    "smartlead_campaigns": {
+      "_routing": "Daily run routes each lead into ONE of the 4 campaigns. STEP 1 (On-Amazon check, user-specified method 2026-05-27): Google-search '[company name] amazon' and check the results — if the brand has an Amazon storefront or product listings (e.g. amazon.com/stores/<brand>, or /dp/ product pages for their products), they ARE on Amazon -> 'Present on Amazon' pair; if no Amazon listings for the brand appear, they are NOT -> 'Not on Amazon' pair. STEP 2 (Hard/Soft A/B split): within the chosen pair, split leads ~50/50 between Hard and Soft. Each lead lands in exactly ONE campaign. STEP 0 (email gate): every lead MUST have a verified email before push (Prospeo primary; if dry, the lead goes to the LinkedIn/HeyReach fallback, not the email campaign).",
+      "present_on_amazon_hard": {"id": 3407077, "url": "https://app.smartlead.ai/app/email-campaign/3407077/analytics", "mirrors": 3294307},
+      "present_on_amazon_soft": {"id": 3409741, "url": "https://app.smartlead.ai/app/email-campaign/3409741/analytics", "mirrors": 3294310},
+      "not_on_amazon_hard": {"id": 3409745, "url": "https://app.smartlead.ai/app/email-campaign/3409745/analytics", "mirrors": 3294311},
+      "not_on_amazon_soft": {"id": 3409748, "url": "https://app.smartlead.ai/app/email-campaign/3409748/analytics", "mirrors": 3294313},
+      "_settings": "All 4 PAUSED. Each: tz America/New_York, Mon-Fri 09:00-18:00, min 20 min between emails, max 50 new leads/day, send_as_plain_text true, tracking OFF (DONT_TRACK_EMAIL_OPEN + DONT_TRACK_LINK_CLICK), stop on REPLY_TO_AN_EMAIL, follow_up_percentage 50.",
+      "_outstanding": [
+        "Sender mailboxes NOT attached to ANY of the 4 — user must attach Amplifyy mailboxes in Smartlead UI before unpausing. Fresh campaigns never auto-inherit mailboxes.",
+        "Copy mirrors Amplifyy's live campaigns (3294307 / 3294310 / 3294311 / 3294313) verbatim, opener swapped to the hiring hook. Only {{Role}} is personalised."
+      ]
+    }
+  },
+
+  "theirstack_saved_search": {
+    "ui_label": "Amazon hiring signals — Amplifyy",
+    "user_must_create_in_ui": true,
+    "created_in_ui_at": "2026-05-27",
+    "webhook_attached": true,
+    "trigger_once_per_company": "user_to_confirm",
+    "test_fire_verified_at": "2026-05-27T10:59:17Z",
+    "test_fire_note": "Make Jobs scenario 9297874 execution 7435a6dbef58449ab21bdceee2b7ec23: operations 2, status success, via 'Run once' (first-poll-delay workaround per reference_make_first_poll_delay). Webhook interface populated from a real TheirStack 'Send test' payload, proving the saved search + webhook are wired. NOTE: the landed test row (Contabile @ During Spa, IT) is TheirStack's canned sample, NOT a filtered Amazon result — proves plumbing only. Filter correctness validated separately via the free TAM test (487 jobs / 367 cos over 30 days). Company Size column was blank on the sample (test payload lacked employee_count); real TheirStack payloads include it.",
+    "negative_title_keywords": [
+      "AWS",
+      "Web Services",
+      "Bedrock",
+      "Cloud",
+      "Developer",
+      "Engineer",
+      "Strategieberater",
+      "Berater",
+      "Consultant",
+      "Cold Caller",
+      "Setter",
+      "Sales Qualifier",
+      "M&A",
+      "Deal Execution",
+      "Acquisition",
+      "Investment",
+      "Warehouse",
+      "Logistics",
+      "Fulfilment",
+      "Fulfillment",
+      "Driver",
+      "Flex",
+      "Picker",
+      "Packer",
+      "Intern",
+      "Student",
+      "Werkstudent",
+      "Praktikum",
+      "Graduate",
+      "Apprentice"
+    ],
+    "negative_title_keywords_history": [],
+    "negative_keywords_rationale": "Seeded from the 25-row blurred TAM sample (2026-05-27). The bare lowercase 'amazon' title pattern is the biggest noise source (substring-matches AWS/Bedrock/logistics/agency roles) — kept because dropping it would lose good Amazon-titled roles not in the explicit list, so noise is handled via negatives instead. Four noise buckets: AWS/tech, Amazon agencies (competitors, heavy in DE), brand aggregators (E-Commerce M&A), and junior/temp. Agencies hiring clean-titled roles still slip past keyword blocks and must be caught by company name during the daily review.",
+    "geography_filter_note": "Saved search SHOULD filter by 'Company HQ Location' country code, NOT 'Job Location' (user chose HQ 2026-05-27). Rationale: we target brands whose HQ is in NA/high-GDP Europe; a US-HQ brand posting a remote/overseas Amazon role is still a US-HQ buyer. NOTE: Bjion's original pre-built search used Job Location — overridden to HQ Location at setup. The API filter block above uses job_country_code_or as the free-test/dry-run proxy (established pattern across all TheirStack briefs)."
+  },
+
+  "personalization": {
+    "_note": "FOUR campaigns (Present/Not-on-Amazon x Hard/Soft), each mirroring a live Amplifyy campaign VERBATIM with ONLY the opening line swapped to the hiring hook 'Saw you were hiring a {{Role}}, and so thought this may be relevant.' (user 2026-05-27: keep the opener simple — just acknowledge the hire + that we wanted to reach out; the offer lives in the body). Because {{ProductCategory}} only lived in the originals' opening line (now replaced), the ONLY per-lead variable across all 4 campaigns is {{Role}} (+ standard {{first_name}} / {{company_name}}). NO {{Icebreaker}}, {{CaseStudy}}, {{HowWeCanHelp}}, or {{ProductCategory}}. RULE (user 2026-05-27): every lead pushed to any campaign MUST have {{Role}} + {{first_name}} + {{company_name}} populated — verify before push (per lilly-qa Step 5b). Proof (Coleman/Yamaha), the $25 gift card, and all CTAs are hardcoded in each campaign's copy.",
+    "_email_copy_snapshot_2026-05-27": {
+      "shared_subject": "{Quick one|One quick thing|Quick question}",
+      "shared_opener": "Hi {{first_name}}, Saw you were hiring a {{Role}}, and so thought this may be relevant. [then each campaign's mirrored body + CTA + P.S. + follow-up]",
+      "present_on_amazon_hard": "Smartlead 3407077 — mirrors live 3294307 verbatim (A: stop PPC bleed -> profitable growth + $25 gift-card discovery call; B: grow Amazon revenue without burning PPC; email2: free 15-min listing teardown)",
+      "present_on_amazon_soft": "Smartlead 3409741 — mirrors live 3294310 verbatim (A: free 15-min walk-through of top SKU + 3 listing fixes; B: Coleman case study; $25 gift card in P.S.; email2: take over Amazon growth)",
+      "not_on_amazon_hard": "Smartlead 3409745 — mirrors live 3294311 verbatim (A: launch end-to-end + invite-only programs 12mo free account mgmt + up to $50K fees waived + $25 gift card; B: launch-this-year question; email2: free Amazon Opportunity Brief)",
+      "not_on_amazon_soft": "Smartlead 3409748 — mirrors live 3294313 active variants C/D (A: 15-min eligibility check for partner-only programs; B: case study + $25 gift card; email2: launch end-to-end + programs)"
+    },
+    "per_lead_variables": {
+      "Role": {
+        "instructions": "Direct field lookup WITH email-readability normalisation. Copy the Jobs row's 'Job Title' value, then normalise so it reads naturally after the hardcoded 'Saw you were hiring a ___' hook. Rules: (1) Replace ', ' separating a level word from a function area with ' of ' (e.g. 'Director, E-Commerce' -> 'Director of E-Commerce'). (2) Drop bracketed/parenthetical text and any (m/w/d) / (f/m/x) gender tags and location suffixes (e.g. 'Amazon Manager (m/w/d) — Remote DACH' -> 'Amazon Manager'). (3) If the title is in a non-English language, translate to the natural English equivalent (e.g. 'Projektmanager Amazon Marketing' -> 'Amazon Marketing Project Manager'). (4) Trim whitespace. (5) Preserve seniority words (Senior, Director, Manager, Head, VP, Lead, Chief). Only escalate to an LLM if genuinely ambiguous after rule-based normalisation.",
+        "validation": "Non-empty. Reads naturally after 'Saw you were hiring a ___'. No commas in the level-word/function-area position. No parens, no (m/w/d) tags, no trailing location/remote suffix. English."
+      }
+    }
+  },
+
+  "schedule": {
+    "_status": "SCHEDULED 2026-05-27 — runs daily ~09:01 local, Monday-Friday.",
+    "task_id": "theirstack-amplifyy-amazon-hiring-signal-daily",
+    "task_path": "/Users/bjionhenry/.claude/scheduled-tasks/theirstack-amplifyy-amazon-hiring-signal-daily/SKILL.md",
+    "cron": "0 9 * * 1-5",
+    "timezone": "local (Europe/London)",
+    "created_at": "2026-05-27",
+    "mcp_tool": "mcp__scheduled-tasks__create_scheduled_task"
+  }
+}

@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- @dsCard group="Components" name="Buttons" subtitle="Primary pill · secondary outline · ghost" viewport="900x260" -->
+<html><head><meta charset="utf-8"><title>Buttons</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body { padding: 24px; }
+  .row3 { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 14px; }
+  .label2 { width: 84px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--nav-ink-3); font-weight: 500; }
+  button { font-family: inherit; cursor: pointer; border: 0; }
+  .btn-primary {
+    background: var(--nav-orange); color: var(--nav-cream);
+    border-radius: 999px; padding: 10px 20px;
+    font-size: 14px; font-weight: 500; letter-spacing: -0.005em;
+  }
+  .btn-primary.hover { background: #DB4100; }
+  .btn-primary.press { background: #A83100; transform: translateY(1px); }
+  .btn-secondary {
+    background: transparent; color: var(--nav-ink);
+    border: 1px solid rgba(20,17,14,0.22);
+    border-radius: 999px; padding: 9px 19px;
+    font-size: 14px; font-weight: 500;
+  }
+  .btn-secondary.hover { background: #E8D7C4; }
+  .btn-ghost {
+    background: transparent; color: var(--nav-ink);
+    padding: 9px 14px; font-size: 14px; font-weight: 500;
+    border-radius: 8px;
+  }
+  .btn-ghost.hover { background: rgba(20,17,14,0.06); }
+  .btn-disabled {
+    background: var(--nav-dark-brown); color: var(--nav-cream);
+    border-radius: 999px; padding: 10px 20px;
+    font-size: 14px; font-weight: 500; opacity: 0.6;
+  }
+</style></head>
+<body>
+  <div class="row3"><span class="label2">Primary</span>
+    <button class="btn-primary">Get started</button>
+    <button class="btn-primary hover">Hover</button>
+    <button class="btn-primary press">Press</button>
+    <button class="btn-disabled">Disabled</button>
+  </div>
+  <div class="row3"><span class="label2">Secondary</span>
+    <button class="btn-secondary">Read more</button>
+    <button class="btn-secondary hover">Hover</button>
+  </div>
+  <div class="row3"><span class="label2">Ghost</span>
+    <button class="btn-ghost">Learn more →</button>
+    <button class="btn-ghost hover">Hover</button>
+  </div>
+</body></html>

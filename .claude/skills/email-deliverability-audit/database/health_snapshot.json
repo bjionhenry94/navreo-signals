@@ -1,0 +1,36 @@
+{
+  "_meta": {
+    "generated": "2026-05-19",
+    "audit_dir": "/tmp/audit_full",
+    "note": "Point-in-time snapshot. Re-generate after re-running the audit."
+  },
+  "per_batch_stats": {
+    "hypertide-dnsimple": {
+      "domains": 394,
+      "inboxes_total": 13151,
+      "inboxes_live": 10140,
+      "inboxes_blocked_live": 964,
+      "domains_with_dead_dns": 47,
+      "domains_missing_dkim": 47,
+      "domains_dmarc_none": 74
+    },
+    "maildoso-cloudflare": {
+      "domains": 38,
+      "inboxes_total": 304,
+      "inboxes_live": 0,
+      "inboxes_blocked_live": 0,
+      "domains_with_dead_dns": 0,
+      "domains_missing_dkim": 0,
+      "domains_dmarc_none": 0
+    },
+    "boomerang-cloudflare": {
+      "domains": 37,
+      "inboxes_total": 111,
+      "inboxes_live": 111,
+      "inboxes_blocked_live": 111,
+      "domains_with_dead_dns": 37,
+      "domains_missing_dkim": 37,
+      "domains_dmarc_none": 0
+    }
+  }
+}

@@ -1,0 +1,232 @@
+<!doctype html><html><head><meta charset="utf-8">
+<title>Upload gate — Upload-gate test (no real campaign)</title>
+<style>
+@font-face { font-family: "Acid Grotesk"; src: url("file:///Users/bjionhenry/navreo-signals/app/fonts/AcidGrotesk-Normal.otf") format("opentype");
+  font-weight: 400; font-style: normal; font-display: swap; }
+:root {
+  --orange:#FF4D00; --orange-600:#DB4100; --orange-700:#A83100; --orange-100:#FFE4D6;
+  --ink:#14110E; --ink-2:#3A332C; --ink-3:#6B6055; --brown-400:#A89684; --cream:#F9F0E7;
+  --bg:#FFFFFF; --bg-sunken:#F7F7F6; --card:#FFFFFF; --line:#ECECEA; --line-2:#DDDDDA;
+  --green:#2E7D5B; --green-bg:#E2F1E9; --amber:#8F6600; --amber-bg:#F8EAC4;
+  --red:#C2371F; --red-bg:#F7DCD5;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --radius:12px; --focus:0 0 0 3px rgba(255,77,0,0.32);
+}
+* { box-sizing:border-box; margin:0; padding:0; }
+body { font-family:var(--font-sans); background:var(--bg); color:var(--ink);
+  line-height:1.45; letter-spacing:-0.015em; -webkit-font-smoothing:antialiased; }
+.main { max-width:1080px; margin:0 auto; padding:28px 38px 80px; }
+h1 { font-family:var(--font-display); font-weight:400; font-size:28px; letter-spacing:-0.03em; }
+h2 { font-size:16px; font-weight:600; letter-spacing:-0.01em; }
+.eyebrow { font-size:11px; font-weight:500; letter-spacing:0.12em; text-transform:uppercase; color:var(--ink-3); }
+.sub { font-size:13.5px; color:var(--ink-2); }
+.muted { color:var(--ink-3); }
+.small { font-size:12px; }
+.mono { font-family:var(--font-mono); letter-spacing:0; font-size:12px; }
+.num-hero { font-family:var(--font-display); font-weight:400; font-size:34px; line-height:1; letter-spacing:-0.02em; }
+.pagehead { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:6px; }
+.freshness { text-align:right; font-size:11.5px; color:var(--ink-3); line-height:1.5; }
+.freshness b { color:var(--ink-2); font-weight:600; }
+.card { background:var(--card); border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; margin:14px 0; }
+.card.sunken { background:var(--bg-sunken); }
+.stats { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin:20px 0 24px; }
+.stat { border:1px solid var(--line); border-radius:var(--radius); padding:16px 18px; }
+.stat .lab { font-size:12px; color:var(--ink-3); font-weight:500; margin-bottom:8px; }
+.stat .hint { font-size:11.5px; color:var(--brown-400); margin-top:6px; }
+.pill { font-size:11px; font-weight:500; padding:3px 9px; border-radius:999px; display:inline-flex; align-items:center; gap:5px; }
+.pill .dot { width:6px; height:6px; border-radius:999px; background:currentColor; }
+.pill.g { background:var(--green-bg); color:#195C3F; }
+.pill.a { background:var(--amber-bg); color:#6B4A00; }
+.pill.r { background:var(--red-bg); color:#861E10; }
+.pill.n { background:#F2F2F0; color:var(--ink-2); }
+.btn { border:1px solid var(--line-2); background:transparent; color:var(--ink);
+  border-radius:999px; padding:8px 16px; font:500 13px var(--font-sans);
+  cursor:pointer; display:inline-flex; align-items:center; gap:7px; white-space:nowrap; }
+.btn:hover { background:var(--bg-sunken); }
+.btn:focus-visible { outline:none; box-shadow:var(--focus); }
+.btn.primary { background:var(--orange); border-color:var(--orange); color:var(--cream); }
+.btn.primary:hover { background:var(--orange-600); }
+.btn.sm { padding:5px 12px; font-size:11.5px; }
+.btn[disabled] { opacity:0.55; cursor:not-allowed; }
+.btn.fix, .btn.fixall { border-color:#C4E2D3; background:var(--green-bg); color:#195C3F; }
+.btn.fix:hover, .btn.fixall:hover { background:#D3EADD; }
+table.tbl { width:100%; border-collapse:collapse; font-size:13px; }
+.tbl th { text-align:left; font-size:11px; font-weight:500; letter-spacing:0.08em;
+  text-transform:uppercase; color:var(--ink-3); padding:9px 12px; border-bottom:1px solid var(--line); }
+.tbl td { padding:10px 12px; border-bottom:1px solid var(--line); vertical-align:top; }
+.tbl tr:last-child td { border-bottom:none; }
+.tbl td.ctl { width:110px; }
+.who { font-weight:600; font-size:13px; }
+.what { font-size:13px; color:var(--ink-2); margin-top:2px; line-height:1.5; }
+.acts { display:flex; gap:8px; margin-top:8px; align-items:center; flex-wrap:wrap; }
+.toolbar { display:flex; gap:10px; align-items:center; margin:0 0 4px; flex-wrap:wrap; }
+.pagehead-right { display:flex; gap:22px; align-items:flex-start; }
+.pagehead-far { display:flex; flex-direction:column; gap:10px; align-items:flex-end; position:relative; }
+.upwrap { position:relative; text-align:right; }
+.splitbtn { display:inline-flex; }
+.splitbtn .btn.primary { border-radius:999px 0 0 999px; }
+.splitbtn .btn.caret { border-radius:0 999px 999px 0; border-left:1px solid rgba(255,255,255,0.35); padding:8px 11px; }
+.upmenu { position:absolute; right:0; top:calc(100% + 6px); z-index:80; width:280px;
+  background:var(--card); border:1px solid var(--line-2); border-radius:12px;
+  box-shadow:0 10px 30px rgba(20,17,14,0.12); overflow:hidden; }
+.upopt { display:block; width:100%; text-align:left; background:none; border:none;
+  padding:11px 14px; cursor:pointer; font-family:var(--font-sans); }
+.upopt:hover { background:var(--bg-sunken); }
+.upopt b { display:block; font-size:13px; color:var(--ink); font-weight:600; }
+.upopt span { display:block; font-size:11.5px; color:var(--ink-3); margin-top:2px; }
+.upmsg { color:var(--red); max-width:280px; margin-top:6px; }
+.attention { outline:2px solid var(--orange); outline-offset:2px; transition:outline 0.3s; }
+.audscore { text-align:right; }
+.audscore .num-hero { margin:2px 0; }
+.stickyck { position:sticky; top:0; z-index:60; padding:10px 18px; }
+.ckrow { display:flex; gap:14px; align-items:center; flex-wrap:wrap; }
+.ck-item { font-size:12px; color:var(--ink-3); display:inline-flex; align-items:center; gap:5px; }
+.ck-item.done { color:#195C3F; font-weight:500; }
+.ck-item.todo { color:var(--ink-2); cursor:pointer; }
+.ckdiv { width:1px; height:16px; background:var(--line-2); }
+.ovnote { font-size:12px; color:var(--ink-3); font-style:italic; margin-top:3px; }
+.pager { display:flex; align-items:center; justify-content:space-between; padding-top:10px; }
+.empty { text-align:center; color:var(--brown-400); font-size:13px; padding:24px 0; }
+.checkhead { display:flex; align-items:center; gap:10px; margin-bottom:4px; }
+.checkhead .spacer { flex:1; }
+.ovbox { position:sticky; top:12px; z-index:50; box-shadow:0 6px 24px rgba(20,17,14,0.08); }
+.ovrow { display:flex; gap:10px; }
+.ovrow input { flex:1; padding:8px 14px; font:400 13px var(--font-sans); color:var(--ink);
+  background:var(--card); border:1px solid var(--line-2); border-radius:999px; }
+.ovrow input:focus { outline:none; box-shadow:var(--focus); }
+input[type=checkbox] { accent-color:var(--ink); width:14px; height:14px; }
+::selection { background:var(--orange-100); }
+</style></head><body>
+<div class="main">
+  <div class="pagehead">
+    <div>
+      <div class="eyebrow">Upload gate</div>
+      <h1>Upload-gate test (no real campaign)</h1>
+      <p class="sub" style="margin-top:6px">Gate
+        <span class="pill r"><span class="dot"></span>BLOCKED</span>
+        &nbsp;Fix, drop, or override every flag below to clear the upload.</p>
+    </div>
+    <div class="pagehead-right">
+      <div class='audscore'><div class='eyebrow'>List quality</div><div class='num-hero' style='color:#195C3F'>90</div><div class='small muted'>9 of 10 sampled on-ICP</div></div>
+      <div class="pagehead-far">
+        
+        <div class="freshness">Run <b>2026-07-10T13:00:53 UTC</b><br>Campaign <b>TEST-DRY-RUN</b></div>
+      </div>
+    </div>
+  </div>
+  <div class='card sunken stickyck'><div class='ckrow'><span class='ck-item '>○ Required fields</span><span class='ck-item '>○ Name &amp; company cleaning</span><span class='ck-item '>○ Email variables filled</span><span class='ck-item '>○ Already contacted / suppressed</span><span class='ck-item '>○ Email deliverability</span></div></div>
+  
+<div class="stats">
+  <div class="stat"><div class="lab">Leads uploading</div><div class="num-hero">10</div>
+    <div class="hint">all 10 kept</div></div>
+  <div class="stat"><div class="lab">Flags open</div><div class="num-hero">19</div>
+    <div class="hint">of 19 found</div></div>
+  <div class="stat"><div class="lab">Fixed</div><div class="num-hero">0</div>
+    <div class="hint">applied to the list</div></div>
+  <div class="stat"><div class="lab">Overridden</div><div class="num-hero">0</div>
+    <div class="hint">recorded in the audit</div></div>
+</div>
+  
+  <div class="card sunken"><div class="eyebrow" style="margin-bottom:6px">Read-only copy</div>
+  <p class="sub">This is a saved snapshot. Serve it with <span class="mono">serve_review.py</span>
+  to fix, drop, or override flags on the page.</p></div>
+  <div class='card' id='card-schema'><div class='checkhead'><h2>Required fields</h2><span class='pill r'><span class='dot'></span>FAIL</span><span class='spacer'></span></div><p class='sub' style='margin-bottom:10px'>3 missing field values across 2 rows</p><table class='tbl flagtbl' data-check='schema'><tr><th style='width:110px'>Status</th><th>Prospect &amp; issue</th></tr><tr data-check='schema'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>anna.keller@example-agency.de</div><div class='what'>Company size is missing.</div></td></tr><tr data-check='schema'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>anna.keller@example-agency.de</div><div class='what'>Personal location is missing.</div></td></tr><tr data-check='schema'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>raj.patel@growthworks.in</div><div class='what'>Data source is missing.</div></td></tr></table><div class='pager' data-check='schema'></div></div><div class='card' id='card-normalisation'><div class='checkhead'><h2>Name &amp; company cleaning</h2><span class='pill r'><span class='dot'></span>FAIL</span><span class='spacer'></span></div><p class='sub' style='margin-bottom:10px'>3 hygiene violations; NASA kept caps (acronym rule)</p><table class='tbl flagtbl' data-check='normalisation'><tr><th style='width:110px'>Status</th><th>Prospect &amp; issue</th></tr><tr data-check='normalisation'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>sarah.jones@acmecorp.com</div><div class='what'>First name has extra spaces.</div></td></tr><tr data-check='normalisation'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>sarah.jones@acmecorp.com</div><div class='what'>First name is written in all caps.</div></td></tr><tr data-check='normalisation'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>sarah.jones@acmecorp.com</div><div class='what'>Company name carries a legal suffix.</div></td></tr></table><div class='pager' data-check='normalisation'></div></div><div class='card' id='card-variable_fill'><div class='checkhead'><h2>Email variables filled</h2><span class='pill r'><span class='dot'></span>FAIL</span><span class='spacer'></span></div><p class='sub' style='margin-bottom:10px'>{{first_name}}: 100% PASS; {{company_name}}: 100% PASS; {{Icebreaker}}: 80% FAIL Tip: icebreaker gaps can be auto-filled by the icebreaker skill — consider recycling these leads instead of dropping.</p><table class='tbl flagtbl' data-check='variable_fill'><tr><th style='width:110px'>Status</th><th>Prospect &amp; issue</th></tr><tr data-check='variable_fill'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>lisa.wong@brightpath.io</div><div class='what'>{{Icebreaker}} is empty — the email would send with a gap.</div></td></tr><tr data-check='variable_fill'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>raj.patel@growthworks.in</div><div class='what'>{{Icebreaker}} is empty — the email would send with a gap.</div></td></tr></table><div class='pager' data-check='variable_fill'></div></div><div class='card' id='card-recontact'><div class='checkhead'><h2>Already contacted / suppressed</h2><span class='pill r'><span class='dot'></span>FAIL</span><span class='spacer'></span></div><p class='sub' style='margin-bottom:10px'>3 previously contacted, 1 suppressed, 6 clean Rule of thumb: same offer, or contacted in the last 90 days → drop; approve only for a genuinely new offer.</p><table class='tbl flagtbl' data-check='recontact'><tr><th style='width:110px'>Status</th><th>Prospect &amp; issue</th></tr><tr data-check='recontact'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>1simonsharp@gmail.com</div><div class='what'>Already emailed in 1 campaign: “Navreo | 6sense | Followers - [May 2026]” (navreo) — 4 May 2026</div></td></tr><tr data-check='recontact'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>jake.webber-cadby@inforcer.com</div><div class='what'>Already emailed in 6 campaigns: “Arnic – SaaS Sales Leaders (50-1K) – Focused – [May 2026]” (navreo) — 26 May 2026 · “Arnic – Sales Leaders – Navreo – [May]” (navreo) — 15 May 2026 · “New Reconnect: Navreo | SaaS Software | Sales Leaders (Hard)” (navreo) — 12 May 2026 · “Recontact (2): Navreo - SaaS Sales Leaders [Salesloft copy]” (navreo) — 18 Jun 2026 · “Reconnect: Navreo | SaaS Software | Sales Leaders (Hard)” (navreo) — 21 Apr 2026 · “Navreo | SaaS Software | Sales Leaders” (navreo) — 10 Apr 2026</div></td></tr><tr data-check='recontact'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>mike.ostrowski@prophetsecurity.ai</div><div class='what'>Already emailed in 6 campaigns: “Arnic – Sales Leaders – Navreo – [May]” (navreo) — 15 May 2026 · “Recontact (2): Navreo - SaaS Sales Leaders [Salesloft copy]” (navreo) — 18 Jun 2026 · “New Reconnect: Navreo | SaaS Software | Sales Leaders (Hard)” (navreo) — 12 May 2026 · “Reconnect: Navreo | SaaS Software | Sales Leaders (Hard) [May 2026]” (navreo) — 11 May 2026 · “Reconnect: Navreo | SaaS Software | Sales Leaders (Hard)” (navreo) — 21 Apr 2026 · “Navreo | SaaS Software | Sales Leaders” (navreo) — 10 Apr 2026</div></td></tr><tr data-check='recontact'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>1simonsharp@gmail.com</div><div class='what'>On the suppression list — company follower rejected (client navreo).</div></td></tr></table><div class='pager' data-check='recontact'></div></div><div class='card' id='card-email_verification'><div class='checkhead'><h2>Email deliverability</h2><span class='pill r'><span class='dot'></span>FAIL</span><span class='spacer'></span></div><p class='sub' style='margin-bottom:10px'>0 cache-skipped, 3 ListMint calls (capped at 3), 7 flagged ⛔ The upload is blocked until these leads are verified: anna.keller@example-agency.de, fake.person@test-noexist-navreo-gate.com, hello@navreo.co, lisa.wong@brightpath.io, raj.patel@growthworks.in, sarah.jones@acmecorp.com, tom.reid@nasa-vendor.com. Copy the chat prompt to run verification in chat, or drop them. Approve is not available on this check.</p><table class='tbl flagtbl' data-check='email_verification'><tr><th style='width:110px'>Status</th><th>Prospect &amp; issue</th></tr><tr data-check='email_verification'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>anna.keller@example-agency.de</div><div class='what'>Not verified — this run&#x27;s verification call cap was reached first.</div></td></tr><tr data-check='email_verification'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>sarah.jones@acmecorp.com</div><div class='what'>Not verified — this run&#x27;s verification call cap was reached first.</div></td></tr><tr data-check='email_verification'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>tom.reid@nasa-vendor.com</div><div class='what'>Not verified — this run&#x27;s verification call cap was reached first.</div></td></tr><tr data-check='email_verification'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>lisa.wong@brightpath.io</div><div class='what'>Not verified — this run&#x27;s verification call cap was reached first.</div></td></tr><tr data-check='email_verification'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>fake.person@test-noexist-navreo-gate.com</div><div class='what'>Not verified — this run&#x27;s verification call cap was reached first.</div></td></tr><tr data-check='email_verification'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>hello@navreo.co</div><div class='what'>Not verified — this run&#x27;s verification call cap was reached first.</div></td></tr><tr data-check='email_verification'><td class='ctl'><span class='muted small'>○ Open</span></td><td><div class='who'>raj.patel@growthworks.in</div><div class='what'>Not verified — this run&#x27;s verification call cap was reached first.</div></td></tr></table><div class='pager' data-check='email_verification'></div></div>
+  <p class="muted mono" style="margin-top:20px">lilly-upload-gate · audit trail: list_upload_qa_runs · run 2026-07-10T13-00-53</p>
+</div>
+
+<script>
+const PAGE = 5;
+document.querySelectorAll('.flagtbl').forEach(tbl => {
+  const rows = [...tbl.querySelectorAll('tr')].slice(1);
+  if (rows.length <= PAGE) return;
+  const pager = document.querySelector(".pager[data-check='" + tbl.dataset.check + "']");
+  let page = 0; const pages = Math.ceil(rows.length / PAGE);
+  function show() {
+    rows.forEach((r, i) => r.style.display = (i >= page*PAGE && i < (page+1)*PAGE) ? '' : 'none');
+    pager.innerHTML = "<button class='btn sm' " + (page===0?'disabled':'') + " data-d='-1'>‹ Prev</button>" +
+      "<span class='muted small'>Page " + (page+1) + " of " + pages + " · " + rows.length + " flags</span>" +
+      "<button class='btn sm' " + (page===pages-1?'disabled':'') + " data-d='1'>Next ›</button>";
+    pager.querySelectorAll('button').forEach(b => b.onclick = () => { page += +b.dataset.d; show(); });
+  }
+  show();
+});
+function actor() {
+  let a = localStorage.getItem('gateActor');
+  while (!a || !a.trim()) {
+    a = prompt('Your name — recorded on every decision you make here:') || '';
+  }
+  localStorage.setItem('gateActor', a.trim());
+  return a.trim();
+}
+async function api(path, body, btn) {
+  body.by = actor();
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+  const r = await fetch(path, { method: 'POST',
+    headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) });
+  if (r.ok) location.reload();
+  else {
+    alert('That didn\u2019t save: ' + await r.text());
+    if (btn) location.reload();
+  }
+}
+document.addEventListener('click', e => {
+  const t = e.target;
+  if (t.classList.contains('fix')) api('/api/fix', {id: +t.dataset.id, value: t.dataset.value});
+  if (t.classList.contains('fixall')) api('/api/fixall', {check: t.dataset.check});
+  if (t.classList.contains('drop')) {
+    if (confirm('Remove this lead from the upload? Every flag on them is resolved by the drop.'))
+      api('/api/drop', {email: t.dataset.email, check: t.dataset.check});
+  }
+  if (t.classList.contains('dropall')) {
+    if (confirm('Remove EVERY lead flagged in this check from the upload?'))
+      api('/api/dropall', {check: t.dataset.check});
+  }
+  if (t.classList.contains('approve')) api('/api/override', {ids: [+t.dataset.id]});
+  if (t.classList.contains('approveall') || t.id === 'approve-everything')
+    api('/api/override', {ids: t.dataset.ids.split(',').map(Number)}, t);
+  if (t.classList.contains('copyprompt')) {
+    navigator.clipboard.writeText(t.dataset.prompt);
+    t.textContent = 'Copied ✓';
+    setTimeout(() => { t.textContent = 'Copy chat prompt'; }, 1800);
+  }
+  if (t.id === 'drop-everything') {
+    if (confirm('Remove EVERY lead that still has an open flag from the upload?'))
+      api('/api/dropall', {});
+  }
+});
+document.addEventListener('change', e => {
+  if (e.target.classList && e.target.classList.contains('ck') && e.target.checked)
+    api('/api/confirm', {item: e.target.dataset.item});
+});
+const upBtn = document.getElementById('upload-btn');
+if (upBtn) {
+  const menu = document.getElementById('upmenu'), msg = document.getElementById('upmsg');
+  document.getElementById('upload-caret').onclick = () =>
+    menu.style.display = menu.style.display === 'none' ? '' : 'none';
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.upwrap')) menu.style.display = 'none';
+  });
+  async function doUpload(mode) {
+    menu.style.display = 'none';
+    if (mode === 'force' &&
+        !confirm('Force upload bypasses EVERY remaining check and is recorded in the audit as forced. Continue?')) return;
+    const r = await fetch('/api/upload', { method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mode, by: actor() }) });
+    if (r.ok) { location.reload(); return; }
+    let info = null;
+    try { info = await r.json(); } catch (err) { msg.textContent = await r.text(); return; }
+    msg.textContent = info.message;
+    const card = document.getElementById('card-' + info.first_fail);
+    if (card) {
+      card.scrollIntoView({behavior: 'smooth', block: 'center'});
+      card.classList.add('attention');
+      setTimeout(() => card.classList.remove('attention'), 2600);
+    }
+  }
+  upBtn.onclick = () => doUpload('approve');
+  document.querySelectorAll('.upopt').forEach(b => b.onclick = () => doUpload(b.dataset.mode));
+}
+</script></body></html>

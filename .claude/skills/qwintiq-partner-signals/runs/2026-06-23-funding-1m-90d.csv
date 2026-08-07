@@ -1,0 +1,75 @@
+company,domain,found_at,round,amount,amount_usd,verdict,description
+Optalysys Ltd,optalysys.com,2026-06-18,Series A2,£23M,30400000,B2B,Optical / homomorphic-encryption compute hardware
+Silveray,silveray.co.uk,2026-06-18,Series A,£5 million,6610000,B2B,Digital X-ray detector medtech
+Frontierhealth,frontierhealth.ai,2026-06-18,Seed,$16 million,16000000,B2B,Healthcare AI platform
+Conduct Ai,conduct.ai,2026-06-17,Series A,$60M,60000000,B2B,Enterprise AI / legacy-IT modernisation (ex-Palantir)
+Monument Technology Limited,monument.tech,2026-06-17,Seed,£18 million,24100000,B2B,Banking-platform-as-a-service for financial institutions
+Tramlines Ltd.,tramlines.com,2026-06-11,Seed,£2m,2680000,EXCLUDE-investor,"Venture capital firm (investor, not a partner target)"
+Strand Intelligence Ltd,strandintelligence.com,2026-06-10,Seed,£1m,1340000,B2B,AI cyber incident-response SaaS for MSPs/IT
+Record Os,record-os.com,2026-06-09,Pre Seed,$2m,2000000,CUT-B2C,Consumer UK tax-return filing service
+Asterix Health,asterix.health,2026-06-08,Pre Seed,£2.1 million,2810000,B2B,Remote GP capacity for primary-care providers
+NewOrbit Space Ltd.,neworbit.space,2026-06-08,Series A,$18.5M,18500000,B2B,Space technology / satellites
+Volteum,volteum.io,2026-06-08,Seed,€2.5 million,2910000,B2B,EV fleet & energy management software
+Semble Technology Limited,semble.io,2026-06-04,Series C,£30 million,40400000,B2B,Healthcare practice-management SaaS
+Aveni Ltd.,aveni.ai,2026-06-04,Series B,£12 million,16200000,B2B,AI for financial-services compliance
+Flok Health Ltd.,flok.health,2026-06-03,Series A,$12.5 million,12500000,MIXED,AI physiotherapy: NHS/employer B2B + patient app
+OxfordQuantumCircuits,oqc.tech,2026-06-03,Series C,£260M,348500000,B2B,Quantum computing
+Gigaton Technologies Ltd.,gigaton.co,2026-06-03,Series A,$26 million,26000000,B2B,AI control software for industrial plants
+Apoha Limited,apoha.com,2026-06-03,Series A,$36 million,36000000,B2B,AI sensing for pharma & food industries
+Gradient Labs Limited,gradient-labs.ai,2026-06-02,Series A,$26M,26000000,B2B,AI support agents for financial services
+Imubiosciences,imubiosciences.com,2026-06-02,Series A,$53m,53000000,BIOTECH,Immunology biotech / therapeutics
+Oak Hill Bio Ltd,oakhillbio.com,2026-06-01,Series A,$32.5 million,32500000,BIOTECH,Neonatal biotech / therapeutics
+Wild Ltd,luneandwild.co.uk,2026-06-01,Series A,£2m,2690000,CUT-B2C,Consumer maternity/baby brand
+Crimson,crimson.law,2026-05-28,Seed,$2.5 million,2500000,B2B,Legal technology
+Caudal,caudal.com,2026-05-27,Seed,£4.3 million,5770000,YOURCALL-cleantech,Tidal-energy developer (pre-commercial)
+WeRoad S.r.l.,weroad.com,2026-05-27,Series C,$58 million,58000000,CUT-B2C,Consumer group-travel (Italy)
+Garland Surgical Ltd,garlandsurgical.health,2026-05-22,Seed,€3.5 million,4080000,B2B,Surgical devices for hospitals
+Primer,primer.io,2026-05-20,Series C,USD 100 million,100000000,B2B,Payments orchestration infrastructure
+"Scope, Inc.",getscope.ai,2026-05-20,Series A,€17.3 million,20100000,B2B,AI inspection workflow for TIC providers
+Greenpixie,greenpixie.com,2026-05-18,Pre Series A,£4.7m,6310000,B2B,Cloud-carbon / FinOps data
+K3 Metrology Ltd,k3metrology.co.uk,2026-05-14,Seed,£2.75m,3680000,B2B,Precision metrology / measurement
+Iceotope Technologies Limited,iceotope.com,2026-05-14,Series B,$26 million,26000000,B2B,Data-centre liquid cooling
+SwishX,swishx.com,2026-05-13,Seed,$2.2 million,2200000,B2B,AI agents for pharma commercial ops
+Isomorphic Labs Limited,isomorphiclabs.com,2026-05-12,Series B,$2.1 billion,2100000000,B2B,AI drug discovery platform (pharma partner)
+Tolemy Bio,tolemy.bio,2026-05-12,Pre Seed,€1.4 million,1620000,BIOTECH,Biotech / therapeutics
+Fifth Dimension AI Ltd,fifthdimensionai.com,2026-05-12,Series A,$26M,26000000,B2B,AI assistants for professional services
+Happl Ltd,happl.com,2026-05-11,Series A,$11 million,11000000,B2B,Employee-benefits platform (HR tech)
+Quantum Motion Ltd.,quantummotion.com,2026-05-07,Series C,USD 160 million,160000000,B2B,Quantum computing
+Meatly,meatly.pet,2026-05-07,Series A,£10.4m,13900000,CUT-B2C,"Cultivated pet food, direct to owners"
+Lcrfreeport,lcrfreeport.uk,2026-05-07,Seed,£25m,33400000,CUT-public,Liverpool City Region Freeport (public body)
+Agemo AI Ltd,agemo.ai,2026-05-07,Seed,$9 million,9000000,B2B,AI coding agents
+CodeWords,codewords.ai,2026-05-07,Seed,$9 million,9000000,B2B,AI automation / workflows
+Scarlet Tx,scarlet-tx.com,2026-05-07,Seed,£3.2 million,4350000,BIOTECH,Therapeutics (Tx) biotech
+WaiV Robotics,waivrobotics.com,2026-05-05,Seed,$7.5 million,7500000,B2B,Maritime drones / robotics
+On Re,onre.finance,2026-05-05,Series A,$5 million,5000000,YOURCALL-crypto,DeFi / crypto reinsurance
+Cytospire Therapeutics Limited,cytospire.com,2026-05-05,Series A,£61 million,82600000,BIOTECH,Therapeutics biotech
+Barocal Ltd.,barocal.com,2026-05-04,Seed,$10 million,10000000,B2B,Solid-state cooling / heat-pump cleantech
+ManaMind,manamind.ai,2026-04-30,Pre Seed,€1.2 million,1400000,B2B,Autonomous QA testing for game/software teams
+Gymkhanafinefoods,gymkhanafinefoods.com,2026-04-30,Series A,$8.5M,8500000,CUT-B2C,Consumer food brand
+Hypervision Surgical Ltd,hypervisionsurgical.com,2026-04-29,Series A,£17 million,22900000,B2B,Surgical imaging AI for hospitals
+meet Dex,meetdex.ai,2026-04-29,Seed,$5.3 million,5300000,MIXED,AI recruiting: serves companies + job seekers
+Cerca Magnetics Ltd,cercamagnetics.com,2026-04-24,Series A,€4.3 million,5040000,B2B,Brain-scanner (OPM-MEG) medtech
+Cloudsmith Ltd,cloudsmith.com,2026-04-23,Series C,$72M,72000000,B2B,Software artifact / package management (DevOps)
+Exergy3 Limited,exergy3.com,2026-04-22,Seed,£10 million,13500000,B2B,Thermal energy storage cleantech
+gizmo.ai,gizmo.ai,2026-04-16,Series A,$22 million,22000000,CUT-B2C,Consumer study app for students
+STORM Therapeutics Ltd,stormtherapeutics.com,2026-04-16,Series C,$56 million,56000000,BIOTECH,RNA therapeutics biotech
+Roundtreasury,roundtreasury.com,2026-04-14,Seed,$6 million,6000000,B2B,Finance automation for finance teams (=Round)
+Archangel Lightworks Ltd.,archangel.works,2026-04-13,Series A,$13.5m,13500000,B2B,Optical satellite communications
+Frame AI,frameai.tech,2026-04-13,Series A,$6.3 million,6300000,B2B,AI systems for enterprises
+Round Finance Limited,round.finance,2026-04-13,Seed,6 million US dollars,6000000,DUPLICATE,Same company/round as roundtreasury.com
+Base58 Labs Ltd.,base58labs.com,2026-04-10,Pre Series A,$35 million,35000000,B2B,HFT infrastructure for institutions
+Northernlightmicroscopy,northernlightmicroscopy.com,2026-04-09,Pre Seed,£1 million,1350000,B2B,Scientific microscopy instruments
+Fieldwork Robotics Ltd.,fieldworkrobotics.com,2026-04-08,Seed Plus,£2.5m,3310000,B2B,Agricultural harvesting robotics
+Fermtech,fermtech.co.uk,2026-04-08,Seed,£2.5 million,3300000,B2B,Cocoa-replacement ingredient for food makers
+Natter,trynatter.com,2026-04-07,Series A,$23M,23000000,B2B,Insights / research conversation platform
+Omniscient incorporated,omniscient-ai.io,2026-04-02,Pre Seed,$4.1 million,4100000,B2B,Enterprise intelligence / decision platform
+9fin Limited,9fin.com,2026-03-31,Series C,$170 million,170000000,B2B,Debt capital markets analytics & data
+Lucida Medical Ltd,lucidamedical.com,2026-03-31,Series A,£8.7 million,11600000,B2B,AI cancer diagnostics
+Tropic Biosciences UK Ltd,tropic.bio,2026-03-31,Series C,US$105 million,105000000,B2B,Agri-biotech gene editing (sells to ag industry)
+Riplo Limited,riplo.ai,2026-03-31,Pre Seed,£2.3M,3050000,B2B,Agentic operating system for consulting firms
+Theia Insights Inc.,theiainsights.com,2026-03-26,Series A,$8 million,8000000,B2B,AI financial data & analytics
+Giraffe360 Limited,giraffe360.com,2026-03-26,Series B,$10 million,10000000,B2B,Real-estate imaging robotics / SaaS
+Immutrin Ltd,immutrin.com,2026-03-25,Series A,£65 million,87200000,BIOTECH,Immunology therapeutics biotech
+Vuelo Group,getvuelo.com,2026-03-25,Seed,£56m,74400000,CUT-B2C,Consumer travel booking + BNPL
+Eunice Ltd.,eunice.ai,2026-03-25,Pre Seed,$8 million,8000000,B2B,AI compliance for institutional due diligence
+Origin Benefits Ltd,originbenefits.com,2026-03-25,Series A Plus,$30 million,30000000,B2B,Employee-benefits platform (HR tech)

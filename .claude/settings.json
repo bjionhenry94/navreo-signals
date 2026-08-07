@@ -1,0 +1,14 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p \"$HOME/.claude/skills\" && cp -a \"$CLAUDE_PROJECT_DIR/.claude/skills/.\" \"$HOME/.claude/skills/\" 2>/dev/null || true"
+          }
+        ]
+      }
+    ]
+  }
+}

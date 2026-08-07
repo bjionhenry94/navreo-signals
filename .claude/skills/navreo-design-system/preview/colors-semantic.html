@@ -1,0 +1,25 @@
+<!doctype html>
+<!-- @dsCard group="Colors" name="Semantic tokens" subtitle="bg · fg · accent · status" viewport="720x320" -->
+<html><head><meta charset="utf-8"><title>Semantic colors</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .row2 { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border-radius: 10px; border: 1px solid var(--border); background: var(--nav-cream-50); }
+  .dot { width: 22px; height: 22px; border-radius: 999px; flex: none; box-shadow: inset 0 0 0 1px rgba(0,0,0,0.06); }
+  .meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .name { font-weight: 500; font-size: 13px; }
+  .hex { font-family: var(--font-mono); font-size: 11px; color: var(--nav-ink-3); }
+</style></head>
+<body>
+  <div class="label" style="margin-bottom:10px">Semantic tokens</div>
+  <div class="grid">
+    <div class="row2"><div class="dot" style="background:#F9F0E7"></div><div class="meta"><span class="name">--bg</span><span class="hex">page background · cream</span></div></div>
+    <div class="row2"><div class="dot" style="background:#14110E"></div><div class="meta"><span class="name">--fg</span><span class="hex">text · ink</span></div></div>
+    <div class="row2"><div class="dot" style="background:#FF4D00"></div><div class="meta"><span class="name">--accent</span><span class="hex">CTA · focus · key data</span></div></div>
+    <div class="row2"><div class="dot" style="background:#FFE4D6"></div><div class="meta"><span class="name">--accent-soft</span><span class="hex">selection · highlight</span></div></div>
+    <div class="row2"><div class="dot" style="background:#2E7D5B"></div><div class="meta"><span class="name">--success</span><span class="hex">#2E7D5B</span></div></div>
+    <div class="row2"><div class="dot" style="background:#C28A00"></div><div class="meta"><span class="name">--warning</span><span class="hex">#C28A00</span></div></div>
+    <div class="row2"><div class="dot" style="background:#C2371F"></div><div class="meta"><span class="name">--danger</span><span class="hex">#C2371F</span></div></div>
+    <div class="row2"><div class="dot" style="background:#E8D7C4"></div><div class="meta"><span class="name">--divider</span><span class="hex">light-200</span></div></div>
+  </div>
+</body></html>

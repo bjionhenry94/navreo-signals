@@ -1,0 +1,35 @@
+{
+  "snapshot_taken": "2026-07-13",
+  "purpose": "Step 1 rollback artifact for setter-training-brain-ship. Byte-compare target for Step 11 close-out (intentionally shipped fields excepted).",
+  "table": "setter_agents",
+  "id": "agent-d403bbcd",
+  "updated_at_at_snapshot": "2026-07-11 14:16:20.480623+00",
+  "doc": {
+    "id": "agent-d403bbcd",
+    "mode": "autopilot",
+    "name": "Clay to Claude guide sender",
+    "enabled": true,
+    "created_at": "2026-07-11T14:17:20+00:00",
+    "updated_at": "2026-07-11T20:09:15+00:00",
+    "booking_link": "https://www.navreo.ai/book-a-call",
+    "campaign_ids": [3396215, 3509012, 3445511],
+    "instructions": "Our pay-per-lead pricing has two parts:\n1. Setup and infrastructure: $1,000 (at cost)\nThis covers everything needed to run your campaigns: Enterprise Microsoft (Azure) mailboxes plus Gmail mailboxes giving you up to 50,000 sends per month, email enrichment (purchasing the prospect data), verification of that data so we only send to real valid contacts, and personalisation plus intent/signal data from our providers. All of it billed at cost, no markup.\n2. Performance: $300 per qualified meeting attended\nYou only pay when a genuinely qualified prospect actually shows up to the meeting.",
+    "pricing_notes": "Our pay-per-lead pricing has two parts:\n1. Setup and infrastructure: $1,000 (at cost)\nThis covers everything needed to run your campaigns: Enterprise Microsoft (Azure) mailboxes plus Gmail mailboxes giving you up to 50,000 sends per month, email enrichment (purchasing the prospect data), verification of that data so we only send to real valid contacts, and personalisation plus intent/signal data from our providers. All of it billed at cost, no markup.\n2. Performance: $300 per qualified meeting attended\nYou only pay when a genuinely qualified prospect actually shows up to the meeting.",
+    "resource_link": "https://navreo.notion.site/The-Ultimate-Claude-Code-Guide-for-Sales-Leaders-Run-your-GTM-inside-of-Claude-36a6e75598d98047b5ecd20c2c6e1280",
+    "resource_name": "The Ultimate Claude Code Guide for Sales Leaders",
+    "voice_examples": [
+      "Hi Nick, Here is a breakdown I prepared. Would you be free for a call on Thursday, 9th July at 11:00 AM MDT or Friday, 10th July at 11:30 AM, where I could share how I can implement our strategy for you? If those times are not suitable, feel free to book a call here. Bjion",
+      "Hi Gerry, Sure, would you be free for a call on Tuesday, 14th July at 12:00 PM CDT or Wednesday, 15th July at 11:00 AM CDT? If those times are not suitable, feel free to book a call here. Bjion"
+    ],
+    "allowed_intents": ["send_resource", "pricing", "scheduling"],
+    "calendly_event_url": "https://calendly.com/navreo/book-a-call-with-us-clone-2",
+    "extra_instructions": "",
+    "campaign_assigned_at": {
+      "3396215": "2026-07-11T14:17:20+00:00",
+      "3445511": "2026-07-11T14:17:20+00:00",
+      "3509012": "2026-07-11T14:17:20+00:00"
+    },
+    "confidence_threshold": 0.9,
+    "resource_description": "A written breakdown of how Navreo moved its GTM from Clay into Claude Code."
+  }
+}

@@ -1,0 +1,185 @@
+{
+  "_meta": {
+    "purpose": "Maps each sender domain in the Smartlead fleet to its infrastructure batch (registrar + mailbox provider + expected DNS nameserver provider). Used by the email-deliverability-audit skill to enrich reports with per-batch context (e.g. flag when a batch's domains have NS that don't match its expected provider).",
+    "schema_version": "1.0",
+    "last_updated": "2026-05-19",
+    "update_pattern": "When adding a new batch, append to `batches` and add the domains to `domain_batches.csv`. When migrating a batch to new NS, update `expected_ns` here and re-run the audit to confirm fleet matches.",
+    "classification_rules": [
+      "When classifying a new domain to a batch, look for the consistent brand name within the domain itself \u2014 that usually identifies the company. Examples: '*navreo*' = Navreo, '*amplifyy*' / '*amplify*' = Amplifyy, '*bytedance*' / '*seed*' = ByteDance (Sean Zhou).",
+      "Generic-themed domains (no brand keyword, e.g. 'bridgeandscale.info', 'flowstrategy.org', 'reachalign.net') paired with from_name='Jane Smithson' typically belong to Client Backups.",
+      "Exception: when a domain contains both a brand keyword AND the Jane Smithson persona (e.g. 'launchwithnavreo.*' + Jane Smithson), do NOT auto-classify as Client Backups \u2014 surface to user; might be brand owner using Jane as a backup persona.",
+      "Naming convention for new batches: {company}-{persona}-{provider}, all lowercase, hyphenated."
+    ]
+  },
+  "batches": {
+    "navreo-bjion-henry-boomerang": {
+      "label": "Boomerang via Cloudflare NS",
+      "registrar": "Porkbun",
+      "mailbox_provider": "Boomerang",
+      "expected_ns_provider": "Cloudflare",
+      "expected_ns": [
+        "rohin.ns.cloudflare.com",
+        "aurora.ns.cloudflare.com"
+      ],
+      "added": "2026-05-19",
+      "notes": "Migrated registrar NS from DNSimple to Cloudflare on 2026-05-19 via /update-porkbun-domains (all 37 succeeded). DNS zones expected to flip to Active in Cloudflare within hours."
+    },
+    "navreo-bjion-henry-maildoso": {
+      "label": "Maildoso via Cloudflare NS \u2014 internal/Navreo Henry persona",
+      "registrar": "Porkbun",
+      "mailbox_provider": "Maildoso",
+      "client": "Navreo (internal)",
+      "persona": "Bjion Henry (multiple username variants)",
+      "expected_ns_provider": "Cloudflare",
+      "expected_ns": null,
+      "added": "2026-05-19",
+      "notes": "Maildoso auto-provisions per-domain Cloudflare zones (unique NS pair per zone). Confirmed healthy: navreocampaign.info \u2192 terin.ns.cloudflare.com + deborah.ns.cloudflare.com. SPF: include:_spf.checkstrack.net; DMARC: p=reject. Each domain may have a different NS pair."
+    },
+    "client-backups-jane-smithson-maildoso": {
+      "label": "Client Backup Domains via Maildoso \u2014 Jane Smithson persona",
+      "registrar": "Porkbun",
+      "mailbox_provider": "Maildoso",
+      "client": "Client Backups (internal codename)",
+      "persona": "Jane Smithson",
+      "expected_ns_provider": "Cloudflare",
+      "expected_ns": null,
+      "smtp_host_signature": "smtp.maildoso.com",
+      "added": "2026-05-19",
+      "notes": "Maildoso-managed Cloudflare zones. Identified by from_name='Jane Smithson' on smtp.maildoso.com inboxes. 19 domains \u00d7 8 inboxes = 152 inboxes. Maildoso half of the Client Backup Domains operation; Hypertide-Azure half is client-backups-hypertide-azure."
+    },
+    "client-backups-jane-smithson-hypertide-azure": {
+      "label": "Client Backup Domains via Hypertide Azure \u2014 Jane Smithson persona",
+      "registrar": "Hypertide-managed (NOT in user's Porkbun account)",
+      "mailbox_provider": "Hypertide (Azure)",
+      "client": "Client Backups (internal codename)",
+      "persona": "Jane Smithson",
+      "expected_ns_provider": "DNSimple",
+      "expected_ns": null,
+      "smtp_host_signature": "(empty \u2014 OAuth-connected)",
+      "added": "2026-05-19",
+      "ownership_note": "These 20 domains are registered AND managed by Hypertide end-to-end. User does NOT have Porkbun-level control over them. If they go dead, escalate to Hypertide support \u2014 user cannot fix via /update-porkbun-domains. All healthy at audit time on 2026-05-19.",
+      "notes": "Identified by from_name='Jane Smithson' + (empty smtp_host) + 'Order Type: Hypertide Azure' label in Hypertide UI. 20 domains \u00d7 ~52 inboxes = 1,037 inboxes. Hypertide-Azure half of the Client Backup Domains operation; Maildoso half is client-backups-maildoso. | NS-pair pin removed 2026-05-19: each Hypertide-Azure domain has its own DNSimple zone, provider-only match. Provider name normalised to 'DNSimple' (was 'DNSimple (Hypertide-managed)')."
+    },
+    "amplifyy-kevin-dormer-maildoso": {
+      "label": "Amplifyy via Maildoso \u2014 Kevin Dormer persona",
+      "registrar": "Porkbun",
+      "mailbox_provider": "Maildoso",
+      "client": "Amplifyy (Kevin Dormer DFY, kevin@amplifyy.com)",
+      "persona": "Kevin Dormer",
+      "expected_ns_provider": "Cloudflare",
+      "expected_ns": null,
+      "smtp_host_signature": "smtp.maildoso.com",
+      "added": "2026-05-19",
+      "notes": "Maildoso-managed Cloudflare zones. Identified by from_name='Kevin Dormer' on smtp.maildoso.com inboxes. 18 domains \u00d7 8 inboxes = 144 inboxes. Distinct from the Hypertide Azure 'amplifyy' domains (e.g. dealswithamplifyy.info \u00d7 52 inboxes) which use OAuth not Maildoso."
+    },
+    "hypertide-dnsimple": {
+      "label": "Hypertide via DNSimple NS",
+      "registrar": "Porkbun (primary) \u2014 some may be at DNSimple itself (long-tail strategy*/scale* domains return Porkbun 'Invalid domain', likely DNSimple-registered)",
+      "mailbox_provider": "Hypertide (incl. Hypertide Azure product line)",
+      "expected_ns_provider": "DNSimple",
+      "expected_ns": [
+        "ns1.dnsimple.com",
+        "ns2.dnsimple-edge.net",
+        "ns3.dnsimple.com",
+        "ns4.dnsimple-edge.org"
+      ],
+      "smtp_host_signature": "(empty \u2014 OAuth-connected via Hypertide Azure)",
+      "added": "2026-05-19",
+      "notes": "Default fallback bucket for fleet domains not explicitly assigned to another batch. Per user 2026-05-19: 'any remainers are more than likely from Porkbun, mailboxes from Hypertide, should have DNSimple nameservers'."
+    },
+    "navreo-bjion-henry-hypertide-azure": {
+      "registrar": "Porkbun (primary)",
+      "mailbox_provider": "Hypertide (Azure)",
+      "expected_ns_provider": "DNSimple",
+      "expected_ns": [
+        "ns1.dnsimple.com",
+        "ns2.dnsimple-edge.net",
+        "ns3.dnsimple.com",
+        "ns4.dnsimple-edge.org"
+      ],
+      "smtp_host_signature": "(empty \u2014 OAuth-connected via Hypertide Azure)",
+      "added": "2026-05-19",
+      "label": "Navreo via Hypertide Azure \u2014 Bjion Henry persona",
+      "client": "Navreo (internal)",
+      "persona": "Bjion Henry",
+      "notes": "96 domains \u00d7 ~52 inboxes \u2248 4,106 inboxes. Hypertide Azure half of Navreo Bjion Henry infrastructure; Boomerang half is navreo-bjion-henry-boomerang, Maildoso half is navreo-bjion-henry-maildoso."
+    },
+    "amplifyy-kevin-dormer-hypertide-azure": {
+      "registrar": "Porkbun (primary)",
+      "mailbox_provider": "Hypertide (Azure)",
+      "expected_ns_provider": "DNSimple",
+      "expected_ns": null,
+      "smtp_host_signature": "(empty \u2014 OAuth-connected via Hypertide Azure)",
+      "added": "2026-05-19",
+      "label": "Amplifyy via Hypertide Azure \u2014 Kevin Dormer persona",
+      "client": "Amplifyy (Kevin Dormer DFY)",
+      "persona": "Kevin Dormer",
+      "notes": "20 domains \u00d7 ~52 inboxes \u2248 1,039 inboxes. Hypertide Azure half of Amplifyy infrastructure; Maildoso half is amplifyy-kevin-dormer-maildoso. | NS-pair pin removed 2026-05-19: each Hypertide-Azure domain has its own DNSimple zone, provider-only match."
+    },
+    "arnic-jacki-arnic-hypertide-azure": {
+      "registrar": "Porkbun (primary)",
+      "mailbox_provider": "Hypertide (Azure)",
+      "expected_ns_provider": "DNSimple",
+      "expected_ns": [
+        "ns1.dnsimple.com",
+        "ns2.dnsimple-edge.net",
+        "ns3.dnsimple.com",
+        "ns4.dnsimple-edge.org"
+      ],
+      "smtp_host_signature": "(empty \u2014 OAuth-connected via Hypertide Azure)",
+      "added": "2026-05-19",
+      "label": "Arnic via Hypertide Azure \u2014 Jacki Arnic persona",
+      "client": "Arnic (Navreo DFY client)",
+      "persona": "Jacki Arnic",
+      "notes": "20 domains \u00d7 ~50 inboxes \u2248 1,000 inboxes. Brand-name in domains: 'arnic'."
+    },
+    "andrea-henderson-hypertide-azure": {
+      "registrar": "Porkbun (primary)",
+      "mailbox_provider": "Hypertide (Azure)",
+      "expected_ns_provider": "DNSimple",
+      "expected_ns": [
+        "ns1.dnsimple.com",
+        "ns2.dnsimple-edge.net",
+        "ns3.dnsimple.com",
+        "ns4.dnsimple-edge.org"
+      ],
+      "smtp_host_signature": "(empty \u2014 OAuth-connected via Hypertide Azure)",
+      "added": "2026-05-19",
+      "label": "Andrea Henderson via Hypertide Azure",
+      "client": "Andrea Henderson (personal brand / individual client)",
+      "persona": "Andrea Henderson",
+      "notes": "4 domains \u00d7 ~52 inboxes = 204 inboxes. Brand and persona are the same person \u2014 personal-brand client."
+    },
+    "olivia-duncan-hypertide-azure": {
+      "registrar": "Porkbun (primary)",
+      "mailbox_provider": "Hypertide (Azure)",
+      "expected_ns_provider": "DNSimple",
+      "expected_ns": [
+        "ns1.dnsimple.com",
+        "ns2.dnsimple-edge.net",
+        "ns3.dnsimple.com",
+        "ns4.dnsimple-edge.org"
+      ],
+      "smtp_host_signature": "(empty \u2014 OAuth-connected via Hypertide Azure)",
+      "added": "2026-05-19",
+      "label": "Olivia Duncan via Hypertide Azure",
+      "client": "Olivia Duncan (personal brand / individual client)",
+      "persona": "Olivia Duncan",
+      "notes": "2 domains \u00d7 ~51 inboxes = 102 inboxes. Brand and persona are the same person \u2014 personal-brand client. Domains include 'oliviaduncaninteriors.info' (interiors business?)."
+    },
+    "navreo-bjion-henry-zapmail": {
+      "label": "Navreo via Zapmail (Google Workspace mailboxes, ClouDNS NS) \u2014 Bjion Henry persona",
+      "registrar": "Porkbun",
+      "mailbox_provider": "Zapmail",
+      "expected_ns_provider": "cloudns",
+      "expected_ns": [
+        "pns61.cloudns.net",
+        "pns62.cloudns.com",
+        "pns63.cloudns.net",
+        "pns64.cloudns.uk"
+      ],
+      "added": "2026-05-19",
+      "notes": "Reclassified from retired-client-mailboxes on 2026-05-19 after Zapmail alert emails (16-18 May) revealed these 27 domains were Zapmail-managed via ClouDNS, not Hypertide. Diagnostic: all 135 Smartlead inboxes have empty smtp_host (=Google Workspace via Zapmail) and from_name='Bjion Henry' (=internal Navreo persona). NS pair restored via /update-porkbun-domains 2026-05-19 (27/27 succeeded). Original retirement note preserved: 27 domains \u00d7 originally 8 inboxes = 216 (54 removed, 27 ben@ remained at audit time). Marked retired per user instruction 2026-05-19. Distinct from active 'Client Backup Domains' (those are healthy at Hypertide). Domains still exist at Porkbun \u2014 to fully decommission, user can remove ben@ inboxes from Smartlead and let Porkbun registrations lapse. | NS audit expectation: all domains should return zero NS records (zones never created or were deleted, query returns REFUSED). Anything resolving is unexpected."
+    }
+  }
+}

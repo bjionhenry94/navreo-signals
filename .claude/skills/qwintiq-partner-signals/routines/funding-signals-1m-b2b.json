@@ -1,0 +1,61 @@
+{
+  "routine_id": "funding-signals-1m-b2b",
+  "routine_name": "Funding signals (£1M+ B2B)",
+  "client": "Qwintiq",
+  "created_at": "2026-06-23",
+  "status": "active",
+
+  "signals": {
+    "recency_days": 90,
+    "target_count": 20,
+    "ranked": [
+      {
+        "id": "raised-funding-1m-plus",
+        "label": "Just raised £1M+ in funding (last 90 days)",
+        "where": "PredictLeads financing events (venture ladder) + funding news",
+        "amount_floor_gbp": 1000000,
+        "amount_floor_usd": 1300000,
+        "geography_note": "Read '£' as UK-based rounds; widen to all geographies on request.",
+        "search_terms": [
+          "raises seed funding", "raises Series A", "raises Series B",
+          "secures funding round", "closes funding", "lands investment"
+        ]
+      }
+    ]
+  },
+
+  "company_type": {
+    "note": "Keep only B2B companies (sell primarily to businesses).",
+    "description": "B2B companies",
+    "size_min": null,
+    "size_max": null,
+    "countries": ["United Kingdom"],
+    "self_check": "Sells to businesses, not consumers. Exclude B2C, public bodies, investors/funds.",
+    "exclusions": ["B2C / consumer brands", "government & public bodies", "VC funds / investors"]
+  },
+
+  "decision_makers": {
+    "note": "User-specified roles for this routine.",
+    "target_roles": ["Head of Partnerships", "VP Partnerships", "Founder"],
+    "ai_ark_dials_hint": {
+      "partnerships": {"department": ["business_development"], "seniority": ["head", "vp"], "title": ["partnerships", "partner"]},
+      "founder": {"seniority": ["founder", "owner"]}
+    },
+    "max_per_company": 3,
+    "linkedin_only": true
+  },
+
+  "icebreaker": {
+    "anchor": "the funding raise (e.g. 'Saw you just closed your Series A, so wanted to reach out')",
+    "recency_months": 3,
+    "off_limits": ["layoffs", "lawsuits", "scandals", "anything negative or sensitive"],
+    "fallback_order": ["signal", "colleague-in-list", "honest role/company line"]
+  },
+
+  "lemlist": {
+    "note": "User said 'skip this for now' on 2026-06-23. No campaign wired yet.",
+    "campaign_name": null,
+    "campaign_id": null,
+    "channel": "multichannel (email + LinkedIn)"
+  }
+}

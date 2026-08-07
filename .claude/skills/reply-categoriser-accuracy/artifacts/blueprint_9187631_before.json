@@ -1,0 +1,5227 @@
+{
+ "flow": [
+  {
+   "id": 1,
+   "mapper": {},
+   "module": "gateway:CustomWebHook",
+   "version": 1,
+   "metadata": {
+    "restore": {
+     "parameters": {
+      "hook": {
+       "data": {
+        "editable": "true"
+       },
+       "label": "smartlead-asteri-replies"
+      }
+     }
+    },
+    "advanced": true,
+    "designer": {
+     "x": 0,
+     "y": 1050
+    },
+    "interface": [
+     {
+      "name": "webhook_id",
+      "type": "number"
+     },
+     {
+      "name": "webhook_name",
+      "type": "text"
+     },
+     {
+      "name": "campaign_status",
+      "type": "text"
+     },
+     {
+      "name": "stats_id",
+      "type": "text"
+     },
+     {
+      "name": "from_email",
+      "type": "text"
+     },
+     {
+      "name": "subject",
+      "type": "text"
+     },
+     {
+      "name": "sent_message",
+      "spec": [
+       {
+        "name": "message_id",
+        "type": "text"
+       },
+       {
+        "name": "html",
+        "type": "text"
+       },
+       {
+        "name": "text",
+        "type": "text"
+       },
+       {
+        "name": "time",
+        "type": "text"
+       }
+      ],
+      "type": "collection"
+     },
+     {
+      "name": "to_email",
+      "type": "text"
+     },
+     {
+      "name": "to_name",
+      "type": "text"
+     },
+     {
+      "name": "event_timestamp",
+      "type": "text"
+     },
+     {
+      "name": "reply_message",
+      "spec": [
+       {
+        "name": "message_id",
+        "type": "text"
+       },
+       {
+        "name": "html",
+        "type": "text"
+       },
+       {
+        "name": "text",
+        "type": "text"
+       },
+       {
+        "name": "time",
+        "type": "text"
+       }
+      ],
+      "type": "collection"
+     },
+     {
+      "name": "campaign_name",
+      "type": "text"
+     },
+     {
+      "name": "campaign_id",
+      "type": "number"
+     },
+     {
+      "name": "client_id",
+      "type": "text"
+     },
+     {
+      "name": "sequence_number",
+      "type": "number"
+     },
+     {
+      "name": "secret_key",
+      "type": "text"
+     },
+     {
+      "name": "app_url",
+      "type": "text"
+     },
+     {
+      "name": "description",
+      "type": "text"
+     },
+     {
+      "name": "metadata",
+      "spec": [
+       {
+        "name": "webhook_created_at",
+        "type": "text"
+       }
+      ],
+      "type": "collection"
+     },
+     {
+      "name": "webhook_url",
+      "type": "text"
+     },
+     {
+      "name": "event_type",
+      "type": "text"
+     },
+     {
+      "name": "sl_email_lead_id",
+      "type": "number"
+     },
+     {
+      "name": "sl_email_lead_map_id",
+      "type": "number"
+     },
+     {
+      "name": "sl_lead_email",
+      "type": "text"
+     },
+     {
+      "name": "webhookUrl",
+      "type": "text"
+     }
+    ],
+    "parameters": [
+     {
+      "name": "hook",
+      "type": "hook:gateway-webhook",
+      "label": "Webhook",
+      "required": true
+     },
+     {
+      "name": "maxResults",
+      "type": "number",
+      "label": "Maximum number of results"
+     }
+    ]
+   },
+   "parameters": {
+    "hook": 4105127,
+    "maxResults": 1
+   }
+  },
+  {
+   "id": 29,
+   "filter": {
+    "name": "Only EMAIL_REPLY events",
+    "conditions": [
+     [
+      {
+       "a": "{{1.event_type}}",
+       "b": "EMAIL_REPLY",
+       "o": "text:equal"
+      }
+     ]
+    ]
+   },
+   "mapper": {
+    "url": "https://server.smartlead.ai/api/v1/leads/?email={{1.sl_lead_email}}&api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+    "method": "get",
+    "timeout": "300",
+    "shareCookies": false,
+    "parseResponse": true,
+    "allowRedirects": true,
+    "stopOnHttpError": false,
+    "requestCompressedContent": true
+   },
+   "module": "http:MakeRequest",
+   "version": 4,
+   "metadata": {
+    "expect": [
+     {
+      "name": "url",
+      "type": "url",
+      "label": "URL",
+      "required": true
+     },
+     {
+      "name": "method",
+      "type": "select",
+      "label": "Method",
+      "required": true,
+      "validate": {
+       "enum": [
+        "get",
+        "head",
+        "post",
+        "put",
+        "patch",
+        "delete",
+        "options"
+       ]
+      }
+     },
+     {
+      "name": "headers",
+      "spec": {
+       "name": "value",
+       "spec": [
+        {
+         "name": "name",
+         "type": "text",
+         "label": "Name",
+         "required": true,
+         "validate": {
+          "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+         }
+        },
+        {
+         "name": "value",
+         "type": "text",
+         "label": "Value"
+        }
+       ],
+       "type": "collection",
+       "label": "Header"
+      },
+      "type": "array",
+      "label": "Headers"
+     },
+     {
+      "name": "queryParameters",
+      "spec": {
+       "name": "value",
+       "spec": [
+        {
+         "name": "name",
+         "type": "text",
+         "label": "Name",
+         "required": true
+        },
+        {
+         "name": "value",
+         "type": "text",
+         "label": "Value"
+        }
+       ],
+       "type": "collection",
+       "label": "Parameter"
+      },
+      "type": "array",
+      "label": "Query parameters"
+     },
+     {
+      "name": "contentType",
+      "type": "select",
+      "label": "Body content type",
+      "validate": {
+       "enum": [
+        "json",
+        "multipart",
+        "urlEncoded",
+        "custom"
+       ]
+      }
+     },
+     {
+      "name": "parseResponse",
+      "type": "boolean",
+      "label": "Parse response",
+      "required": true
+     },
+     {
+      "name": "stopOnHttpError",
+      "type": "boolean",
+      "label": "Return error if HTTP request fails",
+      "required": true
+     },
+     {
+      "name": "timeout",
+      "type": "uinteger",
+      "label": "Timeout",
+      "validate": {
+       "max": 300,
+       "min": 1
+      }
+     },
+     {
+      "name": "allowRedirects",
+      "type": "boolean",
+      "label": "Allow redirects",
+      "required": true
+     },
+     {
+      "name": "shareCookies",
+      "type": "boolean",
+      "label": "Share cookies with other HTTP modules",
+      "required": true
+     },
+     {
+      "name": "requestCompressedContent",
+      "type": "boolean",
+      "label": "Request compressed content",
+      "required": true
+     },
+     {
+      "name": "paginationType",
+      "type": "select",
+      "label": "Pagination type",
+      "validate": {
+       "enum": [
+        "offsetBased",
+        "pageBased",
+        "urlBased",
+        "tokenBased"
+       ]
+      }
+     }
+    ],
+    "restore": {
+     "expect": {
+      "method": {
+       "mode": "chose",
+       "label": "GET"
+      },
+      "headers": {
+       "mode": "chose"
+      },
+      "contentType": {
+       "label": "Empty"
+      },
+      "shareCookies": {
+       "mode": "chose"
+      },
+      "parseResponse": {
+       "mode": "chose"
+      },
+      "allowRedirects": {
+       "mode": "chose"
+      },
+      "paginationType": {
+       "label": "Empty"
+      },
+      "queryParameters": {
+       "mode": "chose"
+      },
+      "stopOnHttpError": {
+       "mode": "chose"
+      },
+      "requestCompressedContent": {
+       "mode": "chose"
+      }
+     },
+     "parameters": {
+      "tlsType": {
+       "label": "Empty"
+      },
+      "authenticationType": {
+       "label": "No authenticationUse when no credentials are required for the request."
+      }
+     }
+    },
+    "advanced": true,
+    "designer": {
+     "x": 300,
+     "y": 1050
+    },
+    "interface": [
+     {
+      "name": "data",
+      "type": "any",
+      "label": "Data"
+     },
+     {
+      "name": "statusCode",
+      "type": "number",
+      "label": "Status Code"
+     },
+     {
+      "name": "headers",
+      "spec": [
+       {
+        "name": "content-length",
+        "type": "text",
+        "label": "Content-Length"
+       },
+       {
+        "name": "content-encoding",
+        "type": "text",
+        "label": "Content-Encoding"
+       },
+       {
+        "name": "content-type",
+        "type": "text",
+        "label": "Content-Type"
+       },
+       {
+        "name": "server",
+        "type": "text",
+        "label": "Server"
+       },
+       {
+        "name": "cache-control",
+        "type": "text",
+        "label": "Cache-Control"
+       },
+       {
+        "name": "set-cookie",
+        "spec": {
+         "type": "text"
+        },
+        "type": "array",
+        "label": "Set-Cookie"
+       }
+      ],
+      "type": "collection",
+      "label": "Headers"
+     }
+    ],
+    "parameters": [
+     {
+      "name": "authenticationType",
+      "type": "select",
+      "label": "Authentication type",
+      "required": true,
+      "validate": {
+       "enum": [
+        "noAuth",
+        "apiKey",
+        "basicAuth",
+        "oAuth"
+       ]
+      }
+     },
+     {
+      "name": "tlsType",
+      "type": "select",
+      "label": "Transport layer security (TLS)",
+      "validate": {
+       "enum": [
+        "mTls",
+        "tls"
+       ]
+      }
+     },
+     {
+      "name": "proxyKeychain",
+      "type": "keychain:proxy",
+      "label": "Proxy"
+     }
+    ]
+   },
+   "parameters": {
+    "tlsType": "",
+    "authenticationType": "noAuth"
+   }
+  },
+  {
+   "id": 2,
+   "filter": {
+    "name": "Only if no existing category",
+    "conditions": [
+     [
+      {
+       "a": "{{29.data.lead_campaign_data[].lead_category_id}}",
+       "o": "notexist"
+      }
+     ]
+    ]
+   },
+   "mapper": {
+    "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/message-history?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+    "method": "get",
+    "timeout": "300",
+    "shareCookies": false,
+    "parseResponse": true,
+    "allowRedirects": true,
+    "stopOnHttpError": false,
+    "requestCompressedContent": true
+   },
+   "module": "http:MakeRequest",
+   "version": 4,
+   "metadata": {
+    "expect": [
+     {
+      "name": "url",
+      "type": "url",
+      "label": "URL",
+      "required": true
+     },
+     {
+      "name": "method",
+      "type": "select",
+      "label": "Method",
+      "required": true,
+      "validate": {
+       "enum": [
+        "get",
+        "head",
+        "post",
+        "put",
+        "patch",
+        "delete",
+        "options"
+       ]
+      }
+     },
+     {
+      "name": "headers",
+      "spec": {
+       "name": "value",
+       "spec": [
+        {
+         "name": "name",
+         "type": "text",
+         "label": "Name",
+         "required": true,
+         "validate": {
+          "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+         }
+        },
+        {
+         "name": "value",
+         "type": "text",
+         "label": "Value"
+        }
+       ],
+       "type": "collection",
+       "label": "Header"
+      },
+      "type": "array",
+      "label": "Headers"
+     },
+     {
+      "name": "queryParameters",
+      "spec": {
+       "name": "value",
+       "spec": [
+        {
+         "name": "name",
+         "type": "text",
+         "label": "Name",
+         "required": true
+        },
+        {
+         "name": "value",
+         "type": "text",
+         "label": "Value"
+        }
+       ],
+       "type": "collection",
+       "label": "Parameter"
+      },
+      "type": "array",
+      "label": "Query parameters"
+     },
+     {
+      "name": "contentType",
+      "type": "select",
+      "label": "Body content type",
+      "validate": {
+       "enum": [
+        "json",
+        "multipart",
+        "urlEncoded",
+        "custom"
+       ]
+      }
+     },
+     {
+      "name": "parseResponse",
+      "type": "boolean",
+      "label": "Parse response",
+      "required": true
+     },
+     {
+      "name": "stopOnHttpError",
+      "type": "boolean",
+      "label": "Return error if HTTP request fails",
+      "required": true
+     },
+     {
+      "name": "timeout",
+      "type": "uinteger",
+      "label": "Timeout",
+      "validate": {
+       "max": 300,
+       "min": 1
+      }
+     },
+     {
+      "name": "allowRedirects",
+      "type": "boolean",
+      "label": "Allow redirects",
+      "required": true
+     },
+     {
+      "name": "shareCookies",
+      "type": "boolean",
+      "label": "Share cookies with other HTTP modules",
+      "required": true
+     },
+     {
+      "name": "requestCompressedContent",
+      "type": "boolean",
+      "label": "Request compressed content",
+      "required": true
+     },
+     {
+      "name": "paginationType",
+      "type": "select",
+      "label": "Pagination type",
+      "validate": {
+       "enum": [
+        "offsetBased",
+        "pageBased",
+        "urlBased",
+        "tokenBased"
+       ]
+      }
+     }
+    ],
+    "restore": {
+     "expect": {
+      "method": {
+       "mode": "chose",
+       "label": "GET"
+      },
+      "headers": {
+       "mode": "chose"
+      },
+      "contentType": {
+       "label": "Empty"
+      },
+      "shareCookies": {
+       "mode": "chose"
+      },
+      "parseResponse": {
+       "mode": "chose"
+      },
+      "allowRedirects": {
+       "mode": "chose"
+      },
+      "paginationType": {
+       "label": "Empty"
+      },
+      "queryParameters": {
+       "mode": "chose"
+      },
+      "stopOnHttpError": {
+       "mode": "chose"
+      },
+      "requestCompressedContent": {
+       "mode": "chose"
+      }
+     },
+     "parameters": {
+      "tlsType": {
+       "label": "Empty"
+      },
+      "authenticationType": {
+       "label": "No authenticationUse when no credentials are required for the request."
+      }
+     }
+    },
+    "advanced": true,
+    "designer": {
+     "x": 600,
+     "y": 1050
+    },
+    "interface": [
+     {
+      "name": "data",
+      "type": "any",
+      "label": "Data"
+     },
+     {
+      "name": "statusCode",
+      "type": "number",
+      "label": "Status Code"
+     },
+     {
+      "name": "headers",
+      "spec": [
+       {
+        "name": "content-length",
+        "type": "text",
+        "label": "Content-Length"
+       },
+       {
+        "name": "content-encoding",
+        "type": "text",
+        "label": "Content-Encoding"
+       },
+       {
+        "name": "content-type",
+        "type": "text",
+        "label": "Content-Type"
+       },
+       {
+        "name": "server",
+        "type": "text",
+        "label": "Server"
+       },
+       {
+        "name": "cache-control",
+        "type": "text",
+        "label": "Cache-Control"
+       },
+       {
+        "name": "set-cookie",
+        "spec": {
+         "type": "text"
+        },
+        "type": "array",
+        "label": "Set-Cookie"
+       }
+      ],
+      "type": "collection",
+      "label": "Headers"
+     }
+    ],
+    "parameters": [
+     {
+      "name": "authenticationType",
+      "type": "select",
+      "label": "Authentication type",
+      "required": true,
+      "validate": {
+       "enum": [
+        "noAuth",
+        "apiKey",
+        "basicAuth",
+        "oAuth"
+       ]
+      }
+     },
+     {
+      "name": "tlsType",
+      "type": "select",
+      "label": "Transport layer security (TLS)",
+      "validate": {
+       "enum": [
+        "mTls",
+        "tls"
+       ]
+      }
+     },
+     {
+      "name": "proxyKeychain",
+      "type": "keychain:proxy",
+      "label": "Proxy"
+     }
+    ]
+   },
+   "parameters": {
+    "tlsType": "",
+    "authenticationType": "noAuth"
+   }
+  },
+  {
+   "id": 3,
+   "mapper": {
+    "array": "{{2.data.history}}"
+   },
+   "module": "builtin:BasicFeeder",
+   "version": 1,
+   "metadata": {
+    "expect": [
+     {
+      "mode": "edit",
+      "name": "array",
+      "spec": [],
+      "type": "array",
+      "label": "Array"
+     }
+    ],
+    "restore": {
+     "expect": {
+      "array": {
+       "mode": "edit"
+      }
+     }
+    },
+    "designer": {
+     "x": 900,
+     "y": 1050
+    }
+   },
+   "parameters": {}
+  },
+  {
+   "id": 4,
+   "flags": {
+    "stopIfEmpty": true
+   },
+   "mapper": {
+    "value": "[{{3.type}}\u2014{{3.time}}]\nFrom:{{3.from}}\n\nstripHTML({{3.email_body}})"
+   },
+   "module": "util:TextAggregator",
+   "version": 1,
+   "metadata": {
+    "expect": [
+     {
+      "name": "value",
+      "type": "text",
+      "label": "Text"
+     }
+    ],
+    "restore": {
+     "extra": {
+      "feeder": {
+       "label": "Iterator [3]"
+      }
+     },
+     "parameters": {
+      "rowSeparator": {
+       "label": "Other"
+      }
+     }
+    },
+    "advanced": true,
+    "designer": {
+     "x": 1200,
+     "y": 1050
+    },
+    "parameters": [
+     {
+      "name": "rowSeparator",
+      "type": "select",
+      "label": "Row separator",
+      "validate": {
+       "enum": [
+        "\n",
+        "\t",
+        "other"
+       ]
+      }
+     },
+     {
+      "name": "otherRowSeparator",
+      "type": "text",
+      "label": "Separator"
+     }
+    ]
+   },
+   "parameters": {
+    "feeder": 3,
+    "rowSeparator": "other",
+    "otherRowSeparator": "\\n\\n---\\n\\n"
+   }
+  },
+  {
+   "id": 5,
+   "mapper": {
+    "model": "gpt-4o-mini",
+    "top_p": "1",
+    "select": "chat",
+    "messages": [
+     {
+      "role": "system",
+      "content": "You are a reply categoriser for B2B cold email. Read an email thread (cold outreach + the prospect's reply) and assign exactly ONE category from the 8-category list below.\r\n\r\nValid categories (use these exact strings \u2014 case and spelling must match):\r\n\r\n1. \"Interested\" \u2014 Positive engagement, prospect open to learning more, but hasn't booked or asked for an asset. Door is open; next move is ours.\r\n   Examples: \"happy to hear more\", \"yes that's a real pain\", \"tell me more\", \"sounds interesting \u2014 bad timing, circle back in Q3\".\r\n\r\n2. \"Meeting Request\" \u2014 Prospect explicitly invites scheduling but hasn't yet booked.\r\n   Examples: \"send me a time\", \"I'm free Tuesday or Thursday after 2pm\", \"drop me your calendar link\".\r\n\r\n3. \"Call Booked\" \u2014 Prospect explicitly states the call IS booked (not just willing to book).\r\n   Examples: \"just booked a slot on your Calendly\", \"put time in your calendar for Monday 3pm\", \"booked the call, looking forward to it\".\r\n\r\n4. \"Information Request\" \u2014 Prospect asks for an asset (deck, case studies, pricing, ROI, samples) BEFORE deciding to engage further. They want material, not a meeting.\r\n   Examples: \"send me the deck and pricing first\", \"what does this typically cost?\", \"share the case studies\".\r\n\r\n5. \"Out Of Office\" \u2014 Auto-responder. Vacation, sick, parental leave, \"back on X date\". No human intent in the message.\r\n   Examples: \"OOO May 11th, returning May 12th\", \"on parental leave until 1 September\".\r\n\r\n6. \"Wrong Person\" \u2014 Prospect says they're not the right contact. May or may not name a replacement. Redirect, not rejection.\r\n   Examples: \"I don't handle this \u2014 try Sarah\", \"wrong contact, please reach out to procurement\", \"this isn't my area\".\r\n\r\n7. \"Not Interested\" \u2014 Explicit polite decline OR cold/confused responses that indicate no engagement intent.\r\n   Examples: \"not for us, thanks\", \"we're sorted on this side\", \"appreciate the outreach but we're not in the market\", \"not a fit\", \"who is this? how did you get my email?\", \"I have no idea who you are\".\r\n\r\n8. \"Do Not Contact\" \u2014 Defensive fallback for anything that doesn't cleanly fit the 7 above. Includes:\r\n   - Removal demands / unsubscribe requests (\"remove me from your list\", \"stop emailing me\", \"do not contact\", \"take me off your database\").\r\n   - Hostile language, profanity, insults, legal threats, CAN-SPAM / GDPR references.\r\n   - Postmaster / mailer-daemon / delivery-failure / bounce notifications.\r\n   - Single-character or nonsense replies (\"?\", \".\").\r\n   - Non-English replies that can't be confidently interpreted.\r\n   - Anything else ambiguous where you cannot confidently assign one of categories 1-7.\r\n   Default here when in doubt \u2014 false positives are cheap, false negatives damage sender reputation.\r\n\r\nSpecial handling for calendar invite responses (replies that look like automated calendar event acceptances/declines):\r\n- \"Accepted\" \u2192 \"Call Booked\" (calendar event confirmed).\r\n- \"Tentatively Accepted\" or \"Maybe\" \u2192 \"Meeting Request\" (intent there, not yet confirmed).\r\n- \"Declined\" with no accompanying message \u2192 \"Not Interested\" (they actively turned it down).\r\n- \"Declined\" PLUS a message proposing a new time / reschedule \u2192 \"Meeting Request\" (booking intent still alive).\r\n\r\nDecision rules (first match wins, top to bottom):\r\n1. Out Of Office (auto-responder language wins over everything).\r\n2. Wrong Person (a redirect isn't a yes \u2014 beats Interested).\r\n3. Not Interested (explicit decline OR cold/confused).\r\n4. Call Booked (booking already happened \u2014 beats Meeting Request).\r\n5. Meeting Request.\r\n6. Information Request.\r\n7. Interested.\r\n8. Otherwise \u2192 \"Do Not Contact\" (defensive fallback).\r\n\r\nTiebreaker: if a reply contains BOTH positive and negative signals (e.g., \"interested but bad timing\"), prefer the more forward-leaning tag (Interested wins over Not Interested).\r\n\r\nOutput rules:\r\n- Output ONLY a JSON object. No prose, no markdown fences, no preamble.\r\n- Schema: {\"category\": \"<one of the 8 strings>\", \"confidence\": <0.0-1.0>, \"reasoning\": \"<one short sentence>\"}\r\n- Base the category on the LATEST reply from the prospect, but read the WHOLE thread for context.\r\n- Never invent another category. Never return more than one.\r\n- If unsure between two valid categories, pick the one higher in the decision rules order.\r\n- If unsure whether to tag at all, prefer \"Do Not Contact\" (defensive fallback)."
+     },
+     {
+      "role": "user",
+      "content": "THREAD (oldest first):\r\n\r\n{{4.text}}\n\r\n\r\n---\r\n\r\nCategorise the LATEST prospect reply. Return JSON only.",
+      "imageDetail": "auto"
+     }
+    ],
+    "max_tokens": "2048",
+    "temperature": "0",
+    "n_completions": "1",
+    "response_format": "json_object",
+    "parseJSONResponse": true
+   },
+   "module": "openai-gpt-3:CreateCompletion",
+   "version": 1,
+   "metadata": {
+    "expect": [
+     {
+      "name": "select",
+      "type": "select",
+      "label": "Select Method",
+      "required": true,
+      "validate": {
+       "enum": [
+        "chat",
+        "prompt"
+       ]
+      }
+     },
+     {
+      "name": "temperature",
+      "type": "number",
+      "label": "Temperature",
+      "validate": {
+       "max": 2,
+       "min": 0
+      }
+     },
+     {
+      "name": "top_p",
+      "type": "number",
+      "label": "Top P",
+      "validate": {
+       "max": 1,
+       "min": 0
+      }
+     },
+     {
+      "name": "n_completions",
+      "type": "number",
+      "label": "Number"
+     },
+     {
+      "name": "frequency_penalty",
+      "type": "number",
+      "label": "Frequency Penalty",
+      "validate": {
+       "max": 2,
+       "min": -2
+      }
+     },
+     {
+      "name": "presence_penalty",
+      "type": "number",
+      "label": "Presence Penalty",
+      "validate": {
+       "max": 2,
+       "min": -2
+      }
+     },
+     {
+      "name": "logit_bias",
+      "spec": {
+       "name": "value",
+       "spec": [
+        {
+         "name": "token",
+         "type": "text",
+         "label": "Token ID",
+         "required": true
+        },
+        {
+         "name": "probability",
+         "type": "number",
+         "label": "Probability",
+         "required": true,
+         "validate": {
+          "max": 100,
+          "min": -100
+         }
+        }
+       ],
+       "type": "collection",
+       "label": "Token Probability"
+      },
+      "type": "array",
+      "label": "Token Probability"
+     },
+     {
+      "name": "seed",
+      "type": "integer",
+      "label": "Seed"
+     },
+     {
+      "name": "tool_choice",
+      "type": "select",
+      "label": "Tool Choice",
+      "validate": {
+       "enum": [
+        "none",
+        "auto",
+        "required"
+       ]
+      }
+     },
+     {
+      "name": "stop",
+      "spec": {
+       "name": "value",
+       "type": "text",
+       "label": "Stop Sequence"
+      },
+      "type": "array",
+      "label": "Stop Sequences",
+      "validate": {
+       "maxItems": 4
+      }
+     },
+     {
+      "name": "additionalParameters",
+      "spec": {
+       "name": "value",
+       "spec": [
+        {
+         "name": "key",
+         "type": "text",
+         "label": "Parameter Name",
+         "required": true
+        },
+        {
+         "name": "type",
+         "type": "select",
+         "label": "Input Type",
+         "options": [
+          {
+           "label": "Text",
+           "value": "text",
+           "nested": [
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Parameter Value"
+            }
+           ],
+           "default": true
+          },
+          {
+           "label": "Number",
+           "value": "number",
+           "nested": [
+            {
+             "name": "value",
+             "type": "number",
+             "label": "Parameter Value"
+            }
+           ]
+          },
+          {
+           "label": "Boolean",
+           "value": "boolean",
+           "nested": [
+            {
+             "name": "value",
+             "type": "boolean",
+             "label": "Parameter Value"
+            }
+           ]
+          },
+          {
+           "label": "Date",
+           "value": "date",
+           "nested": [
+            {
+             "name": "value",
+             "type": "date",
+             "label": "Parameter Value"
+            }
+           ]
+          },
+          {
+           "label": "Any",
+           "value": "any",
+           "nested": [
+            {
+             "name": "value",
+             "type": "any",
+             "label": "Parameter Value"
+            }
+           ]
+          }
+         ]
+        }
+       ],
+       "type": "collection",
+       "label": "Input Parameter"
+      },
+      "type": "array",
+      "label": "Other Input Parameters"
+     },
+     {
+      "name": "model",
+      "type": "select",
+      "label": "Model",
+      "required": true
+     },
+     {
+      "name": "max_tokens",
+      "type": "uinteger",
+      "label": "Max Output Tokens"
+     },
+     {
+      "name": "messages",
+      "spec": {
+       "name": "value",
+       "spec": [
+        {
+         "name": "role",
+         "type": "select",
+         "label": "Role",
+         "options": {
+          "store": [
+           {
+            "label": "User",
+            "value": "user",
+            "nested": [
+             {
+              "help": "Text content of the message on behalf of the selected __Role__.",
+              "name": "content",
+              "type": "text",
+              "label": "Text Content"
+             },
+             {
+              "name": "imageInputType",
+              "type": "select",
+              "label": "Image Input Type",
+              "options": [
+               {
+                "label": "URL",
+                "value": "url",
+                "nested": [
+                 {
+                  "help": "Make sure to use a publicly accessible URL.\nYou can test if your image is publicly accessible by opening the link in an incognito tab.",
+                  "name": "imageUrl",
+                  "type": "url",
+                  "label": "Image URL"
+                 }
+                ]
+               },
+               {
+                "label": "Image File",
+                "value": "file",
+                "nested": [
+                 {
+                  "name": "imageFile",
+                  "spec": [
+                   {
+                    "help": "Accepted extensions: `.jpg`, `.jpeg`, `.png`, `.webp` and `.gif`.",
+                    "name": "imageFilename",
+                    "type": "filename",
+                    "label": "Image Filename",
+                    "semantic": "file:name",
+                    "extension": [
+                     "jpg",
+                     "jpeg",
+                     "png",
+                     "webp",
+                     "gif"
+                    ]
+                   },
+                   {
+                    "name": "imageData",
+                    "type": "buffer",
+                    "label": "Image Data",
+                    "semantic": "file:data"
+                   }
+                  ],
+                  "type": "collection",
+                  "label": "Image"
+                 }
+                ]
+               }
+              ],
+              "mappable": false
+             },
+             {
+              "help": "Recommended value: `Auto`",
+              "name": "imageDetail",
+              "type": "select",
+              "label": "Image Detail",
+              "options": [
+               {
+                "label": "Auto",
+                "value": "auto",
+                "default": true
+               },
+               {
+                "label": "High",
+                "value": "high"
+               },
+               {
+                "label": "Low",
+                "value": "low"
+               }
+              ]
+             }
+            ],
+            "default": true
+           },
+           {
+            "label": "Assistant",
+            "value": "assistant",
+            "nested": [
+             {
+              "help": "Text content of the message on behalf of the selected __Role__.",
+              "name": "content",
+              "type": "text",
+              "label": "Text Content"
+             },
+             {
+              "mode": "edit",
+              "name": "tool_calls",
+              "spec": {
+               "spec": [
+                {
+                 "name": "type",
+                 "type": "hidden",
+                 "default": "function"
+                },
+                {
+                 "help": "Map this directly from the output of a previous **Create a Completion** module. Look for `Choices[]: Message.Tool Calls[]: ID`.",
+                 "name": "id",
+                 "type": "text",
+                 "label": "Tool call ID"
+                },
+                {
+                 "name": "function",
+                 "spec": [
+                  {
+                   "help": "The name of the function previously called.",
+                   "name": "name",
+                   "type": "text",
+                   "label": "Name",
+                   "required": true
+                  },
+                  {
+                   "help": "The arguments previously output by the AI.",
+                   "name": "arguments",
+                   "type": "text",
+                   "label": "Arguments",
+                   "required": true
+                  }
+                 ],
+                 "type": "collection",
+                 "label": "Function"
+                }
+               ],
+               "type": "collection",
+               "label": "Tool Call"
+              },
+              "type": "array",
+              "label": "Tool Calls",
+              "labels": {
+               "add": "Add tool call"
+              },
+              "mappable": {
+               "help": "You can map the entire `Choices[]: Message.Tool Calls` array from a previous Create a Completion module here."
+              }
+             }
+            ]
+           },
+           {
+            "label": "Developer / System",
+            "value": "system",
+            "nested": [
+             {
+              "help": "Text content of the message on behalf of the selected __Role__.",
+              "name": "content",
+              "type": "text",
+              "label": "Text Content"
+             }
+            ]
+           },
+           {
+            "label": "Tool",
+            "value": "tool",
+            "nested": [
+             {
+              "help": "The return of the function. This role should only be used when you have processed a previous function call and want to send the output of the function execution back to the AI.",
+              "name": "content",
+              "type": "text",
+              "label": "Text Content",
+              "required": true
+             },
+             {
+              "help": "Map this directly from the output of a previous **Create a Completion** module. Look for `Choices[]: Message.Tool Calls[]: ID`.",
+              "name": "tool_call_id",
+              "type": "text",
+              "label": "Tool Call ID.",
+              "required": true
+             }
+            ]
+           }
+          ]
+         },
+         "required": true
+        }
+       ],
+       "type": "collection",
+       "label": "Message"
+      },
+      "type": "array",
+      "label": "Messages",
+      "required": true
+     },
+     {
+      "name": "response_format",
+      "type": "select",
+      "label": "Response Format",
+      "validate": {
+       "enum": [
+        "text",
+        "json_object"
+       ]
+      }
+     },
+     {
+      "name": "prediction",
+      "type": "text",
+      "label": "Predicted Outputs"
+     },
+     {
+      "name": "parseJSONResponse",
+      "type": "boolean",
+      "label": "Parse JSON Response",
+      "required": true
+     }
+    ],
+    "restore": {
+     "expect": {
+      "stop": {
+       "mode": "chose"
+      },
+      "model": {
+       "mode": "chose",
+       "label": "gpt-4o-mini (system)Fast, affordable small model for focused tasks"
+      },
+      "select": {
+       "label": "Create a Chat Completion (GPT and o1 models)"
+      },
+      "messages": {
+       "mode": "chose",
+       "items": [
+        {
+         "role": {
+          "mode": "chose",
+          "label": "Developer / System"
+         }
+        },
+        {
+         "role": {
+          "mode": "chose",
+          "label": "User"
+         },
+         "imageDetail": {
+          "mode": "chose",
+          "label": "Auto"
+         },
+         "imageInputType": {
+          "mode": "chose",
+          "label": "Empty"
+         }
+        }
+       ]
+      },
+      "logit_bias": {
+       "mode": "chose"
+      },
+      "tool_choice": {
+       "mode": "chose",
+       "label": "Empty"
+      },
+      "response_format": {
+       "mode": "chose",
+       "label": "JSON Object"
+      },
+      "parseJSONResponse": {
+       "mode": "chose"
+      },
+      "additionalParameters": {
+       "mode": "chose"
+      }
+     },
+     "parameters": {
+      "__IMTCONN__": {
+       "data": {
+        "scoped": "true",
+        "connection": "openai-gpt-3"
+       },
+       "label": "Bjion New Open AI Key; Tuesday 16 Sept 2025"
+      }
+     }
+    },
+    "advanced": true,
+    "designer": {
+     "x": 1500,
+     "y": 1050
+    },
+    "interface": [
+     {
+      "name": "result",
+      "type": "any",
+      "label": "Result"
+     },
+     {
+      "name": "id",
+      "type": "text",
+      "label": "ID"
+     },
+     {
+      "name": "object",
+      "type": "text",
+      "label": "Object"
+     },
+     {
+      "name": "created",
+      "type": "date",
+      "label": "Created"
+     },
+     {
+      "name": "model",
+      "type": "text",
+      "label": "Model"
+     },
+     {
+      "name": "choices",
+      "spec": [
+       {
+        "name": "text",
+        "type": "text",
+        "label": "Text"
+       },
+       {
+        "name": "index",
+        "type": "number",
+        "label": "Index"
+       },
+       {
+        "name": "logprobs",
+        "type": "text",
+        "label": "Log Probs"
+       },
+       {
+        "name": "finish_reason",
+        "type": "text",
+        "label": "Finish Reason"
+       },
+       {
+        "name": "message",
+        "spec": [
+         {
+          "name": "role",
+          "type": "text",
+          "label": "Role"
+         },
+         {
+          "name": "content",
+          "type": "text",
+          "label": "Content"
+         },
+         {
+          "name": "tool_calls",
+          "spec": [
+           {
+            "name": "id",
+            "type": "text",
+            "label": "ID"
+           },
+           {
+            "name": "type",
+            "type": "text",
+            "label": "Type"
+           },
+           {
+            "name": "function",
+            "spec": [
+             {
+              "name": "name",
+              "type": "text",
+              "label": "Name"
+             },
+             {
+              "name": "arguments",
+              "type": "text",
+              "label": "Arguments"
+             }
+            ],
+            "type": "collection",
+            "label": "Function"
+           }
+          ],
+          "type": "array",
+          "label": "Tool Calls"
+         },
+         {
+          "name": "refusal",
+          "type": "text",
+          "label": "Refusal"
+         },
+         {
+          "name": "annotations",
+          "spec": [
+           {
+            "name": "type",
+            "type": "text",
+            "label": "Type"
+           },
+           {
+            "name": "url_citation",
+            "spec": [
+             {
+              "name": "end_index",
+              "type": "number",
+              "label": "End Index"
+             },
+             {
+              "name": "start_index",
+              "type": "number",
+              "label": "Start Index"
+             },
+             {
+              "name": "title",
+              "type": "text",
+              "label": "Title"
+             },
+             {
+              "name": "url",
+              "type": "text",
+              "label": "URL"
+             }
+            ],
+            "type": "collection",
+            "label": "URL Citation"
+           }
+          ],
+          "type": "array",
+          "label": "Annotations"
+         }
+        ],
+        "type": "collection",
+        "label": "Message"
+       }
+      ],
+      "type": "array",
+      "label": "Choices"
+     },
+     {
+      "name": "usage",
+      "spec": [
+       {
+        "name": "prompt_tokens",
+        "type": "number",
+        "label": "Prompt Tokens"
+       },
+       {
+        "name": "completion_tokens",
+        "type": "text",
+        "label": "Completion Tokens"
+       },
+       {
+        "name": "total_tokens",
+        "type": "number",
+        "label": "Total Tokens"
+       },
+       {
+        "name": "prompt_tokens_details",
+        "spec": [
+         {
+          "name": "cached_tokens",
+          "type": "uinteger",
+          "label": "Cached Tokens"
+         },
+         {
+          "name": "text_tokens",
+          "type": "uinteger",
+          "label": "Text Tokens"
+         },
+         {
+          "name": "image_tokens",
+          "type": "uinteger",
+          "label": "Image Tokens"
+         },
+         {
+          "name": "audio_tokens",
+          "type": "uinteger",
+          "label": "Audio Tokens"
+         }
+        ],
+        "type": "collection",
+        "label": "Prompt Tokens Details"
+       },
+       {
+        "name": "completion_tokens_details",
+        "spec": [
+         {
+          "name": "reasoning_tokens",
+          "type": "uinteger",
+          "label": "Reasoning Tokens"
+         },
+         {
+          "name": "text_tokens",
+          "type": "uinteger",
+          "label": "Text Tokens"
+         },
+         {
+          "name": "audio_tokens",
+          "type": "uinteger",
+          "label": "Audio Tokens"
+         },
+         {
+          "name": "accepted_prediction_tokens",
+          "type": "uinteger",
+          "label": "Accepted Prediction Tokens"
+         },
+         {
+          "name": "rejected_prediction_tokens",
+          "type": "uinteger",
+          "label": "Rejected Prediction Tokens"
+         }
+        ],
+        "type": "collection",
+        "label": "Completion Tokens Details"
+       }
+      ],
+      "type": "collection",
+      "label": "Usage"
+     },
+     {
+      "name": "service_tier",
+      "type": "text",
+      "label": "Service Tier"
+     },
+     {
+      "name": "system_fingerprint",
+      "type": "text",
+      "label": "System Fingerprint"
+     }
+    ],
+    "parameters": [
+     {
+      "name": "__IMTCONN__",
+      "type": "account:openai-gpt-3",
+      "label": "Connection",
+      "required": true
+     }
+    ]
+   },
+   "parameters": {
+    "__IMTCONN__": 11622594
+   }
+  },
+  {
+   "id": 6,
+   "mapper": null,
+   "module": "builtin:BasicRouter",
+   "routes": [
+    {
+     "flow": [
+      {
+       "id": 7,
+       "filter": {
+        "name": "Not Interested",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Not Interested",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 3}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 0
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 11,
+       "filter": {
+        "name": "Out Of Office",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Out Of Office",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 6}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 300
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 14,
+       "filter": {
+        "name": "Wrong Person",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Wrong Person",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 7}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 600
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 17,
+       "filter": {
+        "name": "Information Request",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Information Request",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 5}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 900
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 20,
+       "filter": {
+        "name": "Meeting Request",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Meeting Request",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 2}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 1200
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 23,
+       "filter": {
+        "name": "Interested",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Interested",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 2}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 1500
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 26,
+       "filter": {
+        "name": "Call Booked",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Call Booked",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 93732}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 1800
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 30,
+       "filter": {
+        "name": "Do Not Contact",
+        "conditions": [
+         [
+          {
+           "a": "{{5.result.category}}",
+           "b": "Do Not Contact",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/category?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"category_id\": 4}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 2100
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      },
+      {
+       "id": 31,
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{1.campaign_id}}/leads/{{1.sl_email_lead_id}}/pause?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "designer": {
+         "x": 2400,
+         "y": 2100
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      },
+      {
+       "id": 32,
+       "mapper": {
+        "url": "https://server.smartlead.ai/api/v1/leads/add-domain-block-list?api_key=1417c9a6-6fff-433d-8ca4-f0913967a9c4_zto0vlj",
+        "method": "post",
+        "contentType": "json",
+        "inputMethod": "jsonString",
+        "shareCookies": false,
+        "parseResponse": true,
+        "allowRedirects": true,
+        "stopOnHttpError": false,
+        "jsonStringBodyContent": "{\"domain_block_list\": [\"{{1.sl_lead_email}}\"]}",
+        "requestCompressedContent": true
+       },
+       "module": "http:MakeRequest",
+       "version": 4,
+       "metadata": {
+        "expect": [
+         {
+          "name": "url",
+          "type": "url",
+          "label": "URL",
+          "required": true
+         },
+         {
+          "name": "method",
+          "type": "select",
+          "label": "Method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "get",
+            "head",
+            "post",
+            "put",
+            "patch",
+            "delete",
+            "options"
+           ]
+          }
+         },
+         {
+          "name": "headers",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true,
+             "validate": {
+              "pattern": "^[-!#$%&'*+.^_`|~0-9A-Za-z]+$"
+             }
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Header"
+          },
+          "type": "array",
+          "label": "Headers"
+         },
+         {
+          "name": "queryParameters",
+          "spec": {
+           "name": "value",
+           "spec": [
+            {
+             "name": "name",
+             "type": "text",
+             "label": "Name",
+             "required": true
+            },
+            {
+             "name": "value",
+             "type": "text",
+             "label": "Value"
+            }
+           ],
+           "type": "collection",
+           "label": "Parameter"
+          },
+          "type": "array",
+          "label": "Query parameters"
+         },
+         {
+          "name": "contentType",
+          "type": "select",
+          "label": "Body content type",
+          "validate": {
+           "enum": [
+            "json",
+            "multipart",
+            "urlEncoded",
+            "custom"
+           ]
+          }
+         },
+         {
+          "name": "parseResponse",
+          "type": "boolean",
+          "label": "Parse response",
+          "required": true
+         },
+         {
+          "name": "stopOnHttpError",
+          "type": "boolean",
+          "label": "Return error if HTTP request fails",
+          "required": true
+         },
+         {
+          "name": "timeout",
+          "type": "uinteger",
+          "label": "Timeout",
+          "validate": {
+           "max": 300,
+           "min": 1
+          }
+         },
+         {
+          "name": "allowRedirects",
+          "type": "boolean",
+          "label": "Allow redirects",
+          "required": true
+         },
+         {
+          "name": "shareCookies",
+          "type": "boolean",
+          "label": "Share cookies with other HTTP modules",
+          "required": true
+         },
+         {
+          "name": "requestCompressedContent",
+          "type": "boolean",
+          "label": "Request compressed content",
+          "required": true
+         },
+         {
+          "name": "inputMethod",
+          "type": "select",
+          "label": "Body input method",
+          "required": true,
+          "validate": {
+           "enum": [
+            "dataStructure",
+            "jsonString"
+           ]
+          }
+         },
+         {
+          "name": "jsonStringBodyContent",
+          "type": "text",
+          "label": "Body content",
+          "required": true
+         },
+         {
+          "name": "paginationType",
+          "type": "select",
+          "label": "Pagination type",
+          "validate": {
+           "enum": [
+            "offsetBased",
+            "pageBased",
+            "urlBased",
+            "tokenBased"
+           ]
+          }
+         }
+        ],
+        "restore": {
+         "expect": {
+          "method": {
+           "mode": "chose",
+           "label": "POST"
+          },
+          "headers": {
+           "mode": "chose"
+          },
+          "contentType": {
+           "label": "application/jsonEnter data in the JSON format, as a string or using a data structure."
+          },
+          "inputMethod": {
+           "label": "JSON stringEnter the JSON body as a raw text string. If values contain JSON reserved characters, you must escape them manually."
+          },
+          "shareCookies": {
+           "mode": "chose"
+          },
+          "parseResponse": {
+           "mode": "chose"
+          },
+          "allowRedirects": {
+           "mode": "chose"
+          },
+          "paginationType": {
+           "label": "Empty"
+          },
+          "queryParameters": {
+           "mode": "chose"
+          },
+          "stopOnHttpError": {
+           "mode": "chose"
+          },
+          "requestCompressedContent": {
+           "mode": "chose"
+          }
+         },
+         "parameters": {
+          "tlsType": {
+           "label": "Empty"
+          },
+          "proxyKeychain": {
+           "label": "Choose a key"
+          },
+          "authenticationType": {
+           "label": "No authenticationUse when no credentials are required for the request."
+          }
+         }
+        },
+        "advanced": true,
+        "designer": {
+         "x": 2700,
+         "y": 2100
+        },
+        "interface": [
+         {
+          "name": "data",
+          "type": "any",
+          "label": "Data"
+         },
+         {
+          "name": "statusCode",
+          "type": "number",
+          "label": "Status Code"
+         },
+         {
+          "name": "headers",
+          "spec": [
+           {
+            "name": "content-length",
+            "type": "text",
+            "label": "Content-Length"
+           },
+           {
+            "name": "content-encoding",
+            "type": "text",
+            "label": "Content-Encoding"
+           },
+           {
+            "name": "content-type",
+            "type": "text",
+            "label": "Content-Type"
+           },
+           {
+            "name": "server",
+            "type": "text",
+            "label": "Server"
+           },
+           {
+            "name": "cache-control",
+            "type": "text",
+            "label": "Cache-Control"
+           },
+           {
+            "name": "set-cookie",
+            "spec": {
+             "type": "text"
+            },
+            "type": "array",
+            "label": "Set-Cookie"
+           }
+          ],
+          "type": "collection",
+          "label": "Headers"
+         }
+        ],
+        "parameters": [
+         {
+          "name": "authenticationType",
+          "type": "select",
+          "label": "Authentication type",
+          "required": true,
+          "validate": {
+           "enum": [
+            "noAuth",
+            "apiKey",
+            "basicAuth",
+            "oAuth"
+           ]
+          }
+         },
+         {
+          "name": "tlsType",
+          "type": "select",
+          "label": "Transport layer security (TLS)",
+          "validate": {
+           "enum": [
+            "mTls",
+            "tls"
+           ]
+          }
+         },
+         {
+          "name": "proxyKeychain",
+          "type": "keychain:proxy",
+          "label": "Proxy"
+         }
+        ]
+       },
+       "parameters": {
+        "tlsType": "",
+        "proxyKeychain": "",
+        "authenticationType": "noAuth"
+       }
+      }
+     ]
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "designer": {
+     "x": 1800,
+     "y": 1050
+    }
+   }
+  }
+ ],
+ "name": "smartlead-reply_categoriser-Asteri",
+ "metadata": {
+  "instant": true,
+  "version": 1,
+  "designer": {
+   "orphans": [],
+   "samples": {
+    "1": {
+     "bcc": "",
+     "subject": "Re: To do",
+     "metadata": {
+      "webhook_created_at": "2026-05-10T17:17:38.967Z"
+     },
+     "cc_emails": [],
+     "event_type": "UNTRACKED_REPLIES",
+     "secret_key": "1417c9a6-6fff-433d-8ca4-f0913967a9c4",
+     "webhook_id": 586232,
+     "description": "",
+     "webhook_url": "https://hook.eu2.make.com/yxjoi7s5i82kl53oxbi2jg1pjeybebs7",
+     "visible_text": "start by putting on her harness when you hike, her harness has a handle",
+     "webhook_name": "Make - Reply Categoriser (Asteri)",
+     "reply_message": {
+      "html": "",
+      "text": "start by putting on her harness when you hike, her harness has a handle",
+      "time": "2026-05-11T00:30:37.656Z",
+      "message_id": "<41903483-7C52-4480-A872-DDEE52039DF2@asteripartners.com>"
+     },
+     "sender_detail": "Magali Mialaret <magali.mialaret@asteripartners.com>",
+     "has_attachment": false,
+     "event_timestamp": "2026-05-11T00:30:37.656Z",
+     "recipient_detail": "Nicolas Mialaret <nicolas.mialaret@asteripartners.com>"
+    },
+    "2": {
+     "data": {
+      "to": "jmscully@scullycompany.com",
+      "from": "nicolas.n@callasteri.org",
+      "history": [
+       {
+        "cc": [],
+        "to": "nicolas.n@callasteri.org",
+        "from": "jmscully@scullycompany.com",
+        "time": "2026-05-06T21:02:14.000Z",
+        "type": "REPLY",
+        "subject": "RE: Acquisition inquiry about Scully Company",
+        "stats_id": "47597820-dbdb-4de8-a9c8-a0df0055d4d1",
+        "email_body": "no\r\n\r\n\u00a0\r\n\u00a0\r\n\u00a0\r\n\u00a0\r\n\u00a0\r\n\u00a0\r\n\u00a0\r\n\u00a0\r\n \r\nJessica\r\n          Scully\r\n\r\n          President,\u00a0Scully Company\r\n ...",
+        "message_id": "<MN2PR14MB4047C12337953E0CFDEC382FD53F2@MN2PR14MB4047.namprd14.prod.outlook.com>",
+        "open_count": null,
+        "attachments": null,
+        "click_count": null,
+        "click_details": {},
+        "email_seq_number": "3"
+       }
+      ]
+     },
+     "headers": {
+      "date": "Mon, 11 May 2026 06:03:16 GMT",
+      "etag": "W/\"183b-KWLWCGlg92zxtnyOQULvt1Myy4E\"",
+      "cf-ray": "9f9efac4bd45c6a4-DUB",
+      "server": "cloudflare",
+      "connection": "keep-alive",
+      "content-type": "application/json; charset=utf-8",
+      "x-powered-by": "Express",
+      "cf-cache-status": "DYNAMIC",
+      "transfer-encoding": "chunked",
+      "x-ratelimit-limit": "200",
+      "x-ratelimit-reset": "1778479457",
+      "x-ratelimit-remaining": "199",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-allow-headers": "Content-Type, Authorization, Content-Length, X-Requested-With",
+      "access-control-allow-methods": "GET, PUT, POST, PATCH, DELETE, OPTIONS",
+      "access-control-allow-credentials": "true"
+     },
+     "statusCode": 200
+    },
+    "3": {
+     "cc": null,
+     "to": "jmscully@scullycompany.com",
+     "from": "nicolas.n@callasteri.org",
+     "time": "2026-04-24T14:37:16.340Z",
+     "type": "SENT",
+     "subject": "Acquisition inquiry about Scully Company",
+     "stats_id": "39ed110e-eaf1-4460-9e21-c9266fa24c76",
+     "email_body": "<div>Hi Jessica,</div><div><br></div><div>We work with a client who is looking to acquire property m...",
+     "message_id": "<39ed110e-eaf1-sl63-4460-9e21-c9266fa24c76@callasteri.org>",
+     "open_count": 0,
+     "attachments": null,
+     "click_count": 0,
+     "__IMTINDEX__": 1,
+     "__IMTLENGTH__": 4,
+     "click_details": {},
+     "email_seq_number": "1"
+    },
+    "4": {
+     "text": "[SENT\u20142026-04-24T14:37:16.340Z]\nFrom:nicolas.n@callasteri.org\n\nstripHTML(<div>Hi Jessica,</div><div>..."
+    },
+    "5": {
+     "id": "chatcmpl-DeE1WOkRvIUDM0C9lq8ib2ig7QPeU",
+     "model": "gpt-4o-mini-2024-07-18",
+     "usage": {
+      "total_tokens": 2042,
+      "prompt_tokens": 2006,
+      "completion_tokens": 36,
+      "prompt_tokens_details": {
+       "audio_tokens": 0,
+       "cached_tokens": 1920
+      },
+      "completion_tokens_details": {
+       "audio_tokens": 0,
+       "reasoning_tokens": 0,
+       "accepted_prediction_tokens": 0,
+       "rejected_prediction_tokens": 0
+      }
+     },
+     "object": "chat.completion",
+     "result": {
+      "category": "Do Not Contact",
+      "reasoning": "The prospect's reply is a clear 'no' to the outreach.",
+      "confidence": 0.9
+     },
+     "choices": [
+      {
+       "index": 0,
+       "message": {
+        "role": "assistant",
+        "content": "{\"category\": \"Do Not Contact\", \"confidence\": 0.9, \"reasoning\": \"The prospect's reply is a clear 'no'...",
+        "refusal": null,
+        "annotations": []
+       },
+       "logprobs": null,
+       "finish_reason": "stop"
+      }
+     ],
+     "created": "2026-05-11T06:03:18.000Z",
+     "service_tier": "default",
+     "system_fingerprint": "fp_43c6d0de9d"
+    },
+    "6": {
+     "category_id": "switch(Do Not Contact; \"Do Not Contact\"; 4; \"Out Of Office\"; 6; \"Wrong Person\"; 7; \"Information Requ..."
+    },
+    "7": {
+     "data": {
+      "ok": true
+     },
+     "headers": {
+      "date": "Mon, 11 May 2026 06:03:20 GMT",
+      "etag": "W/\"b-Ai2R8hgEarLmHKwesT1qcY913ys\"",
+      "cf-ray": "9f9efad829261b99-DUB",
+      "server": "cloudflare",
+      "connection": "keep-alive",
+      "content-type": "application/json; charset=utf-8",
+      "x-powered-by": "Express",
+      "content-length": "11",
+      "cf-cache-status": "DYNAMIC",
+      "x-ratelimit-limit": "200",
+      "x-ratelimit-reset": "1778479457",
+      "x-ratelimit-remaining": "198",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-allow-headers": "Content-Type, Authorization, Content-Length, X-Requested-With",
+      "access-control-allow-methods": "GET, PUT, POST, PATCH, DELETE, OPTIONS",
+      "access-control-allow-credentials": "true"
+     },
+     "statusCode": 200
+    },
+    "29": {
+     "data": {
+      "id": "3601954816",
+      "email": "jmscully@scullycompany.com",
+      "website": "scullycompany.com",
+      "location": "",
+      "last_name": "Scully",
+      "created_at": "2026-04-10T12:11:56.864Z",
+      "first_name": "Jessica",
+      "company_url": null,
+      "company_name": "Scully Company",
+      "phone_number": null,
+      "custom_fields": {
+       "Source": "AI Ark",
+       "Icebreaker": "Apologies if this isn't relevant, wasn't sure who at Scully Company was the best POC for this"
+      },
+      "is_unsubscribed": false,
+      "linkedin_profile": "https://www.linkedin.com/in/jessica-scully-a435685",
+      "lead_campaign_data": [
+       {
+        "client_id": null,
+        "campaign_id": 3157729,
+        "client_email": null,
+        "campaign_name": "Alpine | Property Management (Navreo)",
+        "lead_category_id": 4,
+        "campaign_lead_map_id": 2931940019
+       }
+      ],
+      "unsubscribed_client_id_map": {}
+     },
+     "headers": {
+      "date": "Wed, 13 May 2026 13:24:09 GMT",
+      "etag": "W/\"2d3-z7xGJ3L9cyI6hfZg25BvQMwjguo\"",
+      "cf-ray": "9fb1fb569906be31-DUB",
+      "server": "cloudflare",
+      "connection": "keep-alive",
+      "content-type": "application/json; charset=utf-8",
+      "x-powered-by": "Express",
+      "cf-cache-status": "DYNAMIC",
+      "transfer-encoding": "chunked",
+      "x-ratelimit-limit": "200",
+      "x-ratelimit-reset": "1778678710",
+      "x-ratelimit-remaining": "199",
+      "access-control-allow-origin": "http://localhost:3000",
+      "access-control-allow-headers": "Content-Type, Authorization, Content-Length, X-Requested-With",
+      "access-control-allow-methods": "GET, PUT, POST, PATCH, DELETE, OPTIONS",
+      "access-control-allow-credentials": "true"
+     },
+     "statusCode": 200
+    }
+   }
+  },
+  "scenario": {
+   "dlq": true,
+   "slots": null,
+   "dataloss": false,
+   "maxErrors": 3,
+   "autoCommit": true,
+   "roundtrips": 1,
+   "sequential": false,
+   "confidential": false,
+   "freshVariables": false,
+   "autoCommitTriggerLast": true
+  }
+ }
+}

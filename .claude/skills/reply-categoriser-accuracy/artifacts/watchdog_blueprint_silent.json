@@ -1,0 +1,222 @@
+{
+ "flow": [
+  {
+   "id": 8,
+   "mapper": {},
+   "module": "gateway:CustomWebHook",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "designer": {
+     "x": -300,
+     "y": 0
+    }
+   },
+   "parameters": {
+    "hook": 4251558,
+    "maxResults": 1
+   }
+  },
+  {
+   "id": 1,
+   "mapper": {
+    "qs": [],
+    "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_failsafe_queue?select=*",
+    "data": "",
+    "gzip": true,
+    "method": "get",
+    "headers": [
+     {
+      "name": "apikey",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     },
+     {
+      "name": "Authorization",
+      "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     }
+    ],
+    "useMtls": false,
+    "bodyType": "raw",
+    "contentType": "",
+    "serializeUrl": false,
+    "shareCookies": false,
+    "parseResponse": true,
+    "followRedirect": true,
+    "useQuerystring": false,
+    "followAllRedirects": false,
+    "rejectUnauthorized": true
+   },
+   "module": "http:ActionSendData",
+   "version": 3,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 0,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   },
+   "parameters": {
+    "handleErrors": false,
+    "useNewZLibDeCompress": true
+   }
+  },
+  {
+   "id": 2,
+   "mapper": {
+    "array": "{{1.data}}"
+   },
+   "module": "builtin:BasicFeeder",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "designer": {
+     "x": 300,
+     "y": 0
+    }
+   },
+   "parameters": {}
+  },
+  {
+   "id": 3,
+   "mapper": {
+    "email": "{{2.email}}",
+    "fullName": ""
+   },
+   "module": "folk:findPerson",
+   "onerror": [
+    {
+     "id": 9,
+     "mapper": {
+      "id": "NOTFOUND",
+      "fullName": ""
+     },
+     "module": "builtin:Resume",
+     "version": 1,
+     "metadata": {
+      "designer": {
+       "x": 600,
+       "y": 300
+      }
+     },
+     "parameters": {}
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 600,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   },
+   "parameters": {
+    "__IMTCONN__": 9252689
+   }
+  },
+  {
+   "id": 10,
+   "mapper": null,
+   "module": "builtin:BasicRouter",
+   "routes": [
+    {
+     "flow": [
+      {
+       "id": 11,
+       "filter": {
+        "name": "Not found in Folk",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/optimiser_notifications",
+        "data": "{\"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"finding_type\": \"folk_failsafe\", \"title\": \"Folk missing {{2.email}}\", \"detail\": \"Positive lead not found in Folk. SILENT MODE: logged only, no Slack, no re-push. Backdate batch will process these.\", \"status\": \"new\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1350,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      }
+     ]
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "designer": {
+     "x": 900,
+     "y": 0
+    }
+   }
+  }
+ ],
+ "name": "folk-failsafe-watchdog",
+ "metadata": {
+  "instant": true,
+  "version": 1,
+  "scenario": {
+   "dlq": true,
+   "dataloss": false,
+   "maxErrors": 10,
+   "autoCommit": true,
+   "roundtrips": 1,
+   "sequential": false,
+   "confidential": false,
+   "freshVariables": false,
+   "autoCommitTriggerLast": true
+  }
+ }
+}

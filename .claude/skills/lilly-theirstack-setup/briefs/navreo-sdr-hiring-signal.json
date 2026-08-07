@@ -1,0 +1,164 @@
+{
+  "brief_id": "navreo-sdr-hiring-signal",
+  "brief_name": "Navreo SDR Hiring Signal",
+  "client": "Navreo (internal)",
+  "created_at": "2026-05-14",
+
+  "ideation": {
+    "icp_description": "Small-to-mid B2B companies that are actively hiring an SDR / BDR — a strong signal they're scaling outbound and likely understaffed for sender infrastructure, sequencing, and inbox management.",
+    "offer": "Navreo runs cold email infrastructure DFY — sender setup, sequences, deliverability, and inbox management on a pay-per-lead model.",
+    "why_signal_fits_angles": [
+      "Hiring an SDR is committing to outbound, but the new SDR will need senders + sequences + warmed inboxes from day one",
+      "Heads of Sales often inherit the infrastructure problem and welcome a partner who removes the setup overhead",
+      "Pay-per-lead model means the company pays only when we generate qualified leads — lower risk than another internal hire"
+    ],
+    "angles_tested": [
+      {"id": "A", "type": "title", "patterns": ["SDR","BDR","ADR","Sales Development Representative","Business Development Representative","Senior SDR","Senior BDR","Outbound SDR","Inbound SDR","Account Development Representative"], "30d_tam": 2352, "fit_pct": 75, "kept": true},
+      {"id": "B", "type": "title", "patterns": ["Outbound Sales Representative","Lead Generation Representative","Lead Generation Specialist","Pipeline Development Representative","Outbound Specialist","Prospecting Specialist"], "30d_tam": 127, "fit_pct": 40, "kept": false, "drop_reason": "Below 60% fit threshold — contact-centre/B2C enrolment/real-estate automation noise"},
+      {"id": "C", "type": "title", "patterns": ["First SDR","Founding SDR","First BDR","Founding BDR","First Sales Hire","Founding Sales Hire"], "30d_tam": 22, "fit_pct": 100, "kept": "partial", "kept_reason": "Mostly overlaps A via substring matching — kept only 'First Sales Hire' and 'Founding Sales Hire' as unique adds"}
+    ]
+  },
+
+  "qualification": {
+    "_purpose": "Role-only judgement layer applied by lilly-theirstack-data-processing Phase 2.5. Classifies each new Jobs row as QUALIFIED or OFF_BRIEF based on whether the role is a genuine IC-level SDR/BDR hire. Companies are NEVER excluded by this gate — only specific roles. Borderlines disabled per user preference (binary qualification only).",
+    "role_signal_definition": "The new hire will be an IC-level outbound prospector building or expanding the company's SDR motion. A first-or-early SDR hire at a 10-200 emp B2B company is the canonical fit. Manager/Director-level SDR hires are a DIFFERENT signal (scaling existing team — out of scope for this brief).",
+    "qualified_role_patterns": [
+      "SDR / BDR / ADR (Account Development Rep) IC-level",
+      "Sales Development Representative, Business Development Representative, Outbound SDR, Inbound SDR, Senior SDR, Senior BDR",
+      "Outbound Sales Representative, Lead Generation Representative (at B2B SaaS / tech-services, NOT contact centre / B2C / wholesale)",
+      "First SDR / Founding SDR / First BDR / Founding BDR / First Sales Hire / Founding Sales Hire (strongest signal — greenfield outbound)"
+    ],
+    "disqualified_role_patterns": [
+      "Internal recruiter / agency-side role with 'Sales Development' in title (staffing firms hiring SDRs for clients, not internally)",
+      "Manager / Director / Head of Sales Development / SDR Manager / SDR Team Lead — different signal (scaling existing team, not first-SDR-build)",
+      "'Business Development' at law firms / accountancy practices / consultancies / brokerages — means partnership/relationship development, not outbound prospecting",
+      "'Business Development Manager' at distributors / wholesalers / dealerships — account management for existing book of business",
+      "Sales Engineer / Solutions Engineer flavoured BDR roles — technical pre-sales, not prospecting",
+      "Inside Sales Representative without 'development' or 'outbound' qualifier — often transactional closer roles",
+      "Customer Development / Customer Success Rep — retention/expansion, not new-logo outbound",
+      "Field Sales Rep / Territory Sales Rep / Route Sales Rep — field-quota IC role, not outbound",
+      "Sponsorship SDR / Delegate Acquisition (event/media sales) — different motion (not pure cold-email infra fit)"
+    ],
+    "borderline_role_patterns": []
+  },
+
+  "filter": {
+    "posted_at_max_age_days": 1,
+    "job_country_code_or": ["US","CA","GB","AU","IE","NZ","DE","NL","CH","SE","NO","DK","FI","SG"],
+    "min_employee_count": 10,
+    "max_employee_count": 200,
+    "company_type": "direct_employer",
+    "job_title_or": ["SDR","BDR","ADR","Sales Development Representative","Business Development Representative","Senior SDR","Senior BDR","Outbound SDR","Inbound SDR","Account Development Representative","First Sales Hire","Founding Sales Hire"],
+    "limit": 50,
+    "_expected_daily_volume": "~78 jobs/day pre-cap — TheirStack plan caps at 50/day"
+  },
+
+  "dm_finder": {
+    "target_titles": ["Head of Sales","VP Sales","Chief Sales Officer","CSO","Chief Revenue Officer","CRO","Head of Revenue","VP Revenue","Sales Director","Director of Sales","Founder","Co-Founder","CEO"],
+    "_founder_note": "Include Founder/Co-Founder/CEO ONLY when company_size < 30 — at smaller cos, founder still owns sales",
+    "providers_preference": ["prospeo","ai_ark"],
+    "max_dms_per_company": 3
+  },
+
+  "infrastructure": {
+    "template_sheet_id": "1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ",
+    "template_sheet_url": "https://docs.google.com/spreadsheets/d/1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ/edit",
+    "sheet_id": "1qxN9FdJ0FD1FsJqyHBWTyz1sL8KCj4vG2JufgyDefTA",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1qxN9FdJ0FD1FsJqyHBWTyz1sL8KCj4vG2JufgyDefTA/edit",
+    "jobs_scenario_id": 9233399,
+    "jobs_scenario_url": "https://eu2.make.com/536258/scenarios/9233399",
+    "jobs_webhook_url": "https://hook.eu2.make.com/agyhwxxrly7ckdw46iowdjk5y9b8yzm3",
+    "jobs_webhook_payload_shape": "TheirStack job.new event: { id, type: 'job.new', payload: {job + company_object fields} }",
+    "dms_scenario_id": 9233401,
+    "dms_scenario_url": "https://eu2.make.com/536258/scenarios/9233401",
+    "dms_scenario_activated_at": "2026-05-14T12:08:08Z",
+    "dms_scenario_polling_note": "Webhook is in polling mode (instant: false, interval 900s, maxResults: 1). Skill 2 MUST call scenarios_run after each POST to fire immediately — see lilly-theirstack-data-processing SOP Phase 4.",
+    "dms_webhook_url": "https://hook.eu2.make.com/ytvq5cmuopbd07fmrrgbbujhtqha3ptd",
+    "dms_webhook_payload_shape": "Skill 2 push: { rows: [{...17 DM fields...}] } — simple array, no wrap",
+    "smartlead_campaign_id": 3336738,
+    "smartlead_campaign_url": "https://app.smartlead.ai/app/email-campaign/3336738/analytics",
+    "smartlead_campaign_name": "Navreo - SDRs",
+    "smartlead_campaign_status": "LINKED_2026-05-14",
+    "smartlead_campaign_clone_source": 3331499,
+    "smartlead_campaign_variants": "2-variant A/B test on email 1 (variant A 'guaranteed 30 qualified leads in 90 days', variant B 'pay-per-lead basis') + single follow-up email 2",
+    "schedule_method": "mcp__scheduled-tasks",
+    "schedule_task_id": "theirstack-navreo-sdr-daily",
+    "schedule_task_path": "/Users/bjionhenry/.claude/scheduled-tasks/theirstack-navreo-sdr-daily/SKILL.md",
+    "schedule_cron": "0 9 * * 1-5",
+    "schedule_timezone": "Europe/London (local)",
+    "schedule_created_at": "2026-05-15",
+    "schedule_mcp_tool": "mcp__scheduled-tasks__create_scheduled_task",
+    "schedule_note": "Local launchd job (com.navreo.theirstack-sdr-daily.plist) was created on 2026-05-14 as a fallback when /schedule remote kept failing — torn down 2026-05-15 once the user surfaced that mcp__scheduled-tasks is the canonical local scheduler (the GTM brief's theirstack-navreo-gtm-daily task fires through this same MCP). /schedule remote was never used: cloud routines have fundamental local-skill-access limitations even when the connection works."
+  },
+
+  "theirstack_saved_search": {
+    "ui_label": "SDR hiring signals — Navreo",
+    "user_must_create_in_ui": false,
+    "created_in_ui_at": "2026-05-14",
+    "webhook_attached": true,
+    "trigger_once_per_company": true,
+    "test_fire_verified_at": "2026-05-14T11:42:52Z",
+    "negative_title_keywords": [
+      "Manager",
+      "Sponsorship",
+      "Delegate Acquisition"
+    ],
+    "negative_title_keywords_optional": [],
+    "negative_title_keywords_history": [
+      {"added_at": "2026-05-14", "keyword": "Manager", "rationale": "Catches 'SDR Manager' from Phase 2 sample — manager role is different signal (scaling existing team, not first-SDR-build), out of scope for this IC-level brief"},
+      {"added_at": "2026-05-14", "keyword": "Sponsorship", "rationale": "Catches 'Sponsorship Sales Development Representative' from Phase 2 sample — event/media sponsorship sales is a different motion (not cold-email infra fit)"},
+      {"added_at": "2026-05-14", "keyword": "Delegate Acquisition", "rationale": "Catches 'Delegate Acquisition Manager(SDR)' from Phase 2 sample — events sales motion, not outbound infra"}
+    ],
+    "geography_filter_note": "Saved search MUST filter by 'Job Location' country code, NOT 'Company HQ Location' — same gotcha as Navreo GTM brief (US-HQ companies posting overseas roles slipped through on 2026-05-14)."
+  },
+
+  "personalization": {
+    "_note": "Email copy is ground truth. Skill 2 reads the campaign email body → identifies all {{merge_variables}} → looks up generation instructions in per_lead_variables below. Cloned from GTM campaign 3331499 — same merge variable schema. Pricing language: 'pay-per-lead basis' (NOT 'pay-per-result' / 'performance basis' like GTM brief) — keep consistent across all generated copy.",
+    "per_lead_variables": {
+      "Role": {
+        "instructions": "Direct field lookup WITH email-readability normalisation. Copy the Jobs row's 'Job Title' value, then normalise so it reads naturally after the hardcoded 'Saw you were hiring a ___' hook. Same rules as GTM brief: replace ', ' separating level word from function area with ' of ', drop bracketed/parenthetical text, preserve seniority words ('Senior', 'Director', 'Manager', 'Head', 'VP', 'Lead'). No LLM call needed for rule-based cases.",
+        "validation": "Non-empty. Must read naturally after 'Saw you were hiring a ___'. Must NOT contain commas in the level-word/function-area position. Must NOT contain parens."
+      },
+      "Icebreaker": {
+        "instructions": "Delegate to lilly-icebreaker. CRITICAL: SKIP both the Hiring angle AND the 'You joined' (change-of-roles) angle. The email's hook already explicitly references the hiring signal via {{Role}}; referencing the DM's own recent role change compounds the personal-detective signal in a way that reads stalkerish (rule set 2026-05-17 — applies to ALL hiring-signal briefs). Allowed angle waterfall: Colleague → Funding → Tech → Fallback. Pass DM's company + title + LinkedIn URL plus 'skip_angles: [Hiring, You joined]'.",
+        "validation": "Non-empty. Must NOT reference 'hiring', 'open role', 'looking for', or any active-hiring language. Must NOT reference the DM's recent role change ('stepped into', 'took over', 'new in your seat', 'X years in role')."
+      },
+      "HowWeCanHelp": {
+        "generation_strategy": "angle_waterfall",
+        "_note": "Three angles in priority order. First matching trigger fires. Fallback (priority 99) always fires last. All three fit the email's 'wanted to reach out because ___' mid-sentence stem. Pricing language is 'pay-per-lead basis' throughout — NOT 'performance basis' / 'pay-per-result' (those belong to the GTM brief).",
+        "angles": [
+          {
+            "id": "founding_or_first_sdr",
+            "priority": 1,
+            "trigger": "hiring_for matches /(Founding|First)/i",
+            "instructions": "When the company is making a founding or first-of-its-kind SDR hire, the new person walks into a build-from-scratch problem. Position Navreo as the outbound system layer so the SDR's first 90 days aren't burned on prospecting infrastructure. Anchor to: build the outbound system, free the SDR for conversations.",
+            "example": "we'd build the outbound system so the new SDR doesn't waste time on prospecting and can focus on conversations"
+          },
+          {
+            "id": "scaling_existing_sdr_team",
+            "priority": 2,
+            "trigger": "open_roles > 1 OR tech_stack contains 2+ of (Outreach|SalesLoft|Apollo|Clay|Smartlead|Lemlist|Instantly|HubSpot|Salesforce)",
+            "instructions": "When the company already runs an SDR motion (multiple hires open OR mature outbound tech stack), position Navreo as a side-by-side capacity-add — not replacement. Anchor to: working alongside in-house SDRs on pay-per-lead.",
+            "example": "we work alongside in-house SDRs on a pay-per-lead basis to drive even more pipeline"
+          },
+          {
+            "id": "fallback_outside_team",
+            "priority": 99,
+            "trigger": "always — fires when no priority 1-2 angle matches",
+            "instructions": "Default fallback. Soft positioning: 'I thought you may be open to an outside team driving additional opportunities alongside the new hire on a pay-per-lead basis.' This must always fire so {{HowWeCanHelp}} is never empty. Pricing anchor 'pay-per-lead basis' is non-negotiable.",
+            "example": "I thought you may be open to an outside team driving additional opportunities alongside the new hire on a pay-per-lead basis"
+          }
+        ],
+        "validation": "10-25 words. Starts mid-sentence (lowercase, since 'because' precedes it — EXCEPT fallback which starts with capitalised 'I' as it's the first-person pronoun). Pricing anchor 'pay-per-lead' present in priorities 2 and 99. Must NOT duplicate {{Cold Email Video Angle}}'s content."
+      },
+      "Cold Email Video Angle": {
+        "instructions": "Generate a one-line sentence-completion for the email stem 'I recorded a short-video for {{company_name}} showing a teaser of what we'd do to ___'. Pure ICP-connection angle: how we'd help the company reach their target buyers. Form: starts with an infinitive verb (drive / fill / open / build), references a sales outcome anchored to the company's specific ICP segment.\n\nEXPLICITLY DO NOT INCLUDE: pricing model language (covered in {{HowWeCanHelp}}); channel/method ('through outbound'); the prospect's title; the company name (already in template adjacent to slot).\n\nOVERRIDE NOTE: This instruction OVERRIDES Navreo's global memory rule 'feedback_cold_email_angle_title_relevance' (which says angle must reference title) FOR THIS BRIEF ONLY — the hook already references the role via {{Role}}.",
+        "validation": "5-12 words, sentence-completion form (starts with infinitive, NOT a full sentence). References company's specific ICP segment. Must NOT repeat company name, prospect's title, pricing language, or channel/method."
+      },
+      "CaseStudy": {
+        "instructions": "Delegate to lilly-personalisation's bucketed CaseStudy generation. Match a case study to the DM's role/vertical/company-size bucket (Navreo's standard bucket scheme). Inherits Navreo's default mapping.",
+        "validation": "Per lilly-personalisation's CaseStudy validation. Must include hard numbers."
+      }
+    }
+  }
+}

@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- @dsCard group="Colors" name="Brand colors" subtitle="Cream · light brown · dark brown · orange · ink" viewport="1100x320" -->
+<html><head><meta charset="utf-8"><title>Brand colors</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  .swatch {
+    flex: 1;
+    aspect-ratio: 1.2 / 1;
+    border-radius: 14px;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    border: 1px solid var(--border);
+    min-width: 0;
+  }
+  .swatch .name { font-weight: 500; font-size: 14px; letter-spacing: -0.01em; }
+  .swatch .hex { font-family: var(--font-mono); font-size: 11px; opacity: 0.7; }
+  .ink { color: var(--nav-ink); }
+  .light { color: var(--nav-cream); }
+</style></head>
+<body>
+  <div class="row">
+    <div class="swatch" style="background:#F9F0E7">
+      <span class="ink name">Cream</span>
+      <span class="ink hex">#F9F0E7 · --nav-cream</span>
+    </div>
+    <div class="swatch" style="background:#F2E5D9">
+      <span class="ink name">Light brown</span>
+      <span class="ink hex">#F2E5D9 · --nav-light-brown</span>
+    </div>
+    <div class="swatch" style="background:#C0B0A0">
+      <span class="ink name">Dark brown</span>
+      <span class="ink hex">#C0B0A0 · --nav-dark-brown</span>
+    </div>
+    <div class="swatch" style="background:#FF4D00">
+      <span class="light name">Orange</span>
+      <span class="light hex">#FF4D00 · --nav-orange</span>
+    </div>
+    <div class="swatch" style="background:#14110E">
+      <span class="light name">Ink</span>
+      <span class="light hex">#14110E · --nav-ink</span>
+    </div>
+  </div>
+</body></html>

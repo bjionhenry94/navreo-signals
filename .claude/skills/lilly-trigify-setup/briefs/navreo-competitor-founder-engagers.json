@@ -1,0 +1,741 @@
+{
+  "brief_id": "navreo-competitor-founder-engagers",
+  "brief_name": "Navreo \u2014 Competitor Founder Engagers",
+  "client": "Navreo (internal)",
+  "created_at": "2026-05-15",
+  "ideation": {
+    "icp_description": "B2B sales-related Director+ roles (CRO/CSO, VP/Head Sales, BD, Partnerships, RevOps, AE) at 11-200 emp services companies \u2014 software dev agencies, AI transformation firms, digital transformation firms.",
+    "offer": "Navreo DFY cold-email infrastructure ($2.5k/mo + pay-per-result). Sender pools, sequences, inbox management.",
+    "why_signal_fits": "When a sales leader at a services company engages with another agency's GTM thought-leader, they're shopping the category \u2014 they don't need education, just a better option.",
+    "outreach_voice": "Bjion Henry (Navreo founder). First-person voice for all emails."
+  },
+  "trigify": {
+    "tracked_profiles": [
+      {
+        "name": "Bjion Henry",
+        "linkedin_url": "https://www.linkedin.com/in/bjionhenry",
+        "search_id": "c22b9ed9-2fb5-44c7-9854-ff4659b4a339",
+        "workflow_id": "cab0bc16-da3e-4942-8f79-ed5fbd90222f",
+        "role": "self",
+        "icebreaker_perspective": "first_person"
+      },
+      {
+        "name": "Kenny Damian",
+        "linkedin_url": "https://www.linkedin.com/in/kenny-damian-90aba221a/",
+        "search_id": "77691491-2779-44b8-a1b6-8135e472e75f",
+        "workflow_id": "W-erA-vbvzyW-TuH-nQkd",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Sacha Martinot",
+        "linkedin_url": "https://www.linkedin.com/in/sacha-martinot-392005235/",
+        "search_id": "b8956683-b659-42e5-82d9-5dd19599ea1b",
+        "workflow_id": "86f46IE65DWuXGSdnvoPn",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Manthan (Leadgen)",
+        "linkedin_url": "https://www.linkedin.com/in/leadgenmanthan/",
+        "search_id": "3f4d6f6c-7316-4902-bd9c-3c9f544879ae",
+        "workflow_id": "ARhYi0z8ru_yJyvcxCZZt",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Fivos Aresti",
+        "linkedin_url": "https://www.linkedin.com/in/fivosaresti/",
+        "search_id": "1c3598ad-ec3f-4ebb-b73d-ee9ca5e1d869",
+        "workflow_id": "sdbibrB4cWx2hZkPrJ8XH",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Abbas Somji",
+        "linkedin_url": "https://www.linkedin.com/in/abbas-somji/",
+        "search_id": "bff38d27-ba44-4e93-a5ca-6be6141960ff",
+        "workflow_id": "8m9IMswj7lO-FaUgBUSIU",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Michel Lieben",
+        "linkedin_url": "https://www.linkedin.com/in/michel-lieben/",
+        "search_id": "e8b2e98b-9381-4fc2-b4af-91e4dd11ab98",
+        "workflow_id": "YEJMz5AKJbFz7Q4OKueir",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Retention Adam",
+        "linkedin_url": "https://www.linkedin.com/in/retentionadam/",
+        "search_id": "5a769ad6-0582-46ac-aa77-63d7a34db655",
+        "workflow_id": "AwCeQIGSRElc_wf0r_iIq",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Louis van Wyk",
+        "linkedin_url": "https://www.linkedin.com/in/louis-van-wyk-/",
+        "search_id": "7f6bd1aa-0673-4567-b391-9ab1aa1655e4",
+        "workflow_id": "lOp520Za5lOoyjmOrk851",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Joe Wilde",
+        "linkedin_url": "https://www.linkedin.com/in/joe-wilde-b69786195/",
+        "search_id": "8b95329f-6cca-4d61-96de-3bc80b9fbe9d",
+        "workflow_id": "Gk75NyRteTRsmEd1hq-ky",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Benjamin Aaron Reed",
+        "linkedin_url": "https://www.linkedin.com/in/benjamin-aaron-reed/",
+        "search_id": "917a5295-aa2b-49fe-ae8f-9dd16ea906cd",
+        "workflow_id": "n8G9QVaAaQngwFCcBLyQk",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Vaibhav Namburi",
+        "linkedin_url": "https://www.linkedin.com/in/vaibhavnamburi/",
+        "search_id": "af182d30-2a5e-43cb-9453-5a41bf2fa62e",
+        "workflow_id": "t2_qsBHRAKADN27tK4oRx",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Tim Carden",
+        "linkedin_url": "https://www.linkedin.com/in/timjcarden/",
+        "search_id": "92eeb6f2-3f89-426a-9e5e-bf6411d3f443",
+        "workflow_id": "_eia8z1R0lmZ6z0gD_g11",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Michael Saruggia",
+        "linkedin_url": "https://www.linkedin.com/in/michaelsaruggia/",
+        "search_id": "ecfbd9e0-4f9a-467c-baa8-5c3c5703d3da",
+        "workflow_id": "mwh5fyxq-ARUbQAHFxUCC",
+        "role": "competitor_founder",
+        "icebreaker_perspective": "third_person"
+      },
+      {
+        "name": "Hugues Selderslagh",
+        "linkedin_url": "https://www.linkedin.com/in/hugues-selderslagh-72ab7b193",
+        "search_id": "911dbc9d-e029-44bc-8a9a-b6bc922018f8",
+        "workflow_id": "52kOoXo4EN5t6gdGjHsjt",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Monika Grycz",
+        "linkedin_url": "https://www.linkedin.com/in/grycz-monika",
+        "search_id": "7dd9cb19-a3ab-490c-a00c-15c23fba0a7b",
+        "workflow_id": "JGikKXMADRIL7yMXyj836",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Jan Rasmussen Mitjana",
+        "linkedin_url": "https://www.linkedin.com/in/jan-rasmussen-mitjana-b041a6188",
+        "search_id": "9a58670d-58cd-4556-bb49-098680cca185",
+        "workflow_id": "zTiqZOh2HbS2KlD5FwvdX",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Melissa Gaglione",
+        "linkedin_url": "https://www.linkedin.com/in/melissagaglione",
+        "search_id": "da71b3a4-1e53-4817-995d-34f86ef1bc15",
+        "workflow_id": "0zh9AIqffSzSM_1zb5ExG",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Penn Frank",
+        "linkedin_url": "https://www.linkedin.com/in/penn-frank",
+        "search_id": "7b21991a-2152-48b9-9d02-264e4588ea8a",
+        "workflow_id": "6_8u0FSxQUGyi-UeMXKAr",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Ivan Falco",
+        "linkedin_url": "https://www.linkedin.com/in/ivanfalco",
+        "search_id": "164250ee-e1ca-4848-ad63-91137f18dfef",
+        "workflow_id": "qY1gn3D7lu6zYOyM1bOx5",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Luca Carrese",
+        "linkedin_url": "https://www.linkedin.com/in/lucacarrese",
+        "search_id": "24ad9e5b-ad5c-4fc8-b2b7-4e460953720b",
+        "workflow_id": "JOplgFcNt4C7DBwHpQhnd",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Zahra Batool Butt",
+        "linkedin_url": "https://www.linkedin.com/in/zahra-batool-butt",
+        "search_id": "a35a2b42-b9cf-4a47-9ac0-35d39f27fae7",
+        "workflow_id": "vUSVsoQzDisfL6wkxxaDr",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Shubham Sandilya",
+        "linkedin_url": "https://www.linkedin.com/in/shubhamsandilya",
+        "search_id": "17ed86cc-caf9-4e23-b0e2-7e28b9984f88",
+        "workflow_id": "iIVH2c_S4HJAMGBgMAchN",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Joaquin Garasino",
+        "linkedin_url": "https://www.linkedin.com/in/joaquin-garasino",
+        "search_id": "bd9e5127-e21a-4f17-b1d3-117cfc0f6ecb",
+        "workflow_id": "6fNbUsJ1jHRYxcQb7JKWx",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Nil Rasmussen",
+        "linkedin_url": "https://www.linkedin.com/in/nil-rasmussen-2ba29612a",
+        "search_id": "0e9f7b0c-6cb7-473f-90fa-8edc36a02305",
+        "workflow_id": "jWB4Mbxy6w-nYpRtHEabz",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Nicholas De La Guardia",
+        "linkedin_url": "https://www.linkedin.com/in/delaguardianick",
+        "search_id": "89b06b6d-6dc5-4e36-98f9-41ab3f1f21a2",
+        "workflow_id": "v7Ewg8bm6y4swUhxIHZtd",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Soheil Saeidmehr",
+        "linkedin_url": "https://www.linkedin.com/in/soheil-saeidmehr-1b932268",
+        "search_id": "cc478828-61e6-47a2-9e58-3245d1ff5a54",
+        "workflow_id": "2hSfP6i0BSHhi2nflF1Ou",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Ansh Bindal",
+        "linkedin_url": "https://www.linkedin.com/in/ansh-bindal",
+        "search_id": "86d2e2e5-c8fe-41d7-9864-c41d4a36d2e6",
+        "workflow_id": "29JjAboxJ1O5vRjb3ZLtL",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Giovanni Patterson",
+        "linkedin_url": "https://www.linkedin.com/in/giovanni-97-00",
+        "search_id": "50bed62e-edf4-4e6e-8e91-2f5615f38b9b",
+        "workflow_id": "klEmfA0Jkz5oDO3xD9vjz",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Georgi Bardarov",
+        "linkedin_url": "https://www.linkedin.com/in/georgibardarov",
+        "search_id": "93cbf0e2-6b33-4b4d-8302-389d8cdc69c9",
+        "workflow_id": "SA9Qo1q2fqG6FH2dcApNt",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Roberto Alonso Lugo",
+        "linkedin_url": "https://www.linkedin.com/in/robertoalonsol",
+        "search_id": "f3aa2fac-dd4b-447c-81f6-cb2a61ce5ae6",
+        "workflow_id": "X_AhF3roTmPeETv-mQ6LP",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Juan Araujo",
+        "linkedin_url": "https://www.linkedin.com/in/araujojuan",
+        "search_id": "75b36ad9-8c4e-4b4e-b991-624c0cfd80b5",
+        "workflow_id": "yLyaVUwhoU2kB4XUf6uLT",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Aicel Rocafort",
+        "linkedin_url": "https://www.linkedin.com/in/aicel-rocafort-139493246",
+        "search_id": "fd415540-1e5f-4e55-92a5-c67b0253dfe7",
+        "workflow_id": "pUwYIk7yoCHkAUZ_l8XdI",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Edward Harries-Jones",
+        "linkedin_url": "https://www.linkedin.com/in/edward-harries-jones-77775110a",
+        "search_id": "bea57808-0293-4328-a839-53b604e57e8e",
+        "workflow_id": "GKBaNba53vrKJIakQtoUG",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Bruno Morris",
+        "linkedin_url": "https://www.linkedin.com/in/brunomorris",
+        "search_id": "833aca54-7197-4cca-ae41-b2783eebb7ac",
+        "workflow_id": "14K7O-TcbnIlGGuGDHdC3",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Funmito Obafemi",
+        "linkedin_url": "https://www.linkedin.com/in/funmito-obafemi",
+        "search_id": "414ac04f-fb36-4966-a27d-178af83841dd",
+        "workflow_id": "1gpFKXqVS0tvir3vYAq9e",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Yevhen Suslov",
+        "linkedin_url": "https://www.linkedin.com/in/eysuslov",
+        "search_id": "d2f146bb-0a51-480e-9ba3-0ec133f64519",
+        "workflow_id": "_RcNPifdKXk2ghyYUlx7g",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Parikshyan Khanal",
+        "linkedin_url": "https://www.linkedin.com/in/parikshyan-khanal-b27438228",
+        "search_id": "eae607bc-97e2-4996-9844-202d1b7222a1",
+        "workflow_id": "HecC3FsUg9ltKTJLDEjF8",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Ak Pastrano",
+        "linkedin_url": "https://www.linkedin.com/in/ak-pastrano-65a373255",
+        "search_id": "d258d630-f77d-475e-aa41-b1aac527a631",
+        "workflow_id": "g66clYqjSJlc69dAwHFud",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Ira Danelle",
+        "linkedin_url": "https://www.linkedin.com/in/iradanepro",
+        "search_id": "9c582af5-1e52-498c-b656-ccb2267159db",
+        "workflow_id": "kL7Rb3Aa0XfZwwcVkbPLH",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Gerardo Teijeira",
+        "linkedin_url": "https://www.linkedin.com/in/gteijeira",
+        "search_id": "95a1dacb-aa18-4fc8-8c2c-196f579eba16",
+        "workflow_id": "OCRLjRc_3Qp0xmCsz86jt",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Tom Torres",
+        "linkedin_url": "https://www.linkedin.com/in/tom-torress",
+        "search_id": "85fe366a-0fcb-40bd-b463-51ce41dfb71a",
+        "workflow_id": "FOflZQxaUDPHDW7neZDy0",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Emmaculate Adhiambo",
+        "linkedin_url": "https://www.linkedin.com/in/emmaculate-a-4a847120b",
+        "search_id": "4a5621b6-f25d-43bd-b439-2dfec24f2a90",
+        "workflow_id": "JCouFB_ADTG5nuOxffNAt",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Susan Gathogo",
+        "linkedin_url": "https://www.linkedin.com/in/susan-gathogo-470384119",
+        "search_id": "643a998e-f064-40ca-82c5-e21590ab1f3f",
+        "workflow_id": "CQJOU8zewN_kKSMUPRpJz",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Yasin Mwai",
+        "linkedin_url": "https://www.linkedin.com/in/yasinaudio",
+        "search_id": "f6a61b27-2953-4221-be77-1e04518fb6d9",
+        "workflow_id": "AtwGzaegWorTa95jrhXPQ",
+        "role": "competitor_employee",
+        "company": "StackOptimise \u2699\ufe0f",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      },
+      {
+        "name": "Momin Zeeshan",
+        "linkedin_url": "https://www.linkedin.com/in/momin-zeeshan-b42324311",
+        "search_id": "58bf1b48-990f-4401-bac2-feb8a162f9a4",
+        "workflow_id": "9ABpmwzpcBY7fw01tpxIY",
+        "role": "competitor_employee",
+        "company": "ColdIQ",
+        "icebreaker_perspective": "third_person",
+        "_added_at": "2026-05-17",
+        "_source": "lilly-decision-maker-finder pull of ColdIQ + StackOptimise employees"
+      }
+    ],
+    "engagement_types": [
+      "comment"
+    ],
+    "_engagement_types_note": "Comments-only by deliberate design. Decided 2026-05-15 after the likes+comments combo at maxLikes=100 caused a Make.com credit blast (~10K ops in hours) and Google Sheets 429 rate-limit errors. Comments give higher signal (literal words, not a click), better icebreaker data, and ~50% volume reduction vs combined.",
+    "workflow_per_post_max_engagers": 25,
+    "_throttle_note": "maxComments=25 per workflow. With 12 active profiles posting ~3/week each, total volume \u2248 900 engagers/week \u2248 130/day. Well within Google Sheets API rate limits.",
+    "daily_volume_cap": null,
+    "saved_search_frequency": "DAILY",
+    "saved_search_max_results": 50,
+    "_expansion_note": "2026-05-17: Expanded from 14 \u2192 46 tracked profiles (14 original founders/self + 32 ColdIQ/StackOptimise employees). Goal: monitor full competitor-agency content surface for category-buyer signals. Note: 6 of 38 attempted adds failed with NOT_FOUND/INVALID_URL \u2014 Trigify REST API rejects URN-format LinkedIn URLs (ACoAxxx). Failed: Ayush Dungriyal, Ada Beltr\u00e1n Gonz\u00e1lez, Tj Comley, Gladys Wanyeki, Marco Francis Navarro, Abdul Rehman. Mostly junior staff at StackOptimise \u2014 low signal-value, not worth retrying with public-slug lookups."
+  },
+  "filter": {
+    "country_code_or": [
+      "US",
+      "CA",
+      "GB",
+      "AU",
+      "IE",
+      "NZ",
+      "DE",
+      "NL",
+      "CH",
+      "SE",
+      "NO",
+      "DK",
+      "FI",
+      "SG"
+    ],
+    "min_employee_count": 11,
+    "max_employee_count": 200
+  },
+  "qualification": {
+    "_purpose": "Four-gate qualification applied by lilly-trigify-data-processing daily routine, in order. ALL FOUR GATES MUST PASS for QUALIFIED. Any single fail = OFF_BRIEF. Ambiguity in any gate = BORDERLINE (user reviews daily). Gates run in order of cheapness \u2014 fail fast on country before evaluating the slower LLM gates.",
+    "_trigify_fields_supply_everything": "Verified 2026-05-17 against a real Trigify Workflow execution payload (workflow cab0bc16, run 01KRNK054FNGR6PB22EE3B87WS). Trigify's person_enrichment step pre-fills firstName, lastName, fullName, jobTitle, companyName, companyDomain, companyIndustry, companyHeadCount, companyDescription, country, location, openToWork BEFORE the row reaches the Sheet. Author block adds LinkedIn headline (the full title field, separate from clean jobTitle), username slug, URN, and profilePicture sizes. Engagement block adds comment text + permalink + comment-level likeCount. Post block adds full post text (not just 200-char snippet) + total post likes + total post comments. The Sheet captures all of this PLUS a Raw Payload catchall column at the end. Downstream qualification consumes these fields directly \u2014 NO Prospeo round-trip for headcount, NO country guessing, and NO WebFetch for company classification unless companyIndustry + companyDescription are both genuinely thin (rare).",
+    "location_gate": {
+      "_purpose": "Drop engagers outside Navreo's 14-country high-GDP target set. Cheapest filter \u2014 pure string check on the Country column. Runs first.",
+      "source_field": "engagers_sheet_schema column AC (Country) \u2014 Trigify enrich.country, e.g. 'United States'. Map UI labels to ISO-2 via the country code table in lilly-trigify-setup Phase 5.",
+      "qualified_country_codes": [
+        "US",
+        "CA",
+        "GB",
+        "AU",
+        "IE",
+        "NZ",
+        "DE",
+        "NL",
+        "CH",
+        "SE",
+        "NO",
+        "DK",
+        "FI",
+        "SG"
+      ],
+      "_note": "Country is populated by Trigify workflow's person_enrichment step. If missing/null, mark as BORDERLINE (user reviews \u2014 could be a privacy-strict LinkedIn profile in a qualified country)."
+    },
+    "post_topic_gate": {
+      "_purpose": "Reject engagers whose originating post is NOT a sales-signal. Personal stories, lifestyle posts, motivational quotes, and holiday greetings are NOT sales signals even if the engager is a perfect-fit ICP \u2014 engaging on a personal post doesn't indicate buying intent.",
+      "source_field": "engagers_sheet_schema column F (Post Text) \u2014 the FULL post body (was previously truncated to 200-char Post Snippet; the new schema captures the full text).",
+      "qualified_topics": [
+        "Sales / GTM / outbound / cold email / lead generation",
+        "Demand generation / marketing operations / RevOps",
+        "Agency growth / services-business operations",
+        "Founder lessons (only if business-focused, e.g. hiring/firing decisions, pricing strategy, scaling ops)",
+        "Sales tooling, AI-for-sales, automation",
+        "Hiring sales / GTM teams",
+        "Closing / deal-flow / pipeline mechanics"
+      ],
+      "disqualified_topics": [
+        "Personal stories (health, family, relationships, struggles)",
+        "Politics / current events / commentary",
+        "Lifestyle / fitness / travel / food",
+        "Inspirational / motivational (not tied to business action)",
+        "Holiday greetings / personal milestones / birthdays",
+        "Pure entertainment / memes / humor without business angle",
+        "Sports / hobbies"
+      ],
+      "judge_using": "Post Text (full body) \u2014 LLM reads and verdicts qualified/disqualified/borderline. Borderline if mixed business+personal."
+    },
+    "engager_title_gate": {
+      "_purpose": "Pattern-match the engager's actual role against qualified / disqualified / borderline patterns.",
+      "source_fields": [
+        "engagers_sheet_schema column W (Job Title) \u2014 Trigify enrich.jobTitle, the clean canonical role",
+        "engagers_sheet_schema column T (LinkedIn Headline) \u2014 Trigify author.title, the full LinkedIn headline (often more telling than Job Title alone)"
+      ],
+      "_note": "Read BOTH fields. The headline frequently contains pitch-language like '...| Host of Service Business Mastery | CEO of...' that the clean Job Title hides. LLM-first classification using both."
+    },
+    "engager_company_gate": {
+      "_purpose": "Verdict whether the engager's employer is on-brief (services agency / consultancy 11-200 emp, NOT a SaaS / tool / direct competitor / Fortune 500). LLM-first using Trigify-supplied fields; WebFetch is FALLBACK ONLY when both industry and description are too thin to verdict.",
+      "source_fields": [
+        "engagers_sheet_schema column X (Company Name) \u2014 enrich.companyName",
+        "engagers_sheet_schema column Z (Company Industry) \u2014 enrich.companyIndustry, e.g. 'Business Consulting and Services'",
+        "engagers_sheet_schema column AB (Company Description) \u2014 enrich.companyDescription, often a 1-3 sentence company tagline",
+        "engagers_sheet_schema column AA (Company HeadCount) \u2014 enrich.companyHeadCount, numeric or range string",
+        "engagers_sheet_schema column V (Open To Work) \u2014 enrich.openToWork, drop if true (open-to-work = not a buyer)"
+      ],
+      "decision_ladder": [
+        "1. If Open To Work == true \u2192 OFF_BRIEF (not a buyer)",
+        "2. If Company HeadCount > brief.filter.max_employee_count or < brief.filter.min_employee_count \u2192 OFF_BRIEF (size mismatch). US-1-10 allowance applies per the 2026-05-17 rule when Country == US.",
+        "3. Read Company Industry + Company Description together. If the pair clearly resolves company-type from LLM training knowledge (SaaS vs services vs e-commerce vs agency, etc.) \u2192 verdict QUALIFIED / BORDERLINE / OFF_BRIEF on the spot. NO WebFetch.",
+        "4. Only if BOTH industry AND description are thin (industry is a generic umbrella like 'Marketing & Advertising' AND description is one vague sentence AND the company name doesn't ring a bell) \u2192 WebFetch the company website for 1 sentence of clarification.",
+        "5. DIRECT/NEAR-COMPETITOR EXCLUSION (category rule, HARD drop even when a perfect ICP on size+geo): drop any engager whose company sells what Navreo sells or the tooling that replaces it. Three buckets: (a) DFY lead-gen / appointment-setting / cold-outbound agencies (book calls / generate pipeline as a service); (b) GTM / RevOps-as-a-service agencies (build or run your outbound + revenue engine, 'fractional GTM/RevOps', 'revenue-engine partner'); (c) cold-outbound execution tools (AI SDRs, LinkedIn / email outreach automation, sales-engagement / cold-email platforms, AI cold-calling / voice dialers for outbound). KEEP adjacent companies that merely SELL TO sales teams (intent/signal data, ICP intelligence, CRM tooling, ABM analytics, content/personal-branding, recruiting, training, vertical SaaS) \u2014 they need pipeline and are NOT competitors. This bucket is dense on engagement-signal briefs because the tracked posts are about outbound/GTM. Calibration 2026-05-24: 28 of 128 A-tier competitor-founder engagers were such competitors and had to be pulled post-hoc. Reason string co=competitor:<bucket>.",
+        "6. Apply company_avoid_list patterns AFTER 1-5 \u2014 the avoid list catches known-bad NAMED companies that pass the size + industry checks (e.g. a 50-emp direct rival agency)."
+      ],
+      "_note": "This replaces the previous 'WebFetch every company to classify' pattern. Saves ~1 WebFetch per engager, eliminates the flakiness of external HTTP, and aligns with feedback_company_classification_llm_first."
+    },
+    "qualified_engager_title_patterns": [
+      "C-suite at <200 emp: CRO, CSO, CEO, Founder, Co-Founder",
+      "VP-level: VP Sales, VP Revenue, VP GTM, VP Growth, VP Marketing",
+      "Head/Director: Head of (Sales | GTM | Growth | Marketing | Revenue | RevOps), Director of (Sales | BD | Partnerships)",
+      "BD & Partnerships: BD Director, Director of Partnerships, Head of Partnerships",
+      "RevOps senior: Head of RevOps, Director of Revenue Operations"
+    ],
+    "disqualified_engager_title_patterns": [
+      "Technical ICs: Software Engineer, Backend / Frontend Engineer, DevOps, Data Engineer, ML Engineer",
+      "Junior tier: Intern, Junior, Associate, Assistant, Coordinator",
+      "Wrong function: Recruiter, Talent Acquisition, Sourcer, HR Manager, People Ops",
+      "Not B2B prospects: Student, Independent Consultant, Freelancer, Career Coach, Resume Writer",
+      "Customer-facing IC: Customer Success Manager (non-Head), Support, Account Manager (non-Director)"
+    ],
+    "borderline_engager_title_patterns": [
+      "Sales Manager (no Director title) at <50 emp \u2014 could be first dedicated hire OR admin layer",
+      "Account Executive at <30 emp B2B \u2014 sometimes the founder-AE; verify by company size",
+      "Head of X at >500 emp \u2014 engagement real, company too big for Navreo pricing",
+      "Growth / Demand Gen / Marketing Ops Manager \u2014 tooling-buying influence but not always primary buyer"
+    ],
+    "company_avoid_list": [
+      "Direct cold-email tool competitors: Smartlead, Instantly, Lemlist, Apollo, Mailshake, Reply.io, Outreach, Salesloft, Lavender, Clay",
+      "Trigify itself",
+      "Recruiting / staffing agencies (recruiting-shape engagement, not buying)",
+      "Fortune 500 / enterprise (>1000 emp \u2014 pricing/sales-cycle mismatch with Navreo's DFY package)",
+      "Direct/near competitors (CATEGORY drop \u2014 see engager_company_gate decision_ladder step 5): (a) DFY lead-gen / appointment-setting / cold-outbound agencies; (b) GTM / RevOps-as-a-service agencies (revenue-engine builders, fractional GTM/RevOps); (c) cold-outbound execution tools (AI SDRs, LinkedIn/email outreach automation, sales-engagement / cold-email platforms, AI voice dialers). KEEP companies that merely sell TO sales teams (data/intent, ICP intelligence, CRM, ABM analytics, content, recruiting, training, vertical SaaS).",
+      "Specific named direct rivals \u2014 TO BE PASTE-LISTED BY USER"
+    ]
+  },
+  "enrichment": {
+    "provider": "trigify_workflow_inline",
+    "_note": "Engagers are pre-enriched by Trigify's person_enrichment step BEFORE the row reaches the Sheet. Captured fields: firstName, lastName, fullName, jobTitle, linkedinUrl, location, country, openToWork, companyName, companyDomain, companyIndustry, companyHeadCount, companyDescription, currentCompanyName. Plus from author block: LinkedIn headline (raw title field), username, urn, profilePicture (4 sizes). Plus from post block: full post text, total post likes, total post comments, datePosted. Plus from comment block (for engagement_type=comment): comment text, permalink, comment-level likeCount, createdAt. Daily Claude routine does NOT re-enrich any of these. ONLY runs Prospeo enrich-person to find a verified email (the one field Trigify doesn't supply).",
+    "email_provider_primary": "prospeo",
+    "email_provider_fallback": "ai_ark",
+    "skip_unverified_emails": true,
+    "run_millionverifier_post_prospeo": true,
+    "_mv_note": "When true, lilly-trigify-data-processing Phase 3.5 pipes Prospeo-source emails through lilly-email-verification (MillionVerifier Stage 1) for a second-layer deliverability check. AI-Ark-source emails (bidirectional fallback) are exempt. Set false to skip — saves ~1 MV credit per Prospeo-verified row per run."
+  },
+  "engagers_sheet_schema": {
+    "_purpose": "Canonical 32-column schema for the Engagers tab. Captures EVERY field Trigify supplies plus a Raw Payload catchall. Verified against a real workflow execution 2026-05-17. Consumed by lilly-trigify-data-processing for qualification + personalisation, by Make scenario 9239245 for addRow mapping, and by Apps Script HEADERS array for read endpoints.",
+    "_version": "v2_full_schema",
+    "_introduced_at": "2026-05-17",
+    "_replaces": "v1 17-column schema (Date Pulled / Engaged At / First Name / Last Name / Full Name / LinkedIn URL / Title / Company / Company Website / Country / Engagement Type / Comment Text / Post URL / Post Author / Post Author LinkedIn / Post Snippet / Status) plus Company HeadCount which was hot-added as col R on 2026-05-17 before the full schema landed.",
+    "_migration_note": "Going-forward only. The 5,589 existing rows under the v1 schema stay as-is \u2014 they're not re-fetched. Going-forward writes use the v2 schema once the Trigify pushToClay body templates + Make addRow mapping + Sheet headers are all updated.",
+    "columns": [
+      {"col": "A", "name": "Date Pulled",          "source": "Make formatDate(now; 'YYYY-MM-DD')",                "category": "metadata"},
+      {"col": "B", "name": "Post URL",             "source": "trigify.trigger.postUrl",                           "category": "post"},
+      {"col": "C", "name": "Post Author Name",     "source": "constant per workflow (the tracked profile's name)", "category": "post"},
+      {"col": "D", "name": "Post Author LinkedIn", "source": "trigify.trigger.authorUrl",                         "category": "post"},
+      {"col": "E", "name": "Post Date Posted",     "source": "trigify.trigger.datePosted",                        "category": "post"},
+      {"col": "F", "name": "Post Text",            "source": "trigify.trigger.text",                              "category": "post", "_note": "FULL post body, not 200-char snippet"},
+      {"col": "G", "name": "Post Likes Count",     "source": "trigify.trigger.likes",                             "category": "post"},
+      {"col": "H", "name": "Post Comments Count",  "source": "trigify.trigger.comments",                          "category": "post"},
+      {"col": "I", "name": "Engagement Type",      "source": "literal 'comment' (brief is comments-only)",        "category": "engagement"},
+      {"col": "J", "name": "Engaged At",           "source": "trigify.getComments.items[N].createdAtString",      "category": "engagement"},
+      {"col": "K", "name": "Comment Text",         "source": "trigify.getComments.items[N].text",                 "category": "engagement"},
+      {"col": "L", "name": "Comment Permalink",    "source": "trigify.getComments.items[N].permalink",            "category": "engagement", "_note": "deep link to the specific comment"},
+      {"col": "M", "name": "Comment Likes Count",  "source": "trigify.getComments.items[N].totalSocialActivityCounts.likeCount", "category": "engagement"},
+      {"col": "N", "name": "First Name",           "source": "trigify.enrich.firstName",                          "category": "engager_identity"},
+      {"col": "O", "name": "Last Name",            "source": "trigify.enrich.lastName",                           "category": "engager_identity"},
+      {"col": "P", "name": "Full Name",            "source": "trigify.enrich.fullName",                           "category": "engager_identity"},
+      {"col": "Q", "name": "LinkedIn URL",         "source": "trigify.enrich.linkedinUrl",                        "category": "engager_identity"},
+      {"col": "R", "name": "LinkedIn Username",    "source": "trigify.getComments.items[N].author.username",      "category": "engager_identity"},
+      {"col": "S", "name": "LinkedIn URN",         "source": "trigify.getComments.items[N].author.urn",           "category": "engager_identity", "_note": "ACoAA... form \u2014 primary cross-source dedup key"},
+      {"col": "T", "name": "LinkedIn Headline",    "source": "trigify.getComments.items[N].author.title",         "category": "engager_role", "_note": "RAW headline including emojis / pitch-language"},
+      {"col": "U", "name": "Profile Picture URL",  "source": "trigify.getComments.items[N].author.profilePicture[width=400].url", "category": "engager_identity"},
+      {"col": "V", "name": "Open To Work",         "source": "trigify.enrich.openToWork",                         "category": "engager_role", "_gate_signal": "drop if true"},
+      {"col": "W", "name": "Job Title",            "source": "trigify.enrich.jobTitle",                           "category": "engager_role", "_note": "CLEAN role, separated from marketing-headline"},
+      {"col": "X", "name": "Company Name",         "source": "trigify.enrich.companyName",                        "category": "engager_company"},
+      {"col": "Y", "name": "Company Domain",       "source": "trigify.enrich.companyDomain",                      "category": "engager_company"},
+      {"col": "Z", "name": "Company Industry",     "source": "trigify.enrich.companyIndustry",                    "category": "engager_company", "_gate_signal": "primary signal for engager-company gate"},
+      {"col": "AA","name": "Company HeadCount",    "source": "trigify.enrich.companyHeadCount",                   "category": "engager_company", "_gate_signal": "drop if outside [min, max] employee band, US-1-10 allowance applies"},
+      {"col": "AB","name": "Company Description",  "source": "trigify.enrich.companyDescription",                 "category": "engager_company", "_gate_signal": "secondary signal for engager-company gate, paired with industry"},
+      {"col": "AC","name": "Country",              "source": "trigify.enrich.country",                            "category": "engager_company", "_gate_signal": "primary signal for location gate"},
+      {"col": "AD","name": "Location",             "source": "trigify.enrich.location",                           "category": "engager_company", "_note": "full city/state/country string"},
+      {"col": "AE","name": "Status",               "source": "downstream \u2014 written by lilly-trigify-data-processing", "category": "pipeline", "_values": "NEW | QUALIFIED | BORDERLINE | OFF_BRIEF | PUSHED | OFF_BRIEF_NO_EMAIL"},
+      {"col": "AF","name": "Raw Payload",          "source": "Make {{ toString(1) }} \u2014 full webhook payload as JSON string", "category": "catchall", "_note": "safety net for any field we forgot or Trigify adds later; never trim, can be hidden in Sheets UI"}
+    ]
+  },
+  "personalization": {
+    "outreach_voice": "Bjion Henry (Navreo)",
+    "_HARD_RULE": "NEVER mention a competitor founder's post in the email body. The engagement is the LEAD-GENERATION signal (used to find the prospect), not the EMAIL-CONTENT signal. Mentioning the founder's post by name leaks our intel-gathering and burns the relationship. Only Bjion's OWN posts are fair game to reference directly. For all 13 competitor founder posts, the engagement is invisible to the recipient \u2014 the email reads like a standard Bjion-to-prospect cold email.",
+    "per_lead_variables": {
+      "icebreaker": {
+        "generation_strategy": "angle_waterfall_by_post_author",
+        "angles": [
+          {
+            "id": "first_person_own_post",
+            "trigger": "post.author_name == 'Bjion Henry'",
+            "perspective": "first_person",
+            "examples": [
+              "saw your comment on my post about [topic from post snippet] \u2014 your point about X caught my eye",
+              "noticed you liked my post on [topic] \u2014 wanted to reach out",
+              "your '[comment text]' on my post landed \u2014 quick question for you"
+            ]
+          },
+          {
+            "id": "role_anchored_for_founder_post",
+            "trigger": "post.author_name in [13 competitor founders]",
+            "perspective": "role_or_company_anchored_NO_POST_REFERENCE",
+            "_rule": "DO NOT mention the post, the founder whose post it was, or anything that betrays we saw the engagement. Use the engager's title, company, or seniority as the anchor instead \u2014 make it read like a normal cold email with no signal trail.",
+            "examples": [
+              "your role leading sales at [engager.company] caught my eye \u2014 quick question",
+              "noticed you're heading [function] at [engager.company] \u2014 wanted to reach out about [offer-relevant topic]",
+              "saw you're running [function] at a [company-size] [vertical] shop \u2014 relevant to something we're doing",
+              "quick one for the [engager.title] at [engager.company]"
+            ]
+          },
+          {
+            "id": "fallback",
+            "trigger": "always (when no specific signal fires, or title/company missing)",
+            "examples": [
+              "your name came up in some sales-leader circles \u2014 wanted to reach out",
+              "quick question for you on [topic]"
+            ]
+          }
+        ]
+      },
+      "how_we_can_help": {
+        "generation_strategy": "offer_anchored_to_engager_role_and_company",
+        "_rule": "DO NOT reference the originating post or its topic in the body \u2014 the engagement is the silent signal that brought us here, not the conversation starter. Anchor on the engager's role + company stage instead.",
+        "anchor": "Engager's title + company size + Navreo DFY offer \u2192 frame the specific value-prop for that intersection. E.g. for a VP Sales at a 50-emp agency, anchor on 'our pay-per-result pricing makes outbound a P&L lever, not a fixed cost \u2014 useful when you're scaling sales without burning runway'."
+      }
+    }
+  },
+  "infrastructure": {
+    "sheet_id": "1ebioo_mfGBy6lVkSTAl14tJYPZTbw16PXlcmzIYss0Q",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1ebioo_mfGBy6lVkSTAl14tJYPZTbw16PXlcmzIYss0Q/edit",
+    "apps_script_rows_url": "https://script.google.com/macros/s/AKfycbx84Gfsc8Zz32bNes6lJbCnCLDcGgJW7yrWbI6LtU6lEtIzmwzYlyDdbR7h4PHNuW3v/exec",
+    "_apps_script_note": "doGet web app for reading the full Engagers tab as JSON (Drive API truncates large sheets ~200 rows; this returns all rows). Endpoints: ?action=rows (all rows), ?action=count. doPost handles updateStatus (form-encoded payload= param). Saved 2026-05-20 so we never have to re-hunt for it.",
+    "make_team_id": 536258,
+    "make_org_id": 1634255,
+    "make_scenario_id": 9239245,
+    "make_scenario_url": "https://eu2.make.com/536258/scenarios/9239245",
+    "make_webhook_hook_id": 4130112,
+    "make_webhook_url": "https://hook.eu2.make.com/alju157oda19yu92amikbf2ke8knjm5x",
+    "google_connection_id": 9696598,
+    "smartlead_campaign_id": null,
+    "smartlead_campaign_url": null,
+    "smartlead_campaign_status": "pending_creation_via_lilly_bot",
+    "schedule_id": null
+  },
+  "daily_routine": {
+    "_purpose": "What lilly-trigify-data-processing should do every day on this brief",
+    "frequency": "daily (recommend 9am local Mon-Fri)",
+    "steps": [
+      "1. Read all rows in Engagers tab where Status = NEW (32-column schema per engagers_sheet_schema)",
+      "2. For each row, apply 4-gate qualification in cheapness order: (a) location gate from Country column, (b) post-topic gate from Post Text column, (c) engager-title gate from Job Title + LinkedIn Headline columns, (d) engager-company gate from Company Industry + Company Description + Company HeadCount + Open To Work columns. WebFetch ONLY as fallback when industry+description together are too thin to verdict.",
+      "3. Mark Status: QUALIFIED / BORDERLINE / OFF_BRIEF",
+      "4. For QUALIFIED rows: find/verify email via Prospeo enrich-person (engager.linkedin_url), fallback AI Ark if NO_MATCH",
+      "5. If email not deliverable, mark Status = OFF_BRIEF_NO_EMAIL",
+      "6. For remaining QUALIFIED+EMAIL rows: generate Icebreaker (using angle_waterfall_by_post_author) and HowWeCanHelp",
+      "7. Push each as a lead to the brief's Smartlead campaign with merge variables filled",
+      "8. Mark Status = PROCESSED",
+      "9. End-of-run summary: counts, suggested negative title patterns from off-brief rows, per-profile precision % stats"
+    ]
+  }
+}

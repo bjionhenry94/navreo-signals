@@ -1,0 +1,60 @@
+{
+  "setup_id": "qwintiq-default-icebreaker",
+  "setup_name": "Qwintiq partnership icebreakers",
+  "client": "Qwintiq",
+  "created_at": "2026-06-23",
+  "note": "The operator's saved choice of what to look for and in what order. Editable any time in plain words (see the lifecycle section of SKILL.md). The operator never sees or edits this file; Claude maintains it.",
+
+  "angles": {
+    "note": "Tried top to bottom. The first angle that finds something real for a person wins. Reorder, drop, or add via plain-word edits.",
+    "ranked": [
+      {
+        "id": "partner-referral-invite",
+        "label": "They ask for partners or referrals on their site",
+        "look_at": "website, LinkedIn",
+        "detection_words": [
+          "Partners", "Partner with us", "Become a partner", "Referral Program",
+          "Alliances", "partner application form", "partners@ email",
+          "open to partnerships", "open to collaborations"
+        ]
+      },
+      {
+        "id": "shared-client-vertical",
+        "label": "They work in an industry we also work in",
+        "look_at": "website",
+        "detection_words": [
+          "Tech", "Software", "SaaS", "Healthcare", "Medical", "Health", "Wellness",
+          "Beauty", "Skincare", "Consumer", "E-commerce", "Apparel", "Fashion",
+          "Travel", "Lifestyle", "Professional services", "B2B"
+        ]
+      },
+      {
+        "id": "case-study-inflection",
+        "label": "A client in their case studies hit a launch, raise, or rebrand",
+        "look_at": "website case studies, testimonials",
+        "detection_words": ["launch", "fundraise", "funding", "rebrand", "new product"]
+      },
+      {
+        "id": "services-gap-no-pr",
+        "label": "They offer SEO / paid / content but NOT PR",
+        "look_at": "website services pages",
+        "detection_words_present": [
+          "SEO", "Organic search", "Content strategy", "Conversion optimization",
+          "GEO", "Generative engine optimization", "Technical SEO",
+          "Paid media", "Paid search", "Paid social"
+        ],
+        "detection_words_absent": ["PR", "Public Relations"]
+      }
+    ]
+  },
+
+  "recency_months": 6,
+
+  "off_limits": ["layoffs", "lawsuits", "scandals", "closures", "deaths", "anything negative or sensitive"],
+
+  "backups": {
+    "note": "Used in this order only when none of the angles fire.",
+    "order": ["colleague-in-list", "honest-flagged-line"],
+    "if_no_colleague": "honest-flagged-line"
+  }
+}

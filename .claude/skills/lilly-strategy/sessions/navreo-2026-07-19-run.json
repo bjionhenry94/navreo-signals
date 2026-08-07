@@ -1,0 +1,828 @@
+{
+ "client": "navreo",
+ "date": "2026-07-19",
+ "footer": "Ideas for Navreo · updated 19 July 2026 · every number probe-confirmed and suppression-netted · example people are illustrative · nothing here sends email without you.",
+ "colleagues": {
+  "apollo": "Sam",
+  "saleshire": "Nadia",
+  "collections": "Dana",
+  "customs": "Rohan",
+  "ecomm": "Jess",
+  "hr": "Martin",
+  "exporters": "Owen",
+  "cleaning": "Teresa"
+ },
+ "people": {
+  "apollo": [
+   {
+    "first": "Erin",
+    "title": "Founder",
+    "company": "Cobalt Search Partners",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Cobalt Search Partners crossed 200 placements this year. Growth like that usually means outbound gets whatever hours are left over.",
+     "colleague": "I wasn't sure if you or Sam was the right person to ask at Cobalt Search Partners.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Cobalt Search Partners was the best person for this."
+    }
+   },
+   {
+    "first": "Tyler",
+    "title": "Head of growth",
+    "company": "Meridian Data Co",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Sam was the right person to ask at Meridian Data Co.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Meridian Data Co was the best POC for this."
+    }
+   },
+   {
+    "first": "Sofia",
+    "title": "Managing director",
+    "company": "Atlas B2B Studio",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Atlas B2B Studio just brought its outbound in-house. The teams that keep it running weekly are the ones that see it pay.",
+     "safe": "Apologies if this should sit elsewhere, wasn't sure who at Atlas B2B Studio handles this kind of thing."
+    }
+   },
+   {
+    "first": "Ben",
+    "title": "Owner",
+    "company": "Northlight Advisory",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant to you, wasn't sure who else at Northlight Advisory might be the right person."
+    }
+   },
+   {
+    "first": "Hannah",
+    "title": "Sales director",
+    "company": "Forge & Field Consulting",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Forge & Field Consulting opened a second practice area this spring. New lines like that usually need their own pipeline.",
+     "colleague": "I wasn't sure if you or Sam was the right person to ask at Forge & Field Consulting.",
+     "safe": "Sorry if this lands in the wrong inbox, wasn't sure who at Forge & Field Consulting handles this sort of thing."
+    }
+   }
+  ],
+  "saleshire": [
+   {
+    "first": "Derek",
+    "title": "CEO",
+    "company": "Vantage Systems Group",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Vantage Systems Group opened a Denver office this spring. New territory usually stretches the pipeline side first.",
+     "colleague": "I wasn't sure if you or Nadia was the right person to ask at Vantage Systems Group.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Vantage Systems Group was the best person for this."
+    }
+   },
+   {
+    "first": "Monica",
+    "title": "Founder",
+    "company": "Clearwater Robotics",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Nadia was the right person to ask at Clearwater Robotics.",
+     "safe": "Apologies if this isn't relevant, didn't know who'd be the more relevant person at Clearwater Robotics to ask about this."
+    }
+   },
+   {
+    "first": "Ahmed",
+    "title": "VP of sales",
+    "company": "Stonebridge Partners",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Stonebridge Partners picked up two enterprise logos last quarter. Wins like that usually raise the bar for what pipeline has to look like.",
+     "safe": "Apologies if this should sit elsewhere, wasn't sure who at Stonebridge Partners handles this kind of thing."
+    }
+   },
+   {
+    "first": "Kate",
+    "title": "CEO",
+    "company": "Juniper Analytics",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Juniper Analytics was the best POC for this."
+    }
+   },
+   {
+    "first": "Ross",
+    "title": "Managing director",
+    "company": "Pinehurst Manufacturing",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Pinehurst Manufacturing added a third production line this year. Capacity like that usually means the order book needs to keep pace.",
+     "colleague": "I wasn't sure if you or Nadia was the right person to ask at Pinehurst Manufacturing.",
+     "safe": "Sorry if this lands in the wrong inbox, wasn't sure who at Pinehurst Manufacturing handles this sort of thing."
+    }
+   }
+  ],
+  "collections": [
+   {
+    "first": "Sarah",
+    "title": "Owner",
+    "company": "Beacon Recovery Group",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Beacon Recovery Group just picked up the regional hospital group's overdue accounts. That kind of volume usually strains a small recovery team.",
+     "colleague": "I wasn't sure if you or Dana was the right person to ask at Beacon Recovery Group.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Beacon Recovery Group was the best person for this."
+    }
+   },
+   {
+    "first": "Mike",
+    "title": "Sales director",
+    "company": "Fairway Collections",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Dana was the right person to ask at Fairway Collections.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Fairway Collections was the best POC for this."
+    }
+   },
+   {
+    "first": "Priya",
+    "title": "Managing partner",
+    "company": "Clearline Receivables",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Clearline Receivables opened a second office in Leeds this year. Growth like that usually means more overdue accounts to chase.",
+     "safe": "Apologies if this should sit elsewhere, wasn't sure who at Clearline Receivables handles this kind of thing."
+    }
+   },
+   {
+    "first": "Dan",
+    "title": "Owner",
+    "company": "Portside Recovery",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant to you, wasn't sure who else at Portside Recovery might be the right person."
+    }
+   },
+   {
+    "first": "Louise",
+    "title": "Head of sales",
+    "company": "Marble Hill Collections",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Marble Hill Collections just added a healthcare vertical team. That kind of expansion usually brings a fresh wave of overdue accounts.",
+     "colleague": "I wasn't sure if you or Dana was the right person to ask at Marble Hill Collections.",
+     "safe": "Sorry if this lands in the wrong inbox, wasn't sure who at Marble Hill Collections handles this sort of thing."
+    }
+   }
+  ],
+  "customs": [
+   {
+    "first": "Tom",
+    "title": "Managing director",
+    "company": "Gateway Customs Ltd",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Gateway Customs Ltd just opened a bonded warehouse near Felixstowe. More throughput like that usually means more duty sitting unclaimed.",
+     "colleague": "I wasn't sure if you or Rohan was the right person to ask at Gateway Customs Ltd.",
+     "safe": "Apologies if this isn't relevant, didn't know who'd be the more relevant person at Gateway Customs Ltd to ask about this."
+    }
+   },
+   {
+    "first": "Aisha",
+    "title": "Sales director",
+    "company": "Portway Clearance",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Rohan was the right person to ask at Portway Clearance.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Portway Clearance was the best person for this."
+    }
+   },
+   {
+    "first": "Kevin",
+    "title": "Managing director",
+    "company": "Northgate Duty Services",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Northgate Duty Services was the best POC for this."
+    }
+   },
+   {
+    "first": "Elena",
+    "title": "Head of sales",
+    "company": "Crossdock Brokerage",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Crossdock Brokerage picked up two new import accounts this quarter. More tariff lines like that usually means more reclaimable duty sitting untouched.",
+     "safe": "Apologies if this should sit elsewhere, wasn't sure who at Crossdock Brokerage handles this kind of thing."
+    }
+   },
+   {
+    "first": "Raj",
+    "title": "Commercial director",
+    "company": "Fairwind Trade Services",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Fairwind Trade Services expanded into airfreight this year. That mix of tariff codes usually hides a lot of reclaimable duty.",
+     "colleague": "I wasn't sure if you or Rohan was the right person to ask at Fairwind Trade Services.",
+     "safe": "Apologies if this isn't relevant to you, wasn't sure who else at Fairwind Trade Services might be the right person."
+    }
+   }
+  ],
+  "ecomm": [
+   {
+    "first": "Chloe",
+    "title": "Founder",
+    "company": "Brightcart Agency",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Brightcart Agency just picked up a second seven-figure Amazon brand. Wins like that usually mean the intro-call pipeline needs to keep pace.",
+     "colleague": "I wasn't sure if you or Jess was the right person to ask at Brightcart Agency.",
+     "safe": "Sorry if this lands in the wrong inbox, wasn't sure who at Brightcart Agency handles this sort of thing."
+    }
+   },
+   {
+    "first": "James",
+    "title": "Co-founder",
+    "company": "Parcel & Pixel",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Jess was the right person to ask at Parcel & Pixel.",
+     "safe": "Apologies if this isn't relevant, didn't know who'd be the more relevant person at Parcel & Pixel to ask about this."
+    }
+   },
+   {
+    "first": "Nina",
+    "title": "Head of new business",
+    "company": "Storefront Studio",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Storefront Studio just launched a TikTok Shop offering. New channels like that usually bring a fresh wave of brand owners shopping for a new agency.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Storefront Studio was the best person for this."
+    }
+   },
+   {
+    "first": "Ollie",
+    "title": "Founder",
+    "company": "Cartwheel Commerce",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Cartwheel Commerce was the best POC for this."
+    }
+   },
+   {
+    "first": "Grace",
+    "title": "Sales lead",
+    "company": "Merchant House",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Merchant House just added a Walmart Marketplace service line. Expansion like that usually means more intro calls to keep filled.",
+     "colleague": "I wasn't sure if you or Jess was the right person to ask at Merchant House.",
+     "safe": "Apologies if this should sit elsewhere, wasn't sure who at Merchant House handles this kind of thing."
+    }
+   }
+  ],
+  "hr": [
+   {
+    "first": "Rachel",
+    "title": "CEO",
+    "company": "Bramble HR",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Bramble HR just crossed 40 client companies. Growth like that usually means a few of them are approaching headcount thresholds you haven't flagged yet.",
+     "colleague": "I wasn't sure if you or Martin was the right person to ask at Bramble HR.",
+     "safe": "Apologies if this isn't relevant to you, wasn't sure who else at Bramble HR might be the right person."
+    }
+   },
+   {
+    "first": "Victor",
+    "title": "Sales director",
+    "company": "PeopleFirst Advisory",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Martin was the right person to ask at PeopleFirst Advisory.",
+     "safe": "Sorry if this lands in the wrong inbox, wasn't sure who at PeopleFirst Advisory handles this sort of thing."
+    }
+   },
+   {
+    "first": "Susan",
+    "title": "CEO",
+    "company": "Compass Employment Group",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Compass Employment Group just opened a second regional practice. That kind of growth usually means new clients crossing compliance thresholds without knowing it.",
+     "safe": "Apologies if this isn't relevant, didn't know who'd be the more relevant person at Compass Employment Group to ask about this."
+    }
+   },
+   {
+    "first": "Leo",
+    "title": "Managing director",
+    "company": "Harbour HR Services",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Harbour HR Services was the best person for this."
+    }
+   },
+   {
+    "first": "Amara",
+    "title": "Head of sales",
+    "company": "Keystone People Partners",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Keystone People Partners just picked up three manufacturing clients. Headcount in that sector climbs fast, and compliance exposure climbs with it.",
+     "colleague": "I wasn't sure if you or Martin was the right person to ask at Keystone People Partners.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Keystone People Partners was the best POC for this."
+    }
+   }
+  ],
+  "exporters": [
+   {
+    "first": "Dermot",
+    "title": "Managing director",
+    "company": "Kestrel Valve Co",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Kestrel Valve Co just added a distributor in the Gulf. New regions like that usually mean the buyer pipeline needs feeding.",
+     "colleague": "I wasn't sure if you or Owen was the right person to ask at Kestrel Valve Co.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Kestrel Valve Co was the best person for this."
+    }
+   },
+   {
+    "first": "Paula",
+    "title": "Sales director",
+    "company": "Brightweave Textiles",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Owen was the right person to ask at Brightweave Textiles.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Brightweave Textiles was the best POC for this."
+    }
+   },
+   {
+    "first": "Marco",
+    "title": "Commercial director",
+    "company": "Solent Marine Supplies",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Solent Marine Supplies exhibited at METSTRADE last autumn. Firms that show up there usually have room for more overseas accounts.",
+     "safe": "Apologies if this should sit elsewhere, wasn't sure who at Solent Marine Supplies handles this kind of thing."
+    }
+   },
+   {
+    "first": "Jean",
+    "title": "Owner",
+    "company": "Maplecore Wood Products",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant to you, wasn't sure who else at Maplecore Wood Products might be the right person."
+    }
+   },
+   {
+    "first": "Tessa",
+    "title": "Head of sales",
+    "company": "Ridgeline Instruments",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Ridgeline Instruments just landed its CE marking for the new range. That usually opens doors abroad that were shut before.",
+     "colleague": "I wasn't sure if you or Owen was the right person to ask at Ridgeline Instruments.",
+     "safe": "Sorry if this lands in the wrong inbox, wasn't sure who at Ridgeline Instruments handles this sort of thing."
+    }
+   }
+  ],
+  "cleaning": [
+   {
+    "first": "Al",
+    "title": "Owner",
+    "company": "Shoreline Building Services",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Shoreline Building Services just won the medical plaza contract downtown. Wins like that usually fill the crew schedule faster than the sales pipeline.",
+     "colleague": "I wasn't sure if you or Teresa was the right person to ask at Shoreline Building Services.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Shoreline Building Services was the best person for this."
+    }
+   },
+   {
+    "first": "Denise",
+    "title": "Sales director",
+    "company": "Cascade Janitorial Group",
+    "detail": false,
+    "colleague": true,
+    "lines": {
+     "colleague": "I wasn't sure if you or Teresa was the right person to ask at Cascade Janitorial Group.",
+     "safe": "Apologies if this isn't relevant, wasn't sure who at Cascade Janitorial Group was the best POC for this."
+    }
+   },
+   {
+    "first": "Victor",
+    "title": "President",
+    "company": "Summit Facility Care",
+    "detail": true,
+    "colleague": false,
+    "lines": {
+     "detail": "Saw Summit Facility Care added day-porter services this year. New lines like that usually need a steadier stream of walkthroughs.",
+     "safe": "Apologies if this should sit elsewhere, wasn't sure who at Summit Facility Care handles this kind of thing."
+    }
+   },
+   {
+    "first": "Gloria",
+    "title": "Owner",
+    "company": "TrueNorth Cleaning Co",
+    "detail": false,
+    "colleague": false,
+    "lines": {
+     "safe": "Apologies if this isn't relevant to you, wasn't sure who else at TrueNorth Cleaning Co might be the right person."
+    }
+   },
+   {
+    "first": "Ray",
+    "title": "General manager",
+    "company": "Beacon Commercial Cleaning",
+    "detail": true,
+    "colleague": true,
+    "lines": {
+     "detail": "Saw Beacon Commercial Cleaning picked up two school district contracts over the summer. Seasonal wins like that usually leave gaps the rest of the year.",
+     "colleague": "I wasn't sure if you or Teresa was the right person to ask at Beacon Commercial Cleaning.",
+     "safe": "Sorry if this lands in the wrong inbox, wasn't sure who at Beacon Commercial Cleaning handles this sort of thing."
+    }
+   }
+  ]
+ },
+ "validation_card": {
+  "id": "validate-devagencies",
+  "eyebrow": "Client question",
+  "title": "Client asked: dev agencies — worth it?",
+  "verdictShort": "Yes, cheaply.",
+  "verdictLine": "Verdict: yes, cheaply. 416 people found, ~390 after the 30-day rule, ~280 return free from our records. Caution: they saw our Agencies & Consultancies emails (May 2026) — needs a fresh angle.",
+  "microline": "Validated with one quick check · ask in chat to turn this into a full idea.",
+  "found": 416,
+  "afterCooldown": 390,
+  "freeFromRecords": 280,
+  "askPrompt": "Turn the dev agencies check into a full campaign idea for Navreo"
+ },
+ "carry": [
+  {
+   "idea": "cleaning",
+   "state": {
+    "phase": 7,
+    "launched": true,
+    "uploadState": "uploaded",
+    "stagesDone": 5
+   }
+  }
+ ],
+ "ideas": [
+  {
+   "id": "apollo",
+   "campaignNo": "TBC",
+   "name": "Apollo.io followers",
+   "net": 151300,
+   "gross": 151300,
+   "emails": 55900,
+   "who": "People who follow Apollo.io on LinkedIn and already run outbound. The follower is the lead, so there's no decision-maker hunt.",
+   "offer": "We plug a done-for-you outbound engine into the stack they already run. Pay-per-lead.",
+   "caption": "proven playbook · biggest audience",
+   "tag": "Recommended",
+   "shortTag": "Recommended",
+   "firstName": "Chris",
+   "company": "Fieldline Consulting",
+   "pain": "Most teams we speak to run Apollo alongside the day job, so lists, copy and follow-ups get whatever hours are left over.",
+   "moment": "The teams that keep outbound running every single week win the meetings the stop-start senders miss.",
+   "videoAngle": "turn the stack you already run into a steady stream of booked meetings",
+   "why": "Why: every follower audience we've run lands 3.8 to 9.4 positives per 1,000 (Clay, Instantly, AmpleMarket, Smartlead). Apollo is the biggest source we've never touched: 151,300 followers, counted live.",
+   "freeNote": "Suppression netting runs at export, wave by wave, so nobody active or recently contacted gets pulled.",
+   "copyProvenance": "Adapts our proven Clay-followers copy: 61 positives from 10,699 sends.",
+   "repliesLine": "Follower audiences are our best performer, and this adapts the exact emails that earned those replies.",
+   "vector": "followers",
+   "probe": {
+    "provider": "manual",
+    "date": "2026-07-16",
+    "credits": 0,
+    "gross": 151300
+   },
+   "pull_spec": {
+    "provider": "manual",
+    "filters": {},
+    "notes": "live LinkedIn count"
+   }
+  },
+  {
+   "id": "saleshire",
+   "campaignNo": "TBC",
+   "name": "Companies hiring salespeople",
+   "net": 8747,
+   "gross": 8747,
+   "emails": 3240,
+   "netUnit": "fresh hiring signals a month",
+   "who": "Founders and sales leaders at companies actively hiring SDRs, AEs or sales leadership across our core geographies. A fresh feed every month, not a fixed list.",
+   "offer": "While the new hire ramps, we keep pipeline moving from week two. Pay-per-lead.",
+   "caption": "live buying moment · feed",
+   "tag": "Highest intent",
+   "shortTag": "Intent",
+   "firstName": "Laura",
+   "company": "Brightpath Group",
+   "pain": "Most companies we speak to hire a salesperson and then wait three to six months of ramp before pipeline actually moves.",
+   "moment": "A company posting sales roles is telling the market it needs pipeline right now.",
+   "videoAngle": "keep meetings landing while your new hire ramps",
+   "why": "Why: 8,747 companies posted sales roles in the last 30 days across our geographies, and we've never run this at scale (231 sends total across two tiny pilots). Hiring is a live buying moment.",
+   "freeNote": "People are counted and netted daily as the feed runs, so the pool refreshes itself every month.",
+   "repliesLine": "Signal timing beats cold lists: we reach them the week they told the market they need pipeline.",
+   "vector": "hiring_signal",
+   "probe": {
+    "provider": "theirstack",
+    "date": "2026-07-16",
+    "credits": 0,
+    "gross": 8747
+   },
+   "pull_spec": {
+    "provider": "theirstack",
+    "filters": {},
+    "notes": "free preview"
+   }
+  },
+  {
+   "id": "collections",
+   "campaignNo": "TBC",
+   "name": "Collections and receivables firms",
+   "net": 426,
+   "gross": 484,
+   "emails": 158,
+   "who": "Owners and sales leaders at collections and receivables-recovery firms, 11 to 200 staff, US, UK, Canada and Australia.",
+   "offer": "We book them meetings with finance chiefs sitting on overdue invoices. They only pay for the leads we deliver.",
+   "caption": "never run · daily pain",
+   "tag": "Lab standout",
+   "shortTag": "Standout",
+   "firstName": "Paul",
+   "company": "Sterling Recovery Partners",
+   "pain": "Most collections firms we speak to win work through referrals from the same accountants and lawyers, so growth caps out at who already knows you.",
+   "moment": "Meanwhile every mid-market finance chief is sitting on overdue invoices right now.",
+   "videoAngle": "put you in front of finance chiefs sitting on overdue invoices, week in, week out",
+   "why": "Why: scored highest in our niche testing (24 of 30) and never run. Their prospects live this pain daily: overdue invoices don't go quiet.",
+   "freeFromRecords": 136,
+   "newPeople": 290,
+   "repliesLine": "Money-recovery angles outperform generic pitches. Overdue invoices are a daily pain, not a someday one.",
+   "vector": "targeted_list",
+   "probe": {
+    "provider": "prospeo_person",
+    "date": "2026-07-16",
+    "credits": 1,
+    "gross": 484
+   },
+   "pull_spec": {
+    "provider": "prospeo_person",
+    "filters": {},
+    "notes": "page-1 total_count"
+   }
+  },
+  {
+   "id": "customs",
+   "campaignNo": "TBC",
+   "name": "Customs brokers and duty reclaim",
+   "net": 974,
+   "gross": 1230,
+   "emails": 360,
+   "who": "Managing directors and sales leaders at customs brokerages and duty-reclaim specialists, 11 to 200 staff, US, UK, Canada and Australia.",
+   "offer": "We book them meetings with importers who are overpaying duty they could claim back. Pay-per-lead.",
+   "caption": "mostly already ours · brokers",
+   "tag": "Cheapest per lead",
+   "shortTag": "Cheapest",
+   "firstName": "Anita",
+   "company": "Crossline Customs Group",
+   "pain": "Referrals cap out at who already knows you. The firms reaching importers directly win the reclaim work first.",
+   "moment": "Every importer with a messy tariff book is overpaying duty, and most have never heard of drawback.",
+   "videoAngle": "put you in front of importers with reclaimable duty spend, before your competitors",
+   "why": "Why: 717 of the 974 reachable people return free from our records. Replaces the freight angle that died (0 replies in 1,700 sends) with the money-recovery angle instead.",
+   "freeFromRecords": 717,
+   "newPeople": 256,
+   "freeNote": "This audience saw our exporter emails before, so a fresh angle is required.",
+   "repliesLine": "The freight-capacity angle died (0 replies in 1,700 sends); the money-recovery angle is what works.",
+   "vector": "targeted_list",
+   "probe": {
+    "provider": "prospeo_person",
+    "date": "2026-07-16",
+    "credits": 1,
+    "gross": 1230
+   },
+   "pull_spec": {
+    "provider": "prospeo_person",
+    "filters": {},
+    "notes": "page-1 total_count"
+   }
+  },
+  {
+   "id": "ecomm",
+   "campaignNo": "TBC",
+   "name": "Amazon and Shopify agencies",
+   "net": 321,
+   "gross": 385,
+   "emails": 119,
+   "who": "Founders and sales leaders at Amazon, marketplace and Shopify agencies, 11 to 200 staff, US, UK, Canada and Australia.",
+   "offer": "Peer proof: we already fill the calendar for an Amazon agency. Same engine, their niche. Pay-per-lead.",
+   "caption": "named peer proof · agencies",
+   "tag": "Warmest",
+   "shortTag": "Warmest",
+   "firstName": "Marcus",
+   "company": "Northcart Commerce",
+   "pain": "Most agencies we speak to ride referrals and marketplace waves, so new business arrives in lumps.",
+   "moment": "Brand owners switch agencies in waves, and the agency in their inbox first wins the intro call.",
+   "videoAngle": "keep a steady stream of brand owners booking intro calls with you",
+   "why": "Why: we already run outbound for an Amazon agency, so the proof is a named peer. Half this audience returns free from our records.",
+   "freeFromRecords": 160,
+   "newPeople": 161,
+   "copyProvenance": "Adapts our proven agency copy: 2.2 replies per 1,000 on the pilot.",
+   "peerProofLine": "We run the outbound engine for an Amazon agency right now. Lists, copy, sending and replies, all done for them.",
+   "repliesLine": "Named peer proof is the strongest opener we have: it names a real agency we run today.",
+   "vector": "targeted_list",
+   "probe": {
+    "provider": "prospeo_person",
+    "date": "2026-07-16",
+    "credits": 1,
+    "gross": 385
+   },
+   "pull_spec": {
+    "provider": "prospeo_person",
+    "filters": {},
+    "notes": "page-1 total_count"
+   }
+  },
+  {
+   "id": "hr",
+   "campaignNo": "TBC",
+   "name": "Outsourced HR and compliance firms",
+   "net": 1192,
+   "gross": 1362,
+   "emails": 441,
+   "who": "CEOs and sales leaders at outsourced-HR and employment-compliance firms, 11 to 200 staff, US, UK, Canada and Australia.",
+   "offer": "We book them meetings with founders crossing the headcount thresholds where compliance gets serious. Start with a small pilot, pay only per qualified meeting.",
+   "caption": "biggest clean pool",
+   "tag": "Biggest clean pool",
+   "shortTag": "Biggest",
+   "firstName": "Renee",
+   "company": "Anchor HR Partners",
+   "pain": "Most HR firms we speak to wait for the phone to ring after something breaks at a client.",
+   "moment": "Every month a wave of companies crosses the headcount thresholds that trigger real compliance exposure.",
+   "videoAngle": "reach founders at exactly the moment compliance becomes a problem they feel",
+   "why": "Why: every month a wave of companies crosses the headcount thresholds where compliance gets serious, and this is the biggest clean pool on the menu (1,192 reachable, none contacted in 30 days).",
+   "freeFromRecords": 397,
+   "newPeople": 795,
+   "repliesLine": "Threshold-moment timing beats generic HR pitches: reach them the month compliance bites.",
+   "vector": "targeted_list",
+   "probe": {
+    "provider": "prospeo_person",
+    "date": "2026-07-16",
+    "credits": 1,
+    "gross": 1362
+   },
+   "pull_spec": {
+    "provider": "prospeo_person",
+    "filters": {},
+    "notes": "page-1 total_count"
+   }
+  },
+  {
+   "id": "exporters",
+   "campaignNo": "TBC",
+   "name": "Product exporters",
+   "net": 1920,
+   "gross": 2749,
+   "emails": 710,
+   "who": "Owners and sales leaders at product exporters: manufacturers and wholesalers shipping abroad, 11 to 200 staff, US, UK, Canada and Australia.",
+   "offer": "We put them in front of the overseas buyers of their product. Pay-per-lead, with named manufacturer proof.",
+   "caption": "quiet winner · never scaled",
+   "tag": "Fresh angle",
+   "shortTag": "Fresh",
+   "firstName": "Gareth",
+   "company": "Harlow Packline",
+   "pain": "Most exporters we speak to lean on distributors and trade shows, so new overseas buyers arrive slowly and on someone else's schedule.",
+   "moment": "Buyers abroad re-source suppliers all the time, and the exporter in their inbox first wins the conversation.",
+   "videoAngle": "put you in front of the overseas buyers already sourcing what you make",
+   "why": "Why: our May exporter campaign earned 1.66 positives per 1,000 (second only to cleaning) and was never scaled. Probed fresh today: 2,749 people found, around 1,920 after the 30-day rule.",
+   "freeFromRecords": 190,
+   "newPeople": 1730,
+   "freeNote": "Part of this pool overlaps the June manufacturing sends still in flight, so anyone active is excluded before pulling.",
+   "peerProofLine": "We run this today for a manufacturing client: $3.4M in pipeline and six and seven-figure partnerships inside six months.",
+   "repliesLine": "Buyer-outcome copy is the only thing that has ever worked in this family: name their buyers, never the mechanism.",
+   "vector": "targeted_list",
+   "probe": {
+    "provider": "prospeo_person",
+    "date": "2026-07-19",
+    "credits": 1,
+    "gross": 2749
+   },
+   "pull_spec": {
+    "provider": "prospeo_person",
+    "filters": {
+     "company_keywords": {
+      "include": [
+       "exporter",
+       "export"
+      ],
+      "include_company_description": true
+     },
+     "company_headcount_range": [
+      "11-20",
+      "21-50",
+      "51-100",
+      "101-200"
+     ],
+     "company_location_search": {
+      "include": [
+       "United States",
+       "United Kingdom",
+       "Canada",
+       "Australia"
+      ]
+     },
+     "person_job_title": {
+      "include": [
+       "sales director",
+       "head of sales",
+       "vp sales",
+       "vice president of sales",
+       "chief executive officer",
+       "founder",
+       "managing director",
+       "owner",
+       "director of sales"
+      ],
+      "include_partial_match": true
+     },
+     "person_seniority": {
+      "include": [
+       "Founder/Owner",
+       "C-Suite",
+       "Vice President",
+       "Head",
+       "Director"
+      ]
+     }
+    },
+    "notes": "exclude legal/IT/freight bleed at build (session ruling 2026-07-19)"
+   }
+  },
+  {
+   "id": "cleaning",
+   "campaignNo": 3651763,
+   "name": "Commercial cleaning scale-up",
+   "net": 754,
+   "gross": 1596,
+   "emails": 754,
+   "who": "Owners and sales leaders at commercial cleaning companies, 11 to 200 staff, US. Built and loaded: 754 verified people.",
+   "offer": "We book them meetings with facilities and office managers who need a cleaning quote. Pay-per-lead, soft ask.",
+   "caption": "built · 754 loaded · ready",
+   "tag": "Launch-ready",
+   "shortTag": "Ready",
+   "firstName": "Marcia",
+   "company": "BrightServe Facilities",
+   "pain": "Most cleaning companies we speak to grow through word of mouth and the odd tender, so the pipeline swings month to month.",
+   "moment": "Office and facilities managers re-quote cleaning contracts all year round, and the first credible email usually gets the walkthrough.",
+   "videoAngle": "keep quote requests landing from facilities managers every week",
+   "why": "Why: the only niche from our testing with live signal (1.94 positives per 1,000 on the pilot). Built on 16 July: 754 verified people, zero new data spend, quality checks passed.",
+   "freeNote": "One manual step before starting: duplicate the Interested Reply subsequence onto campaign 3651763 in Smartlead.",
+   "copyProvenance": "Carries the pilot's proven two-step soft sequence (1.94 per 1,000).",
+   "repliesLine": "Soft asks beat hard pitches two to one in this family, so the sequence leads with the plan, not the meeting.",
+   "vector": "targeted_list",
+   "probe": {
+    "provider": "prospeo_person",
+    "date": "2026-07-16",
+    "credits": 1,
+    "gross": 1596
+   },
+   "pull_spec": {
+    "provider": "prospeo_person",
+    "filters": {},
+    "notes": "built 07-16"
+   }
+  }
+ ]
+}

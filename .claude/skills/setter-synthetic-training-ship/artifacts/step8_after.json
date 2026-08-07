@@ -1,0 +1,43 @@
+{
+  "training-agent-70fd17e5": {
+    "n_cases": 59,
+    "n_answers": 34,
+    "n_used": 59,
+    "n_synth": 0,
+    "readiness_history_tail": [
+      {
+        "at": "2026-07-14T13:57:28+00:00",
+        "score": 72,
+        "n_answers": 33
+      },
+      {
+        "at": "2026-07-14T13:59:52+00:00",
+        "score": 72,
+        "n_answers": 34
+      }
+    ]
+  },
+  "training-agent-f01cfa63": {
+    "n_cases": 12,
+    "n_answers": 1,
+    "n_used": 8,
+    "n_synth": 4,
+    "readiness_history_tail": [
+      {
+        "at": "2026-07-14T14:23:57+00:00",
+        "score": 3,
+        "n_answers": 1
+      }
+    ]
+  },
+  "provider_usage_setter_synthetic": [
+    {
+      "id": 280,
+      "provider": "setter_synthetic",
+      "source_id": "agent-f01cfa63",
+      "credits": 4,
+      "endpoint": "zero_replies:owner",
+      "called_at": "2026-07-14T14:06:28.422541+00:00"
+    }
+  ]
+}

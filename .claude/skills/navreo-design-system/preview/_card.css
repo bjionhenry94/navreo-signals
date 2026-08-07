@@ -1,0 +1,23 @@
+/* preview/_card.css — shared chrome for design-system preview cards */
+@import url('../colors_and_type.css');
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--nav-cream);
+  color: var(--nav-ink);
+  font-family: var(--font-sans);
+  letter-spacing: var(--tracking-snug);
+  -webkit-font-smoothing: antialiased;
+}
+body { padding: 24px; }
+.row { display: flex; gap: 16px; align-items: stretch; }
+.col { display: flex; flex-direction: column; gap: 12px; }
+.label {
+  font-size: 11px;
+  letter-spacing: var(--tracking-mark);
+  text-transform: uppercase;
+  color: var(--nav-ink-3);
+  font-weight: var(--fw-medium);
+}
+.mono { font-family: var(--font-mono); font-size: 12px; }

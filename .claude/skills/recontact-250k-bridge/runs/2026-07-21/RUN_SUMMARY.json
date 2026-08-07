@@ -1,0 +1,16 @@
+{
+ "pool": 161853,
+ "gap": 91645,
+ "pct": 177,
+ "title_confirmed": 25254,
+ "geo_known": 32016,
+ "committed": 158355,
+ "target": 250000,
+ "briefs": {
+  "A. SaaS & tech sales leaders / CEOs": 84920,
+  "B. Industry verticals (wholesale/distribution/mfg/export)": 30218,
+  "C. Agencies (SEO/GEO + recruitment)": 23463,
+  "D. General B2B sales leaders": 21869,
+  "E. Warm followers (Clay/SalesLoft/Instantly)": 1383
+ }
+}

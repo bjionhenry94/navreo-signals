@@ -1,0 +1,41 @@
+<!doctype html>
+<!-- @dsCard group="Brand" name="Logo clear-space" subtitle="Clear-space ≥ height of the n" viewport="720x280" -->
+<html><head><meta charset="utf-8"><title>Logo clear-space</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body { padding: 32px; display: flex; align-items: center; justify-content: center; }
+  .frame {
+    position: relative;
+    padding: 56px;
+    background: repeating-linear-gradient(135deg, transparent 0 8px, rgba(20,17,14,0.04) 8px 9px);
+    border-radius: 14px;
+  }
+  .inner { position: relative; }
+  .inner img { display: block; height: 56px; width: auto; }
+  .guides { position: absolute; inset: -56px; pointer-events: none; }
+  .g { position: absolute; background: rgba(255,77,0,0.5); }
+  .g.t, .g.b { left: 0; right: 0; height: 1px; }
+  .g.l, .g.r { top: 0; bottom: 0; width: 1px; }
+  .g.t { top: 0; } .g.b { bottom: 0; }
+  .g.l { left: 0; } .g.r { right: 0; }
+  .lab {
+    position: absolute; font-family: var(--font-mono); font-size: 10.5px; color: var(--nav-orange);
+    background: var(--nav-cream); padding: 2px 6px; border-radius: 3px;
+  }
+  .lab.top { top: -8px; left: 50%; transform: translate(-50%,-50%); }
+  .lab.right { top: 50%; right: -8px; transform: translate(50%,-50%); }
+  .caption { font-family: var(--font-mono); font-size: 11px; color: var(--nav-ink-3); margin-left: 28px; }
+</style></head>
+<body>
+  <div class="frame">
+    <div class="inner">
+      <img src="../assets/logo-navreo.png" alt="Navreo">
+      <div class="guides">
+        <div class="g t"></div><div class="g b"></div><div class="g l"></div><div class="g r"></div>
+        <div class="lab top">= height of n</div>
+        <div class="lab right">= height of n</div>
+      </div>
+    </div>
+  </div>
+  <div class="caption">Clear space ≥ height of the n. Min screen width 64px.</div>
+</body></html>

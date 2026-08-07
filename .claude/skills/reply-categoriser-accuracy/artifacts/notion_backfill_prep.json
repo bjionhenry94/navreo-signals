@@ -1,0 +1,39 @@
+{
+  "prepared_at": "2026-07-11",
+  "purpose": "Item 1 backfill prep: of the 20 client_healed leads in folk_ledger, these lists split who already has a portal row (manual team adds) vs who needs a Notion row written. Cross-checked against both portal DBs on 2026-07-11.",
+  "status": "BACKFILL EXECUTED 2026-07-11: 9 clean leads written directly to Amplifyy portal via Notion MCP (page IDs 39a6e755-*). 2 flagged leads (cael@mugsy.com, dr.francescopensato@gmail.com) SKIPPED permanently per Bjion 2026-07-11 - do NOT add them to the portal. Make connection 11521245 still cannot see Arnic/Amplifyy DBs (verified via listDatabases RPC: sees 10 other portals, 0 results for Arnic/Amplifyy queries) - modules 23/33 still paused, go-forward pipeline still needs the reconnect.",
+  "amplifyy_database_id": "342a5f09137b4af780a003eb19542ff0",
+  "amplifyy_data_source": "collection://fb36893a-366a-4712-8920-351c851203d1",
+  "arnic_database_id": "2ec3333429d54ebf9a5dba33f1402561",
+  "arnic_data_source": "collection://97be8645-6bc9-4d86-9c1d-1295510effb1",
+  "already_in_portal_DO_NOT_BACKFILL": [
+    {"email": "contact@mlash.fr", "row": "Mlash", "page": "3926e755-98d9-810d-b3b7-eaa32d957958"},
+    {"email": "contact@prive2222.com", "row": "Prive", "page": "3926e755-98d9-812f-b076-cd25f581f42e"},
+    {"email": "crealainevero26@gmail.com", "row": "Créalainevéro", "page": "3836e755-98d9-81ab-9244-d1afecc03b3d"},
+    {"email": "contact@beresheetdeadsea.com", "row": "Beresheet Dead Sea", "page": "3926e755-98d9-8162-8d12-c6613ac20508"},
+    {"email": "contact@derolcosmetics.bg", "row": "Derol Cosmetics", "page": "3926e755-98d9-81fa-b902-ea39aa528699"},
+    {"email": "cornishcalendula@gmail.com", "row": "Cornish Calendula", "page": "3926e755-98d9-81af-a9d4-edbebe71d338"},
+    {"email": "ecommerce@deltaspharma.com", "row": "Deltas Pharma", "page": "3926e755-98d9-8110-a144-c3798c8ecb98"},
+    {"email": "excellentleather2012@gmail.com", "row": "Excellent Leather", "page": "3926e755-98d9-8163-b9c1-fefcaf0b64f3"},
+    {"email": "dean.harrigan@auditoria.ai", "row": "Dean Harrigan (ARNIC)", "page": "3836e755-98d9-8199-b5ae-c4ed20cd57e4"}
+  ],
+  "backfill_needed_all_amplifyy": [
+    {"email": "antiguajaboneriamexicana@gmail.com", "campaign_id": "3506959", "campaign_name": "Amplifyy - Not on Amazon (Hard) - StoreLead - NEW", "replied_at": "2026-06-18T16:42:37Z", "category": "Meeting Request"},
+    {"email": "belaurorecosmetique@gmail.com", "campaign_id": "3507001", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead - NEW", "replied_at": "2026-07-03T07:30:21Z", "category": "Information Request"},
+    {"email": "cael@mugsy.com", "campaign_id": "3441378", "campaign_name": "Reconnect: Amplifyy - Present on Amazon (Hard)", "replied_at": "2026-06-08T20:52:52Z", "category": "Meeting Request", "flag": "reply is a soft-no ('probably not the best fit') pivoting to his own newsletter - review before showing client"},
+    {"email": "contact@parfumsdelmar.com", "campaign_id": "3472184", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead", "replied_at": "2026-06-18T14:19:33Z", "category": "Meeting Request"},
+    {"email": "contactamornaturals@gmail.com", "campaign_id": "3507001", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead - NEW", "replied_at": "2026-07-03T14:16:44Z", "category": "Meeting Request"},
+    {"email": "crlashes19@gmail.com", "campaign_id": "3507001", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead - NEW", "replied_at": "2026-06-26T09:28:54Z", "category": "Interested"},
+    {"email": "deluxcom58@gmail.com", "campaign_id": "3506959", "campaign_name": "Amplifyy - Not on Amazon (Hard) - StoreLead - NEW", "replied_at": "2026-06-18T19:58:38Z", "category": "Meeting Request"},
+    {"email": "deprofcosmetics@gmail.com", "campaign_id": "3507001", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead - NEW", "replied_at": "2026-07-09T15:32:45Z", "category": "Information Request"},
+    {"email": "dirtygirlsoapstudio@gmail.com", "campaign_id": "3507001", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead - NEW", "replied_at": "2026-06-24T13:17:56Z", "category": "Interested"},
+    {"email": "doritsht1@gmail.com", "campaign_id": "3507001", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead - NEW", "replied_at": "2026-07-08T17:24:27Z", "category": "Meeting Request"},
+    {"email": "dr.francescopensato@gmail.com", "campaign_id": "3507001", "campaign_name": "Amplifyy - Not on Amazon (Soft) - StoreLead - NEW", "replied_at": "2026-06-27T00:58:21Z", "category": "Information Request", "flag": "sells watches, replied to a beauty/skincare campaign - off-ICP, review before showing client"}
+  ],
+  "write_plan": "For each backfill lead: pull first/last/company/website/linkedin from Smartlead GET /leads?email=, reply_body from Supabase replies table (stripHTML), then notion-create-pages into the Amplifyy data source with Select=Interested, Status='1. Not responded', Time of Reply=replied_at. Mirrors watchdog module 23 field mapping.",
+  "notes": [
+    "Absence verified via scoped Notion semantic search (email + company-name angles); query_data_sources is plan-gated so exact SQL check was not possible.",
+    "Existing rows from the team's 18 Jun and 3 Jul manual sweeps are sparse (most have empty Full-Reply/Website/LinkedIn) - optional enrichment pass later.",
+    "Do NOT clear client_healed rows in folk_ledger expecting reprocessing to write Notion rows - the watchdog's Notion module only fires on the not-in-Folk branch; these leads are now in Folk so they would just re-verify."
+  ]
+}

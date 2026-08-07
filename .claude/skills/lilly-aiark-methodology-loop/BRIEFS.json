@@ -1,0 +1,24 @@
+{
+  "briefs": [
+    {"id": 1,  "band": "broad", "brief": "B2B SaaS companies, United States, 11-200 employees", "dm_roles": ["CEO","Founder","Co-Founder","Chief Revenue Officer","VP of Sales","Head of Sales"], "expected_magnitude": [10000, null]},
+    {"id": 2,  "band": "broad", "brief": "Marketing agencies, United States + United Kingdom, 11-200 employees", "dm_roles": ["CEO","Founder","Managing Director","Owner"], "expected_magnitude": [10000, null]},
+    {"id": 3,  "band": "broad", "brief": "Software development companies (custom dev shops), Europe, 11-200 employees", "dm_roles": ["CEO","Founder","Managing Director"], "expected_magnitude": [10000, null]},
+    {"id": 4,  "band": "broad", "brief": "E-commerce / DTC consumer brands, United States, 11-200 employees", "dm_roles": ["CEO","Founder","Co-Founder","Owner"], "expected_magnitude": [10000, null]},
+    {"id": 5,  "band": "broad", "brief": "Construction companies (general contractors), United Kingdom, 11-200 employees", "dm_roles": ["Managing Director","Owner","Director","CEO"], "expected_magnitude": [10000, null]},
+    {"id": 6,  "band": "mid", "brief": "Managed service providers / IT support companies, United Kingdom, 11-200 employees", "dm_roles": ["Managing Director","CEO","Founder","Owner"], "expected_magnitude": [2000, 10000]},
+    {"id": 7,  "band": "mid", "brief": "Freight forwarders and logistics providers, Germany + Netherlands, 11-200 employees", "dm_roles": ["Managing Director","Geschäftsführer","CEO","Owner"], "expected_magnitude": [2000, 10000]},
+    {"id": 8,  "band": "mid", "brief": "Staffing and recruiting agencies, Australia, 11-100 employees", "dm_roles": ["Managing Director","CEO","Founder","Director"], "expected_magnitude": [2000, 10000]},
+    {"id": 9,  "band": "mid", "brief": "Accounting firms, Canada, 11-100 employees", "dm_roles": ["Partner","Managing Partner","CEO","Owner"], "expected_magnitude": [2000, 10000]},
+    {"id": 10, "band": "mid", "brief": "Solar / renewable energy installers, United States, 11-200 employees", "dm_roles": ["CEO","Founder","Owner","President"], "expected_magnitude": [2000, 10000]},
+    {"id": 11, "band": "niche", "brief": "IT asset disposition (ITAD) providers, United States + United Kingdom", "dm_roles": ["CEO","Founder","Owner","Managing Director","Head of Sales"], "expected_magnitude": [300, 2000]},
+    {"id": 12, "band": "niche", "brief": "Amazon marketplace agencies (Amazon PPC / marketplace management), United States + United Kingdom + Germany", "dm_roles": ["CEO","Founder","Co-Founder","Managing Director"], "expected_magnitude": [300, 2000]},
+    {"id": 13, "band": "niche", "brief": "SAP consultancies, Germany + Switzerland + Austria, 11-200 employees", "dm_roles": ["Managing Director","Geschäftsführer","CEO","Partner"], "expected_magnitude": [300, 2000]},
+    {"id": 14, "band": "niche", "brief": "Commercial roofing contractors, United Kingdom, 11-200 employees", "dm_roles": ["Managing Director","Owner","Director"], "expected_magnitude": [300, 2000]},
+    {"id": 15, "band": "niche", "brief": "Cold-chain / temperature-controlled logistics providers, United States", "dm_roles": ["CEO","President","Owner","VP of Sales"], "expected_magnitude": [300, 2000]},
+    {"id": 16, "band": "ultra-niche", "brief": "Drone inspection service companies, Australia", "dm_roles": ["CEO","Founder","Owner","Managing Director"], "expected_magnitude": [50, 500]},
+    {"id": 17, "band": "ultra-niche", "brief": "Veterinary practice management software vendors, United States + United Kingdom", "dm_roles": ["CEO","Founder","Co-Founder","Head of Sales"], "expected_magnitude": [50, 500]},
+    {"id": 18, "band": "ultra-niche", "brief": "Padel court construction / installation companies, Europe", "dm_roles": ["CEO","Founder","Owner","Managing Director"], "expected_magnitude": [50, 500]},
+    {"id": 19, "band": "ultra-niche", "brief": "Ship chandlers / maritime provisioning companies, Netherlands + Belgium", "dm_roles": ["Managing Director","Owner","CEO"], "expected_magnitude": [50, 500]},
+    {"id": 20, "band": "ultra-niche", "brief": "Equestrian facility construction companies (arenas, stables), United Kingdom + Ireland", "dm_roles": ["Managing Director","Owner","Director"], "expected_magnitude": [50, 500]}
+  ]
+}

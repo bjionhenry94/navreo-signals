@@ -1,0 +1,1613 @@
+{
+ "flow": [
+  {
+   "id": 1,
+   "mapper": {},
+   "module": "gateway:CustomWebHook",
+   "version": 1,
+   "metadata": {
+    "designer": {
+     "x": -600,
+     "y": 0
+    }
+   },
+   "parameters": {
+    "hook": 4001002,
+    "maxResults": 10
+   }
+  },
+  {
+   "id": 5,
+   "filter": {
+    "name": "Interested / Meeting Request / Information Request / Call Booked",
+    "conditions": [
+     [
+      {
+       "a": "{{1.lead_category.new_name}}",
+       "b": "Interested",
+       "o": "text:equal"
+      }
+     ],
+     [
+      {
+       "a": "{{1.lead_category.new_name}}",
+       "b": "Meeting Request",
+       "o": "text:equal"
+      }
+     ],
+     [
+      {
+       "a": "{{1.lead_category.new_name}}",
+       "b": "Information Request",
+       "o": "text:equal"
+      }
+     ],
+     [
+      {
+       "a": "{{1.lead_category.new_name}}",
+       "b": "Call Booked",
+       "o": "text:equal"
+      }
+     ]
+    ]
+   },
+   "mapper": {
+    "qs": [],
+    "url": "https://api.prospeo.io/enrich-person",
+    "data": "{\"enrich_mobile\":true,\"data\":{\"{{if(1.lead_data.linkedin_profile; \"linkedin_url\"; \"email\")}}\":\"{{if(1.lead_data.linkedin_profile; 1.lead_data.linkedin_profile; 1.lead_data.email)}}\"}}",
+    "gzip": true,
+    "method": "post",
+    "headers": [
+     {
+      "name": "X-KEY",
+      "value": "pk_f18e63bac88d94ef3d28bb5d736a19b221cad0558b5b47e9f20cf96a0c48850d"
+     }
+    ],
+    "useMtls": false,
+    "bodyType": "raw",
+    "contentType": "application/json",
+    "serializeUrl": false,
+    "shareCookies": false,
+    "parseResponse": true,
+    "followRedirect": true,
+    "useQuerystring": false,
+    "followAllRedirects": false,
+    "rejectUnauthorized": true
+   },
+   "module": "http:ActionSendData",
+   "onerror": [
+    {
+     "id": 6,
+     "mapper": {
+      "data": {},
+      "statusCode": 0
+     },
+     "module": "builtin:Resume",
+     "version": 1,
+     "metadata": {
+      "designer": {
+       "x": -450,
+       "y": 300
+      }
+     }
+    }
+   ],
+   "version": 3,
+   "metadata": {
+    "designer": {
+     "x": -450,
+     "y": 0
+    }
+   },
+   "parameters": {
+    "handleErrors": false,
+    "useNewZLibDeCompress": true
+   }
+  },
+  {
+   "id": 50,
+   "mapper": null,
+   "module": "builtin:BasicRouter",
+   "routes": [
+    {
+     "flow": [
+      {
+       "id": 200,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async",
+        "data": "{\"data\":[{\"first_name\":\"{{1.lead_data.first_name}}\",\"last_name\":\"{{1.lead_data.last_name}}\",\"company\":\"{{1.lead_data.company_name}}\",\"linkedin_url\":\"{{1.lead_data.linkedin_profile}}\",\"custom_fields\":{\"uuid\":\"{{1.lead_id}}\"}}],\"enrich_email_address\":false,\"enrich_phone_number\":true}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 203,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": -450,
+           "y": -280
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": -450,
+         "y": -400,
+         "name": "BetterContact submit"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 201,
+       "mapper": {
+        "duration": 240
+       },
+       "module": "util:FunctionSleep",
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": -300,
+         "y": -400,
+         "name": "wait for BetterContact"
+        }
+       }
+      },
+      {
+       "id": 202,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async/{{200.data.id}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 204,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": -150,
+           "y": -280
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": -150,
+         "y": -400,
+         "name": "BetterContact result"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 2,
+       "filter": {
+        "name": "Navreo campaigns \u2192 Q226",
+        "conditions": [
+         [
+          {
+           "a": "{{1.campaign_name}}",
+           "b": "Navreo",
+           "o": "text:contain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "note": "\ud83c\udfaf POSITIVE RESPONSE \u2014 SmartLead\n\nDeal: {{1.lead_data.company_name}} \u2014 SmartLead\nDeal Status: Positive Response from Outreach\nCategory: {{1.lead_category.new_name}}\nCampaign: {{1.campaign_name}}\nAccount Used: {{1.from_email}}\nReply Date: {{1.last_reply.time}}\n\n\u2501\u2501\u2501 THEIR REPLY \u2501\u2501\u2501\n{{1.last_reply.email_body}}\n\n\ud83d\udd17 Conversation:\n{{1.app_url}}",
+        "urls": [
+         "{{1.lead_data.website}}",
+         "{{1.lead_data.linkedin_profile}}",
+         "{{1.app_url}}"
+        ],
+        "group": "36aea4a5-bd0d-43d6-97d1-7d10214a3fbb",
+        "emails": [
+         "{{1.lead_data.email}}"
+        ],
+        "phones": "{{merge(if(202.data.data[1].contact_phone_number; add(emptyarray; 202.data.data[1].contact_phone_number); emptyarray); if(5.data.person.mobile.status = \"VERIFIED\"; add(emptyarray; 5.data.person.mobile.mobile); emptyarray))}}",
+        "company": "{{1.lead_data.company_name}}",
+        "jobTitle": "{{1.lead_data.custom_fields.role}}",
+        "lastName": "{{1.lead_data.last_name}}",
+        "firstName": "{{1.lead_data.first_name}}",
+        "customFields": {
+         "70000b43-e6bb-4ba5-b8db-ef6b81705175": "Positive from outreach"
+        }
+       },
+       "module": "folk:createPerson",
+       "onerror": [
+        {
+         "id": 301,
+         "mapper": {
+          "group": "36aea4a5-bd0d-43d6-97d1-7d10214a3fbb",
+          "search": "{{1.lead_data.email}}"
+         },
+         "module": "folk:findPerson",
+         "onerror": [
+          {
+           "id": 311,
+           "mapper": {
+            "id": "",
+            "urls": [],
+            "emails": [],
+            "phones": [],
+            "groupId": "",
+            "fullName": "",
+            "jobTitle": "",
+            "lastName": "",
+            "addresses": [],
+            "companies": [],
+            "firstName": "",
+            "networkId": "",
+            "totalInteractions": 0
+           },
+           "module": "builtin:Resume",
+           "version": 1,
+           "metadata": {
+            "designer": {
+             "x": -150,
+             "y": 350
+            }
+           }
+          }
+         ],
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": -150,
+           "y": 200
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9252689
+         }
+        },
+        {
+         "id": 302,
+         "filter": {
+          "name": "Person found in Folk \u2192 update them",
+          "conditions": [
+           [
+            {
+             "a": "{{301.id}}",
+             "b": "",
+             "o": "text:notequal"
+            }
+           ]
+          ]
+         },
+         "mapper": {
+          "note": "\ud83c\udfaf POSITIVE RESPONSE \u2014 SmartLead\n\nDeal: {{1.lead_data.company_name}} \u2014 SmartLead\nDeal Status: Positive Response from Outreach\nCategory: {{1.lead_category.new_name}}\nCampaign: {{1.campaign_name}}\nAccount Used: {{1.from_email}}\nReply Date: {{1.last_reply.time}}\n\n\u2501\u2501\u2501 THEIR REPLY \u2501\u2501\u2501\n{{1.last_reply.email_body}}\n\n\ud83d\udd17 Conversation:\n{{1.app_url}}",
+          "group": "36aea4a5-bd0d-43d6-97d1-7d10214a3fbb",
+          "phones": "{{if(length(301.phones) = 0; merge(if(202.data.data[1].contact_phone_number; add(emptyarray; 202.data.data[1].contact_phone_number); emptyarray); if(5.data.person.mobile.status = \"VERIFIED\"; add(emptyarray; 5.data.person.mobile.mobile); emptyarray)); 301.phones)}}",
+          "jobTitle": "{{1.lead_data.custom_fields.role}}",
+          "personId": "{{301.id}}",
+          "customFields": {
+           "70000b43-e6bb-4ba5-b8db-ef6b81705175": "Positive from outreach"
+          }
+         },
+         "module": "folk:updatePerson",
+         "onerror": [
+          {
+           "id": 321,
+           "mapper": {
+            "text": "\u274c *Folk createPerson AND updatePerson both failed* \u2014 SmartLead Positive Reply\n*Lead:* {{1.lead_data.first_name}} {{1.lead_data.last_name}} <{{1.lead_data.email}}>\n*Company:* {{1.lead_data.company_name}}\n*Campaign:* {{1.campaign_name}}\n*Category:* {{1.lead_category.new_name}}\n*Folk Person ID (find):* {{301.id}}\n*Conversation:* {{1.app_url}}\n\n_Manual fix:_ open Folk \u2192 find this person \u2192 set Status to `Positive from outreach` and append the latest reply to their notes.",
+            "channel": "C07TTLZKU56",
+            "channelWType": "manualy"
+           },
+           "module": "slack:CreateMessage",
+           "version": 4,
+           "metadata": {
+            "designer": {
+             "x": 150,
+             "y": 350
+            }
+           },
+           "parameters": {
+            "__IMTCONN__": 9254394
+           }
+          },
+          {
+           "id": 322,
+           "mapper": {
+            "id": "",
+            "phones": []
+           },
+           "module": "builtin:Resume",
+           "version": 1,
+           "metadata": {
+            "designer": {
+             "x": 150,
+             "y": 500
+            }
+           }
+          }
+         ],
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 0,
+           "y": 200
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9252689
+         }
+        },
+        {
+         "id": 303,
+         "filter": {
+          "name": "Person NOT found in Folk \u2192 alert",
+          "conditions": [
+           [
+            {
+             "a": "{{301.id}}",
+             "b": "",
+             "o": "text:equal"
+            }
+           ]
+          ]
+         },
+         "mapper": {
+          "text": "\u274c *Folk createPerson FAILED and no existing person to update* \u2014 SmartLead Positive Reply\n*Lead:* {{1.lead_data.first_name}} {{1.lead_data.last_name}} <{{1.lead_data.email}}>\n*Company:* {{1.lead_data.company_name}} ({{1.lead_data.website}})\n*Campaign:* {{1.campaign_name}}\n*Category:* {{1.lead_category.new_name}}\n*Reply time:* {{1.last_reply.time}}\n*Conversation:* {{1.app_url}}\n\n_Manual fix:_ open Folk \u2192 Q226 group \u2192 add this person \u2192 set Status to `Positive from outreach`.",
+          "channel": "C07TTLZKU56",
+          "channelWType": "manualy"
+         },
+         "module": "slack:CreateMessage",
+         "version": 4,
+         "metadata": {
+          "designer": {
+           "x": 150,
+           "y": 200
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9254394
+         }
+        },
+        {
+         "id": 304,
+         "mapper": {
+          "id": "",
+          "urls": [],
+          "emails": [],
+          "phones": [],
+          "groupId": "",
+          "fullName": "",
+          "jobTitle": "",
+          "lastName": "",
+          "addresses": [],
+          "companies": [],
+          "firstName": "",
+          "networkId": "",
+          "totalInteractions": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 0,
+           "y": 500
+          }
+         }
+        }
+       ],
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": 0,
+         "y": 0
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9252689
+       }
+      },
+      {
+       "id": 7,
+       "filter": {
+        "name": "Has LinkedIn URL + last name (HeyReach required)",
+        "conditions": [
+         [
+          {
+           "a": "{{1.lead_data.linkedin_profile}}",
+           "o": "exist"
+          },
+          {
+           "a": "{{1.lead_data.linkedin_profile}}",
+           "b": "",
+           "o": "text:notequal"
+          },
+          {
+           "a": "{{1.lead_data.last_name}}",
+           "o": "exist"
+          },
+          {
+           "a": "{{1.lead_data.last_name}}",
+           "b": "",
+           "o": "text:notequal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://api.heyreach.io/api/public/list/AddLeadsToListV2",
+        "data": "{\"listId\":672067,\"leads\":[{\"firstName\":\"{{1.lead_data.first_name}}\",\"lastName\":\"{{1.lead_data.last_name}}\",\"profileUrl\":\"{{1.lead_data.linkedin_profile}}\",\"location\":\"{{1.lead_data.location}}\",\"companyName\":\"{{1.lead_data.company_name}}\",\"position\":\"{{1.lead_data.custom_fields.role}}\",\"emailAddress\":\"{{1.lead_data.email}}\"}]}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "X-API-KEY",
+          "value": "+CYJqGDGYOR1wyfoYq1DKdHdpXOYI2ntN2Q/p61hKHM="
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 8,
+         "mapper": {
+          "text": "\u274c *HeyReach add-to-list FAILED (direct API)* \u2014 SmartLead Positive Reply\n*Lead:* {{1.lead_data.first_name}} {{1.lead_data.last_name}} <{{1.lead_data.email}}>\n*Company:* {{1.lead_data.company_name}}\n*LinkedIn:* {{1.lead_data.linkedin_profile}}\n*Campaign:* {{1.campaign_name}}\n*Category:* {{1.lead_category.new_name}}\n*HeyReach List:* 672067 (Positives from SL) \u2192 feeds campaign 432058\n*Conversation:* {{1.app_url}}\n\n\u2501\u2501\u2501 HeyReach API response \u2501\u2501\u2501\n\u2022 HTTP status: `{{7.statusCode}}`\n\u2022 Response body: `{{7.data}}`\n\u2022 Error: `{{error.message}}`\n\n_Manual fix:_ open HeyReach \u2192 `Positives from SL` list \u2192 add this lead via their LinkedIn URL.",
+          "channel": "C07TTLZKU56",
+          "channelWType": "manualy"
+         },
+         "module": "slack:CreateMessage",
+         "version": 4,
+         "metadata": {
+          "designer": {
+           "x": 300,
+           "y": 300
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9254394
+         }
+        },
+        {
+         "id": 9,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 300,
+           "y": 470
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": 150,
+         "y": 0
+        }
+       },
+       "parameters": {
+        "handleErrors": true,
+        "useNewZLibDeCompress": true
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 210,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async",
+        "data": "{\"data\":[{\"first_name\":\"{{1.lead_data.first_name}}\",\"last_name\":\"{{1.lead_data.last_name}}\",\"company\":\"{{1.lead_data.company_name}}\",\"linkedin_url\":\"{{1.lead_data.linkedin_profile}}\",\"custom_fields\":{\"uuid\":\"{{1.lead_id}}\"}}],\"enrich_email_address\":false,\"enrich_phone_number\":true}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 213,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": -450,
+           "y": -280
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": -450,
+         "y": -400,
+         "name": "BetterContact submit"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 211,
+       "mapper": {
+        "duration": 240
+       },
+       "module": "util:FunctionSleep",
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": -300,
+         "y": -400,
+         "name": "wait for BetterContact"
+        }
+       }
+      },
+      {
+       "id": 212,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async/{{210.data.id}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 214,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": -150,
+           "y": -280
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": -150,
+         "y": -400,
+         "name": "BetterContact result"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 40,
+       "filter": {
+        "name": "Client (non-Navreo) campaigns \u2192 Clients pipeline",
+        "conditions": [
+         [
+          {
+           "a": "{{1.campaign_name}}",
+           "b": "Navreo",
+           "o": "text:notcontain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "note": "\ud83c\udfaf POSITIVE RESPONSE \u2014 SmartLead (Client)\n\nDeal: {{1.lead_data.company_name}} \u2014 SmartLead\nDeal Status: Positive Response from Outreach\nCategory: {{1.lead_category.new_name}}\nCampaign: {{1.campaign_name}}\nAccount Used: {{1.from_email}}\nReply Date: {{1.last_reply.time}}\n\n\u2501\u2501\u2501 THEIR REPLY \u2501\u2501\u2501\n{{1.last_reply.email_body}}\n\n\ud83d\udd17 Conversation:\n{{1.app_url}}",
+        "urls": [
+         "{{1.lead_data.website}}",
+         "{{1.lead_data.linkedin_profile}}",
+         "{{1.app_url}}"
+        ],
+        "group": "db406cc0-6cb9-4e85-91ed-e4231975b195",
+        "emails": [
+         "{{1.lead_data.email}}"
+        ],
+        "phones": "{{merge(if(212.data.data[1].contact_phone_number; add(emptyarray; 212.data.data[1].contact_phone_number); emptyarray); if(5.data.person.mobile.status = \"VERIFIED\"; add(emptyarray; 5.data.person.mobile.mobile); emptyarray))}}",
+        "company": "{{1.lead_data.company_name}}",
+        "jobTitle": "{{1.lead_data.custom_fields.role}}",
+        "lastName": "{{1.lead_data.last_name}}",
+        "firstName": "{{1.lead_data.first_name}}",
+        "customFields": {
+         "2478b9ef-9ceb-443b-bdda-dcbb8686f945": "Lead"
+        }
+       },
+       "module": "folk:createPerson",
+       "onerror": [
+        {
+         "id": 41,
+         "mapper": {
+          "group": "db406cc0-6cb9-4e85-91ed-e4231975b195",
+          "search": "{{1.lead_data.email}}"
+         },
+         "module": "folk:findPerson",
+         "onerror": [
+          {
+           "id": 42,
+           "mapper": {
+            "id": "",
+            "urls": [],
+            "emails": [],
+            "phones": [],
+            "groupId": "",
+            "fullName": "",
+            "jobTitle": "",
+            "lastName": "",
+            "addresses": [],
+            "companies": [],
+            "firstName": "",
+            "networkId": "",
+            "totalInteractions": 0
+           },
+           "module": "builtin:Resume",
+           "version": 1,
+           "metadata": {
+            "designer": {
+             "x": -150,
+             "y": 950
+            }
+           }
+          }
+         ],
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": -150,
+           "y": 800
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9252689
+         }
+        },
+        {
+         "id": 43,
+         "filter": {
+          "name": "Person found in Folk \u2192 update them",
+          "conditions": [
+           [
+            {
+             "a": "{{41.id}}",
+             "b": "",
+             "o": "text:notequal"
+            }
+           ]
+          ]
+         },
+         "mapper": {
+          "note": "\ud83c\udfaf POSITIVE RESPONSE \u2014 SmartLead (Client)\n\nDeal: {{1.lead_data.company_name}} \u2014 SmartLead\nDeal Status: Positive Response from Outreach\nCategory: {{1.lead_category.new_name}}\nCampaign: {{1.campaign_name}}\nAccount Used: {{1.from_email}}\nReply Date: {{1.last_reply.time}}\n\n\u2501\u2501\u2501 THEIR REPLY \u2501\u2501\u2501\n{{1.last_reply.email_body}}\n\n\ud83d\udd17 Conversation:\n{{1.app_url}}",
+          "group": "db406cc0-6cb9-4e85-91ed-e4231975b195",
+          "phones": "{{if(length(41.phones) = 0; merge(if(212.data.data[1].contact_phone_number; add(emptyarray; 212.data.data[1].contact_phone_number); emptyarray); if(5.data.person.mobile.status = \"VERIFIED\"; add(emptyarray; 5.data.person.mobile.mobile); emptyarray)); 41.phones)}}",
+          "jobTitle": "{{1.lead_data.custom_fields.role}}",
+          "personId": "{{41.id}}",
+          "customFields": {
+           "2478b9ef-9ceb-443b-bdda-dcbb8686f945": "Lead"
+          }
+         },
+         "module": "folk:updatePerson",
+         "onerror": [
+          {
+           "id": 44,
+           "mapper": {
+            "text": "\u274c *Folk createPerson AND updatePerson both failed* \u2014 Client Positive Reply\n*Lead:* {{1.lead_data.first_name}} {{1.lead_data.last_name}} <{{1.lead_data.email}}>\n*Company:* {{1.lead_data.company_name}}\n*Campaign:* {{1.campaign_name}}\n*Category:* {{1.lead_category.new_name}}\n*Folk Person ID (find):* {{41.id}}\n*Conversation:* {{1.app_url}}\n\n_Manual fix:_ open Folk \u2192 Clients (Appointment Setting) pipeline \u2192 find this person \u2192 set Status to `Lead` and append the latest reply to their notes.",
+            "channel": "C07TTLZKU56",
+            "channelWType": "manualy"
+           },
+           "module": "slack:CreateMessage",
+           "version": 4,
+           "metadata": {
+            "designer": {
+             "x": 150,
+             "y": 950
+            }
+           },
+           "parameters": {
+            "__IMTCONN__": 9254394
+           }
+          },
+          {
+           "id": 45,
+           "mapper": {
+            "id": "",
+            "phones": []
+           },
+           "module": "builtin:Resume",
+           "version": 1,
+           "metadata": {
+            "designer": {
+             "x": 150,
+             "y": 1100
+            }
+           }
+          }
+         ],
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 0,
+           "y": 800
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9252689
+         }
+        },
+        {
+         "id": 46,
+         "filter": {
+          "name": "Person NOT found in Folk \u2192 alert",
+          "conditions": [
+           [
+            {
+             "a": "{{41.id}}",
+             "b": "",
+             "o": "text:equal"
+            }
+           ]
+          ]
+         },
+         "mapper": {
+          "text": "\u274c *Folk createPerson FAILED (client) and no existing person to update* \u2014 Client Positive Reply\n*Lead:* {{1.lead_data.first_name}} {{1.lead_data.last_name}} <{{1.lead_data.email}}>\n*Company:* {{1.lead_data.company_name}} ({{1.lead_data.website}})\n*Campaign:* {{1.campaign_name}}\n*Category:* {{1.lead_category.new_name}}\n*Reply time:* {{1.last_reply.time}}\n*Conversation:* {{1.app_url}}\n\n_Manual fix:_ open Folk \u2192 Clients (Appointment Setting) pipeline \u2192 add this person \u2192 set Status to `Lead`.",
+          "channel": "C07TTLZKU56",
+          "channelWType": "manualy"
+         },
+         "module": "slack:CreateMessage",
+         "version": 4,
+         "metadata": {
+          "designer": {
+           "x": 150,
+           "y": 800
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9254394
+         }
+        },
+        {
+         "id": 47,
+         "mapper": {
+          "id": "",
+          "urls": [],
+          "emails": [],
+          "phones": [],
+          "groupId": "",
+          "fullName": "",
+          "jobTitle": "",
+          "lastName": "",
+          "addresses": [],
+          "companies": [],
+          "firstName": "",
+          "networkId": "",
+          "totalInteractions": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 0,
+           "y": 1100
+          }
+         }
+        }
+       ],
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": 0,
+         "y": 800
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9252689
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 60,
+       "filter": {
+        "name": "Amplifyy \u2192 portal + Slack",
+        "conditions": [
+         [
+          {
+           "a": "{{1.campaign_name}}",
+           "b": "Amplifyy",
+           "o": "text:contain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "text": "\ud83c\udf89 *New Positive Response*\n\n*Client:* Amplifyy\n*Campaign:* {{1.campaign_name}}\n*Lead:* {{1.lead_data.first_name}} {{1.lead_data.last_name}} \u2014 {{ifempty(1.lead_data.custom_fields.role; \"Role n/a\")}} @ {{1.lead_data.company_name}}\n*Email:* {{1.lead_data.email}}\n*LinkedIn:* {{ifempty(1.lead_data.linkedin_profile; \"Not on file\")}}\n*Time of reply:* {{1.last_reply.time}}\n\n*Their reply:*\n{{stripHTML(1.last_reply.email_body)}}\n\n*Original email we sent:*\n{{stripHTML(get(map(1.history; \"email_body\"; \"type\"; \"SENT\"); 1))}}\n\n\ud83d\udcca *<https://www.notion.so/342a5f09137b4af780a003eb19542ff0|View all your leads \u2192>*",
+        "parse": false,
+        "mrkdwn": true,
+        "channel": "C0AV6J0MFPS",
+        "icon_url": "https://cdn.theorg.com/5516b70b-cd51-45d5-8b66-4bae4e8892b8_medium.jpg",
+        "username": "NAVREO BOT",
+        "channelWType": "manualy"
+       },
+       "module": "slack:CreateMessage",
+       "onerror": [
+        {
+         "id": 65,
+         "mapper": {},
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 150,
+           "y": 1600
+          }
+         }
+        }
+       ],
+       "version": 4,
+       "metadata": {
+        "designer": {
+         "x": 0,
+         "y": 1500,
+         "name": "Amplifyy card"
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9254394
+       }
+      },
+      {
+       "id": 61,
+       "mapper": {
+        "fields": [
+         {
+          "key": "Lead-Name",
+          "type": "title",
+          "value": "{{1.lead_data.first_name}} {{1.lead_data.last_name}}"
+         },
+         {
+          "key": "Full-Reply",
+          "type": "rich_text",
+          "value": "{{stripHTML(1.last_reply.email_body)}}"
+         },
+         {
+          "key": "Company Name",
+          "type": "rich_text",
+          "value": "{{1.lead_data.company_name}}"
+         },
+         {
+          "key": "Website",
+          "type": "url",
+          "value": "{{1.lead_data.website}}"
+         },
+         {
+          "key": "Email",
+          "type": "email",
+          "value": "{{1.lead_data.email}}"
+         },
+         {
+          "key": "LinkedIn URL",
+          "type": "url",
+          "value": "{{1.lead_data.linkedin_profile}}"
+         },
+         {
+          "key": "Campaign Name",
+          "type": "rich_text",
+          "value": "{{1.campaign_name}}"
+         },
+         {
+          "key": "Time of Reply",
+          "date": {
+           "start": "{{1.last_reply.time}}",
+           "includeTime": true
+          },
+          "type": "date"
+         },
+         {
+          "key": "First Email Sent",
+          "type": "rich_text",
+          "value": "{{stripHTML(get(map(1.history; \"email_body\"; \"type\"; \"SENT\"); 1))}}"
+         },
+         {
+          "key": "Select",
+          "type": "select",
+          "value": "Interested"
+         },
+         {
+          "key": "Status",
+          "type": "select",
+          "value": "1. Not responded"
+         }
+        ],
+        "select": "map",
+        "database": "342a5f09137b4af780a003eb19542ff0"
+       },
+       "module": "notion:createAPage",
+       "onerror": [
+        {
+         "id": 63,
+         "mapper": {
+          "text": "\u26a0\ufe0f *Amplifyy portal-DB write failed* \u2014 {{1.lead_data.first_name}} {{1.lead_data.last_name}} <{{1.lead_data.email}}> / {{1.campaign_name}}. Add manually to the Amplifyy responses DB.",
+          "channel": "C07TTLZKU56",
+          "channelWType": "manualy"
+         },
+         "module": "slack:CreateMessage",
+         "version": 4,
+         "metadata": {
+          "designer": {
+           "x": 300,
+           "y": 1650
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9254394
+         }
+        },
+        {
+         "id": 64,
+         "mapper": {},
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 500,
+           "y": 1650
+          }
+         }
+        }
+       ],
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": 300,
+         "y": 1500,
+         "name": "Amplifyy \u2192 portal DB"
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 11521245
+       }
+      },
+      {
+       "id": 80,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async",
+        "data": "{\"data\":[{\"first_name\":\"{{1.lead_data.first_name}}\",\"last_name\":\"{{1.lead_data.last_name}}\",\"company\":\"{{1.lead_data.company_name}}\",\"linkedin_url\":\"{{1.lead_data.linkedin_profile}}\",\"custom_fields\":{\"uuid\":\"{{1.lead_id}}\"}}],\"enrich_email_address\":false,\"enrich_phone_number\":true}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 83,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 650,
+           "y": 2300
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": 600,
+         "y": 2200,
+         "name": "BetterContact submit"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 81,
+       "mapper": {
+        "duration": 240
+       },
+       "module": "util:FunctionSleep",
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": 750,
+         "y": 2200,
+         "name": "wait for BetterContact"
+        }
+       }
+      },
+      {
+       "id": 82,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async/{{80.data.id}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 84,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 900,
+           "y": 2300
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": 850,
+         "y": 2200,
+         "name": "BetterContact result"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 62,
+       "mapper": {
+        "text": "\ud83d\udcde *Phone numbers found:*\n\u2022 BetterContact: {{ifempty(82.data.data[1].contact_phone_number; \"none found\")}}\n\u2022 Prospeo: {{if(5.data.person.mobile.status = \"VERIFIED\"; 5.data.person.mobile.mobile; \"none found\")}}",
+        "parse": false,
+        "mrkdwn": true,
+        "channel": "C0AV6J0MFPS",
+        "icon_url": "https://cdn.theorg.com/5516b70b-cd51-45d5-8b66-4bae4e8892b8_medium.jpg",
+        "username": "NAVREO BOT",
+        "thread_ts": "{{60.ts}}",
+        "channelWType": "manualy"
+       },
+       "module": "slack:CreateMessage",
+       "onerror": [
+        {
+         "id": 66,
+         "mapper": {},
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 600,
+           "y": 1600
+          }
+         }
+        }
+       ],
+       "version": 4,
+       "metadata": {
+        "designer": {
+         "x": 450,
+         "y": 1500,
+         "name": "Amplifyy phone \u2192 thread"
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9254394
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 70,
+       "filter": {
+        "name": "Arnic \u2192 portal + Slack",
+        "conditions": [
+         [
+          {
+           "a": "{{1.campaign_name}}",
+           "b": "Arnic",
+           "o": "text:contain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "text": "\ud83c\udf89 *New Positive Response*\n\n*Client:* Arnic\n*Campaign:* {{1.campaign_name}}\n*Lead:* {{1.lead_data.first_name}} {{1.lead_data.last_name}} \u2014 {{ifempty(1.lead_data.custom_fields.role; \"Role n/a\")}} @ {{1.lead_data.company_name}}\n*Email:* {{1.lead_data.email}}\n*LinkedIn:* {{ifempty(1.lead_data.linkedin_profile; \"Not on file\")}}\n*Time of reply:* {{1.last_reply.time}}\n\n*Their reply:*\n{{stripHTML(1.last_reply.email_body)}}\n\n*Original email we sent:*\n{{stripHTML(get(map(1.history; \"email_body\"; \"type\"; \"SENT\"); 1))}}\n\n\ud83d\udcca *<https://www.notion.so/2ec3333429d54ebf9a5dba33f1402561|View all your leads \u2192>*",
+        "parse": false,
+        "mrkdwn": true,
+        "channel": "C0AHFEHV188",
+        "icon_url": "https://cdn.theorg.com/5516b70b-cd51-45d5-8b66-4bae4e8892b8_medium.jpg",
+        "username": "NAVREO BOT",
+        "channelWType": "manualy"
+       },
+       "module": "slack:CreateMessage",
+       "onerror": [
+        {
+         "id": 75,
+         "mapper": {},
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 150,
+           "y": 2100
+          }
+         }
+        }
+       ],
+       "version": 4,
+       "metadata": {
+        "designer": {
+         "x": 0,
+         "y": 2000,
+         "name": "Arnic card"
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9254394
+       }
+      },
+      {
+       "id": 71,
+       "mapper": {
+        "fields": [
+         {
+          "key": "Lead-Name",
+          "type": "title",
+          "value": "{{1.lead_data.first_name}} {{1.lead_data.last_name}}"
+         },
+         {
+          "key": "Full-Reply",
+          "type": "rich_text",
+          "value": "{{stripHTML(1.last_reply.email_body)}}"
+         },
+         {
+          "key": "Company Name",
+          "type": "rich_text",
+          "value": "{{1.lead_data.company_name}}"
+         },
+         {
+          "key": "Website",
+          "type": "url",
+          "value": "{{1.lead_data.website}}"
+         },
+         {
+          "key": "Email",
+          "type": "email",
+          "value": "{{1.lead_data.email}}"
+         },
+         {
+          "key": "LinkedIn URL",
+          "type": "url",
+          "value": "{{1.lead_data.linkedin_profile}}"
+         },
+         {
+          "key": "Campaign Name",
+          "type": "rich_text",
+          "value": "{{1.campaign_name}}"
+         },
+         {
+          "key": "Time of Reply",
+          "date": {
+           "start": "{{1.last_reply.time}}",
+           "includeTime": true
+          },
+          "type": "date"
+         },
+         {
+          "key": "First Email Sent",
+          "type": "rich_text",
+          "value": "{{stripHTML(get(map(1.history; \"email_body\"; \"type\"; \"SENT\"); 1))}}"
+         },
+         {
+          "key": "Select",
+          "type": "select",
+          "value": "Interested"
+         },
+         {
+          "key": "Status",
+          "type": "select",
+          "value": "1. Not responded"
+         }
+        ],
+        "select": "map",
+        "database": "2ec3333429d54ebf9a5dba33f1402561"
+       },
+       "module": "notion:createAPage",
+       "onerror": [
+        {
+         "id": 73,
+         "mapper": {
+          "text": "\u26a0\ufe0f *Arnic portal-DB write failed* \u2014 {{1.lead_data.first_name}} {{1.lead_data.last_name}} <{{1.lead_data.email}}> / {{1.campaign_name}}. Add manually to the Arnic responses DB.",
+          "channel": "C07TTLZKU56",
+          "channelWType": "manualy"
+         },
+         "module": "slack:CreateMessage",
+         "version": 4,
+         "metadata": {
+          "designer": {
+           "x": 300,
+           "y": 2150
+          }
+         },
+         "parameters": {
+          "__IMTCONN__": 9254394
+         }
+        },
+        {
+         "id": 74,
+         "mapper": {},
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 500,
+           "y": 2150
+          }
+         }
+        }
+       ],
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": 300,
+         "y": 2000,
+         "name": "Arnic \u2192 portal DB"
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 11521245
+       }
+      },
+      {
+       "id": 90,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async",
+        "data": "{\"data\":[{\"first_name\":\"{{1.lead_data.first_name}}\",\"last_name\":\"{{1.lead_data.last_name}}\",\"company\":\"{{1.lead_data.company_name}}\",\"linkedin_url\":\"{{1.lead_data.linkedin_profile}}\",\"custom_fields\":{\"uuid\":\"{{1.lead_id}}\"}}],\"enrich_email_address\":false,\"enrich_phone_number\":true}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 93,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 650,
+           "y": 2800
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": 600,
+         "y": 2700,
+         "name": "BetterContact submit"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 91,
+       "mapper": {
+        "duration": 240
+       },
+       "module": "util:FunctionSleep",
+       "version": 1,
+       "metadata": {
+        "designer": {
+         "x": 750,
+         "y": 2700,
+         "name": "wait for BetterContact"
+        }
+       }
+      },
+      {
+       "id": 92,
+       "mapper": {
+        "qs": [],
+        "url": "https://app.bettercontact.rocks/api/v2/async/{{90.data.id}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [
+         {
+          "name": "X-API-Key",
+          "value": "a495bb5bb70a266ba436"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "onerror": [
+        {
+         "id": 94,
+         "mapper": {
+          "data": {},
+          "statusCode": 0
+         },
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 900,
+           "y": 2800
+          }
+         }
+        }
+       ],
+       "version": 3,
+       "metadata": {
+        "designer": {
+         "x": 850,
+         "y": 2700,
+         "name": "BetterContact result"
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 72,
+       "mapper": {
+        "text": "\ud83d\udcde *Phone numbers found:*\n\u2022 BetterContact: {{ifempty(92.data.data[1].contact_phone_number; \"none found\")}}\n\u2022 Prospeo: {{if(5.data.person.mobile.status = \"VERIFIED\"; 5.data.person.mobile.mobile; \"none found\")}}",
+        "parse": false,
+        "mrkdwn": true,
+        "channel": "C0AHFEHV188",
+        "icon_url": "https://cdn.theorg.com/5516b70b-cd51-45d5-8b66-4bae4e8892b8_medium.jpg",
+        "username": "NAVREO BOT",
+        "thread_ts": "{{70.ts}}",
+        "channelWType": "manualy"
+       },
+       "module": "slack:CreateMessage",
+       "onerror": [
+        {
+         "id": 76,
+         "mapper": {},
+         "module": "builtin:Resume",
+         "version": 1,
+         "metadata": {
+          "designer": {
+           "x": 600,
+           "y": 2100
+          }
+         }
+        }
+       ],
+       "version": 4,
+       "metadata": {
+        "designer": {
+         "x": 450,
+         "y": 2000,
+         "name": "Arnic phone \u2192 thread"
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9254394
+       }
+      }
+     ]
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "designer": {
+     "x": -150,
+     "y": 0
+    }
+   }
+  }
+ ],
+ "name": "SmartLead Positive Reply (Navreo) \u2192 Folk + HeyReach: Sales Pipeline",
+ "metadata": {
+  "instant": true,
+  "version": 1,
+  "designer": {
+   "orphans": []
+  },
+  "scenario": {
+   "dlq": false,
+   "slots": null,
+   "dataloss": false,
+   "maxErrors": 3,
+   "autoCommit": true,
+   "roundtrips": 1,
+   "sequential": false,
+   "confidential": false,
+   "freshVariables": false,
+   "autoCommitTriggerLast": true
+  }
+ }
+}

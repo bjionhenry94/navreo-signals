@@ -1,0 +1,30 @@
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime caches
+cache/
+*.cache
+
+# Backups
+*.zip
+*.bak
+
+# Eval workspace (test data, not a shipped skill)
+lilly-email-verification-workspace/
+
+# Runtime state (changes every pipeline run, don't track)
+lilly-theirstack-data-processing/state/
+lilly-theirstack-data-processing/queue/
+lilly-theirstack-data-processing/runs/
+lilly-trigify-data-processing/state/
+*.state.json
+
+# Agent-installed skills (symlinks into ../../.agents/skills, externally managed, not ours)
+/cavecrew
+/caveman
+/caveman-*

@@ -1,0 +1,30 @@
+{
+  "taken_at": "2026-07-14 (Step 1, setter-live-draft-ship)",
+  "repo": {"origin_main": "c7a54af", "worktree": "/private/tmp/claude-501/-Users-bjionhenry-Library-Mobile-Documents-com-apple-CloudDocs-Bjion--2023--Navreo-Claude-Navreo/3329ed4b-6edb-42e8-b5de-f6b2d445172b/scratchpad/setter-ship-wt"},
+  "line_numbers": {
+    "setter.py_lines": 3728,
+    "run_poll": 1850,
+    "handle_inbound": 1944,
+    "_existing_row": 1432,
+    "campaign_assigned_at_skip_in_run_poll": 1889,
+    "mode_gate_in_decide": 761
+  },
+  "settings": {"autopilot_enabled": false, "work_start": 9, "work_end": 17},
+  "agent_modes_before_ship": {
+    "agent-d403bbcd": {"name": "Clay to Claude guide sender", "mode": "autopilot", "enabled": true, "campaign_ids": [3396215, 3509012, 3445511]},
+    "agent-f996e1c9": {"name": "Recruitment", "mode": "draft_only", "enabled": true, "campaign_ids": [3356274, 3356261]},
+    "agent-70fd17e5": {"name": "Amplifyy", "mode": "autopilot", "enabled": true, "campaign_ids_count": 30},
+    "agent-efb50fc7": {"name": "Clay to Claude guide sender copy", "mode": "draft_only", "enabled": true, "campaign_ids": [3591996]}
+  },
+  "planned_mode_flips_for_check5": ["agent-d403bbcd -> draft_only", "agent-70fd17e5 -> draft_only"],
+  "core_four_verified_live": ["Interested", "Information Request", "Meeting Request", "positive-re-reply"],
+  "backfill_expectation": {
+    "enabled_agent_campaigns_7d_core_four": 40,
+    "breakdown": {"Interested": 12, "Information Request": 14, "Meeting Request": 5, "positive-re-reply": 9},
+    "all_campaigns_7d_core_four": 97,
+    "note": "brief's ~80 was all-campaigns as of 2026-07-14 morning; scope = enabled-agent campaigns only = 40",
+    "already_in_setter_queue": 0,
+    "rows_missing_dedupe_keys": 0
+  },
+  "mode_semantics": "code modes are 'autopilot'|'draft_only'; decide() line 761 holds anything not autopilot; brief's mode=review == draft_only"
+}

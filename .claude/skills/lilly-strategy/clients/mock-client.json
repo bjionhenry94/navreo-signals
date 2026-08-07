@@ -1,0 +1,41 @@
+{
+  "client_slug": "mock-client",
+  "client_name": "Northwind Cloud (MOCK)",
+  "_mock": "FICTIONAL DEMO CLIENT — created to illustrate the /lilly-strategy output format. Not a real account. No API probes were fired; all TAM numbers in the session file are illustrative.",
+  "what_they_sell": "Done-for-you FinOps / cloud-cost optimization for AWS-heavy B2B SaaS companies — engagements that cut cloud bills 20-40% without re-architecting",
+  "icp": {
+    "verticals": ["B2B SaaS", "Data/AI platforms", "Dev-tools"],
+    "roles": ["Engineering leadership", "Platform/Infra", "FinOps", "Finance (budget owner)"],
+    "geo": ["US", "CA", "GB", "AU", "IE", "NZ", "DE", "NL"],
+    "headcount_bands": ["51-200", "201-500"],
+    "dm_titles": ["CTO", "VP Engineering", "Head of Platform", "FinOps Lead"]
+  },
+  "named_clients": [
+    "Larkfield Data (fictional)",
+    "Volo Analytics (fictional)",
+    "Pebble Stack (fictional)",
+    "Cohort.io (fictional)",
+    "Meridian Signals (fictional)",
+    "Tessellate AI (fictional)"
+  ],
+  "existing_campaigns": {
+    "smartlead_client_key": "MOCK-no-real-key",
+    "campaign_names": [
+      "Northwind - AWS-heavy SaaS (core, live)",
+      "Northwind - 'cloud bill audit' magnet test (DEAD - killed at 16K sent)"
+    ]
+  },
+  "channels": {
+    "email": "Smartlead",
+    "linkedin": "HeyReach"
+  },
+  "constraints": {
+    "taboo_verticals": ["No public-sector / gov (procurement too slow)"],
+    "geo_exclusions": [],
+    "lead_magnet_blockers": ["Cannot promise a guaranteed % saving in writing"],
+    "regulatory": []
+  },
+  "notes": "MOCK CLIENT for skill demonstration. dm_titles N=4 → DM-TAM multiplier is x4 across every idea. Geo = Navreo default high-GDP set, trimmed to English-first + DE/NL. One dead angle on file ('cloud bill audit' magnet) so the re-pitch guardrail can be demonstrated.",
+  "first_briefed_at": "2026-05-31",
+  "last_refreshed_at": "2026-05-31"
+}

@@ -1,0 +1,115 @@
+{
+  "brief_id": "arnic-sales-ops-enablement",
+  "brief_name": "Arnic Sales-Ops & Enablement Hiring Signal",
+  "client": "Arnic (Navreo DFY client)",
+  "created_at": "2026-05-27",
+  "_provisioning_status": "PROVISIONED_NOT_LIVE — infrastructure built 2026-05-27. Copy, personalization variables, and qualification patterns are DRAFT pending user confirmation at the copywriting/dry-run step. TheirStack saved search not yet created. Nothing emails until copy is written, a 2-company dry-run is approved, and the user unpauses Smartlead.",
+
+  "ideation": {
+    "icp_description": "B2B companies (all-sector, per user decision 2026-05-27), 100-1000 employees, HQ in US or UK, direct employers, that are HIRING a Sales Enablement / Revenue Enablement / RevOps / Sales Operations role. The hire signals the company is staffing or expanding the function that owns the sales tech stack and rep adoption of it.",
+    "offer": "Arnic increases adoption of tools among a company's employees — i.e. gets the sales team to actually USE the sales stack they've bought (CRM, sales engagement, enablement tooling) instead of it sitting unused. The person we email is the Head of Sales / VP Sales / CRO who owns the number and feels the pain of low tool adoption.",
+    "why_signal_fits": "When a company hires a RevOps / Sales-Ops / Sales-Enablement person, it is investing in the exact function that owns CRM + sales-tool rollout and rep adoption. That hire is the clearest in-market signal that (a) they have a sales stack worth adopting, and (b) they are actively trying to drive adoption of it. Arnic accelerates that adoption so the tooling investment pays off.",
+    "tam_probe_2026_05_27": "All-sector, US+GB, 100-1000 emp, 30-day window: ~721 jobs / 585 unique companies (~24/day) for the Sales-Ops/RevOps stems; ~179 jobs / 151 companies for the Sales-Enablement stems. Combined before dedup. SaaS/tech share ~50-70% from shallow sample (sample-based, unreliable)."
+  },
+
+  "qualification": {
+    "_status": "CONFIRMED 2026-05-28 (user feedback on first data-processing run). Any sales-operations-related role qualifies regardless of IC vs management level; geography is NOT a qualification gate; sub-100-employee rows are excluded at processing.",
+    "_purpose": "Role-only judgement layer applied by lilly-theirstack-data-processing Phase 2.5. Classifies each new Jobs row QUALIFIED / BORDERLINE / OFF_BRIEF on whether the role is sales-operations-related (RevOps / Sales Ops / Sales-Enablement / Revenue-Enablement). Never excludes companies — only roles. Geography is NOT used here. The sub-100-employee exclusion is a separate processing gate, not a role verdict.",
+    "role_signal_definition": "The new hire will own, run, or directly support the company's sales tech stack and the sales team's adoption of it (RevOps, Sales Ops, Sales/Revenue Enablement) — at ANY level, IC Analyst/Specialist included. The function (sales-operations-related) is what qualifies, not the seniority. Not a marketing-ops role, not a software engineer building an internal tool, not a generic operations generalist.",
+    "qualified_role_patterns": [
+      "Sales Enablement / Revenue Enablement — any level: Specialist / Analyst / Coordinator-IC / Manager / Senior Manager / Lead / Director / Head / VP",
+      "Revenue Operations / RevOps — any level: Analyst / Specialist / Manager / Lead / Director / Head / VP",
+      "Sales Operations / Sales Ops — any level: Analyst / Specialist / Manager / Lead / Director / Head / VP (incl. CRM Sales-Ops Analyst, Retail/Channel Sales-Ops, Sales-Ops within an ad/retail-media partnership role)",
+      "GTM Operations / Go-to-Market Operations (sales-led) — any level",
+      "_RULE 2026-05-28: any sales-operations-related role is QUALIFIED, IC analysts/specialists included. Per user: 'all the borderlines are actually permitted, because they're sales operations related roles.'"
+    ],
+    "disqualified_role_patterns": [
+      "Marketing Operations / Marketing Ops — owns the marketing stack, not the sales stack",
+      "Business Operations / BizOps / Strategy & Ops — generalist, not sales-tool owner",
+      "Salesforce Developer / CRM Developer / RevOps Engineer (software build) — engineer building tooling, not driving rep adoption",
+      "Customer Success Operations / CS Ops — retention stack, not new-logo sales stack",
+      "Partner / Channel Operations (pure) — partner motion, not direct sales adoption",
+      "Sales, Inventory & Operations Planning (S&OP) / demand planning — supply-chain, not sales tech stack",
+      "Generic operations leadership with no Sales/Revenue/Enablement function (e.g. 'Campus Operations', plain 'Operations Director') — not sales-ops",
+      "Pure accounting / finance roles",
+      "Intern / Associate / Coordinator level — STILL disqualified by default (no system or adoption ownership); revisit with user if a borderline sales-ops coordinator looks like a first dedicated hire"
+    ],
+    "borderline_role_patterns": [
+      "Operations Manager (no Sales/Revenue/Enablement prefix) — could be sales-ops or generic ops; needs context",
+      "Revenue Operations leaning Marketing (title mixes both) — check which stack dominates"
+    ],
+    "_geography_rule": "CONFIRMED 2026-05-28: geography is NOT a qualification or enrichment gate. Canada and other non-US/GB rows that leak past the saved search are fine to enrich. Do NOT defer or downgrade a sales-ops role because its HQ/job country is outside US/GB.",
+    "_employee_floor_rule": "CONFIRMED 2026-05-28: exclude any row whose Company Size is under 100 employees at processing time (treat as off-brief, do not enrich). The saved-search headcount filter is set but leaks sub-100 rows, so enforce the >=100 floor here."
+  },
+
+  "filter": {
+    "posted_at_max_age_days": 1,
+    "job_country_code_or": ["US", "GB"],
+    "min_employee_count": 100,
+    "max_employee_count": 1000,
+    "company_type": "direct_employer",
+    "job_title_or": ["Sales Enablement", "Revenue Enablement", "Sales Operations", "Sales Ops", "Revenue Operations", "RevOps"],
+    "limit": 50,
+    "_sector_filter": "NONE — all-sector by user decision 2026-05-27 (ICP nominally SaaS/tech but user chose breadth over precision).",
+    "_geography_note": "Saved search MUST use Company HQ Location (United States, United Kingdom), NOT Job Location.",
+    "_expected_daily_volume": "~24 jobs/day raw at 100-1000 emp all-sector. Lower after role-qualification + dedup."
+  },
+
+  "dm_finder": {
+    "target_titles": ["Head of Sales", "VP Sales", "VP of Sales", "Chief Revenue Officer", "Chief Sales Officer", "Head of Revenue", "VP Revenue", "Director of Sales", "Sales Director"],
+    "providers_preference": ["prospeo", "ai_ark"],
+    "max_dms_per_company": 3,
+    "_note": "Buyer = the sales leader who owns the number and feels low-tool-adoption pain (Arnic's proven persona: Heads of Sales, originally 100-200 emp, extended to 1000 per user 2026-05-27). NOT the RevOps/Enablement person being hired (does not exist yet). Bare CRO/CSO acronyms excluded; full spellings only."
+  },
+
+  "infrastructure": {
+    "template_sheet_id": "1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ",
+    "sheet_id": "10QSgb45ou8i3vdacWthwPl2c2Ir5l476F1ONT-7J414",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/10QSgb45ou8i3vdacWthwPl2c2Ir5l476F1ONT-7J414/edit",
+    "jobs_scenario_id": 9297938,
+    "jobs_scenario_url": "https://eu2.make.com/536258/scenarios/9297938",
+    "jobs_webhook_id": 4157048,
+    "jobs_webhook_url": "https://hook.eu2.make.com/pjtl5yoq6u9bwlbe0sigzy69d8gqrxdu",
+    "jobs_webhook_payload_shape": "TheirStack job.new event: { id, type:'job.new', payload:{job + company_object} }",
+    "dms_scenario_id": 9297940,
+    "dms_scenario_url": "https://eu2.make.com/536258/scenarios/9297940",
+    "dms_webhook_id": 4157049,
+    "dms_webhook_url": "https://hook.eu2.make.com/cd6ojuax1km4eyt5w5ellmtjpy8qsymt",
+    "dms_webhook_payload_shape": "Skill 2 push: { rows: [{...17 DM fields...}] }",
+    "smartlead_campaign_id": 3407205,
+    "smartlead_campaign_url": "https://app.smartlead.ai/app/email-campaign/3407205/analytics",
+    "smartlead_campaign_status": "USING EXISTING Arnic campaign 'Arnic – Sales Enablement (Hiring Signals)' (status DRAFTED, Smartlead client 366437) — designated by user 2026-05-27, replaces the empty 3407416 I created (now orphaned, pending delete). Verify/author copy via lilly-copywriter and confirm sender mailboxes are attached before the dry-run / unpausing.",
+    "make_team_id": 536258,
+    "make_google_connection_id": 9696598,
+    "schedule_task_id": "theirstack-arnic-sales-ops-enablement-daily",
+    "schedule_task_path": "/Users/bjionhenry/.claude/scheduled-tasks/theirstack-arnic-sales-ops-enablement-daily/SKILL.md",
+    "schedule_cron": "0 9 * * 1-5",
+    "schedule_dispatch": "~09:09 local Mon-Fri",
+    "schedule_created_at": "2026-05-27",
+    "pre_first_run_dependency": "RESOLVED 2026-05-27 — DMs Make scenario 9297940 activated + verified writing to the Decision-Makers tab (test execution operations:4, schema bound on first payload, no manual redetermine needed). Jobs scenario 9297938 also live. Pipeline fully wired.",
+    "activation_test_cleanup": "A dummy test DM (email activation.test@example.com, source 'dms-scenario-activation-test') was written to the Decision-Makers tab during activation. DELETE it before the first run, else the routine will push it to Smartlead 3407205 as a junk lead."
+  },
+
+  "theirstack_saved_search": {
+    "ui_label": "Sales-Ops & Enablement hiring — Arnic",
+    "user_must_create_in_ui": true,
+    "created_in_ui_at": "2026-05-27",
+    "webhook_attached": true,
+    "trigger_once_per_company": true,
+    "test_fire_verified_at": null,
+    "_test_fire_note": "User reported saved searches created 2026-05-27. Make Jobs-scenario activation + first row landing in the Sheet not yet confirmed by Claude — verify a row lands (Send test in TheirStack, THEN Run once in Make) before relying on the daily auto-flow.",
+    "negative_title_keywords": ["Marketing Operations", "Marketing Ops", "Business Operations", "BizOps", "Customer Success", "Intern", "Junior"],
+    "negative_title_keywords_history": [],
+    "geography_filter_note": "Use Company HQ Location (United States, United Kingdom), NOT Job Location."
+  },
+
+  "personalization": {
+    "_status": "COPY WRITTEN 2026-05-27 via lilly-copywriter (offer reverse-engineered from Arnic's live campaigns). Soft-CTA-first: Email 1 = process/adoption audit opening with the hiring hook (3 problem-statement variants A/B/C), Email 2 = proven fractional-enablement follow-up reused from live campaign 3396124. Standard Smartlead fields first_name + company_name auto-fill from lead data; the only custom per-lead variable is Role (below). Case study (GitLab) is hardcoded in the copy. Copy PUSHED to Smartlead 3407205 via API on 2026-05-27 (seq IDs 8866381/8866382; the campaign held only throwaway clone copy with no send history, so the overwrite was user-confirmed and safe). Still TODO before sending: attach sender mailboxes and unpause.",
+    "per_lead_variables": {
+      "Role": {
+        "instructions": "Direct lookup from the Jobs row 'Job Title', NORMALISED so it reads naturally after the hardcoded hook 'Saw you're hiring a ___'. Rules: (1) replace a comma separating a level word from a function area with ' of ' so 'Director, Revenue Operations' becomes 'Director of Revenue Operations'; (2) drop bracketed/parenthetical or trailing geographic qualifiers so 'RevOps Manager (Remote)' becomes 'RevOps Manager' and 'Account Executive - France & Southern Europe' becomes 'Account Executive'; (3) trim whitespace; (4) preserve seniority words (Senior, Director, Manager, Head, VP, Lead, Chief). No LLM call needed for (1)-(3); escalate only if genuinely ambiguous.",
+        "validation": "Non-empty. Reads naturally after 'Saw you're hiring a ___'. No comma in the level/function position, no parentheses, no trailing geographic qualifier."
+      }
+    }
+  }
+}

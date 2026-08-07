@@ -1,0 +1,443 @@
+{
+ "flow": [
+  {
+   "id": 8,
+   "mapper": {},
+   "module": "gateway:CustomWebHook",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "designer": {
+     "x": -300,
+     "y": 0
+    }
+   },
+   "parameters": {
+    "hook": 4251558,
+    "maxResults": 1
+   }
+  },
+  {
+   "id": 1,
+   "mapper": {
+    "qs": [],
+    "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_failsafe_queue?select=*",
+    "data": "",
+    "gzip": true,
+    "method": "get",
+    "headers": [
+     {
+      "name": "apikey",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     },
+     {
+      "name": "Authorization",
+      "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     }
+    ],
+    "useMtls": false,
+    "bodyType": "raw",
+    "contentType": "",
+    "serializeUrl": false,
+    "shareCookies": false,
+    "parseResponse": true,
+    "followRedirect": true,
+    "useQuerystring": false,
+    "followAllRedirects": false,
+    "rejectUnauthorized": true
+   },
+   "module": "http:ActionSendData",
+   "version": 3,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 0,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   },
+   "parameters": {
+    "handleErrors": false,
+    "useNewZLibDeCompress": true
+   }
+  },
+  {
+   "id": 2,
+   "mapper": {
+    "array": "{{1.data}}"
+   },
+   "module": "builtin:BasicFeeder",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "designer": {
+     "x": 300,
+     "y": 0
+    }
+   },
+   "parameters": {}
+  },
+  {
+   "id": 3,
+   "mapper": {
+    "email": "{{2.email}}",
+    "fullName": ""
+   },
+   "module": "folk:findPerson",
+   "onerror": [
+    {
+     "id": 9,
+     "mapper": {
+      "id": "NOTFOUND",
+      "fullName": ""
+     },
+     "module": "builtin:Resume",
+     "version": 1,
+     "metadata": {
+      "designer": {
+       "x": 600,
+       "y": 300
+      }
+     },
+     "parameters": {}
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 600,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   },
+   "parameters": {
+    "__IMTCONN__": 9252689
+   }
+  },
+  {
+   "id": 10,
+   "mapper": null,
+   "module": "builtin:BasicRouter",
+   "routes": [
+    {
+     "flow": [
+      {
+       "id": 11,
+       "filter": {
+        "name": "Not found in Folk",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_ledger",
+        "data": "{\"email\": \"{{2.email}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"verdict\": \"{{if(contains(lower(2.campaign_name); \\\"navreo\\\"); \\\"missing_repushed\\\"; \\\"missing_held\\\")}}\", \"detail\": \"Not found in Folk at check time.\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1350,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 4,
+       "filter": {
+        "name": "Navreo-own campaign only (client re-push held for approval)",
+        "conditions": [
+         [
+          {
+           "a": "{{contains(lower(2.campaign_name); \"navreo\")}}",
+           "b": "true",
+           "o": "text:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/leads/?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5&email={{2.email}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1500,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 5,
+       "filter": {
+        "name": "Lead found in Smartlead",
+        "conditions": [
+         [
+          {
+           "a": "{{4.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          },
+          {
+           "a": "{{4.data.id}}",
+           "o": "exist"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{2.smartlead_campaign_id}}?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1800,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 7,
+       "filter": {
+        "name": "Campaign resolved",
+        "conditions": [
+         [
+          {
+           "a": "{{5.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://hook.eu2.make.com/qt3b07kefg9ogusrgd044qh1uae7hu27",
+        "data": "{\"event_type\": \"EMAIL_REPLY\", \"lead_category\": {\"new_name\": \"Interested\"}, \"campaign_name\": \"{{5.data.name}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"from_email\": \"{{2.email}}\", \"app_url\": \"https://app.smartlead.ai/app/master-inbox\", \"last_reply\": {\"time\": \"{{2.replied_at}}\", \"email_body\": \"(re-pushed automatically by folk-failsafe watchdog - open the Smartlead conversation link for the reply text)\"}, \"history\": [{\"type\": \"SENT\", \"email_body\": \"\"}], \"lead_id\": \"{{4.data.id}}\", \"sl_email_lead_id\": \"{{4.data.id}}\", \"lead_data\": {\"first_name\": \"{{4.data.first_name}}\", \"last_name\": \"{{4.data.last_name}}\", \"company_name\": \"{{4.data.company_name}}\", \"email\": \"{{4.data.email}}\", \"website\": \"{{4.data.website}}\", \"linkedin_profile\": \"{{4.data.linkedin_profile}}\", \"location\": \"{{4.data.location}}\", \"custom_fields\": {\"role\": \"\"}}}",
+        "gzip": true,
+        "method": "post",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 12,
+       "filter": {
+        "name": "Found in Folk",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:notequal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_ledger",
+        "data": "{\"email\": \"{{2.email}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"verdict\": \"verified\", \"detail\": \"Confirmed present in Folk (id {{3.id}}).\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1200,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      }
+     ]
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "designer": {
+     "x": 900,
+     "y": 0
+    }
+   }
+  }
+ ],
+ "name": "folk-failsafe-watchdog",
+ "metadata": {
+  "instant": true,
+  "version": 1,
+  "scenario": {
+   "dlq": true,
+   "dataloss": false,
+   "maxErrors": 10,
+   "autoCommit": true,
+   "roundtrips": 1,
+   "sequential": false,
+   "confidential": false,
+   "freshVariables": false,
+   "autoCommitTriggerLast": true
+  }
+ }
+}

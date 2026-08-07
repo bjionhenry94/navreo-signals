@@ -1,0 +1,288 @@
+/* =========================================================
+   Navreo Design System — Foundations
+   Colors + Type tokens. Import this file at the top of any
+   navreo-branded artifact:  <link rel="stylesheet" href=".../colors_and_type.css">
+   ========================================================= */
+
+/* ---------- Webfonts ---------------------------------------------------
+   The Navreo wordmark is set in Acid Grotesk (Lineto, commercial).
+   Licensed file lives in fonts/. JetBrains Mono is loaded from Google
+   Fonts as the supporting mono.
+   --------------------------------------------------------------------- */
+@font-face {
+  font-family: "Acid Grotesk";
+  src: url("fonts/AcidGrotesk-Normal.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+/* Only the Normal weight of Acid Grotesk is licensed here — used for the
+   display face. Body text uses DM Sans (Google Fonts) which carries the
+   full weight range. JetBrains Mono is the supporting mono. */
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap');
+
+:root {
+  /* ============ Brand Colors ============ */
+  --nav-cream:        #F9F0E7;   /* primary surface / page background */
+  --nav-light-brown:  #F2E5D9;   /* secondary surface, card fills */
+  --nav-dark-brown:   #C0B0A0;   /* muted accent / dividers / disabled */
+  --nav-orange:       #FF4D00;   /* primary accent, CTAs, focus */
+  --nav-ink:          #14110E;   /* near-black text on cream */
+  --nav-ink-2:        #3A332C;   /* secondary text */
+  --nav-ink-3:        #6B6055;   /* tertiary text / labels */
+  --nav-white:        #FFFFFF;
+  --nav-black:        #000000;
+
+  /* Tinted scale derived from the four brand colors */
+  --nav-cream-50:     #FCF7F1;
+  --nav-cream-100:    #F9F0E7;
+  --nav-cream-200:    #F4E8DC;
+  --nav-light-100:    #F2E5D9;
+  --nav-light-200:    #E8D7C4;
+  --nav-light-300:    #DCC6AE;
+  --nav-brown-300:    #C0B0A0;
+  --nav-brown-400:    #A89684;
+  --nav-brown-500:    #8A7868;
+  --nav-brown-600:    #5C4E40;
+  --nav-orange-100:   #FFE4D6;
+  --nav-orange-300:   #FF8A4D;
+  --nav-orange-500:   #FF4D00;   /* canonical */
+  --nav-orange-600:   #DB4100;
+  --nav-orange-700:   #A83100;
+
+  /* ============ Semantic ============ */
+  --bg:               var(--nav-cream);
+  --bg-elevated:      var(--nav-cream-50);
+  --bg-sunken:        var(--nav-light-brown);
+  --bg-inverse:       var(--nav-ink);
+
+  --fg:               var(--nav-ink);
+  --fg-muted:         var(--nav-ink-2);
+  --fg-subtle:        var(--nav-ink-3);
+  --fg-on-orange:     var(--nav-cream);
+  --fg-on-dark:       var(--nav-cream);
+
+  --accent:           var(--nav-orange);
+  --accent-hover:     var(--nav-orange-600);
+  --accent-press:     var(--nav-orange-700);
+  --accent-soft:      var(--nav-orange-100);
+
+  --border:           rgba(20,17,14,0.10);
+  --border-strong:    rgba(20,17,14,0.22);
+  --border-on-dark:   rgba(249,240,231,0.14);
+  --divider:          var(--nav-light-200);
+
+  --focus-ring:       0 0 0 3px rgba(255,77,0,0.32);
+
+  /* status (derived; warm-leaning to fit palette) */
+  --success:          #2E7D5B;
+  --warning:          #C28A00;
+  --danger:           #C2371F;
+
+  /* ============ Type ============ */
+  --font-sans:  "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: "Acid Grotesk", "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-mono:  "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* fluid type — clamps for 360→1440 viewports */
+  --fs-12: 0.75rem;
+  --fs-13: 0.8125rem;
+  --fs-14: 0.875rem;
+  --fs-15: 0.9375rem;
+  --fs-16: 1rem;
+  --fs-18: 1.125rem;
+  --fs-20: 1.25rem;
+  --fs-24: 1.5rem;
+  --fs-32: 2rem;
+  --fs-40: 2.5rem;
+  --fs-56: 3.5rem;
+  --fs-80: 5rem;
+  --fs-display: clamp(3rem, 8vw, 6.5rem); /* @kind font */
+
+  --lh-tight: 1.02;  /* @kind font */
+  --lh-snug:  1.15;  /* @kind font */
+  --lh-base:  1.45;  /* @kind font */
+  --lh-loose: 1.6;   /* @kind font */
+
+  --tracking-tight: -0.03em;  /* @kind font */
+  --tracking-snug:  -0.015em; /* @kind font */
+  --tracking-base:  0;        /* @kind font */
+  --tracking-wide:  0.04em;   /* @kind font */
+  --tracking-mark:  0.12em;   /* @kind font */
+
+  --fw-light: 300;     /* @kind font */
+  --fw-regular: 400;   /* @kind font */
+  --fw-medium: 500;    /* @kind font */
+  --fw-semibold: 600;  /* @kind font */
+  --fw-bold: 700;      /* @kind font */
+
+  /* ============ Spacing (4-pt grid) ============ */
+  --sp-0:  0;    /* @kind spacing */
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+  --sp-20: 80px;
+  --sp-24: 96px;
+  --sp-32: 128px;
+
+  /* ============ Radius ============ */
+  --r-none: 0;     /* @kind radius */
+  --r-xs:   2px;
+  --r-sm:   4px;
+  --r-md:   8px;
+  --r-lg:   12px;
+  --r-xl:   18px;
+  --r-2xl:  28px;
+  --r-pill: 999px;
+
+  /* ============ Shadows / Elevation ============
+     Warm-tinted, low contrast. Navreo prefers borders + flat fills
+     over deep shadows; reserve elevated shadow for menus/popovers. */
+  --shadow-0: none;
+  --shadow-1: 0 1px 0 rgba(20,17,14,0.04), 0 1px 2px rgba(20,17,14,0.05);
+  --shadow-2: 0 2px 4px rgba(20,17,14,0.05), 0 6px 16px -6px rgba(20,17,14,0.10);
+  --shadow-3: 0 4px 8px rgba(20,17,14,0.06), 0 18px 40px -12px rgba(20,17,14,0.18);
+  --shadow-inset: inset 0 0 0 1px rgba(20,17,14,0.08);
+
+  /* ============ Motion ============ */
+  --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);     /* @kind other */
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);  /* @kind other */
+  --dur-1: 120ms;  /* @kind other */
+  --dur-2: 180ms;  /* @kind other */
+  --dur-3: 260ms;  /* @kind other */
+  --dur-4: 420ms;  /* @kind other */
+
+  /* ============ Layout ============ */
+  --max-w-prose: 68ch;            /* @kind other */
+  --max-w-page:  1280px;          /* @kind spacing */
+  --gutter: clamp(20px, 4vw, 56px); /* @kind spacing */
+}
+
+/* ---------- Base reset (opt-in: add class .navreo to <body>) ---------- */
+.navreo, .navreo * { box-sizing: border-box; }
+.navreo {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: var(--fs-16);
+  line-height: var(--lh-base);
+  letter-spacing: var(--tracking-snug);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ---------- Type scale: utility classes ---------- */
+.t-display {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-size: var(--fs-display);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: balance;
+}
+.t-h1 {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-size: clamp(2.5rem, 5vw, 4rem);
+  line-height: var(--lh-tight);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: balance;
+}
+.t-h2 {
+  font-family: var(--font-display);
+  font-weight: var(--fw-regular);
+  font-size: clamp(1.75rem, 3vw, 2.5rem);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-tight);
+  text-wrap: balance;
+}
+.t-h3 {
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-24);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-snug);
+}
+.t-h4 {
+  font-weight: var(--fw-medium);
+  font-size: var(--fs-20);
+  line-height: var(--lh-snug);
+  letter-spacing: var(--tracking-snug);
+}
+.t-body {
+  font-size: var(--fs-16);
+  line-height: var(--lh-base);
+  letter-spacing: var(--tracking-snug);
+}
+.t-body-lg {
+  font-size: var(--fs-20);
+  line-height: var(--lh-base);
+  letter-spacing: var(--tracking-snug);
+  text-wrap: pretty;
+}
+.t-small {
+  font-size: var(--fs-14);
+  line-height: var(--lh-base);
+}
+.t-caption {
+  font-size: var(--fs-13);
+  line-height: var(--lh-base);
+  color: var(--fg-subtle);
+}
+.t-eyebrow {
+  font-size: var(--fs-12);
+  font-weight: var(--fw-medium);
+  letter-spacing: var(--tracking-mark);
+  text-transform: uppercase;
+  color: var(--fg-subtle);
+}
+.t-mono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-13);
+  letter-spacing: 0;
+}
+
+/* ---------- Semantic mapping when used directly ---------- */
+.navreo h1 { font: var(--fw-regular) clamp(2.5rem, 5vw, 4rem)/var(--lh-tight) var(--font-display); letter-spacing: var(--tracking-tight); }
+.navreo h2 { font: var(--fw-regular) clamp(1.75rem, 3vw, 2.5rem)/var(--lh-snug) var(--font-display); letter-spacing: var(--tracking-tight); }
+.navreo h3 { font: var(--fw-medium) var(--fs-24)/var(--lh-snug) var(--font-sans); letter-spacing: var(--tracking-snug); }
+.navreo h4 { font: var(--fw-medium) var(--fs-20)/var(--lh-snug) var(--font-sans); letter-spacing: var(--tracking-snug); }
+.navreo p  { font-size: var(--fs-16); line-height: var(--lh-base); text-wrap: pretty; max-width: var(--max-w-prose); }
+.navreo small { font-size: var(--fs-13); color: var(--fg-subtle); }
+.navreo code, .navreo pre { font-family: var(--font-mono); font-size: var(--fs-13); }
+
+/* =========================================================
+   WHITE APP VARIANT (canonical for product UI + artifacts,
+   Bjion 2026-07-18 — mirrors app/navreo.css in the Navreo repo).
+   Apply with <body class="navreo navreo--app"> or copy tokens.
+   ========================================================= */
+.navreo--app {
+  --bg:            #FFFFFF;   /* page is white */
+  --bg-elevated:   #FFFFFF;   /* cards: white + border, never borderless */
+  --bg-sunken:     #F7F7F6;   /* neutral secondary surface */
+  --border:        #ECECEA;   /* --line  */
+  --border-strong: #DDDDDA;   /* --line-2 */
+  --divider:       #ECECEA;
+  /* cream demotes to occasional secondary surfaces (mail-frame bands etc.) */
+  /* semantic triples (text on bg, with line) */
+  --success:       #2E7D5B;  --success-bg: #E2F1E9;  --success-line: #C4E2D3;
+  --warning:       #8F6600;  --warning-bg: #F8EAC4;  --warning-line: #EBD79E;
+  --danger:        #C2371F;  --danger-bg:  #F7DCD5;  --danger-line:  #EFC7BB;
+  /* chart/data series only — never decorative */
+  --series-blue:   #1971C2;
+  --series-purple: #7048E8;
+  --series-green:  #2F9E44;
+  --series-orange: #E8590C;
+  --series-red:    #E03131;
+  --r-md: 12px;
+  background: var(--bg);
+}
+.navreo--app .card,
+.navreo--app [class*="card"] { border: 1px solid var(--border); }

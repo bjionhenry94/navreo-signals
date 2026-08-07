@@ -1,0 +1,37 @@
+{
+  "client_slug": "wordbank",
+  "client_name": "Wordbank",
+  "what_they_sell": "Media localization, dubbing, subtitling and creative localization services for film, TV and streaming platforms",
+  "icp": {
+    "verticals": ["Streaming platforms (SVOD, AVOD, FAST)", "Studios", "Broadcasters"],
+    "roles": ["Localization", "Creative ops", "Creative", "Production", "Growth (title varies by org)"],
+    "geo": ["Global"],
+    "headcount_bands": [],
+    "dm_titles": ["PENDING - Gary to send ~100 target titles + A/B/C scoring for both titles and brands"]
+  },
+  "named_clients": ["Netflix"],
+  "existing_campaigns": {
+    "smartlead_client_key": "TBD",
+    "campaign_names": [
+      "White Whale - smaller/regional brands (batch 1, streaming platforms under 1000)",
+      "White Whale - bigger brands (batch 2, streaming platforms over 1000)",
+      "First regional-brands campaign (being recontacted / relaunched with copy tweaks)"
+    ]
+  },
+  "channels": {
+    "email": "Smartlead",
+    "linkedin": "Lemlist (live for batch 1 + batch 2)"
+  },
+  "constraints": {
+    "taboo_verticals": [],
+    "geo_exclusions": [],
+    "lead_magnet_blockers": [],
+    "regulatory": [
+      "Copy must NOT describe Netflix (or any client) as 'struggling'. Industry is highly integrated and copy could be forwarded to the client. Use 'challenged' / 'a challenge with' instead."
+    ]
+  },
+  "notes": "White Whales = top 100-130 global streamers, proven after the first regional-brands campaign opened doors. Batch 1 = bigger regional brands (Britbox, Shudder etc). Batch 2 = the biggest dogs (Disney, Max, Crunchyroll, Curiosity Stream). Only ~165 leads made it to Smartlead because emails were not found for most contacts; remainder to go to Lemlist. No Disney contacts found (Gary expects 100+ fit ICP). Signals/TheirStack hiring-signal campaign PAUSED - never surfaced a streaming brand. Competitor LinkedIn-follower scrape planned. Clay workspace 871917 (workbook wb_0tctawce8EVj2Qh9sj2). Case study lives on Navreo Notion; Gary moving it to a Wordbank Notion. Account owner now Bjion direct (Renato off the account; client had churned through ~3 AMs and wants responsiveness + follow-through).",
+  "contact": "Gary Reilly (Wordbank LTD)",
+  "first_briefed_at": "2026-05-28",
+  "last_refreshed_at": "2026-05-28"
+}

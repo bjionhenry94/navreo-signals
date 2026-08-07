@@ -1,0 +1,148 @@
+{
+  "brief_id": "arnic-sdr-ae",
+  "brief_name": "Arnic SDR/AE Hiring Signal",
+  "client": "Arnic (Navreo DFY client)",
+  "created_at": "2026-05-27",
+  "_provisioning_status": "PROVISIONED_NOT_LIVE — infrastructure built 2026-05-27. Copy, personalization variables, and qualification patterns are DRAFT pending user confirmation at the copywriting/dry-run step. TheirStack saved search not yet created. Nothing emails until copy is written, a 2-company dry-run is approved, and the user unpauses Smartlead.",
+
+  "ideation": {
+    "icp_description": "B2B companies (all-sector, per user decision 2026-05-27), 100-1000 employees, HQ in US or UK, direct employers, that are HIRING SDR / BDR / Account Executive roles. The hire signals the company is scaling its sales team — more reps to onboard onto the tool stack.",
+    "offer": "Arnic increases adoption of tools among a company's employees — gets the sales team to actually USE the sales stack they've bought. The person we email is the Head of Sales / VP Sales / CRO who owns the number.",
+    "why_signal_fits": "A wave of new sales reps is exactly when tool adoption is won or lost — new hires either ramp on the stack from day one or never adopt it. Arnic ensures new reps actually use the tools as they onboard.",
+    "_signal_strength_caveat": "WEAK SIGNAL — user accepted BUILD-AS-IS on 2026-05-27 after two explicit flags. 'Hiring a rep' indicates a sales team exists, not specifically a tool-adoption problem. Filter kept raw including 'Account Executive' (a catch-all that TheirStack substring-matches into advertising/PR/insurance account-management roles). Heavy reliance on the role-qualification layer to screen noise downstream.",
+    "tam_probe_2026_05_27": "All-sector, US+GB, 100-1000 emp, 30-day window: ~5181 jobs / 2726 unique companies (~173/day raw). TheirStack saved-search caps at ~50/day on current plan. SaaS/tech share ~30-70% from shallow sample (unreliable). 'Account Executive' is the dominant volume driver and the main noise source."
+  },
+
+  "qualification": {
+    "_status": "DRAFT — co-draft and confirm with user before go-live. EXTRA IMPORTANT for this brief since the filter is intentionally broad (build-as-is) — this layer does the heavy lifting on noise.",
+    "_purpose": "Role-only judgement layer applied by lilly-theirstack-data-processing Phase 2.5. Classifies each new Jobs row QUALIFIED / BORDERLINE / OFF_BRIEF on whether the hire is a genuine outbound sales-rep hire (= a new person who will need to adopt the sales stack). Never excludes companies — only roles.",
+    "role_signal_definition": "The new hire is a quota-carrying outbound/inbound sales rep (SDR, BDR, Account Executive) who will onboard onto and use the company's sales tech stack. NOT a client-service 'account executive' (advertising/PR/media/insurance account management), not an account manager, not a partnerships or recruiting role.",
+    "qualified_role_patterns": [
+      "Sales Development Representative / SDR / Outbound SDR / Inbound SDR",
+      "Business Development Representative / BDR / Account Development Representative / ADR",
+      "Account Executive where clearly a quota-carrying sales rep (SaaS/tech AE, Mid-Market AE, Enterprise AE, SMB AE)"
+    ],
+    "disqualified_role_patterns": [
+      "Advertising / PR / Media / Marketing 'Account Executive' — client-service / account-management, not a sales rep",
+      "Insurance Account Executive / Benefits Account Executive — book-of-business account manager",
+      "Account Manager / Client Manager / Customer Success — retention, not new-logo selling",
+      "Partnerships / Channel BDR / Partner Development — partner motion, not direct outbound",
+      "Recruiter / Talent / Sales Recruiter — internal hiring role",
+      "Intern / Junior / Trainee / Apprentice / Graduate-scheme level"
+    ],
+    "borderline_role_patterns": [
+      "Bare 'Account Executive' with no qualifier — could be a sales rep OR an account manager; check company context",
+      "'Business Development' without 'Representative' — could be partnerships rather than outbound sales",
+      "Senior Account Executive at <30 emp — could be a retitled IC or a player-coach"
+    ]
+  },
+
+  "filter": {
+    "posted_at_max_age_days": 1,
+    "job_country_code_or": ["US", "GB"],
+    "min_employee_count": 100,
+    "max_employee_count": 1000,
+    "company_type": "direct_employer",
+    "job_title_or": ["SDR", "BDR", "Sales Development Representative", "Business Development Representative", "Account Executive"],
+    "limit": 50,
+    "_sector_filter": "NONE — all-sector by user decision 2026-05-27.",
+    "_build_as_is_note": "No title-negatives applied at filter level by user decision 2026-05-27 (build-as-is). Suggested negatives held in theirstack_saved_search.negative_title_keywords_suggested for the first-7-days tightening if the user wants them later.",
+    "_geography_note": "Saved search MUST use Company HQ Location (United States, United Kingdom), NOT Job Location.",
+    "_expected_daily_volume": "~173/day raw but TheirStack caps at ~50/day on current plan. Largely all-sector + AE-catch-all; role-qualification layer screens the worst."
+  },
+
+  "dm_finder": {
+    "target_titles": ["Head of Sales", "VP Sales", "VP of Sales", "Chief Revenue Officer", "Chief Sales Officer", "Head of Revenue", "VP Revenue", "Director of Sales", "Sales Director"],
+    "providers_preference": ["prospeo"],
+    "max_dms_per_company": 3,
+    "enrich_phone": true,
+    "phone_finder": "lilly-phone-finder",
+    "_phone_note": "Phone enrichment ENABLED 2026-06-19 (user request). After DM emails are found, run every new DM through `lilly-phone-finder` (BetterContact → Prospeo waterfall) to attach a verified mobile. The mobile + its source feed the Notion Cold-Call table (notion_sync). ~10 BetterContact credits per number found, no charge on a miss. This does NOT change the Smartlead push (phone is for cold-calling, not email).",
+    "_note": "Buyer = the sales leader who owns the number (Arnic's proven persona). NOT the SDR/AE being hired. Bare CRO/CSO acronyms excluded; full spellings only. PROSPEO-ONLY per user instruction 2026-05-28 — AI Ark banned for DM finding (thin Prospeo coverage = report a gap, no AI Ark fallback)."
+  },
+
+  "infrastructure": {
+    "template_sheet_id": "1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ",
+    "sheet_id": "1o8xDHbOo1b9htzxl9jBWN_gkN60H148XkBAir5IHuY0",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1o8xDHbOo1b9htzxl9jBWN_gkN60H148XkBAir5IHuY0/edit",
+    "jobs_scenario_id": 9297944,
+    "jobs_scenario_url": "https://eu2.make.com/536258/scenarios/9297944",
+    "jobs_webhook_id": 4157050,
+    "jobs_webhook_url": "https://hook.eu2.make.com/f1jcxxaw91q2tzuwr9e5w8na23k5gbnp",
+    "jobs_webhook_payload_shape": "TheirStack job.new event: { id, type:'job.new', payload:{job + company_object} }",
+    "dms_scenario_id": 9297946,
+    "dms_scenario_url": "https://eu2.make.com/536258/scenarios/9297946",
+    "dms_webhook_id": 4157051,
+    "dms_webhook_url": "https://hook.eu2.make.com/wo4ajt19u9o1klhtxsveuavf72viptxl",
+    "dms_webhook_payload_shape": "Skill 2 push: { rows: [{...17 DM fields...}] }",
+    "smartlead_campaign_id": 3407227,
+    "smartlead_campaign_url": "https://app.smartlead.ai/app/email-campaign/3407227/analytics",
+    "smartlead_campaign_status": "LIVE as of 2026-05-28 — user attached sender mailboxes and unpaused. Campaign 'Arnic – SDR/AE Hires (Hiring Signals)', Smartlead client 366437. First real leads (5 DMs: Kong/Benchling/MinIO) pushed 2026-05-28. Daily autopilot now SENDS, not just stockpiles. (Replaced the empty 3407420 I created, now orphaned/pending delete.)",
+    "make_team_id": 536258,
+    "make_google_connection_id": 9696598,
+    "schedule_task_id": "theirstack-arnic-sdr-ae-daily",
+    "schedule_task_path": "/Users/bjionhenry/.claude/scheduled-tasks/theirstack-arnic-sdr-ae-daily/SKILL.md",
+    "schedule_cron": "0 9 * * 1-5",
+    "schedule_dispatch": "~09:06 local Mon-Fri",
+    "schedule_created_at": "2026-05-27",
+    "pre_first_run_dependency": "RESOLVED 2026-05-27 — DMs Make scenario 9297946 activated + verified writing to the Decision-Makers tab (test execution operations:4, schema bound on first payload, no manual redetermine needed). Jobs scenario 9297944 also live. Pipeline fully wired.",
+    "activation_test_cleanup": "A dummy test DM (email activation.test@example.com, source 'dms-scenario-activation-test') was written to the Decision-Makers tab during activation. DELETE it before the first run, else the routine will push it to Smartlead 3407227 as a junk lead."
+  },
+
+  "theirstack_saved_search": {
+    "ui_label": "SDR/AE hiring — Arnic",
+    "user_must_create_in_ui": true,
+    "created_in_ui_at": "2026-05-27",
+    "webhook_attached": true,
+    "trigger_once_per_company": true,
+    "test_fire_verified_at": null,
+    "_test_fire_note": "User reported saved searches created 2026-05-27. Make Jobs-scenario activation + first row landing in the Sheet not yet confirmed by Claude — verify a row lands (Send test in TheirStack, THEN Run once in Make) before relying on the daily auto-flow.",
+    "negative_title_keywords": [],
+    "negative_title_keywords_suggested": ["Advertising", "PR", "Account Manager", "Partnerships", "Insurance", "Recruiter", "Intern", "Junior"],
+    "geography_filter_note": "Use Company HQ Location (United States, United Kingdom), NOT Job Location."
+  },
+
+  "personalization": {
+    "_status": "COPY WRITTEN 2026-05-27 via lilly-copywriter (offer reverse-engineered from Arnic's live campaigns). Soft-CTA-first: Email 1 = onboarding/training audit opening with the hiring hook (3 problem-statement variants A/B/C), Email 2 = proven fractional-enablement follow-up reused from live campaign 3396124. Standard Smartlead fields first_name + company_name auto-fill from lead data; the only custom per-lead variable is Role (below). Case study (Meta) is hardcoded in the copy. Copy PUSHED to Smartlead 3407227 via API on 2026-05-27 (seq IDs 8866388/8866389; the campaign held only throwaway clone copy with no send history, so the overwrite was user-confirmed and safe). Still TODO before sending: attach sender mailboxes and unpause.",
+    "per_lead_variables": {
+      "Role": {
+        "instructions": "Direct lookup from the Jobs row 'Job Title', NORMALISED so it reads naturally after the hardcoded hook 'Saw you're hiring a ___'. Rules: (1) replace a comma separating a level word from a function area with ' of ' so 'Director, Revenue Operations' becomes 'Director of Revenue Operations'; (2) drop bracketed/parenthetical or trailing geographic qualifiers so 'Sales Development Representative (Southeast)' becomes 'Sales Development Representative' and 'Account Executive - France & Southern Europe' becomes 'Account Executive'; (3) trim whitespace; (4) preserve seniority words (Senior, Director, Manager, Head, VP, Lead, Chief). No LLM call needed for (1)-(3); escalate only if genuinely ambiguous.",
+        "validation": "Non-empty. Reads naturally after 'Saw you're hiring a ___'. No comma in the level/function position, no parentheses, no trailing geographic qualifier."
+      }
+    }
+  },
+
+  "notion_sync": {
+    "_status": "ENABLED 2026-06-19 (user request). After each daily run, every NEW decision maker (with phone enriched via lilly-phone-finder) is written as one row to the Notion 'Arnic Cold-Call' table for the cold-caller to work. Backfill of the 111 pre-existing DMs completed 2026-06-19.",
+    "_purpose": "Human-readable cold-calling list mirroring the Decision-Makers tab + a verified mobile + a Call Status tracker. One Notion page per DM, deduped by email.",
+    "database_url": "https://app.notion.com/p/3846e75598d9805cb689deb071469ec0",
+    "data_source_id": "3846e755-98d9-8082-89e5-000bd95081ce",
+    "dedup_key": "Email",
+    "title_property": "Name",
+    "title_format": "{first_name} {last_name} — {company}",
+    "default_icon": "📞",
+    "field_map": {
+      "First Name": "first_name",
+      "Last Name": "last_name",
+      "Title": "title",
+      "Phone": "mobile (from lilly-phone-finder; cleaned to leading +<digits/spaces/dashes>)",
+      "Email": "email",
+      "LinkedIn": "linkedin (url)",
+      "Company": "company",
+      "Website": "website (prefix https:// if no scheme)",
+      "Country": "country NORMALISED to select: US/United States→'United States'; GB/UK/United Kingdom→'United Kingdom'; IN→'India'; DE→'Germany'; AE→'United Arab Emirates'",
+      "Company Size": "company_size (number)",
+      "Hiring For": "hiring_for (the role the company is hiring = the signal)",
+      "Tech Stack": "tech_stack (pipe-joined)",
+      "Remote": "remote (checkbox: TRUE→__YES__, FALSE→__NO__)",
+      "Job Posting": "job_posting (url; omit if not http)",
+      "Open Roles": "open_roles (number)",
+      "Date Added": "date_added → date:Date Added:start",
+      "Source": "source (select: Prospeo / AI Ark)",
+      "Phone Source": "mobile_source (select: BetterContact / Prospeo)",
+      "Call Status": "literal 'Not called' on every new row (caller updates: Called / No answer / Voicemail / Booked / Not interested)"
+    },
+    "write_tool": "notion-create-pages (parent = data_source_id, batches of up to 100). Additive only — never replace_content; never overwrite existing pages (dedup by Email against the table before writing).",
+    "_gotchas": "Sheet markdown collapses cells whose value contains a literal '|' (e.g. Tech Stack, or a piped Hiring For) — split the Decision-Makers row on UNescaped pipes and parse trailing fields (Remote/Job Posting/Open Roles/Date/Source/Status) from the END to stay aligned. Drop the activation.test@example.com dummy row if present. Dedup DMs by email (the DM tab has had exact-duplicate rows)."
+  }
+}

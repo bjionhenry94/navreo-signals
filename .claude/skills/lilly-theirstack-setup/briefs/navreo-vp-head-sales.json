@@ -1,0 +1,198 @@
+{
+  "brief_id": "navreo-vp-head-sales",
+  "brief_name": "Navreo VP/Head of Sales Hiring Signal",
+  "client": "Navreo (internal)",
+  "created_at": "2026-05-17",
+
+  "ideation": {
+    "icp_description": "B2B companies hiring a VP/Head of Sales or equivalent senior sales leader (CRO, CSO, VP Revenue, Head of Revenue). Buyer is the CEO/Founder running the search. Signals: CEO making a strategic move to scale outbound, new sales leader faces an immediate build-vs-buy decision on outbound infrastructure. Company size 11-200, in 14 high-GDP countries, direct employers (not recruiting agencies).",
+    "offer": "Navreo outbound infra DFY, pay-per-lead. The new VP plugs into a working outbound system on day 1 instead of rebuilding from scratch in their first quarter. CEO de-risks the senior sales hire (no infra build cost, no pre-commit, performance basis).",
+    "why_signal_fits_angles": [
+      "New VP Sales = ~$200K+ base salary investment. CEO has already committed to scaling sales. We make the hire's first 90 days productive instead of infrastructural.",
+      "Pay-per-lead removes budget pre-commit risk since the VP hasn't proven ROI yet.",
+      "Twin-buyer pitch: lands with the CEO ('de-risk your hire') AND with the incoming VP ('skip the 90-day infra build, start booking meetings week 2')."
+    ],
+    "angles_tested": [
+      { "id": "A", "type": "title", "patterns": ["VP of Sales","VP Sales","Vice President of Sales","Vice President Sales","Head of Sales","Head of Global Sales","Head of Sales & BD"], "30d_tam": 624, "30d_companies": 526, "daily_est": 21, "fit_pct": 60, "kept": true, "kept_with_negatives": true },
+      { "id": "B", "type": "title", "patterns": ["Chief Revenue Officer","Chief Sales Officer","VP of Revenue","VP Revenue","Head of Revenue"], "30d_tam": 161, "30d_companies": 139, "daily_est": 5, "fit_pct": 60, "kept": true, "drop_reason_for_acronyms": "Bare CRO/CSO acronyms dropped — collide with Chief Risk Officer, Chief Safety Officer, Conversion Rate Optimisation, Contract Research Organization. Full spellings only." },
+      { "id": "C", "type": "title", "patterns": ["Director of Sales","Sales Director","Senior Director of Sales","Senior Director Sales"], "30d_tam": 1152, "30d_companies": 930, "daily_est": 38, "fit_pct": 25, "kept": false, "drop_reason": "Director-level too noisy at the keyword level — catches Partnerships Sales, Regional Sales, Brand Partnership Sales, Geo-specific Sales (North America Data Center), Vertical Sales (Ocular Biologics). At title-keyword level there is no clean way to distinguish 'head of sales for the whole company' from 'director of [some specific region or segment]'." },
+      { "id": "D", "type": "title", "patterns": ["Head of Commercial","VP Commercial","Commercial Director","Head of New Business","Director of New Business"], "30d_tam": 216, "30d_companies": 194, "daily_est": 7, "fit_pct": 5, "kept": false, "drop_reason": "ABORT — 'Commercial' is fatally overloaded. Sample hits: Commercial Finance, Commercial Marketing, Commercial Operations, Commercial Supply Chain, Commercial Performance Improvement, Commercial Energy Strategy, PA to Commercial Director. EU coverage loss is smaller than raw numbers suggest — Angle A already catches the German 'Head of Sales (d/w/m)' role." },
+      { "id": "E", "type": "title", "patterns": ["Founding VP Sales","Founding Sales","First Sales Hire","First Sales Leader","Founding Head of Sales","Founding CRO","First Head of Sales"], "30d_tam": 40, "30d_companies": 35, "daily_est": 1, "fit_pct": 30, "kept": false, "drop_reason": "Too low volume to be worth a separate angle. Bare 'Founding Sales' pulls in 'Founding SDR' / 'Founding BDR' (junior salespeople, not leaders). Founding/first-hire angle is still captured via lilly-theirstack-data-processing's per-lead HowWeCanHelp angle waterfall (Priority 1) when any role title from Angle A/B contains 'Founding' or 'First'." }
+    ]
+  },
+
+  "qualification": {
+    "_purpose": "Role-only judgement layer applied by lilly-theirstack-data-processing Phase 2.5. Classifies each new Jobs row as QUALIFIED / BORDERLINE / OFF_BRIEF based on whether the role signals 'CEO scaling outbound with a new senior sales leader who will OWN the motion'. Companies are NEVER excluded by this gate — only specific roles. A company hiring a regional sales manager today is still a fine prospect under a different brief tomorrow.",
+    "role_signal_definition": "The new hire will OWN the company's outbound sales motion as a senior leader. Not a quota-carrying IC, not a field/regional/channel head, not a sales-ops or sales-enablement role. CEO/Founder is making a deliberate 'we're scaling outbound' investment.",
+    "qualified_role_patterns": [
+      "VP of Sales / VP Sales / Vice President of Sales / Vice President Sales",
+      "Head of Sales / Head of Global Sales / Head of Sales & BD",
+      "Chief Revenue Officer / CRO (full spelling) — when title makes clear it's a revenue role",
+      "Chief Sales Officer / CSO (full spelling) — when title makes clear it's a sales role",
+      "Director of Sales / Senior Director of Sales (at 11-200 emp, IS the head-of equivalent)",
+      "VP of Revenue / VP Revenue / Head of Revenue",
+      "Head of Commercial / VP Commercial / Commercial Director (UK/EU phrasing — apply with caution given the Commercial keyword overload)",
+      "Head of New Business / Director of New Business (UK phrasing for outbound sales lead)"
+    ],
+    "disqualified_role_patterns": [
+      "Account Executive / AE / Senior AE / Enterprise AE — IC quota-carrier, not GTM leader",
+      "SDR / BDR / Sales Development Representative / Business Development Rep — execution layer",
+      "Sales Manager (regional / area / branch / district / territory) — field/team layer",
+      "Inside Sales Manager / Inside Sales Lead / Inside Sales Director — team-of-AEs manager",
+      "VP Sales Operations / Director of Sales Operations / Head of Sales Ops / RevOps — ops layer",
+      "Sales Enablement Manager / Director of Sales Enablement / Head of Enablement — enablement layer",
+      "VP Channel Sales / Head of Channel / Channel Sales Director / Partner Sales VP — partner motion",
+      "VP Partnerships / Head of Partnerships / BD Partnerships — partnerships, not outbound",
+      "VP Customer Success / Head of CS / Customer Success Manager — retention, not new-logo hunting",
+      "Solutions Engineer / Sales Engineer / VP Sales Engineering / Pre-Sales — technical pre-sales",
+      "Sales Trainer / Sales Coach — coaching role",
+      "Internal Sales / Telesales / Inbound Sales Rep — inbound order-taking",
+      "Wholesale Sales Manager / Distributor Sales / Dealer Sales / Trade Sales — channel/transactional ops",
+      "Retail Sales Manager / Field Sales Rep / Field Sales Manager — store/territory rep",
+      "Sales Recruiter / Sales Recruitment Manager / Talent Acquisition (Sales) — internal recruiter",
+      "VP Sales Strategy / Sales Strategy Director — strategy/planning role, not GTM owner"
+    ],
+    "borderline_role_patterns": [
+      "Director of Sales at 100-200 emp — could be true sales leader OR mid-layer reporting to existing VP",
+      "Head of GTM / VP GTM — could be sales-led (qualified) OR product/growth-led (less fit)",
+      "Director of Business Development at <50 emp — could be outbound sales leader OR partnerships-leaning",
+      "Regional VP Sales / VP Sales — North America / VP US Sales — geo-specific; usually disqualified at >100 emp",
+      "Senior Sales Manager at 11-30 emp — could be first true sales hire OR retitled senior IC AE",
+      "Sales Director (no prefix, ambiguous level) at 50-100 emp — mid-market UK phrasing"
+    ]
+  },
+
+  "filter": {
+    "posted_at_max_age_days": 1,
+    "job_country_code_or": ["US","CA","GB","AU","IE","NZ","DE","NL","CH","SE","NO","DK","FI","SG"],
+    "min_employee_count": 11,
+    "max_employee_count": 200,
+    "company_type": "direct_employer",
+    "job_title_or": ["VP of Sales","VP Sales","Vice President of Sales","Vice President Sales","Head of Sales","Head of Global Sales","Head of Sales & BD","Chief Revenue Officer","Chief Sales Officer","VP of Revenue","VP Revenue","Head of Revenue"],
+    "limit": 50,
+    "_expected_daily_volume": "~25 jobs/day post-negatives (raw ~26/day from Angles A+B combined, minus noise removed by negatives)"
+  },
+
+  "dm_finder": {
+    "target_titles": ["CEO","Founder","Co-Founder","President","Chief Executive Officer","Owner","Managing Director","Managing Partner"],
+    "providers_preference": ["prospeo","ai_ark"],
+    "max_dms_per_company": 3,
+    "_note": "Buyer is the CEO/Founder running the search — NOT the incoming VP being hired (they don't exist yet, or if they do, the new one is being hired). Excludes COO/CFO since the sales hire is a CEO-led decision in 90%+ of cases."
+  },
+
+  "infrastructure": {
+    "template_sheet_id": "1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ",
+    "template_sheet_url": "https://docs.google.com/spreadsheets/d/1FUUWljpeHN3Ba_jIuqzVg5fuwEDWwul79dszSNdETmQ/edit",
+    "sheet_id": "1bkY_0CoimZwMwkI_2RaijUE2fNd4M8Zbv03QLWIJwoU",
+    "sheet_url": "https://docs.google.com/spreadsheets/d/1bkY_0CoimZwMwkI_2RaijUE2fNd4M8Zbv03QLWIJwoU/edit",
+    "jobs_scenario_id": 9247981,
+    "jobs_scenario_url": "https://eu2.make.com/536258/scenarios/9247981",
+    "jobs_webhook_id": 4133818,
+    "jobs_webhook_url": "https://hook.eu2.make.com/cxckpl4aci5ufa4brh0tsyxctbm69qox",
+    "jobs_webhook_payload_shape": "TheirStack job.new event: { id, type: 'job.new', payload: {job + company_object fields} }",
+    "dms_scenario_id": 9247982,
+    "dms_scenario_url": "https://eu2.make.com/536258/scenarios/9247982",
+    "dms_webhook_id": 4133819,
+    "dms_webhook_url": "https://hook.eu2.make.com/14pdemadbe0ipb9gd42xpl2i6vqni7m2",
+    "dms_webhook_payload_shape": "Skill 2 push: { rows: [{...18 DM fields...}] } — simple array, no wrap",
+    "smartlead_campaign_id": 3347812,
+    "smartlead_campaign_url": "https://app.smartlead.ai/app/email-campaign/3347812/analytics",
+    "smartlead_campaign_status": "CLONED_FROM_3331499_2026-05-17_PAUSED",
+    "smartlead_campaign_clone_source": 3331499,
+    "smartlead_campaign_outstanding": [
+      "Sender mailboxes NOT cloned — user must attach mailboxes in Smartlead UI before unpausing (cloning gotcha 2026-05-17, no read-side API endpoint exposes per-campaign mailbox associations).",
+      "Variant A pricing language MISMATCH — Email 1 Variant A says 'guaranteeing 30 qualified leads in 90 days or we refund you' (inherited from GTM brief). Doesn't fit this brief's performance-basis model. User must edit Variant A copy via lilly-bot before going live.",
+      "Variant B tail clause says 'on a pay-per-lead basis' — to stay consistent with the brief-wide 'performance basis' wording (set 2026-05-17), consider editing to 'on a performance basis' via lilly-bot.",
+      "P.S. typo in both Variant A and B: 'which was use for their B2B branch' → 'which was used'.",
+      "CaseStudy custom field intentionally left EMPTY on the 2 dry-run leads (Pascal Cévaër-Corey lead_id 3818916244, David Feichter lead_id 3818916243). Must be filled via lilly-personalisation before unpausing — otherwise Email 2 renders 'with the likes of' followed by nothing."
+    ],
+    "schedule_task_id": "theirstack-navreo-vp-head-sales-daily",
+    "schedule_task_path": "/Users/bjionhenry/.claude/scheduled-tasks/theirstack-navreo-vp-head-sales-daily/SKILL.md",
+    "schedule_cron": "0 9 * * 1-5",
+    "schedule_timezone": "Europe/London (local)",
+    "schedule_created_at": "2026-05-17",
+    "schedule_mcp_tool": "mcp__scheduled-tasks__create_scheduled_task"
+  },
+
+  "theirstack_saved_search": {
+    "ui_label": "VP/Head of Sales hiring signals — Navreo",
+    "user_must_create_in_ui": false,
+    "created_in_ui_at": "2026-05-17",
+    "webhook_attached": true,
+    "trigger_once_per_company": true,
+    "test_fire_verified_at": "2026-05-17T18:44:19Z",
+    "test_fire_verification_note": "User clicked 'Run once' in Make to force first-poll-delay processing (per reference_make_first_poll_delay.md). Execution operations: 2, status: 1 (success), 200 centicredits.",
+    "negative_title_keywords": [
+      "Sales Operations",
+      "Sales Ops",
+      "Regional",
+      "Field",
+      "Area",
+      "Inside Sales",
+      "Channel",
+      "Partnerships",
+      "Partner Sales"
+    ],
+    "negative_title_keywords_optional": [
+      {"keyword": "Strategy", "caution": "Would kill 'VP Sales Strategy' (disqualified) but also any legitimate 'VP Sales' role with the word Strategy in it. Add only if you see strategy-titled noise during first 7 days."}
+    ],
+    "negative_title_keywords_history": [],
+    "geography_filter_note": "Saved search MUST filter by 'Company HQ Location' country code, NOT 'Job Location'. Rationale (inherited from GTM brief 2026-05-15): we target companies whose HQ is in a high-GDP country (money / decision-making lives at HQ) — we don't care which office posted the role. A US-HQ company posting a remote role in PH is still a US-HQ buyer."
+  },
+
+  "personalization": {
+    "_note": "Email copy is ground truth for what to personalise. Skill 2 reads the Smartlead campaign email body → identifies all {{merge_variables}} → looks up generation instructions in per_lead_variables below. Variables present in copy but missing here will halt the run. The 'ideation.offer' field above provides SENDER CONTEXT (what the sender does) which the LLM uses as background when generating per-lead values — it is NOT a Smartlead merge variable, it's not in the email body. The email copy itself contains all sales language.",
+    "_email_copy_snapshot_2026-05-17": {
+      "email_1_variant_a": "Hi {{first_name}}, Saw you were hiring a {{Role}}, and wanted to reach out because {{HowWeCanHelp}}. I recorded a 2-min video for {{company_name}} showing a teaser of what we'd do to {{Cold Email Video Angle}}. If it fits, we can {build or run|set up and run} it for you guaranteeing 30 qualified leads in 90 days or we {refund you|give you a refund}. PRICING_MISMATCH_FLAGGED: must edit to pay-per-lead",
+      "email_1_variant_b": "Hi {{first_name}}, Saw you were hiring a {{Role}}, and wanted to reach out because {{HowWeCanHelp}}. I recorded a short-video for {{company_name}} showing a teaser of what we'd {build|set up} to {{Cold Email Video Angle}}. If it fits, we can {run it for you|handle it for you} on a pay-per-lead basis.",
+      "email_2": "Hi {{first_name}}, {Alternatively|If you prefer}, we could {jump on|hop on|get on} a call {sometime|at some point} on {{sl_date \"now_wd 2Days\" \"dddd\"}} to discuss a {potential|possible} pilot? We've booked calls for our clients with the likes of {{CaseStudy}}, and we could do the same for you working on a performance basis. P.S - {{Icebreaker}}"
+    },
+    "per_lead_variables": {
+      "Role": {
+        "instructions": "Direct field lookup WITH email-readability normalisation. Copy the Jobs row's 'Job Title' value, then normalise so it reads naturally after the hardcoded 'Saw you were hiring a ___' hook. Rules: (1) Replace ', ' separating a level word from a function area with ' of ' — e.g. 'Director, Revenue Operations' → 'Director of Revenue Operations'. (2) Drop bracketed/parenthetical text and reformulate if it changes the noun phrase. (3) Trim whitespace. (4) Preserve seniority words ('Senior', 'Director', 'Manager', 'Head', 'VP', 'Lead', 'Chief'). No LLM call needed for cases (1)-(3); only escalate to LLM if the title is genuinely ambiguous after rule-based normalisation. Inherits GTM brief's Role rule verbatim.",
+        "validation": "Non-empty. Must read naturally after 'Saw you were hiring a ___'. Must NOT contain commas in the level-word/function-area position. Must NOT contain parens. Preserves the semantic role from the joined Jobs row."
+      },
+      "Icebreaker": {
+        "instructions": "Delegate to the lilly-icebreaker skill. CRITICAL: SKIP both the Hiring angle AND the 'You joined' (change-of-roles) angle for this brief. The entire campaign is already triggered by a hiring signal (referenced explicitly via {{Role}} in the email's hook), so duplicating the hiring angle in the Icebreaker would feel redundant. Change-of-roles is also excluded because referencing the DM's own recent role change compounds the personal-detective signal in a way that reads stalkerish when paired with the hiring-hook (rule set 2026-05-17 — applies to ALL hiring-signal briefs). Allowed angle waterfall for this brief: Colleague → Funding → Tech → Fallback. Pass the DM's company + title + LinkedIn URL to the skill, plus an explicit 'skip_angles: [Hiring, You joined]' instruction.",
+        "validation": "Non-empty. Must NOT reference 'hiring', 'open role', 'looking for', or any active-hiring language. Must NOT reference the DM's recent role change ('stepped into', 'took over', 'new in your seat', 'X years in role'). Per lilly-icebreaker's other validation rules."
+      },
+      "HowWeCanHelp": {
+        "generation_strategy": "angle_waterfall",
+        "_note": "Skill 2 evaluates triggers in priority order; first matching angle fires; if no specific angle matches, fallback (priority 99) always fires. Each angle produces a sentence-completion clause that drops into the email's 'wanted to reach out because ___' stem. CRITICAL: use 'they' to refer back to the role mentioned in the hook — do NOT repeat the role title in the because-clause (causes word repetition in the email's opening sentence).",
+        "angles": [
+          {
+            "id": "founding_or_first_hire",
+            "priority": 1,
+            "trigger": "hiring_for (the Jobs row's Job Title) matches /(Founding|First)/i",
+            "instructions": "When the hire's title contains 'Founding' or 'First', the new sales leader has no existing outbound to inherit. Pitch: founding hires usually burn their first quarter on outbound setup (sender domains, sequences, list building), and we can hand them a working pipeline instead so they focus on the strategic build (team hiring, enablement, playbooks). Use the phrase 'founding hires' generically (not 'your new founding hire') to avoid repeating the role word from the hook. End with 'instead' (clean tail).",
+            "example": "founding hires usually lose their first quarter to outbound setup, and we can hand yours a working pipeline instead"
+          },
+          {
+            "id": "standard_senior_sales_leader_branched",
+            "priority": 2,
+            "trigger": "always (after Priority 1 founding/first check fails) — fires for every lead. Output branches based on company employee_count.",
+            "instructions": "Two sub-branches based on employee_count:\n\n1. SMALL-CO BRANCH (employee_count < 50): the new VP is probably the first true senior sales hire — CEO has been doing sales themselves, urgency is high, the new hire needs pipeline immediately. Pitch: they'll want to start booking pipeline immediately, we can fill their calendar by week 2 on a performance basis. Use 'they'll' to refer back to {{Role}} (already mentioned in the hook). Preserves user's 'want to' wording (set 2026-05-17, softer than 'need to').\n\n2. LARGER-CO BRANCH (employee_count 50-200): there's usually an existing outbound function — maybe a previous VP left, maybe scaling past first VP. The new hire walks in to a partial system and faces 90 days of stabilising before they can ship new initiatives. Pitch: they'll spend their first 90 days stabilising the existing outbound motion, we can run that layer on a performance basis so they focus on strategy. Use 'they'll' to refer back to {{Role}}.\n\nDefault to LARGER-CO when employee_count is missing or ambiguous.\n\nWORDING NOTE (set 2026-05-17): use 'performance basis' not 'pay-per-lead' — applies to all angles in this waterfall. 'Performance basis' is broader and matches the email body's existing pricing language.",
+            "example_small_co": "they'll want to start booking pipeline immediately, and we can fill their calendar by week 2 on a performance basis",
+            "example_larger_co": "they'll likely spend their first 90 days stabilising outbound, and we can run that layer on a performance basis so they focus on strategy"
+          },
+          {
+            "id": "fallback",
+            "priority": 99,
+            "trigger": "always — fires when no priority 1-2 angle matches (rare; safety net)",
+            "instructions": "Clean generic that always works. Mentions a working pipeline + performance basis + booking meetings from day 1. Use 'they'd' to refer back to {{Role}}. Avoid repeating the role title. Trailing 'on a performance basis' is non-negotiable — it anchors to the brief's offer.",
+            "example": "with a working pipeline on a performance basis, they'd be booking meetings from day 1"
+          }
+        ],
+        "validation": "14-25 words. Starts mid-sentence (lowercase, since 'because' precedes it). Follows the matched angle's instructions. Must NOT repeat the role title (use 'they' / 'they'll' / 'they'd' / 'yours' instead). Must NOT duplicate {{Cold Email Video Angle}}'s content (that variable handles the company-specific sales outcome later in the email). Must include 'performance basis' language for angles 2 and 3 (angle 1 is exempt — it ends with 'instead'). Do NOT use 'pay-per-lead' — wording rule set 2026-05-17."
+      },
+      "Cold Email Video Angle": {
+        "instructions": "Generate a one-line sentence-completion for the email stem 'I recorded a short-video for {{company_name}} showing a teaser of what we'd {build|set up} to ___'. The angle is PURE ICP-connection: how we'd help the company connect with their target buyers (their ICP). Reference what THE COMPANY's ICP looks like (e.g. for Fullbay → heavy-duty repair shops; Osmind → psychiatry practices; Canopy → accounting firms; Xelix → AP teams). Form: starts with an infinitive verb (drive / fill / open / build), references a sales outcome anchored to the company's specific ICP segment.\n\nEXPLICITLY DO NOT INCLUDE:\n- Commercial model language ('on a pay-per-result basis' / 'on a performance basis' / 'pay-per-lead' / 'guaranteed' etc.) — that's already covered in {{HowWeCanHelp}} earlier in the email. Including it here is redundant.\n- The channel/method ('through outbound' / 'through cold outbound') — implied by the email being a cold outreach, not needed in the angle.\n- The prospect's title or role — covered in the email's hook via {{Role}}.\n- The company name — '{{company_name}}' already appears immediately before this slot in the template.\n\nThe angle should be PURE: company's ICP segment + a sales-outcome verb (drive demos / open accounts / fill pipeline). Nothing else.\n\nOVERRIDE NOTE: This instruction OVERRIDES Navreo's global memory rule 'feedback_cold_email_angle_title_relevance' (which says the angle must reference the prospect's title) FOR THIS BRIEF ONLY. The prospect's title appears in the hook already, so the angle stays role-free.\n\nMANDATORY: WebFetch the company's homepage BEFORE generating this angle. Industry tags alone are too coarse — must verify what the company actually does for ICP-segment accuracy.",
+        "validation": "5-12 words, sentence-completion form (starts with infinitive 'drive' / 'fill' / 'open' / 'build' / etc., NOT a full sentence). Must reference the company's specific ICP segment (their target buyer type). Must NOT repeat the company name. Must NOT reference the prospect's title or role. Must NOT include commercial model language ('pay-per-lead' / 'performance basis' / 'guaranteed'). Must NOT include channel/method ('through outbound' / 'cold outbound') — keep it pure ICP-connection."
+      },
+      "CaseStudy": {
+        "instructions": "Delegate to lilly-personalisation's bucketed CaseStudy generation. Match a case study to the DM's role/vertical/company-size bucket (Navreo's standard bucket scheme). The skill maintains the bucket → case-study mapping; this brief inherits Navreo's default mapping unless explicitly overridden.",
+        "validation": "Per lilly-personalisation's CaseStudy validation. Must include hard numbers (revenue, lead count, conversion lift, etc.) per Navreo's case-study convention."
+      }
+    }
+  }
+}

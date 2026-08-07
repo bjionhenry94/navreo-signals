@@ -1,0 +1,15 @@
+{
+  "run_at": "2026-07-05",
+  "captures": "qualified + unqualified views, source draft-43dc37b2 on #cdraft-1, port 7903",
+  "task": "Open the source. Who qualified? Who didn't, and why was Mark Feld rejected?",
+  "testers": [
+    {"persona": "Dani - CSM, spreadsheet-native", "completed": true, "score": 8,
+     "gripe": "LLM rejection reasons render as a full paragraph in the pill; wants a short label with detail on hover"},
+    {"persona": "Marcus - founder, skims", "completed": true, "score": 8.5,
+     "gripe": "'role unknown' reads like broken data rather than 'no title available'"},
+    {"persona": "Ana - VA, instruction-follower", "completed": true, "score": 9,
+     "gripe": "none - empty-state copy explains the panel"}
+  ],
+  "average": 8.5,
+  "verdict": "PASS (>=8 avg, 3/3 completed)"
+}

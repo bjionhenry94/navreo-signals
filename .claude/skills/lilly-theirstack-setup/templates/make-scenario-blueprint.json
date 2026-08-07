@@ -1,0 +1,131 @@
+{
+  "_comment": "Make.com scenario blueprint template for TheirStack pipeline. Used by lilly-theirstack-setup Phase 4b. CRITICAL: TheirStack's actual webhook payload is { id, type: 'job.new', payload: {...} } — NOT { type: 'jobs', rows: [...] }. Job branch has NO iterator (single job per POST). DMs branch keeps iterator (skill 2's routine sends batched payload). Replace {{spreadsheet_id}}, {{webhook_hook_id}}, and {{google_connection_id}} when cloning. Tab names 'Jobs' and 'Decision-Makers' are fixed.",
+
+  "_placeholders": {
+    "{{webhook_hook_id}}": "Integer hook ID from hooks_create",
+    "{{spreadsheet_id}}": "Google Sheet ID (NOT URL, NOT with leading slash here — Make config adds the slash)",
+    "{{google_connection_id}}": "Make.com Google connection ID — 9696598 for Navreo"
+  },
+
+  "_theirstack_payload_schema": {
+    "id": "integer — TheirStack webhook event ID",
+    "type": "string — 'job.new' or 'company.new'",
+    "payload": "object — JobWithMatchingPhrasesResponse with all job + company_object fields"
+  },
+
+  "name": "TheirStack — {{brief_name}}",
+  "flow": [
+    {
+      "id": 1,
+      "module": "gateway:CustomWebHook",
+      "version": 1,
+      "parameters": {"hook": "{{webhook_hook_id}}"},
+      "mapper": {},
+      "metadata": {"designer": {"x": 0, "y": 0, "name": "TheirStack webhook"}}
+    },
+    {
+      "id": 2,
+      "module": "builtin:BasicRouter",
+      "version": 1,
+      "mapper": null,
+      "metadata": {"designer": {"x": 300, "y": 0}},
+      "routes": [
+        {
+          "flow": [
+            {
+              "id": 3,
+              "module": "google-sheets:addRow",
+              "version": 2,
+              "filter": {
+                "name": "type=job.new (TheirStack push)",
+                "conditions": [[{"a": "{{1.type}}", "b": "job.new", "o": "text:equal"}]]
+              },
+              "mapper": {
+                "from": "drive",
+                "mode": "select",
+                "spreadsheetId": "/{{spreadsheet_id}}",
+                "sheetId": "Jobs",
+                "includesHeaders": true,
+                "insertDataOption": "INSERT_ROWS",
+                "valueInputOption": "USER_ENTERED",
+                "insertUnformatted": false,
+                "values": {
+                  "0": "{{formatDate(now; \"YYYY-MM-DD\")}}",
+                  "1": "{{1.payload.date_posted}}",
+                  "2": "{{1.payload.company}}",
+                  "3": "{{1.payload.company_domain}}",
+                  "4": "{{1.payload.country_code}}",
+                  "5": "{{1.payload.short_location}}",
+                  "6": "{{1.payload.company_object.employee_count}}",
+                  "7": "{{1.payload.job_title}}",
+                  "8": "{{1.payload.seniority}}",
+                  "9": "{{1.payload.remote}}",
+                  "10": "{{join(1.payload.technology_slugs; \"|\")}}",
+                  "11": "{{1.payload.url}}",
+                  "12": "{{1.payload.company_object.num_jobs_last_30_days}}",
+                  "13": "{{1.payload.company_object.linkedin_url}}",
+                  "14": "NEW"
+                }
+              },
+              "parameters": {"__IMTCONN__": "{{google_connection_id}}"},
+              "metadata": {"designer": {"x": 600, "y": -150, "name": "Add row to Jobs"}}
+            }
+          ]
+        },
+        {
+          "flow": [
+            {
+              "id": 4,
+              "module": "builtin:BasicFeeder",
+              "version": 1,
+              "filter": {
+                "name": "type=dms (lilly-theirstack-data-processing push)",
+                "conditions": [[{"a": "{{1.type}}", "b": "dms", "o": "text:equal"}]]
+              },
+              "mapper": {"array": "{{1.rows}}"},
+              "metadata": {"designer": {"x": 600, "y": 150, "name": "Iterate DMs"}}
+            },
+            {
+              "id": 5,
+              "module": "google-sheets:addRow",
+              "version": 2,
+              "mapper": {
+                "from": "drive",
+                "mode": "select",
+                "spreadsheetId": "/{{spreadsheet_id}}",
+                "sheetId": "Decision-Makers",
+                "includesHeaders": true,
+                "insertDataOption": "INSERT_ROWS",
+                "valueInputOption": "USER_ENTERED",
+                "insertUnformatted": false,
+                "values": {
+                  "0": "{{4.first_name}}",
+                  "1": "{{4.last_name}}",
+                  "2": "{{4.email}}",
+                  "3": "{{4.title}}",
+                  "4": "{{4.linkedin}}",
+                  "5": "{{4.phone}}",
+                  "6": "{{4.company}}",
+                  "7": "{{4.website}}",
+                  "8": "{{4.country}}",
+                  "9": "{{4.company_size}}",
+                  "10": "{{4.hiring_for}}",
+                  "11": "{{4.tech_stack}}",
+                  "12": "{{4.remote}}",
+                  "13": "{{4.job_posting}}",
+                  "14": "{{4.open_roles}}",
+                  "15": "{{4.date_added}}",
+                  "16": "{{4.source}}",
+                  "17": "NEW"
+                }
+              },
+              "parameters": {"__IMTCONN__": "{{google_connection_id}}"},
+              "metadata": {"designer": {"x": 900, "y": 150, "name": "Add row to Decision-Makers"}}
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {"version": 1, "designer": {"orphans": []}}
+}

@@ -1,0 +1,163 @@
+{
+  "client_slug": "heygrand",
+  "client_name": "Grand HQ (HeyGrand)",
+  "what_they_sell": "B2B SaaS credit-intelligence platform for the UK trade-credit / lending space. Every UK company has a profile on Grand (Crunchbase-like data layer). Provides credit-risk data + trade-credit matching. Positioning: 'the better CreditSafe' — Grand identifies risk 48-72 hours faster than any other UK provider, often weeks earlier. Launch vertical = construction (Q2 2026). Roadmap covers hospitality, retail, auto, logistics — 'any company that says walk out of my store with X and pay me later.'",
+  "founder": {
+    "name": "Kirk Donohoe",
+    "title": "CEO / Founder",
+    "email": "kirk.donohoe@heygrand.com",
+    "phone": "+44 7366 278845",
+    "linkedin": "https://linkedin.com/in/kirkdonohoe"
+  },
+  "icp": {
+    "campaign_1_locked_2026_05_16": {
+      "vertical": "Construction (UK)",
+      "geo": ["GB (incl. crown dependencies / British Isles)"],
+      "geo_sub_focus_open_question": "Pick a UK sub-region for first campaign so we can name-drop local logos as social proof — to be decided on Wednesday strategy call",
+      "category": "Category 1 = makers + sellers + renters of construction material, machinery, tools, equipment, safety gear / clothing, parts. Includes: builders merchants, construction-product manufacturers, plant & equipment hire, chemicals & coatings, PPE, merchant buying groups",
+      "tiers": "T2 and T3 ONLY",
+      "tiers_excluded": ["T1 (product not ready until end of Q2)", "T4 (ACV too low — PLG-only later via profile-claim hook)"],
+      "personas": {
+        "primary_finance_credit_risk": [
+          "Chief / Head of / Director / Manager / Controller of Finance",
+          "Chief / Head of / Director / Manager / Controller of Credit",
+          "Accountant",
+          "Billing / Collections / Accounts Receivable"
+        ],
+        "secondary_T3_owner_operator": [
+          "Managing Director",
+          "General Manager",
+          "Owner",
+          "Director"
+        ],
+        "influencer_secondary": [
+          "Chief / Director / Head / Manager of Revenue",
+          "Chief / Director / Head / Manager of Sales",
+          "Chief / Director / Head / Manager of Commercial"
+        ]
+      },
+      "title_exclusion_rule": "Drop 'Account Manager' from title filter (per memory: service-business / non-digital ICPs — client-relationship role, not credit decision-maker)"
+    },
+    "future_roadmap": {
+      "Q2_to_Q3": "Cat 1 (sellers) → Cat 3 (marketplaces) → Cat 2 (general construction buyers) once product ready",
+      "vertical_expansion": "Hospitality, retail, auto, logistics — once construction stabilises",
+      "T1_motion": "Face-to-face ABM on ~100 enterprise accounts UK-wide once product complete"
+    }
+  },
+  "existing_assets_kirk_handed_over": {
+    "companies_house_master_list": {
+      "file": "CH_Cat1_Master_2026-05-15.csv",
+      "size": "~88,000 active UK companies",
+      "scope": "Builders merchants, construction-product manufacturers, plant & equipment hire, chemicals & coatings, PPE, merchant buying groups",
+      "pre_cleaned": "Kirk already stripped ~12,000 noise rows (chambers of commerce, charities, residents' associations)",
+      "status": "Authoritative TAM input — no need to re-build via Ocean / Prospeo / AI Ark for Category 1 construction"
+    },
+    "mcr_already_touched_list": {
+      "file": "MCR_Sellers_For_CH_Triangulation_2026-05-15.csv",
+      "size": "~4,000 companies already in Kirk's outreach registry",
+      "matched_to_master": "~1,130 cleanly matched, ~2,900 unmatched (registered name ≠ trading name)",
+      "suppression_rule": "CRITICAL — no double-touch. Triangulate the 2,900 unmatched rows against master BEFORE any new outreach. Respect mcr_in_email_campaign / mcr_in_linkedin_campaign flags"
+    }
+  },
+  "current_outreach_state_via_instantly": {
+    "leads_loaded": "~2,000 across 4-5 domains",
+    "mailboxes_used": "~13 of ~20 fully warmed",
+    "current_capacity": "~390/day, ~10K/month",
+    "target_capacity": "~40K/month (4x scale-up, ~80 mailboxes inside 30 days)",
+    "winning_message_so_far": "Hey, do you offer trade credit? (works because recipient assumes it's a trade-credit application FROM Grand TO them, and recipient is incentivised to grow controlled trade-credit accounts)",
+    "issue_flagged": "Some mailboxes suspended due to bounce rates — to investigate on Instantly access"
+  },
+  "lead_magnets_already_validated_by_kirk": [
+    {
+      "name": "Insolvency / receivership list by area",
+      "description": "Give me a list of construction cos in [your area] gone into administration this week",
+      "deliverable_now": true,
+      "delivery_method": "Database dump by SIC code + geo postcode + 'in administration' / 'in insolvency' tag from Grand's record",
+      "kirk_quote": "I can pull that list for them"
+    },
+    {
+      "name": "Profile-claim hook",
+      "description": "Your company is on Grand. Come claim your profile (Crunchbase / Dealroom / Traxen pattern)",
+      "deliverable_now": true,
+      "audience": "T4 PLG (later) + 4th/5th-touch fallback on T3"
+    },
+    {
+      "name": "Free credits + onboarding call (ByteDance-style)",
+      "description": "Free £500 credits to access the platform, gated by a brief onboarding call",
+      "deliverable_now": true,
+      "audience": "T3 (call or self-serve), T2 (call only)"
+    },
+    {
+      "name": "Trade-credit application bait",
+      "description": "Currently winning ask — recipient mistakes us for a buyer applying for trade credit",
+      "deliverable_now": true,
+      "follow_up_required": "Bait-and-switch + personalised video walkthrough (Pitchlane / escript) on positive reply"
+    },
+    {
+      "name": "Geo-coded, sub-vertical, amount-entitled qualified-buyer list",
+      "description": "Here's 50 [roofing companies] in [Cork] who qualify for [£X] trade credit. Sign up to see the full list",
+      "deliverable_now": false,
+      "available_from": "End of June 2026 (product roadmap)",
+      "status": "High-priority hook to build first per Kirk's own brief"
+    }
+  ],
+  "constraints_red_flags": {
+    "do_not_lead_with_linkedin_engagement_signals": "Kirk's ICP isn't active on LinkedIn enough — Trigify post-engagement as a primary mechanism is OFF. Competitor-follower scrapes (passive following) are OK.",
+    "do_not_promise_money_outcomes": "Finance people care more about 'don't be wrong about credit' than 'we'll save you money' — lead with stop-loss / risk, not ROI",
+    "no_T1_demos_until_end_Q2": "Product not ready — even if T1 replies positively, hard line on no demos",
+    "no_T4_demos_ever": "ACV too low — PLG-only later",
+    "no_double_touch": "Respect the 4K MCR already-touched list — triangulation step is mandatory pre-launch",
+    "no_em_dashes_in_copy": "Per Navreo style guide",
+    "do_not_draft_replies": "Kirk handles every reply personally — sometimes he calls instead of emails back. Pass positive replies through cleanly.",
+    "push_to_instantly_not_smartlead": "Kirk's existing sender infrastructure (Instantly + HeyReach) stays. Navreo does not migrate the sending stack."
+  },
+  "tools_in_use": {
+    "email": "Instantly",
+    "linkedin": "HeyReach (Kirk's profile + Aiste's profile)",
+    "enrichment": "Clay (being replaced by AI Ark + Claude Code workflows)",
+    "orchestration": "Claude / Claude Code (Kirk's master registry, replaced Atio CRM)",
+    "raw_source": "Companies House (by SIC code, 88K rows pre-cleaned)",
+    "playbook": "Notion (taxonomy + tier framework)"
+  },
+  "tools_navreo_will_add": [
+    "AI Ark + direct API calls (replaces Clay)",
+    "Google Maps scraping for T4 mom-and-pops (later)",
+    "Trigify competitor-follower scrapes (passive, NOT post-engagement — Kirk red flag)",
+    "Domain procurement via porkbun-domain-ideator (HeyGrand brand orbit, ~80 mailboxes inside 30 days)"
+  ],
+  "targets": {
+    "campaign_1_q2_demos_booked": 30,
+    "whole_business_q2_registrations": 100,
+    "investor_narrative": "Show outreach driving net-new platform usage + registrations by end of Q2 (usage > revenue for this investor story)"
+  },
+  "working_preferences": {
+    "communication_cadence": "Weekly 1:1 with Renato every Tuesday 12:00 UK / 09:00 BRT. Bjion every other week. Slack for between-call comms.",
+    "reply_handling": "Kirk owns the inbox 100% — DO NOT draft responses",
+    "decision_style": "Direct, candid, salty, systematic — talks in campaigns / divisions / sequence-strategies / ICPs / CTAs hierarchy. Mirror this language back in reporting.",
+    "physical_proximity": "In UK every 2 weeks, happy to fly to T1 prospects face-to-face (later)"
+  },
+  "skill_playbook_for_kickoff": {
+    "primary_TAM_source": "Kirk's 88K Companies House list (not lilly-tam-mapper) — already authoritative",
+    "DM_enrichment": "lilly-decision-maker-finder filtered to Persona 1 + 2 titles",
+    "email_verification": "lilly-email-verification (Prospeo + AI Ark) — Companies House has no emails",
+    "no_email_fallback": "lilly-heyreach-upload — push to HeyReach LinkedIn lists",
+    "sender_stack": "Instantly (NOT Smartlead) + HeyReach",
+    "sender_capacity_expansion": "porkbun-domain-ideator for ~80 mailboxes in 30 days",
+    "icebreaker_rule_for_hiring_signal_campaigns": "skip_angles=[\"Hiring\", \"You joined\"] per memory feedback_hiring_signal_icebreaker_skip_angles"
+  },
+  "probed_tam_2026_05_20": {
+    "core_list_company_universe_companies_house": 88000,
+    "core_list_linkedin_visible_T2_T3_prospeo": 1276,
+    "core_list_industries_used": ["Wholesale Building Materials", "Building Materials"],
+    "finance_function_contacts_prospeo": 1644,
+    "finance_function_note": "includes some procurement/category mgrs; on-brief finance/credit subset ~1,000-1,200 after title filter",
+    "owner_ceo_md_csuite_contacts_prospeo": 962,
+    "combined_reachable_dms_T2_T3": "~2,000-2,500 (minor CFO overlap)",
+    "key_insight": "Sendable T2/T3 finance+owner pool is small (~2.5K) not 88K — Campaign 1 must be hook-led (trade-credit bait / insolvency list) not volume-led. Volume top-up = 88K long-tail + plant-hire/PPE/tools sub-verticals (not yet probed) + hiring/news/follower flows.",
+    "reused_probes_2026_05_18": {"hiring_credit_finance_30d_companies": 38, "news_credit_pain_fresh_companies_per_month": "15-20", "followers_BMF": 22452, "followers_CICM": 13240, "followers_Creditsafe": 35530, "buying_group_dms_confirmed": "76 (NMBS 60 + BMF 16)"}
+  },
+  "first_briefed_at": "2026-05-18",
+  "last_refreshed_at": "2026-05-20",
+  "operating_mode": "live (pre-launch, onboarded 2026-05-18)",
+  "next_milestone": "2026-05-20 strategy call — present this menu, lock 3-5 campaigns, draft copy offline post-call within 48hrs"
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- @dsCard group="Brand" name="Hero specimen" subtitle="Full hero — nav, headline, CTA, lede" viewport="1200x520" -->
+<html><head><meta charset="utf-8"><title>Hero specimen</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  body { padding: 0; background: var(--nav-cream); }
+  .nav { display: flex; align-items: center; justify-content: space-between; padding: 18px 36px; border-bottom: 1px solid var(--divider); }
+  .nav img { height: 22px; }
+  .nav .links { display: flex; gap: 24px; font-size: 14px; font-weight: 500; }
+  .nav .cta { background: var(--nav-orange); color: var(--nav-cream); padding: 8px 16px; border-radius: 999px; font-size: 13px; font-weight: 500; border: 0; }
+  .hero { padding: 72px 36px 80px; max-width: 1100px; }
+  .eyebrow { font-size: 12px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--nav-ink-3); font-weight: 500; margin-bottom: 22px; display: inline-flex; align-items: center; gap: 8px; }
+  .eyebrow::before { content: ""; width: 6px; height: 6px; background: var(--nav-orange); border-radius: 999px; }
+  h1 { font-weight: 500; font-size: 76px; line-height: 0.98; letter-spacing: -0.035em; margin: 0 0 20px; max-width: 18ch; }
+  h1 .accent { color: var(--nav-orange); font-style: italic; font-weight: 500; }
+  .lede { font-size: 19px; line-height: 1.5; color: var(--nav-ink-2); max-width: 46ch; margin: 0 0 32px; letter-spacing: -0.01em; }
+  .row { display: flex; gap: 12px; align-items: center; }
+  .btn-primary { background: var(--nav-orange); color: var(--nav-cream); border: 0; border-radius: 999px; padding: 13px 24px; font: 500 15px var(--font-sans); cursor: pointer; }
+  .btn-secondary { background: transparent; color: var(--nav-ink); border: 1px solid rgba(20,17,14,0.22); border-radius: 999px; padding: 12px 20px; font: 500 15px var(--font-sans); }
+  .meta { font-size: 13px; color: var(--nav-ink-3); margin-left: 8px; }
+</style></head>
+<body>
+  <div class="nav">
+    <img src="../assets/logo-navreo.png" alt="Navreo">
+    <div class="links"><span>Home</span><span>Case Studies</span></div>
+    <button class="cta">Book a free call</button>
+  </div>
+  <div class="hero">
+    <div class="eyebrow">Who we are</div>
+    <h1>Go-to-market systems that scale <span class="accent">your revenue</span>, not your headcount.</h1>
+    <p class="lede">We build systems that put your pipeline on autopilot. Outreach, content, and everything in between.</p>
+    <div class="row">
+      <button class="btn-primary">Book a call</button>
+      <button class="btn-secondary">See case studies</button>
+      <span class="meta">Helped 50+ businesses</span>
+    </div>
+  </div>
+</body></html>

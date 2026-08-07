@@ -1,0 +1,102 @@
+<!doctype html>
+<!-- @dsCard group="Components" name="Cards" subtitle="Glass content cards — no shadow, multi-hue backdrop, eyebrow → head → body → meta" viewport="920x540" -->
+<html><head><meta charset="utf-8"><title>Cards — glass</title>
+<link rel="stylesheet" href="_card.css">
+<style>
+  /* Glass language: translucent white over a multi-hue blurred backdrop,
+     white-tinted hairline, soft inner highlight, no drop shadow.
+     Two card patterns: a content tile and a feature tile. */
+  body {
+    padding: 0;
+    background: #3a2f5e;
+    min-height: 100vh;
+    font-family: "DM Sans", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  }
+  .stage {
+    position: relative;
+    padding: 36px;
+    overflow: hidden;
+    isolation: isolate;
+    min-height: 100vh;
+  }
+  .stage::before {
+    content: "";
+    position: absolute; inset: -10%;
+    background:
+      radial-gradient(28% 32% at 78% 62%, rgba(245,120,55,0.95) 0%, transparent 70%),
+      radial-gradient(34% 30% at 60% 78%, rgba(210,70,120,0.75) 0%, transparent 70%),
+      radial-gradient(40% 36% at 22% 30%, rgba(120,80,200,0.92) 0%, transparent 70%),
+      radial-gradient(30% 28% at 88% 18%, rgba(160,110,200,0.8) 0%, transparent 70%),
+      linear-gradient(140deg, #3a2f5e 0%, #6a4ba0 55%, #d68057 100%);
+    filter: blur(28px) saturate(130%);
+    z-index: -1;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; max-width: 880px; margin: 0 auto; }
+  .card3 {
+    border-radius: 24px;
+    padding: 26px;
+    background: rgba(255,255,255,0.20);
+    border: 1px solid rgba(255,255,255,0.45);
+    backdrop-filter: blur(26px) saturate(140%);
+    -webkit-backdrop-filter: blur(26px) saturate(140%);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.45);
+    color: #fff;
+  }
+  .eyebrow {
+    font-size: 11px; font-weight: 500; letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(255,255,255,0.92); margin-bottom: 14px;
+    display: inline-flex; align-items: center; gap: 8px;
+  }
+  .eyebrow::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: #FF4D00; }
+  .h {
+    font-family: "Acid Grotesk", "DM Sans", sans-serif;
+    font-weight: 400; font-size: 24px; line-height: 1.18; letter-spacing: -0.02em;
+    margin: 0 0 10px;
+  }
+  .p { font-size: 14px; line-height: 1.55; color: rgba(255,255,255,0.95); margin: 0 0 20px; max-width: 32ch; }
+  .meta {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: rgba(255,255,255,0.9); letter-spacing: -0.005em;
+    padding-top: 14px; border-top: 1px solid rgba(255,255,255,0.28);
+  }
+  .meta .av {
+    width: 22px; height: 22px; border-radius: 999px;
+    background: linear-gradient(140deg,#FFB38A,#FF4D00);
+  }
+  .arrow { margin-left: auto; }
+  .feature {
+    background: rgba(255,77,0,0.45);
+    border-color: rgba(255,255,255,0.45);
+  }
+  .feature .eyebrow::before { background: #fff; }
+</style></head>
+<body>
+  <div class="stage">
+    <div class="grid">
+      <div class="card3">
+        <div class="eyebrow">Case study</div>
+        <h3 class="h">How Helix cut review time by half.</h3>
+        <p class="p">Eight engineers, one shared backlog, no more triage standups.</p>
+        <div class="meta"><span class="av"></span> Helix · 6 min read <span class="arrow">→</span></div>
+      </div>
+      <div class="card3 feature">
+        <div class="eyebrow">What's new</div>
+        <h3 class="h">Workspace insights, on by default.</h3>
+        <p class="p">Live signals from every connected source — no setup.</p>
+        <div class="meta"><span class="av"></span> Released today <span class="arrow">→</span></div>
+      </div>
+      <div class="card3">
+        <div class="eyebrow">Pipeline</div>
+        <h3 class="h">$15m+ generated last year.</h3>
+        <p class="p">Across 50+ B2B teams, three channels running in parallel.</p>
+        <div class="meta"><span class="av"></span> 2025 in review <span class="arrow">→</span></div>
+      </div>
+      <div class="card3">
+        <div class="eyebrow">Method</div>
+        <h3 class="h">From zero to a pipeline that runs itself.</h3>
+        <p class="p">A clear three-month process. No guesswork, no black box.</p>
+        <div class="meta"><span class="av"></span> 90-day plan <span class="arrow">→</span></div>
+      </div>
+    </div>
+  </div>
+</body></html>

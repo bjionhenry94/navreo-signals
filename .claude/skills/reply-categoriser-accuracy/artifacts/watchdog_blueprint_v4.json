@@ -1,0 +1,996 @@
+{
+ "flow": [
+  {
+   "id": 8,
+   "mapper": {},
+   "module": "gateway:CustomWebHook",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "designer": {
+     "x": -300,
+     "y": 0
+    }
+   },
+   "parameters": {
+    "hook": 4251558,
+    "maxResults": 1
+   }
+  },
+  {
+   "id": 1,
+   "mapper": {
+    "qs": [],
+    "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_failsafe_queue?select=*",
+    "data": "",
+    "gzip": true,
+    "method": "get",
+    "headers": [
+     {
+      "name": "apikey",
+      "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     },
+     {
+      "name": "Authorization",
+      "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+     }
+    ],
+    "useMtls": false,
+    "bodyType": "raw",
+    "contentType": "",
+    "serializeUrl": false,
+    "shareCookies": false,
+    "parseResponse": true,
+    "followRedirect": true,
+    "useQuerystring": false,
+    "followAllRedirects": false,
+    "rejectUnauthorized": true
+   },
+   "module": "http:ActionSendData",
+   "version": 3,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 0,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   },
+   "parameters": {
+    "handleErrors": false,
+    "useNewZLibDeCompress": true
+   }
+  },
+  {
+   "id": 2,
+   "mapper": {
+    "array": "{{1.data}}"
+   },
+   "module": "builtin:BasicFeeder",
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "designer": {
+     "x": 300,
+     "y": 0
+    }
+   },
+   "parameters": {}
+  },
+  {
+   "id": 3,
+   "mapper": {
+    "group": "{{if(contains(lower(2.campaign_name); \"navreo\"); \"36aea4a5-bd0d-43d6-97d1-7d10214a3fbb\"; \"db406cc0-6cb9-4e85-91ed-e4231975b195\")}}",
+    "search": "{{2.email}}"
+   },
+   "module": "folk:findPerson",
+   "onerror": [
+    {
+     "id": 9,
+     "mapper": {
+      "id": "NOTFOUND",
+      "fullName": ""
+     },
+     "module": "builtin:Resume",
+     "version": 1,
+     "metadata": {
+      "designer": {
+       "x": 600,
+       "y": 300
+      }
+     },
+     "parameters": {}
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "restore": {},
+    "advanced": true,
+    "designer": {
+     "x": 600,
+     "y": 0
+    },
+    "scenario": {
+     "dlq": true
+    }
+   },
+   "parameters": {
+    "__IMTCONN__": 9252689
+   }
+  },
+  {
+   "id": 10,
+   "mapper": null,
+   "module": "builtin:BasicRouter",
+   "routes": [
+    {
+     "flow": [
+      {
+       "id": 11,
+       "filter": {
+        "name": "Missing + Navreo-own",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:equal"
+          },
+          {
+           "a": "{{lower(2.campaign_name)}}",
+           "b": "navreo",
+           "o": "text:contain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_ledger",
+        "data": "{\"email\": \"{{2.email}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"verdict\": \"missing_repushed\", \"detail\": \"Not in Folk; auto re-pushed through pipeline 8946472.\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1350,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": true,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 4,
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/leads/?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5&email={{2.email}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1500,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 5,
+       "filter": {
+        "name": "Lead found in Smartlead",
+        "conditions": [
+         [
+          {
+           "a": "{{4.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          },
+          {
+           "a": "{{4.data.id}}",
+           "o": "exist"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/campaigns/{{2.smartlead_campaign_id}}?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1800,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 7,
+       "filter": {
+        "name": "Campaign resolved",
+        "conditions": [
+         [
+          {
+           "a": "{{5.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://hook.eu2.make.com/qt3b07kefg9ogusrgd044qh1uae7hu27",
+        "data": "{\"event_type\": \"EMAIL_REPLY\", \"lead_category\": {\"new_name\": \"Interested\"}, \"campaign_name\": \"{{5.data.name}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"from_email\": \"{{2.email}}\", \"app_url\": \"https://app.smartlead.ai/app/master-inbox\", \"last_reply\": {\"time\": \"{{2.replied_at}}\", \"email_body\": \"(re-pushed automatically by folk-failsafe watchdog - open the Smartlead conversation link for the reply text)\"}, \"history\": [{\"type\": \"SENT\", \"email_body\": \"\"}], \"lead_id\": \"{{4.data.id}}\", \"sl_email_lead_id\": \"{{4.data.id}}\", \"lead_data\": {\"first_name\": \"{{4.data.first_name}}\", \"last_name\": \"{{4.data.last_name}}\", \"company_name\": \"{{4.data.company_name}}\", \"email\": \"{{4.data.email}}\", \"website\": \"{{4.data.website}}\", \"linkedin_profile\": \"{{4.data.linkedin_profile}}\", \"location\": \"{{4.data.location}}\", \"custom_fields\": {\"role\": \"\"}}}",
+        "gzip": true,
+        "method": "post",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 0
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 20,
+       "filter": {
+        "name": "Missing + Amplifyy",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:equal"
+          },
+          {
+           "a": "{{lower(2.campaign_name)}}",
+           "b": "amplifyy",
+           "o": "text:contain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_ledger",
+        "data": "{\"email\": \"{{2.email}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"verdict\": \"client_healed\", \"detail\": \"Amplifyy: not in Folk; healed direct (Folk client group + Notion row, no Slack).\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1200,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": true,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 21,
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/leads/?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5&email={{2.email}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1500,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 22,
+       "filter": {
+        "name": "Lead found in Smartlead",
+        "conditions": [
+         [
+          {
+           "a": "{{21.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          },
+          {
+           "a": "{{21.data.id}}",
+           "o": "exist"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "note": "BACKFILL - positive reply healed by folk-failsafe (Amplifyy). Campaign: {{2.campaign_name}}. Replied: {{2.replied_at}}.",
+        "urls": [
+         "{{ifempty(21.data.website; \"https://app.smartlead.ai\")}}"
+        ],
+        "group": "db406cc0-6cb9-4e85-91ed-e4231975b195",
+        "emails": [
+         "{{2.email}}"
+        ],
+        "phones": [],
+        "company": "{{21.data.company_name}}",
+        "jobTitle": "",
+        "lastName": "{{21.data.last_name}}",
+        "firstName": "{{21.data.first_name}}",
+        "customFields": {}
+       },
+       "module": "folk:createPerson",
+       "version": 1,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1800,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9252689
+       }
+      },
+      {
+       "id": 23,
+       "mapper": {
+        "fields": [
+         {
+          "key": "Lead-Name",
+          "type": "title",
+          "value": "{{21.data.first_name}} {{21.data.last_name}}"
+         },
+         {
+          "key": "Full-Reply",
+          "type": "rich_text",
+          "value": "{{stripHTML(2.reply_body)}}"
+         },
+         {
+          "key": "Company Name",
+          "type": "rich_text",
+          "value": "{{21.data.company_name}}"
+         },
+         {
+          "key": "Website",
+          "type": "url",
+          "value": "{{21.data.website}}"
+         },
+         {
+          "key": "Email",
+          "type": "email",
+          "value": "{{2.email}}"
+         },
+         {
+          "key": "LinkedIn URL",
+          "type": "url",
+          "value": "{{21.data.linkedin_profile}}"
+         },
+         {
+          "key": "Campaign Name",
+          "type": "rich_text",
+          "value": "{{2.campaign_name}}"
+         },
+         {
+          "key": "Time of Reply",
+          "date": {
+           "start": "{{2.replied_at}}",
+           "includeTime": true
+          },
+          "type": "date"
+         },
+         {
+          "key": "Select",
+          "type": "select",
+          "value": "Interested"
+         },
+         {
+          "key": "Status",
+          "type": "select",
+          "value": "1. Not responded"
+         }
+        ],
+        "select": "map",
+        "database": "342a5f09137b4af780a003eb19542ff0"
+       },
+       "module": "notion:createAPage",
+       "version": 1,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 11521245
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 30,
+       "filter": {
+        "name": "Missing + Arnic",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:equal"
+          },
+          {
+           "a": "{{lower(2.campaign_name)}}",
+           "b": "arnic",
+           "o": "text:contain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_ledger",
+        "data": "{\"email\": \"{{2.email}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"verdict\": \"client_healed\", \"detail\": \"Arnic: not in Folk; healed direct (Folk client group + Notion row, no Slack).\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1200,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": true,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 31,
+       "mapper": {
+        "qs": [],
+        "url": "https://server.smartlead.ai/api/v1/leads/?api_key=a8f9359c-b334-4120-9dc5-e36880040492_nzb0cg5&email={{2.email}}",
+        "data": "",
+        "gzip": true,
+        "method": "get",
+        "headers": [],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1500,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": false,
+        "useNewZLibDeCompress": true
+       }
+      },
+      {
+       "id": 32,
+       "filter": {
+        "name": "Lead found in Smartlead",
+        "conditions": [
+         [
+          {
+           "a": "{{31.statusCode}}",
+           "b": "200",
+           "o": "number:equal"
+          },
+          {
+           "a": "{{31.data.id}}",
+           "o": "exist"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "note": "BACKFILL - positive reply healed by folk-failsafe (Arnic). Campaign: {{2.campaign_name}}. Replied: {{2.replied_at}}.",
+        "urls": [
+         "{{ifempty(31.data.website; \"https://app.smartlead.ai\")}}"
+        ],
+        "group": "db406cc0-6cb9-4e85-91ed-e4231975b195",
+        "emails": [
+         "{{2.email}}"
+        ],
+        "phones": [],
+        "company": "{{31.data.company_name}}",
+        "jobTitle": "",
+        "lastName": "{{31.data.last_name}}",
+        "firstName": "{{31.data.first_name}}",
+        "customFields": {}
+       },
+       "module": "folk:createPerson",
+       "version": 1,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1800,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 9252689
+       }
+      },
+      {
+       "id": 33,
+       "mapper": {
+        "fields": [
+         {
+          "key": "Lead-Name",
+          "type": "title",
+          "value": "{{31.data.first_name}} {{31.data.last_name}}"
+         },
+         {
+          "key": "Full-Reply",
+          "type": "rich_text",
+          "value": "{{stripHTML(2.reply_body)}}"
+         },
+         {
+          "key": "Company Name",
+          "type": "rich_text",
+          "value": "{{31.data.company_name}}"
+         },
+         {
+          "key": "Website",
+          "type": "url",
+          "value": "{{31.data.website}}"
+         },
+         {
+          "key": "Email",
+          "type": "email",
+          "value": "{{2.email}}"
+         },
+         {
+          "key": "LinkedIn URL",
+          "type": "url",
+          "value": "{{31.data.linkedin_profile}}"
+         },
+         {
+          "key": "Campaign Name",
+          "type": "rich_text",
+          "value": "{{2.campaign_name}}"
+         },
+         {
+          "key": "Time of Reply",
+          "date": {
+           "start": "{{2.replied_at}}",
+           "includeTime": true
+          },
+          "type": "date"
+         },
+         {
+          "key": "Select",
+          "type": "select",
+          "value": "Interested"
+         },
+         {
+          "key": "Status",
+          "type": "select",
+          "value": "1. Not responded"
+         }
+        ],
+        "select": "map",
+        "database": "2ec3333429d54ebf9a5dba33f1402561"
+       },
+       "module": "notion:createAPage",
+       "version": 1,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 2100,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "__IMTCONN__": 11521245
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 13,
+       "filter": {
+        "name": "Missing + client campaign",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:equal"
+          },
+          {
+           "a": "{{lower(2.campaign_name)}}",
+           "b": "navreo",
+           "o": "text:notcontain"
+          },
+          {
+           "a": "{{lower(2.campaign_name)}}",
+           "b": "amplifyy",
+           "o": "text:notcontain"
+          },
+          {
+           "a": "{{lower(2.campaign_name)}}",
+           "b": "arnic",
+           "o": "text:notcontain"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_ledger",
+        "data": "{\"email\": \"{{2.email}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"verdict\": \"missing_held\", \"detail\": \"Not in Folk; client campaign - held for approved processing.\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1200,
+         "y": 600
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": true,
+        "useNewZLibDeCompress": true
+       }
+      }
+     ]
+    },
+    {
+     "flow": [
+      {
+       "id": 12,
+       "filter": {
+        "name": "Found in Folk",
+        "conditions": [
+         [
+          {
+           "a": "{{3.id}}",
+           "b": "NOTFOUND",
+           "o": "text:notequal"
+          }
+         ]
+        ]
+       },
+       "mapper": {
+        "qs": [],
+        "url": "https://fnykldftbkrccihdjayl.supabase.co/rest/v1/folk_ledger",
+        "data": "{\"email\": \"{{2.email}}\", \"campaign_id\": \"{{2.smartlead_campaign_id}}\", \"verdict\": \"verified\", \"detail\": \"Confirmed present in Folk (id {{3.id}}).\"}",
+        "gzip": true,
+        "method": "post",
+        "headers": [
+         {
+          "name": "apikey",
+          "value": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Authorization",
+          "value": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZueWtsZGZ0YmtyY2NpaGRqYXlsIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4MzEyMzU1OSwiZXhwIjoyMDk4Njk5NTU5fQ.fy1FIF-VjN4Qms8TRi_NFeOqRL3cs-TPOKNPZ4UI_HQ"
+         },
+         {
+          "name": "Prefer",
+          "value": "return=minimal"
+         }
+        ],
+        "useMtls": false,
+        "bodyType": "raw",
+        "contentType": "application/json",
+        "serializeUrl": false,
+        "shareCookies": false,
+        "parseResponse": true,
+        "followRedirect": true,
+        "useQuerystring": false,
+        "followAllRedirects": false,
+        "rejectUnauthorized": true
+       },
+       "module": "http:ActionSendData",
+       "version": 3,
+       "metadata": {
+        "restore": {},
+        "advanced": true,
+        "designer": {
+         "x": 1200,
+         "y": 300
+        },
+        "scenario": {
+         "dlq": true
+        }
+       },
+       "parameters": {
+        "handleErrors": true,
+        "useNewZLibDeCompress": true
+       }
+      }
+     ]
+    }
+   ],
+   "version": 1,
+   "metadata": {
+    "designer": {
+     "x": 900,
+     "y": 0
+    }
+   }
+  }
+ ],
+ "name": "folk-failsafe-watchdog",
+ "metadata": {
+  "instant": true,
+  "version": 1,
+  "scenario": {
+   "dlq": true,
+   "dataloss": false,
+   "maxErrors": 10,
+   "autoCommit": true,
+   "roundtrips": 1,
+   "sequential": false,
+   "confidential": false,
+   "freshVariables": false,
+   "autoCommitTriggerLast": true
+  }
+ }
+}
