@@ -828,6 +828,40 @@ function fleetSeries() {  // {sent[], bounces[], rate[]} aligned to HUB.days, fr
   });
   return out;
 }
+// The day-by-day chart draws two independently-clocked sources on one axis:
+// analytics-hub (interested/meetings — computed live, its day list ends TODAY)
+// and client-windows (sent/replies/rate — a ≤2h SWR cache that can be a full day
+// stale, so its day list ends YESTERDAY). The chart plots series by array index
+// against the analytics-hub axis, so any drift between the two day lists slides
+// the client-windows lines one day earlier — and with weekends hidden that parks
+// Monday's real sent/replies/rate onto the dropped Sunday slot, drawing Monday as
+// ~0 (owner report 2026-08-07). alignDaily re-keys a client-windows series onto
+// the chart axis by DATE so index i always describes axis day i, whatever the two
+// clocks say.
+// Freshness horizon: client-windows is only COMPLETE for days BEFORE the day it
+// was built (CW.asof) — the as-of day itself holds partial data (it was captured
+// mid-day) and later days are missing entirely. So for any axis day on or after
+// CW.asof we prefer `fb` (an already-axis-aligned fresher/live series) and fall
+// back to the client-windows value only if there is no fresher source; days
+// strictly before CW.asof are trusted from client-windows. Without this a stale
+// cache would draw yesterday from its own partial morning snapshot (e.g. 9 sends
+// instead of ~18,600).
+function chartAxisDays() { return (HUB && HUB.days) || (CW && CW.days) || []; }
+function cwAsofDate() { return (CW && CW.asof) ? String(CW.asof).slice(0, 10) : null; }
+function alignDaily(srcArr, srcDays, fill, fb) {
+  var ax = chartAxisDays();
+  if (!srcArr || !srcDays || !ax.length) return srcArr;
+  var cutoff = cwAsofDate();   // client-windows is settled only for days < cutoff
+  var m = {};
+  for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = srcArr[i];
+  return ax.map(function (d, j) {
+    var settled = m[d] !== undefined && !(cutoff && d >= cutoff);
+    if (settled) return m[d];                          // trust a complete CW day
+    if (fb && fb[j] != null) return fb[j];             // fresher source for as-of/tail days
+    if (m[d] !== undefined) return m[d];               // no fresher source — CW is best we have
+    return fill;
+  });
+}
 /* ── client-windows (/api/client-windows): per-client sent/replies/bounces
    for the exact 7/14/30 windows, plus true daily lines for clients that map
    1:1 to a Smartlead workspace (Asteri, KRG) and for the all-client sum. ── */
@@ -865,7 +899,8 @@ function sentDailyFull() {
   if (!CW || !CW.series) return null;
   var key = state.client === "All" ? "__all" : state.client;
   var s = cwTrusted(key);
-  if (s && s.sent) return s.sent;
+  if (s && s.sent) return alignDaily(s.sent, CW.days, 0,
+      state.client === "All" ? fleetSeries().sent : null);
   // the apportioned split is only honest for clients that genuinely SHARE the
   // Navreo workspace — an own-workspace client whose line was gate-dropped
   // must not get bars shaped like another workspace's rhythm (round-3 panel)
@@ -877,7 +912,8 @@ function sentDailyFull() {
                         .reduce(function (a, b) { return a + (b || 0); }, 0);
     if (wsWin > 0) {
       var share = cw.sent / wsWin;
-      return wsS.sent.map(function (v) { return Math.round((v || 0) * share); });
+      return alignDaily(wsS.sent.map(function (v) { return Math.round((v || 0) * share); }),
+                        CW.days, 0, null);
     }
   }
   return null;
@@ -890,13 +926,15 @@ function sentDailyEstimated() {
 function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none exists
   var s = cwTrusted(state.client === "All" ? "__all" : state.client);
   if (!s) return null;
-  if (k === "sent") return s.sent;
-  if (k === "bounces") return s.bounced;
+  var all = state.client === "All";
+  if (k === "sent") return alignDaily(s.sent, CW.days, 0, all ? fleetSeries().sent : null);
+  if (k === "bounces") return alignDaily(s.bounced, CW.days, 0, all ? fleetSeries().bounces : null);
   if (k === "rate") {
     var min = rateMinSent();
-    return s.sent.map(function (v, i) {
+    var rate = s.sent.map(function (v, i) {
       return (v >= min && s.replied[i] != null) ? Math.round(s.replied[i] * 10000 / v) / 100 : null;
     });
+    return alignDaily(rate, CW.days, null, all ? fleetSeries().rate : null);
   }
   return null;
 }
@@ -933,7 +971,9 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     // Asteri, caught by the 2026-07-28 testers). Navreo-ws clients keep the
     // archive, which is complete for them.
     var ws = cwTrusted(state.client === "All" ? "__all" : state.client);
-    if (ws && ws.replied) return ws.replied;
+    if (ws && ws.replied) return alignDaily(ws.replied, CW.days, 0,
+        (state.client === "All" && HUB && HUB.series && HUB.series.__all)
+          ? HUB.series.__all.replies : null);
     // an exact window total exists but no TRUSTED daily line — never plot the
     // partial archive as the reply rhythm (round-3 panel: the chip said 9
     // while the funnel correctly said 182 in the same viewport)
