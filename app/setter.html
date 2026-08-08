@@ -561,9 +561,20 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
   opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .lesson-toast.on { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
-/* (The 2026-08-09 copied-link toast + ⧉ glyph lived here for a few hours —
-   reverted the same day: the pane opens target=_blank links in real new tabs
-   now, so external links simply open. See the headless link handler below.) */
+/* Copied-link toast (headless copy-links, 2026-08-09): in the ?chrome=none
+   embed every external link COPIES instead of opening (the host pane hijacks
+   new tabs), and this is the "it's on your clipboard" confirmation. */
+.copy-toast {
+  position: fixed; left: 50%; transform: translateX(-50%) translateY(12px);
+  bottom: 18px; z-index: 320; max-width: min(520px, 92vw);
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(20, 17, 14, 0.18); padding: 10px 14px;
+  font: 500 12.5px var(--font-sans);
+  opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.copy-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* Signal on the quick-link buttons that a click copies (headless only). */
+html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55; margin-left: 3px; }
 .lesson-toast .lt-head { font: 600 12.5px var(--font-sans); }
 .lesson-toast .lt-rule { font-size: 12.5px; color: var(--ink-2); margin: 5px 0 9px; line-height: 1.5; }
 .lesson-toast .lt-actions { display: flex; gap: 8px; }
@@ -5045,28 +5056,66 @@ setInterval(() => {
   // the same boundary, stacking N GETs behind one global build lock.
 }, 60000 + Math.floor(Math.random() * 10000));
 
-/* ── Headless external links open a NEW tab (owner ruling 2026-08-09 pm) ────
-   The copy-to-clipboard interception that lived here was REVERTED the same
-   day it shipped: the owner clicked a Calendly slot link inside a draft (the
-   one kind of link the interceptor left alone) and the host pane opened it in
-   a real new tab — the pane no longer hijacks target=_blank links in place,
-   which was the whole reason to copy instead of open. So links just open.
-   This tiny delegated handler only NORMALISES: any external link that lacks
-   target=_blank (bare links inside stored email bodies) gets it at click
-   time, so no link can navigate the embedded board away. */
+/* ── Headless copy-links (owner ask 2026-08-09) ─────────────────────────────
+   In the ?chrome=none embed the host pane (Claude) opens every link IN PLACE,
+   destroying the board — so there, every externally-facing link (the Website /
+   LinkedIn / Smartlead quick-links and any other link that leaves this app)
+   COPIES its URL to the clipboard and says so, instead of navigating. One
+   delegated capture-phase handler, so late-rendered rows are covered without
+   per-button wiring. The normal setter.html keeps open-in-new-tab untouched. */
+function copyTextToClipboard(text) {
+  // execCommand FIRST and synchronously — it only works inside the live user
+  // gesture, and the embedded pane denies the async Clipboard API outright
+  // (NotAllowedError), so awaiting that first burned the gesture and BOTH
+  // paths failed (found live 2026-08-09).
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (ok) return Promise.resolve(true);
+  } catch { /* fall through to the async API */ }
+  return navigator.clipboard.writeText(text).then(() => true, () => false);
+}
+let _copyToastTimer = null;
+function showCopyToast(msg) {
+  let el = document.getElementById("copyToast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "copyToast";
+    el.className = "copy-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("on");
+  if (_copyToastTimer) clearTimeout(_copyToastTimer);
+  _copyToastTimer = setTimeout(() => el.classList.remove("on"), 2600);
+}
 if (document.documentElement.classList.contains("headless")) {
   document.addEventListener("click", (e) => {
     const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
-    if (!a || a.target === "_blank") return;
+    if (!a) return;
+    // Links inside the editable draft never navigate anyway — leave the
+    // caret alone (clicking near an anchor while editing must stay an edit).
     if (a.closest(".qc-draft[contenteditable]")) return;
     const href = a.getAttribute("href") || "";
     if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+    let abs = href, external = a.target === "_blank";
     try {
-      if (new URL(href, location.href).origin !== location.origin) {
-        a.target = "_blank";
-        a.rel = "noopener";
-      }
-    } catch { /* unparsable href: leave it alone */ }
+      const u = new URL(href, location.href);
+      abs = u.href;
+      if (!external) external = u.origin !== location.origin;
+    } catch { /* unparsable: only treat as external if target=_blank */ }
+    if (!external) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const label = (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 48) || "Link";
+    copyTextToClipboard(abs).then((ok) => {
+      showCopyToast(ok
+        ? `${label} — link copied to your clipboard. Paste it into a new tab.`
+        : `Couldn't copy automatically — the link is: ${abs}`);
+    });
   }, true);
 }
 
