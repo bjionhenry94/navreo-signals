@@ -16461,14 +16461,30 @@ def _client_win_build():
         _since30 = (end - _dtmod.timedelta(days=29)).isoformat()
         _reps = sb_get_all("replies?select=smartlead_campaign_id,category,replied_at"
                            f"&category=in.({_pos_q})&replied_at=gte.{_since30}&order=id") or []
-        _bkd = sb_get_all("replies?select=smartlead_campaign_id,email,replied_at"
+        _bkd = sb_get_all("replies?select=smartlead_campaign_id,email,replied_at,src:raw->>source"
                           f"&category=eq.{urllib.parse.quote('Call Booked')}&order=id") or []
+        # Same rule as perf_daily_series_v2 / analytics_hub_v1 (2026-08-09):
+        # calendly-synced rows count one per booking DAY (re-books count);
+        # legacy-only leads count once at their FIRST Call Booked reply.
+        _cal_events: set = set()
+        _cal_emails: set = set()
+        for r in _bkd:
+            if r.get("src") == "calendly":
+                _em = (r.get("email") or "").strip().lower()
+                _cal_emails.add(_em)
+                _cal_events.add((str(r.get("smartlead_campaign_id")), _em,
+                                 str(r.get("replied_at") or "")[:10]))
         _first: dict = {}
         for r in _bkd:
-            k = (str(r.get("smartlead_campaign_id")), (r.get("email") or "").strip().lower())
+            _em = (r.get("email") or "").strip().lower()
+            if r.get("src") == "calendly" or _em in _cal_emails:
+                continue
+            k = (str(r.get("smartlead_campaign_id")), _em)
             t = str(r.get("replied_at") or "")
             if t and (k not in _first or t < _first[k]):
                 _first[k] = t
+        for (_c, _em, _d) in _cal_events:
+            _first[(_c, _em + "|" + _d)] = _d  # one countable event per booking day
         for w in _CLIENT_WIN_WINDOWS:
             _since = (end - _dtmod.timedelta(days=w - 1)).isoformat()
             _pos_by: dict = {}
