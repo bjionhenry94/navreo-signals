@@ -6751,7 +6751,7 @@
                              : Math.max(2, Math.round((v.sent || 0) / maxSent * 100));
       var best = maxRate > 0 && r === maxRate && !v.agg && !off;
       var label = v.agg ? "Email " + esc(String(v.email)) + " overall"
-        : "Email " + esc(String(v.email)) + (v.variant != null ? ": Variant " + esc(String(v.variant)) : "") + (off ? " (off)" : "");
+        : "Email " + esc(String(v.email)) + (v.variant != null ? ": Variant " + esc(String(v.variant)) : "") + (off ? ' <span class="vp-dot vp-dot--off" title="inactive — switched off"></span>' : "");
       h.push('<div class="why-bar-row' + (cut ? " wv-cut" : "") + (off ? " wv-inactive" : "") + '">' +
         '<span class="why-bar-label' + (cut ? " wv-cut" : "") + '">' + label + "</span>" +
         '<span class="why-bar-track"><span class="why-bar-fill' + (best ? " is-good" : "") + '" style="width:' + width + '%"></span></span>' +
@@ -6760,7 +6760,7 @@
       h.push("</div>");
     });
     h.push("</div>", '<p class="why-bars-caption">Bar = how often it lands a yes.' +
-      (showCut ? " Red = replace this variant." : "") + (anyOff ? " Greyed = switched off." : "") + "</p>");
+      (showCut ? " Red = replace this variant." : "") + (anyOff ? " Grey dot = inactive." : "") + "</p>");
     return h.join("");
   }
   function whyVariantVerdict(vs, showCut) {
