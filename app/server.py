@@ -14673,6 +14673,17 @@ def _reply_sync_bg():
            {"actor": "cron", "endpoint": "/api/cron/reply-sync",
             "action": "reply_sync_done" if res.get("ok") else "reply_sync_failed",
             "entity": "replies", "payload": res})
+        # Client-workspace backstop (ship 2026-08-09): the pull above is
+        # navreo-only, so client replies previously depended entirely on the
+        # Make webhook chain (the Asteri 08-04 outage class - replies in
+        # Slack but never in the Setter). Per-workspace watermarks; archives
+        # straight into `replies`; the monitor sweep surfaces them from there.
+        res_c = setter.run_client_reply_sync()
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+            "action": ("client_reply_sync_done" if res_c.get("ok")
+                       else "client_reply_sync_failed"),
+            "entity": "replies", "payload": res_c})
         # Positive-thread re-reply sweep rides the same tick, self-throttled to
         # ~15 min inside run_positive_resweep (the watermark backstop above is
         # blind to NEW replies on OLD threads — Smartlead's replyTimeBetween

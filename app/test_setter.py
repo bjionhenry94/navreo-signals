@@ -7119,7 +7119,9 @@ def test_core_four_categories_enter_queue_both_paths():
 
 
 def test_non_core_categories_stay_out_both_paths():
-    non_core = ["Call Booked", "Contact Forward", "Contact In Future", "Not Interested", None]
+    # "Call Booked" moved INTO CORE_FOUR 2026-08-09 (Bjion): booked leads
+    # still ask real scheduling questions that must surface in the Setter.
+    non_core = ["Contact Forward", "Contact In Future", "Not Interested", None]
     real_process_reply = setter.process_reply
     try:
         for cat in non_core:

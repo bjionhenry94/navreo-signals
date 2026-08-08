@@ -211,9 +211,14 @@ def _openai(body: dict, key: str, *, timeout: float = None, retries: int = 1):
     raise last
 
 # Only these Smartlead/Make categories may enter setter_queue (ruling
-# 2026-07-14) - everything else (Call Booked, Contact Forward, Contact In
-# Future, all negatives, uncategorised) stays out of both intake paths.
-CORE_FOUR = frozenset({"Interested", "Information Request", "Meeting Request", "positive-re-reply"})
+# 2026-07-14) - everything else (Contact Forward, Contact In Future, all
+# negatives, uncategorised) stays out of both intake paths.
+# "Call Booked" added 2026-08-09 (Bjion): booked leads still reply with real
+# scheduling questions ("Is tomorrow 11am still ok?") that were invisible
+# in-tool, and the client monitor path already surfaces call booked - the
+# two paths now agree.
+CORE_FOUR = frozenset({"Interested", "Information Request", "Meeting Request",
+                       "positive-re-reply", "Call Booked"})
 
 # PostgREST `category=in.(...)` filter built FROM CORE_FOUR (sorted for a
 # deterministic query string) instead of hardcoding the label list a second
@@ -1737,11 +1742,13 @@ def _sl_get(path: str, params: dict = None, campaign_id=None):
     return _HTTP("GET", f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}", {}, timeout=15)
 
 
-def _sl_post(path: str, body: dict, params: dict = None, campaign_id=None):
+def _sl_post(path: str, body: dict, params: dict = None, campaign_id=None, api_key=None):
     # campaign_id mirrors _sl_get's kwarg: account-scoped POSTs (e.g.
     # /master-inbox/push-to-subsequence) carry no /campaigns/{id} in the
-    # path, so without it they silently use the navreo key.
-    key = _sl_key_for(path, campaign_id)
+    # path, so without it they silently use the navreo key. api_key is an
+    # explicit override for workspace-scoped calls where no campaign id
+    # exists to resolve from (the client reply-sync's master-inbox pull).
+    key = api_key or _sl_key_for(path, campaign_id)
     if not key:
         return None
     qs = dict(params or {})
@@ -4120,7 +4127,7 @@ def _mark_reply_seen(mid: str) -> None:
             prefer="resolution=merge-duplicates")
 
 
-def _fetch_master_inbox_window(since_iso: str, until_iso: str, hard_cap: int):
+def _fetch_master_inbox_window(since_iso: str, until_iso: str, hard_cap: int, api_key=None):
     """Raw Smartlead master-inbox list for replies in [since, until].
     POST /master-inbox/inbox-replies (MCP-free, built on _sl_post — the MCP
     tool `fetch_master_inbox_replies` wraps this same endpoint but cannot be
@@ -4131,11 +4138,12 @@ def _fetch_master_inbox_window(since_iso: str, until_iso: str, hard_cap: int):
     overflow = False
     ceiling = hard_cap + page_size
     while True:
+        kwargs = {"api_key": api_key} if api_key else {}
         resp = _sl_post("/master-inbox/inbox-replies", {
             "limit": page_size, "offset": offset, "sortBy": "REPLY_TIME_DESC",
             "filters": {"emailStatus": "Replied",
                         "replyTimeBetween": [since_iso, until_iso]},
-        })
+        }, **kwargs)
         data = resp.get("data") if isinstance(resp, dict) else None
         if not isinstance(data, list) or not data:
             break
@@ -4251,6 +4259,185 @@ def run_reply_sync() -> dict:
         summary["errors"] += 1
         summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
         return summary
+
+
+# ── client-workspace backstop reply-sync (ship 2026-08-09) ───────────────────
+# run_reply_sync above is navreo-only: the master-inbox path carries no
+# campaign id, so _sl_key_for falls back to the navreo key and client
+# workspaces were never polled. Their Make webhook chain was therefore a
+# single point of failure - a dead delivery dropped replies silently for
+# days (the Asteri 2026-08-04 outage: 38/41 replies invisible in-tool until
+# the 2026-08-09 audit). This sweep closes the hole: per-workspace watermark,
+# master-inbox pull with the WORKSPACE'S OWN key, and a direct `replies`
+# insert (dedup = the same unique smartlead_message_id index the ingest edge
+# function relies on). No Make, no Slack, no sends - the archived row then
+# surfaces through _poll_monitor_workspaces like any other client reply
+# (positives + uncategorised only, always agentless, monitor-only).
+CLIENT_SYNC_CAP = 40           # per-workspace replies per run; overflow => FAILED + gap
+# reply_sync_state's CHECK constraint pins ids to {1,2}, so per-workspace
+# watermarks live as one "wm:<ws>" row each in reply_sync_seen with the value
+# in seen_at. The prefix can never collide with a real message id (those are
+# always "<digits>-<iso>").
+_WS_WM_PREFIX = "wm:"
+
+
+def _ws_sync_watermark(ws: str):
+    """Per-workspace watermark; seeds now-minus-2h when absent.
+    Returns (watermark_dt, seeded: bool)."""
+    now = _dt.datetime.now(_dt.timezone.utc)
+    key = f"{_WS_WM_PREFIX}{ws}"
+    rows = _SB("GET", f"reply_sync_seen?message_id=eq.{quote(key, safe='')}"
+                      f"&select=seen_at&limit=1") if _SB else None
+    if isinstance(rows, list) and rows and rows[0].get("seen_at"):
+        wm = _parse_iso(rows[0]["seen_at"])
+        if wm:
+            return wm, False
+    seed = now - _dt.timedelta(hours=_REPLY_SYNC_FIRST_WINDOW_H)
+    if _SB:
+        _SB("POST", "reply_sync_seen", {"message_id": key, "seen_at": seed.isoformat()},
+            prefer="resolution=merge-duplicates")
+    return seed, True
+
+
+def _save_ws_sync_watermark(ws: str, wm_dt) -> None:
+    if _SB:
+        _SB("PATCH", f"reply_sync_seen?message_id=eq.{quote(_WS_WM_PREFIX + ws, safe='')}",
+            {"seen_at": wm_dt.isoformat()})
+
+
+def _reply_in_archive_ws(ws: str, mid: str) -> bool:
+    """Workspace-scoped twin of _reply_in_archive (which is navreo-pinned)."""
+    if not _SB or not mid:
+        return False
+    rows = _SB("GET", f"replies?workspace=eq.{ws}"
+                      f"&smartlead_message_id=eq.{quote(mid, safe='')}&select=id&limit=1")
+    return isinstance(rows, list) and bool(rows)
+
+
+def _ws_category_names(api_key: str) -> dict:
+    """Smartlead category id -> name for one workspace account. Best-effort."""
+    try:
+        cats = _HTTP("GET", f"{SMARTLEAD_BASE}/leads/fetch-categories?api_key={api_key}", {})
+        if isinstance(cats, list):
+            return {c.get("id"): (c.get("name") or "") for c in cats if isinstance(c, dict)}
+    except Exception:  # noqa: BLE001 - a failed map just means archiving uncategorised
+        pass
+    return {}
+
+
+def _ws_reply_body(api_key: str, cid, lead_id, rtime) -> str:
+    """The reply's cleaned body via per-campaign message history (the
+    workspace key works on campaign paths; master-inbox rows carry no body)."""
+    try:
+        resp = _HTTP("GET", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads/{lead_id}"
+                            f"/message-history?api_key={api_key}", {})
+        hist = resp.get("history") if isinstance(resp, dict) else None
+        best = None
+        for h in hist or []:
+            if isinstance(h, dict) and h.get("type") == "REPLY":
+                if (h.get("time") or "")[:19] == str(rtime)[:19]:
+                    return clean_body(h.get("email_body") or "")
+                best = h
+        return clean_body((best or {}).get("email_body") or "")
+    except Exception:  # noqa: BLE001 - body fetch failure = retry within grace
+        return ""
+
+
+def run_client_reply_sync() -> dict:
+    """Backstop pull for every enabled NON-navreo workspace: master inbox ->
+    direct `replies` insert for every unseen reply. Never raises. ok=False on
+    any per-workspace cap-hit or error, with per-workspace summaries."""
+    summary = {"ok": True, "workspaces": {}, "errors": 0}
+    if not _SB:
+        summary["ok"] = False
+        summary["errors"] += 1
+        summary["error"] = "Supabase not configured"
+        return summary
+    rows = _SB("GET", "workspaces?select=id,api_key,status&order=added_at")
+    targets = [(r.get("id"), r.get("api_key")) for r in (rows if isinstance(rows, list) else [])
+               if isinstance(r, dict) and r.get("id") and r.get("id") != "navreo"
+               and (r.get("status") or "enabled") == "enabled" and r.get("api_key")]
+    for ws, api_key in targets:
+        s = {"ok": True, "checked": 0, "archived": 0, "skipped_seen": 0,
+             "skipped_archived": 0, "archived_bodyless": 0, "errors": 0,
+             "gap": 0, "overflow": False, "first_run": False}
+        summary["workspaces"][ws] = s
+        try:
+            wm, seeded = _ws_sync_watermark(ws)
+            now = _dt.datetime.now(_dt.timezone.utc)
+            s["first_run"] = seeded
+            since_iso = wm.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            until_iso = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+            inbox, overflow = _fetch_master_inbox_window(since_iso, until_iso,
+                                                         CLIENT_SYNC_CAP, api_key=api_key)
+            s["checked"] = len(inbox)
+            s["overflow"] = overflow
+            to_process = inbox[:CLIENT_SYNC_CAP]
+            if overflow or len(inbox) > CLIENT_SYNC_CAP:
+                s["ok"] = False                 # cap-hit: FAILED, never silent
+                summary["ok"] = False
+                s["gap"] = max(0, len(inbox) - CLIENT_SYNC_CAP)
+            catmap = None                       # fetched lazily, once per workspace
+            advanced_to, frozen = wm, False
+            for r in to_process:
+                if not isinstance(r, dict):
+                    continue
+                lead_id = r.get("email_lead_id")
+                rtime = r.get("last_reply_time")
+                cid = r.get("email_campaign_id")
+                email = (r.get("lead_email") or "").strip()
+                if not lead_id or not rtime or not cid or not email:
+                    continue
+                mid = f"{lead_id}-{rtime}"      # == ingest/categoriser archive key
+                rt_dt = _parse_iso(rtime)
+                handled = False
+                if _reply_sync_seen(mid):
+                    s["skipped_seen"] += 1
+                    handled = True
+                elif _reply_in_archive_ws(ws, mid):
+                    _mark_reply_seen(mid)
+                    s["skipped_archived"] += 1
+                    handled = True
+                else:
+                    text = _ws_reply_body(api_key, cid, lead_id, rtime)
+                    past_grace = rt_dt and (now - rt_dt) > _dt.timedelta(hours=EMPTY_BODY_GRACE_H)
+                    if text or past_grace:
+                        if catmap is None:
+                            catmap = _ws_category_names(api_key)
+                        raw_cat = r.get("lead_category_id")
+                        try:
+                            raw_cat = int(raw_cat)
+                        except (TypeError, ValueError):
+                            raw_cat = None
+                        _SB("POST", "replies",
+                            {"workspace": ws, "client_id": ws,
+                             "smartlead_campaign_id": cid, "email": email.lower(),
+                             "replied_at": rtime,
+                             "category": (catmap.get(raw_cat) or "") if raw_cat is not None else "",
+                             "smartlead_message_id": mid,
+                             "reply_subject": "", "reply_body": text},
+                            prefer="resolution=ignore-duplicates")
+                        _mark_reply_seen(mid)
+                        s["archived"] += 1
+                        if not text:
+                            s["archived_bodyless"] += 1
+                        handled = True
+                    # else: no body yet and within grace - leave UNSEEN so a
+                    # later tick retries (thread-indexing lag), watermark freezes.
+                if handled and not frozen:
+                    if rt_dt and rt_dt > advanced_to:
+                        advanced_to = rt_dt
+                elif not handled:
+                    frozen = True
+            if advanced_to > wm or seeded:
+                _save_ws_sync_watermark(ws, advanced_to)
+        except Exception as e:  # noqa: BLE001 - one workspace must never sink the rest
+            s["ok"] = False
+            s["errors"] += 1
+            s["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            summary["ok"] = False
+            summary["errors"] += 1
+    return summary
 
 
 # ── positive-thread re-reply sweep ───────────────────────────────────────────
