@@ -5014,16 +5014,20 @@ setInterval(() => {
    COPIES its URL to the clipboard and says so, instead of navigating. One
    delegated capture-phase handler, so late-rendered rows are covered without
    per-button wiring. The normal setter.html keeps open-in-new-tab untouched. */
-async function copyTextToClipboard(text) {
-  try { await navigator.clipboard.writeText(text); return true; } catch { /* fallback below */ }
+function copyTextToClipboard(text) {
+  // execCommand FIRST and synchronously — it only works inside the live user
+  // gesture, and the embedded pane denies the async Clipboard API outright
+  // (NotAllowedError), so awaiting that first burned the gesture and BOTH
+  // paths failed (found live 2026-08-09).
   try {
     const ta = document.createElement("textarea");
     ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
     document.body.appendChild(ta); ta.select();
     const ok = document.execCommand("copy");
     ta.remove();
-    return ok;
-  } catch { return false; }
+    if (ok) return Promise.resolve(true);
+  } catch { /* fall through to the async API */ }
+  return navigator.clipboard.writeText(text).then(() => true, () => false);
 }
 let _copyToastTimer = null;
 function showCopyToast(msg) {
