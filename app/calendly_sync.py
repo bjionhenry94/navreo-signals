@@ -21,9 +21,13 @@ Attribution: the lead's contact_history row with the latest activity at or
 before booking names the campaign/workspace/client. DB-only writes — nothing
 here ever touches Smartlead or emails anyone.
 
+ONE-TIME / MANUAL TOOL (owner ruling 2026-08-09): NOT wired into any cron.
+Clients don't book on Bjion's Calendly, so the meetings pipeline must never
+depend on it — this ran once to backfill the missed bookings, and going
+forward meetings come from attentively-assigned Call Booked categories.
+Re-run manually any time a reconcile against Bjion's calendar is wanted:
+
 Run:  python3 app/calendly_sync.py [--days 120] [--dry-run]
-Cron: run_daily.py calls run_calendly_sync() when CALENDLY_API_TOKEN is set
-      (add it to the Render navreo-secrets group to activate server-side).
 """
 import argparse
 import json

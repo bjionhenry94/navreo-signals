@@ -21,7 +21,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server  # noqa: E402
 import build_notifications  # noqa: E402 — Lilly Optimiser notifications generator
 import campaign_register  # noqa: E402 — server-side auto-registration reconcile
-import calendly_sync  # noqa: E402 — Calendly bookings → Call Booked archive rows
 
 LOG = Path(__file__).parent / "data" / "daily_log.json"
 
@@ -133,19 +132,6 @@ def main():
     print("run logged.")
 
     run_optimiser_refresh()  # gated to once/day; never blocks/kills the source pulls above
-
-    # Calendly → replies-archive booking sync (meeting-attribution-truth,
-    # 2026-08-09): most bookers never send another email, so the booking itself
-    # must write the Call Booked row. Env-gated — add CALENDLY_API_TOKEN to the
-    # Render navreo-secrets group to activate here; runs before vpath_backfill
-    # so fresh bookings get their variant path stamped the same tick.
-    try:
-        cs = calendly_sync.run_calendly_sync(days=30)
-        print("calendly sync · " + (f"skipped ({cs.get('reason')})" if cs.get("skipped")
-              else f"{cs.get('inserted', 0)} new booking(s), {cs.get('existing', 0)} known, "
-                   f"{cs.get('unmatched', 0)} non-campaign"))
-    except Exception as e:  # noqa: BLE001 — the sync must never kill the run
-        print(f"calendly sync · FAILED: {str(e)[:200]}")
 
     # Variant-path + meeting-step stamping (Supabase-first messaging tab): the
     # web request path never crawls Smartlead message history, so this cron
