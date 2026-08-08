@@ -839,11 +839,18 @@ function vawWireMessaging(root, c){
       const on=t.classList.contains("is-on");
       const step=t.getAttribute("data-step"), lab=t.getAttribute("data-vlabel");
       const split=parseInt(t.getAttribute("data-split"),10)||0;
+      /* name the receiver when it's unambiguous (campaign-page parity) */
+      const others=Array.from(root.querySelectorAll("[data-vaw-toggle].is-on"))
+        .filter(o=>o!==t&&o.getAttribute("data-step")===step)
+        .map(o=>({lab:o.getAttribute("data-vlabel"), split:parseInt(o.getAttribute("data-split"),10)||0}));
+      const dest=others.length===1
+        ? "Version "+others[0].lab+" — it takes "+Math.min(100,others[0].split+split)+"%"
+        : "the best-performing live version";
       vawModal(on?{
         title:"Switch off Version "+lab+" on Email "+step+"?",
         sub:(c.name||"Campaign "+c.id)+" · campaign "+c.id,
         lines:[["Version "+lab+" share",vawChangeV(split+"%","0%")],
-               ["Its "+split+"% goes to","the other live versions"],
+               ["Its "+split+"% goes to",esc(dest)],
                ["Copy / subject","untouched"]],
         idnote:VAW_IDNOTE, token:"DISABLE", danger:true,
         confirmLabel:"Confirm — switch it off",

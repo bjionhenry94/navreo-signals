@@ -4236,6 +4236,15 @@ def _va_worker(q):
                 job["status_code"] = status
                 job["body"] = body
                 job["finished"] = time.time()
+        if ok:
+            # the very next table read must show the NEW split — drop the
+            # cockpit caches for this campaign so the post-write refresh can't
+            # repaint a 10-minute-stale 50/50 and look like nothing happened
+            try:
+                _COCKPIT_MESSAGING_SWR.invalidate_id(str(cid))
+                _COCKPIT_SEQCOPY_SWR.invalidate_id(str(cid))
+            except Exception:  # noqa: BLE001 — cache hygiene never fails the write
+                pass
         if shell_job:
             if ok:
                 after = body.get("after") or {}

@@ -5039,11 +5039,20 @@
         var on = t.classList.contains("is-on");
         var step = t.getAttribute("data-step"), lab = t.getAttribute("data-vlabel");
         var split = parseInt(t.getAttribute("data-split"), 10) || 0;
+        /* name the receiver when it's unambiguous: the freed share folds into
+           the best live sibling — with exactly one other live version, that
+           version simply takes the lot. */
+        var others = Array.prototype.slice.call(root.querySelectorAll("[data-vaw-toggle].is-on"))
+          .filter(function (o) { return o !== t && o.getAttribute("data-step") === step; })
+          .map(function (o) { return { lab: o.getAttribute("data-vlabel"), split: parseInt(o.getAttribute("data-split"), 10) || 0 }; });
+        var dest = others.length === 1
+          ? "Version " + others[0].lab + " — it takes " + Math.min(100, others[0].split + split) + "%"
+          : "the best-performing live version";
         vawModal(on ? {
           title: "Switch off Version " + lab + " on Email " + step + "?",
           sub: (c.name || "Campaign " + c.id) + " · campaign " + c.id,
           lines: [["Version " + lab + " share", vawChangeV(split + "%", "0%")],
-                  ["Its " + split + "% goes to", "the other live versions"],
+                  ["Its " + split + "% goes to", esc(dest)],
                   ["Copy / subject", "untouched"]],
           idnote: VAW_IDNOTE, token: "DISABLE", danger: true,
           confirmLabel: "Confirm — switch it off",
