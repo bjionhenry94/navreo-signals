@@ -55,9 +55,14 @@
     <p class="login-err" id="err"></p>
   </form>
 <script>
-  // where to land after login — same-origin paths only (no open redirect)
+  // where to land after login — same-origin paths only (no open redirect).
+  // The fragment survives the 302 chain onto THIS page's URL but never
+  // reaches the server (so it's absent from ?next=) — re-attach it, or a
+  // chat permalink (#/r/…) logs in to the tool's front door (owner report
+  // 2026-08-09: "it didn't take me to the chat").
   const raw = new URLSearchParams(location.search).get("next") || "";
-  const next = raw.startsWith("/") && !raw.startsWith("//") ? raw : "/app/campaigns.html";
+  const next = (raw.startsWith("/") && !raw.startsWith("//") ? raw : "/app/campaigns.html")
+             + (location.hash || "");
 
   // already signed in? go straight through
   fetch("/api/auth/me").then(r => r.json())
