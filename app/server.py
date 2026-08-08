@@ -4204,20 +4204,45 @@ _VA_JOBS_LOCK = threading.Lock()
 _VA_JOB_TTL = 3600  # done/failed jobs readable for an hour, then pruned
 
 
+def _va_label(payload: dict) -> str:
+    a = str(payload.get("action") or "")
+    em, vl, to = payload.get("email"), payload.get("variant_label"), payload.get("to_label")
+    return {
+        "disable": f"Switch off Version {vl} — Email {em}",
+        "enable": f"Switch on Version {vl} — Email {em}",
+        "scale_winner": f"Send 100% of Email {em} to Version {vl}",
+        "shift_share": f"Move Version {vl}'s share to Version {to} — Email {em}",
+        "even_split": f"Even split — Email {em}",
+        "repair_mode": f"Repair split mode — Email {em}",
+    }.get(a, f"Variant change ({a}) — Email {em}")
+
+
 def _va_worker(q):
     while True:
         job_id, cid, payload = q.get()
+        with _VA_JOBS_LOCK:
+            shell_job = (_VA_JOBS.get(job_id) or {}).get("shell_job")
+        if shell_job:
+            _job_started(shell_job)
         try:
             status, body = api_campaign_variant_action(cid, payload)
         except Exception as e:  # noqa: BLE001 — job must always resolve
             status, body = 500, {"ok": False, "message": f"variant action crashed: {str(e)[:200]}"}
+        ok = 200 <= status < 300 and body.get("ok")
         with _VA_JOBS_LOCK:
             job = _VA_JOBS.get(job_id)
             if job is not None:
-                job["status"] = "done" if (200 <= status < 300 and body.get("ok")) else "failed"
+                job["status"] = "done" if ok else "failed"
                 job["status_code"] = status
                 job["body"] = body
                 job["finished"] = time.time()
+        if shell_job:
+            if ok:
+                after = body.get("after") or {}
+                shell_job["counts"] = {"detail": "Saved — new split: " + ", ".join(
+                    f"{k} {v}%" for k, v in after.items()) if after else "Saved"}
+            _job_finished(shell_job, "done" if ok else "failed",
+                          None if ok else (body.get("message") or "refused")[:300])
         q.task_done()
 
 
@@ -4229,12 +4254,19 @@ def _va_enqueue(cid: str, payload: dict) -> str:
     import queue as _q
     job_id = os.urandom(8).hex()
     now = time.time()
+    # also a house job, so the shell's "Tasks in progress" bar shows the write
+    # running/landing/failing like every other background task
+    try:
+        shell_job = _new_job("variant_action", _va_label(payload), str(cid))
+    except Exception:  # noqa: BLE001 — the task-bar mirror must never block the write
+        shell_job = None
     with _VA_JOBS_LOCK:
         for k in [k for k, j in _VA_JOBS.items()
                   if j.get("finished") and now - j["finished"] > _VA_JOB_TTL]:
             _VA_JOBS.pop(k, None)
         _VA_JOBS[job_id] = {"status": "running", "campaign_id": str(cid),
-                            "action": payload.get("action"), "created": now}
+                            "action": payload.get("action"), "created": now,
+                            "shell_job": shell_job}
         if _VA_QUEUE is None:
             _VA_QUEUE = _q.Queue()
             threading.Thread(target=_va_worker, args=(_VA_QUEUE,),

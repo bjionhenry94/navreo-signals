@@ -743,6 +743,7 @@ function vawInlineErr(msg){
 }
 function vawTrackJob(c, resp, el){
   if(!resp||!resp.job){ vawRefreshCampaign(); return; }
+  if(window.NavreoJobs) window.NavreoJobs.ping(); /* surface it in the Tasks bar right away */
   if(el) el.setAttribute("data-busy","1");
   vawPollJob(c.id, resp.job, ()=>{
     if(el) el.removeAttribute("data-busy");
@@ -755,6 +756,7 @@ function vawTrackJob(c, resp, el){
 }
 function vawTrackToggle(c, t, resp){
   if(!resp||!resp.job){ vawRefreshCampaign(); return; }
+  if(window.NavreoJobs) window.NavreoJobs.ping(); /* surface it in the Tasks bar right away */
   const wasOn=t.classList.contains("is-on");
   t.classList.toggle("is-on");
   t.setAttribute("aria-pressed", wasOn?"false":"true");

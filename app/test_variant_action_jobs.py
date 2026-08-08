@@ -25,6 +25,7 @@ s, b = server.api_campaign_variant_action_async("42", {"action": "disable", "ema
 check("missing variant_label -> sync 400", s == 400)
 
 # 2 — valid payload -> 202 + job id, worker runs the (stubbed) write
+server._job_persist = lambda job: None  # keep test runs out of the app_jobs ledger
 _real = server.api_campaign_variant_action
 calls = []
 def _stub_ok(cid, payload):
@@ -49,6 +50,12 @@ try:
     check("job completes -> done with the write's body", b2.get("status") == "done"
           and b2.get("status_code") == 200 and (b2.get("body") or {}).get("after") == {"A": 0}, b2)
     check("worker actually ran the real action fn", len(calls) == 1 and calls[0][0] == "42")
+
+    # 2b — the write is mirrored into the house JOBS registry (Tasks bar)
+    shell = [j for j in server.JOBS.values() if j.get("kind") == "variant_action"]
+    check("Tasks-bar job created + finished done", any(
+        j.get("status") == "done" and "Switch off Version A" in (j.get("label") or "")
+        for j in shell), [(j.get("status"), j.get("label")) for j in shell])
 
     # 3 — a refused write surfaces as failed, body carried through
     server.api_campaign_variant_action = lambda cid, p: (404, {"ok": False, "message": "variant Z not found"})
