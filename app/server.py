@@ -9871,9 +9871,19 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
             for st, key in path.items():
                 by_variant[st + "|" + key] = by_variant.get(st + "|" + key, 0) + 1
         e1, e2 = path.get("1"), path.get("2")
+        if e1 and e2 and em in booked_set:
+            # legacy combos stay strictly evidence-resolved on BOTH steps
+            combos[e1 + ">" + e2] = combos.get(e1 + ">" + e2, 0) + 1
+        # A path row is the whole JOURNEY's credit: a lead who converted at
+        # Email 1 on opener X is still on the X→follow-up arm. When the
+        # follow-up step has exactly ONE cluster the opener alone determines
+        # the arm honestly; with several follow-up variants an opener-only
+        # lead's arm is ambiguous, so they stay uncounted rather than guessed.
+        if e1 and not e2:
+            s2 = step_clusters.get("2") or []
+            if len(s2) == 1:
+                e2 = s2[0]["rep"]
         if e1 and e2:
-            if em in booked_set:
-                combos[e1 + ">" + e2] = combos.get(e1 + ">" + e2, 0) + 1
             p = paths.setdefault(e1 + ">" + e2, {"replies": 0, "positives": 0, "meetings": 0})
             p["replies"] += 1
             if em in positive_set:
