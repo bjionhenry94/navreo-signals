@@ -225,9 +225,11 @@
 .dh-emailgrp { display: inline-flex; align-items: center; gap: 4px; min-width: 0; margin-top: 3px; }
 /* "replied X ago" as a neutral pill (matches the app's pill/age-badge look). */
 .dh-replied { font-size: 11px; font-weight: 500; color: var(--ink-2); white-space: nowrap; flex-shrink: 0; background: #F2F2F0; padding: 3px 10px; border-radius: 999px; }
-/* Soft warm band grouping the campaign context + the action links. */
-.dh-band { display: flex; align-items: center; justify-content: space-between; gap: 10px 14px; flex-wrap: wrap; background: var(--cream-50); border-radius: 12px; padding: 9px 8px 9px 12px; }
-.dh-campaign { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); min-width: 0; }
+/* Soft warm band grouping the campaign context + the action links. The links
+   hold their place on one line; a long campaign name truncates with an ellipsis
+   rather than pushing the buttons onto a new line (owner ask 2026-08-09). */
+.dh-band { display: flex; align-items: center; gap: 10px 14px; flex-wrap: nowrap; background: var(--cream-50); border-radius: 12px; padding: 9px 8px 9px 12px; }
+.dh-campaign { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); flex: 1 1 auto; min-width: 0; }
 .dh-campaign .dh-campaign-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* The Website / LinkedIn / Smartlead links, content-width, in the band. */
 .dh-links { flex: 0 0 auto; margin: 0; }
@@ -332,6 +334,10 @@
     min-height: 40px; align-items: center; font-size: 14px; margin-bottom: 6px;
   }
   .dh-name { font-size: 18px; }
+  /* On phones the 3 links won't fit beside a campaign name, so here (and only
+     here) the band wraps and the links take their own row, wrapping if needed. */
+  .dh-band { flex-wrap: wrap; }
+  .dh-actions { flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
 
   /* The 2026-07-22 sticky identity bar never actually stuck (.inbox-right's
      desktop overflow swallowed it) and had grown to 205px tall — a quarter of
@@ -598,7 +604,7 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
    phones. */
 .inbox-shell.lead-hidden .lead-panel { display: none; }
 .lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; }
-.dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
+.dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
   width: 36px; min-height: 36px; padding: 0; border: 1px solid var(--line-2);
