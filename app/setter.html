@@ -398,41 +398,42 @@
    icon rail (desktop-sized, added later) squeezed every view to ~283px, the
    sticky identity bar died silently, and three fixed layers (action bar /
    new-reply pill / Tasks tab) piled up on the same bottom edge. Presentation
-   only — same elements, same handlers. Scoped to html:not(.headless): the
-   ?chrome=none embed pane has its own layout and keeps it. */
+   only — same elements, same handlers. Applies in BOTH chrome modes: a viewport this narrow is a phone
+   whether or not ?chrome=none is set — the desktop side-pane embed is >=700px
+   and never matches this query. */
 @media (max-width: 640px) {
   /* The desktop side rail becomes a slim top strip, giving every view the
      full 375px back; the open-reply view hides it entirely — Back to inbox
      is the only exit that matters there. */
-  html:not(.headless) .app { flex-direction: column; }
-  html:not(.headless) .rail {
+  .app { flex-direction: column; }
+  .rail {
     position: static; width: 100%; height: auto;
     flex-direction: row; align-items: center; gap: 8px;
     padding: 8px 14px; border-right: none; border-bottom: 1px solid var(--line);
   }
-  html:not(.headless) .rail .logo {
+  .rail .logo {
     width: 30px; height: 30px; font-size: 16px; margin-bottom: 0; margin-right: 4px;
   }
-  html:not(.headless) body:has(.inbox-shell.mobile-detail) .rail { display: none; }
+  body:has(.inbox-shell.mobile-detail) .rail { display: none; }
 
   /* Full-screen reply card (the July intent): the list header, stats and
      filter pills belong to the LIST, not to an open conversation. */
-  html:not(.headless) .main:has(.inbox-shell.mobile-detail) .setter-head-row,
-  html:not(.headless) .main:has(.inbox-shell.mobile-detail) .setter-toolbar { display: none; }
+  .main:has(.inbox-shell.mobile-detail) .setter-head-row,
+  .main:has(.inbox-shell.mobile-detail) .setter-toolbar { display: none; }
 
   /* A one-tap exit from anywhere in a 3,000px thread. Sticky can't do this —
      it never escapes its parent, and the back row's parent (.detail-topbar)
      is only ~150px tall — so the slim Back row pins with position:fixed and
      the topbar reserves its height. The phone scrolls the document, not the
      pane, so the pane's desktop overflow goes back to visible. */
-  html:not(.headless) .inbox-shell.mobile-detail .inbox-right { overflow: visible; }
-  html:not(.headless) .inbox-shell.mobile-detail .mobile-back {
+  .inbox-shell.mobile-detail .inbox-right { overflow: visible; }
+  .inbox-shell.mobile-detail .mobile-back {
     position: fixed; top: 0; left: 0; right: 0; z-index: 70;
     display: flex; align-items: center; margin: 0;
     padding: calc(10px + env(safe-area-inset-top)) 14px 10px;
     background: var(--bg); border-bottom: 1px solid var(--line);
   }
-  html:not(.headless) .inbox-shell.mobile-detail .detail-topbar { padding-top: 50px; }
+  .inbox-shell.mobile-detail .detail-topbar { padding-top: 50px; }
 
   /* One bottom edge, three fixed layers: content clears the action bar, the
      new-reply pill rides above it, the Tasks tab docks to the corner —
@@ -444,97 +445,97 @@
   /* No slide on phones: a transform transition that stalls (backgrounded
      tab, low-power mode) strands the pill mid-content over the words being
      read. States snap instead — reliability beats a 250ms slide. */
-  html:not(.headless) .proto-note { transition: none; }
+  .proto-note { transition: none; }
   /* In the reply view the pill lives INSIDE the fixed back bar, right-aligned
      — chrome over chrome, never over the name or a word of the thread
      (panel reports 2026-08-09: every floating spot still covered something). */
-  html:not(.headless) body:has(.inbox-shell.mobile-detail) .proto-note {
+  body:has(.inbox-shell.mobile-detail) .proto-note {
     top: calc(env(safe-area-inset-top) + 6px); bottom: auto; left: auto; right: 10px;
     transform: none; z-index: 75; max-width: 52vw;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     padding: 6px 12px; font-size: 11.5px;
   }
-  html:not(.headless) body:has(.inbox-shell.mobile-detail) .proto-note:not(.on) {
+  body:has(.inbox-shell.mobile-detail) .proto-note:not(.on) {
     display: none;
   }
   /* The Tasks tab is a desktop background-jobs affordance; at phone width it
      overlaps whatever text is under it wherever it docks. Hidden on phones —
      same precedent as the admin cluster (owner ask 2026-07-22). */
-  html:not(.headless) #nav-jobs-tab { display: none; }
+  #nav-jobs-tab { display: none; }
 
   /* Flex items default to min-width:auto, so ONE nowrap string anywhere
      (a campaign name, a signature URL) stretches .main — and the whole page —
      past the viewport. Cap the chain so wide content clips or wraps inside
      its own box instead of dragging the layout out. */
-  html:not(.headless) .main { min-width: 0; max-width: 100vw; }
-  html:not(.headless) .inbox-shell,
-  html:not(.headless) .inbox-left,
-  html:not(.headless) .inbox-right { min-width: 0; max-width: 100%; }
+  .main { min-width: 0; max-width: 100vw; }
+  .inbox-shell,
+  .inbox-left,
+  .inbox-right { min-width: 0; max-width: 100%; }
 
   /* Long unbreakable strings (signature URLs, booking links) set the thread's
      min-content far past the viewport and drag the WHOLE layout out with them
      (seen: 661px on a 375px phone). Let them break anywhere. */
-  html:not(.headless) .inbox-right .thread-msg,
-  html:not(.headless) .inbox-right .qc-draft,
-  html:not(.headless) .inbox-right .msg-card { overflow-wrap: anywhere; min-width: 0; }
+  .inbox-right .thread-msg,
+  .inbox-right .qc-draft,
+  .inbox-right .msg-card { overflow-wrap: anywhere; min-width: 0; }
 
   /* Identity chips wrap/shrink instead of clipping off the right edge. */
-  html:not(.headless) .dh-actions { flex-wrap: wrap; max-width: 100%; }
-  html:not(.headless) .dh-links { flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
+  .dh-actions { flex-wrap: wrap; max-width: 100%; }
+  .dh-links { flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
 
   /* Long campaign names (Amplifyy's run to ~80 chars) truncate instead of
      dragging the layout wide — the full name stays in the title tooltip. */
-  html:not(.headless) .dh-campaign { min-width: 0; max-width: 100%; display: flex; align-items: center; }
-  html:not(.headless) .dh-campaign-name {
+  .dh-campaign { min-width: 0; max-width: 100%; display: flex; align-items: center; }
+  .dh-campaign-name {
     min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
 
   /* 16px focusables: anything smaller makes iOS zoom the whole page on tap —
      the exact pinch-zooming this mode exists to end. */
-  html:not(.headless) .il-search input,
-  html:not(.headless) .inbox-shell textarea,
-  html:not(.headless) .qc-draft { font-size: 16px; }
+  .il-search input,
+  .inbox-shell textarea,
+  .qc-draft { font-size: 16px; }
 
   /* Desktop keyboard hint is noise on touch. */
-  html:not(.headless) .il-search-notes > span.small.muted:not(#searchAllNote) { display: none; }
+  .il-search-notes > span.small.muted:not(#searchAllNote) { display: none; }
 
   /* Tighter pills, wrapping to a second line — a clipped "Auto-se…" at the
      screen edge reads as broken, not as "scroll me". */
-  html:not(.headless) .setter-toolbar .filters { flex-wrap: wrap; overflow-x: visible; }
-  html:not(.headless) .setter-toolbar .filters .chip { padding: 8px 12px; }
+  .setter-toolbar .filters { flex-wrap: wrap; overflow-x: visible; }
+  .setter-toolbar .filters .chip { padding: 8px 12px; }
 
   /* The one-time learning banner: let "Got it" drop under the text instead
      of squeezing the sentence into a crop. */
-  html:not(.headless) .learn-intro { flex-wrap: wrap; }
-  html:not(.headless) .learn-intro .btn { margin-left: auto; }
+  .learn-intro { flex-wrap: wrap; }
+  .learn-intro .btn { margin-left: auto; }
 
   /* Collapsed history (phone only): tall OLDER messages clamp to their
      opening lines — the signature/UTM tail of every quoted email is exactly
      what nobody thumbs through twice on a phone. The current reply always
      renders in full. .tm-clamped is added by the clamp script only when a
      message is actually tall; a tap opens it for good. */
-  html:not(.headless) .thread-msg.tm-clamped:not(.tm-open) .tm-body {
+  .thread-msg.tm-clamped:not(.tm-open) .tm-body {
     max-height: 128px; overflow: hidden; position: relative; cursor: pointer;
   }
-  html:not(.headless) .thread-msg.tm-clamped:not(.tm-open) .tm-body::after {
+  .thread-msg.tm-clamped:not(.tm-open) .tm-body::after {
     content: "Show full message"; position: absolute; left: 0; right: 0; bottom: 0;
     padding: 30px 0 4px; text-align: center;
     font-size: 12.5px; font-weight: 600; color: var(--ink-3);
     background: linear-gradient(180deg, rgba(0,0,0,0), var(--bg-sunken) 62%);
   }
-  html:not(.headless) .thread-msg.them.tm-clamped:not(.tm-open) .tm-body::after,
-  html:not(.headless) .thread-msg.current.tm-clamped:not(.tm-open) .tm-body::after {
+  .thread-msg.them.tm-clamped:not(.tm-open) .tm-body::after,
+  .thread-msg.current.tm-clamped:not(.tm-open) .tm-body::after {
     background: linear-gradient(180deg, rgba(0,0,0,0), var(--amber-bg) 62%);
   }
   /* The CURRENT reply only clamps when it's extreme (corporate disclaimers in
      two languages — panel report 2026-08-09), and keeps far more visible:
      the lead's words always come before the legal tail. */
-  html:not(.headless) .thread-msg.current.tm-clamped:not(.tm-open) .tm-body {
+  .thread-msg.current.tm-clamped:not(.tm-open) .tm-body {
     max-height: 360px;
   }
 
   /* An empty draft box says so, instead of presenting a silent white void. */
-  html:not(.headless) .qc-draft:empty::before {
+  .qc-draft:empty::before {
     content: "No draft here yet — tap to write your reply, or use Regenerate below.";
     color: var(--ink-3);
   }
@@ -591,6 +592,51 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 @media (max-width: 699px) {
   html.headless .main > .inbox-shell { min-height: 0; }
   html.headless .inbox-left { flex: 1 1 auto; min-height: 0; }
+
+  /* Phone-width embed gets the same width locks as the phone web view
+     (owner report 2026-08-09: the chat pane on a phone scrolls sideways).
+     The ≤640 phone restore now applies in both chrome modes; this block
+     carries the width locks up to 699px, where the embed still stacks but
+     the restore's media query no longer reaches. */
+  html.headless .main { min-width: 0; max-width: 100vw; }
+  html.headless .inbox-shell,
+  html.headless .inbox-left,
+  html.headless .inbox-right { min-width: 0; max-width: 100%; }
+  html.headless .inbox-right .thread-msg,
+  html.headless .inbox-right .qc-draft,
+  html.headless .inbox-right .msg-card { overflow-wrap: anywhere; min-width: 0; }
+  html.headless .dh-campaign { min-width: 0; max-width: 100%; display: flex; align-items: center; }
+  html.headless .dh-campaign-name {
+    min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  html.headless .dh-actions { flex-wrap: wrap; max-width: 100%; }
+  html.headless .dh-links { flex: 1 1 auto; min-width: 0; flex-wrap: wrap; }
+  html.headless .il-search input,
+  html.headless .inbox-shell textarea,
+  html.headless .qc-draft { font-size: 16px; }
+
+  /* Quoted-tail collapse works here too (the clamp script keys on viewport
+     width, not chrome mode). */
+  html.headless .thread-msg.tm-clamped:not(.tm-open) .tm-body {
+    max-height: 128px; overflow: hidden; position: relative; cursor: pointer;
+  }
+  html.headless .thread-msg.current.tm-clamped:not(.tm-open) .tm-body { max-height: 360px; }
+  html.headless .thread-msg.tm-clamped:not(.tm-open) .tm-body::after {
+    content: "Show full message"; position: absolute; left: 0; right: 0; bottom: 0;
+    padding: 30px 0 4px; text-align: center;
+    font-size: 12.5px; font-weight: 600; color: var(--ink-3);
+    background: linear-gradient(180deg, rgba(0,0,0,0), var(--bg-sunken) 62%);
+  }
+  html.headless .thread-msg.them.tm-clamped:not(.tm-open) .tm-body::after,
+  html.headless .thread-msg.current.tm-clamped:not(.tm-open) .tm-body::after {
+    background: linear-gradient(180deg, rgba(0,0,0,0), var(--amber-bg) 62%);
+  }
+}
+/* On an actual phone the embed reads like a page, not a pane: the 100vh
+   inner-scroll shell exists for the desktop split pane, and inside a phone
+   chat webview it just fights the finger. Document flow instead. */
+@media (max-width: 640px) {
+  html.headless .main { height: auto; min-height: 100vh; }
 }
 
 .back-link { color: var(--ink-3); text-decoration: none; font-size: 13px; align-items: center; gap: 5px; }
@@ -6065,7 +6111,10 @@ async function openPermalink() {
 (function () {
   const mq = window.matchMedia("(max-width: 640px)");
   function clampConvo() {
-    if (!mq.matches || document.documentElement.classList.contains("headless")) return;
+    // Width is the only gate: a ?chrome=none embed on a phone (opened from
+    // the chat pane) needs the collapse exactly as much as the plain view —
+    // desktop embeds never match the query (owner report 2026-08-09).
+    if (!mq.matches) return;
     document.querySelectorAll(".thread-msg:not(.current):not(.tm-open):not(.tm-clamped)").forEach((m) => {
       const b = m.querySelector(".tm-body");
       // Clamp only when there's meaningfully more than the cap (128px) —
