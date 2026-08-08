@@ -595,7 +595,7 @@ def fresh_setter(fake_sb=None, fake_http=None):
     # checks failed only under the full run, green in isolation.
     setter._ROWS_CACHE.clear()
     setter._QUEUE_RESP_MEMO.clear()
-    setter._REP_IDS_CACHE.update(at=0.0, val=None, rows=None, rows_at=0.0)
+    setter._REP_IDS_CACHE.update(at=0.0, val=None, known=None, rows=None, rows_at=0.0)
     setter._KPI_CACHE.update(at=0.0, val=None)
     setter._POLL_TS_CACHE.update(at=0.0)
     setter._WS_IDS_CACHE.update(at=0.0, ids=None)
@@ -2418,6 +2418,55 @@ def test_subsequence_dismiss_is_idempotent():
     row = [r for r in sb.queue if r["id"] == 911][0]
     check("dismiss idempotent: row stays dismissed and stays sent",
          row.get("subsequence_decision") == "dismissed" and row.get("status") == "sent", row)
+
+
+def test_dismiss_sweeps_conversation_siblings():
+    """Ghost fix 2026-08-09: dismissing a conversation's representative row
+    must also dismiss its still-open SIBLING rows (intake stores one row per
+    inbound reply), or any thread-collapse degrade resurrects the whole
+    conversation into Needs review."""
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 921, "workspace": "navreo", "smartlead_campaign_id": 222,
+                     "lead_email": "g@x.com", "message_id": "g-old", "status": "needs_review",
+                     "is_test": False, "replied_at": "2026-08-01T10:00:00"})
+    sb.queue.append({"id": 922, "workspace": "navreo", "smartlead_campaign_id": 222,
+                     "lead_email": "g@x.com", "message_id": "g-new", "status": "needs_review",
+                     "is_test": False, "replied_at": "2026-08-02T10:00:00"})
+    # a DIFFERENT lead in the same campaign must be untouched by the sweep
+    sb.queue.append({"id": 923, "workspace": "navreo", "smartlead_campaign_id": 222,
+                     "lead_email": "other@x.com", "message_id": "o1", "status": "needs_review",
+                     "is_test": False})
+    st, resp = setter.route_queue_action({"id": 922, "action": "dismiss"})
+    check("dismiss sweep: action succeeds", st == 200 and resp.get("ok") is True, (st, resp))
+    by_id = {r["id"]: r for r in sb.queue}
+    check("dismiss sweep: representative dismissed", by_id[922]["status"] == "dismissed", by_id[922])
+    check("dismiss sweep: older sibling dismissed too", by_id[921]["status"] == "dismissed", by_id[921])
+    check("dismiss sweep: other lead untouched", by_id[923]["status"] == "needs_review", by_id[923])
+
+
+def test_collapse_degrade_serves_stale_rep_ids():
+    """Ghost fix 2026-08-09: when the light scan is unavailable (a peer holds
+    the single-flight lock, or the fetch fails) the collapse must serve the
+    LAST-GOOD stale value instead of None — None made callers skip the
+    collapse entirely and serve the uncollapsed view, resurrecting dismissed
+    conversations' older needs_review siblings."""
+    sb, http = fresh_setter()
+    setter._REP_IDS_CACHE.update(at=0.0, val={1, 2}, known={1, 2, 3},
+                                 rows=[{"id": 1}, {"id": 2}, {"id": 3}], rows_at=0.0)
+    setter._LIGHT_SCAN_LOCK.acquire()
+    try:
+        light = setter._light_rows_all()
+    finally:
+        setter._LIGHT_SCAN_LOCK.release()
+    check("collapse degrade: lock-contended light scan serves stale rows",
+          isinstance(light, list) and [r["id"] for r in light] == [1, 2, 3], light)
+    orig = setter._light_rows_all
+    setter._light_rows_all = lambda: None
+    try:
+        rep = setter._thread_rep_ids()
+    finally:
+        setter._light_rows_all = orig
+    check("collapse degrade: rep ids fall back to the last-good set", rep == {1, 2}, rep)
 
 
 def test_pick_slots_honours_exclude_and_not_before():
@@ -9437,6 +9486,8 @@ if __name__ == "__main__":
     test_unresolved_excludes_send_gate_decisions_and_non_positive_categories()
     test_send_gate_push_stamps_pushing_before_the_worker_runs()
     test_subsequence_dismiss_is_idempotent()
+    test_dismiss_sweeps_conversation_siblings()
+    test_collapse_degrade_serves_stale_rep_ids()
     test_pick_slots_honours_exclude_and_not_before()
     test_time_feedback_plan_reads_the_ask()
     test_call_ask_for_stops_repitching_a_settled_call()

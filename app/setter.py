@@ -2250,10 +2250,19 @@ def _parent_map(force: bool = False) -> dict:
         if not isinstance(resp, list):
             return _PARENT_CACHE["map"] or {}
         out = {}
+        names = {}
         for r in resp:
-            if isinstance(r, dict) and r.get("id") and r.get("parent_campaign_id"):
+            if not isinstance(r, dict) or not r.get("id"):
+                continue
+            if r.get("parent_campaign_id"):
                 out[str(r["id"])] = str(r["parent_campaign_id"])
-        _PARENT_CACHE.update({"at": _time.time(), "map": out})
+            # id->name for the same listing, kept alongside: the campaigns
+            # mirror can lag a brand-new campaign, and the picker's
+            # "Campaign <id>" placeholder is what buckets its replies into
+            # the client filter's "Other" (owner report 2026-08-09).
+            if r.get("name"):
+                names[str(r["id"])] = str(r["name"])
+        _PARENT_CACHE.update({"at": _time.time(), "map": out, "names": names})
         return out
     except Exception:  # noqa: BLE001 - never let a Smartlead blip break agent lookup
         return _PARENT_CACHE["map"] or {}
@@ -6440,6 +6449,14 @@ def _compute_campaigns_list() -> list:
         # only ADDS rows the original query would have dropped or missed.
         # Best-effort: any failure here degrades to the plain mirror-only
         # list rather than 500ing the whole endpoint.
+        # Subsequence/parent + live-name lookup, fetched ONCE up front (owner
+        # report 2026-08-09): the union below needs the Smartlead names for
+        # mirror-lagged campaigns, and the annotation loop at the end needs the
+        # parent links. One cached call serves both; an outage degrades to {}.
+        try:
+            pmap = _parent_map()
+        except Exception:  # noqa: BLE001
+            pmap = {}
         try:
             qrows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}&select=smartlead_campaign_id&limit=2000")
             qids = set()
@@ -6459,12 +6476,23 @@ def _compute_campaigns_list() -> list:
                         by_id[str((lr or {}).get("smartlead_campaign_id"))] = lr
                 for cid in missing:
                     lr = by_id.get(cid)
-                    name = ((lr or {}).get("name") or "").strip() or f"Campaign {cid}"
+                    name = (((lr or {}).get("name") or "").strip()
+                            or (_PARENT_CACHE.get("names") or {}).get(cid)
+                            or f"Campaign {cid}")
                     status = (lr or {}).get("status") if lr else None
                     out.append({"id": cid, "name": name, "status": status})
                     seen.add(cid)
         except Exception:  # noqa: BLE001 - union is additive; a failure here must not break the endpoint
             pass
+        # Subsequence -> parent annotation (owner report 2026-08-09: replies
+        # landing under "Interested Reply"/"Meeting Request" bucket into the
+        # client filter's "Other"). A subsequence carries no client in its own
+        # name; its parent does — hand the UI the link so clientForRow can
+        # derive the client from the parent campaign.
+        for c in out:
+            pid = pmap.get(str(c.get("id")))
+            if pid:
+                c["parent_id"] = pid
         return out
     return []
 
@@ -6962,7 +6990,14 @@ def _light_rows_all():
     # Single-flight (panel fix 2026-08-01): three boot warm-ups reach this on
     # an empty cache together, and each scan is now up to 3 sequential reads.
     if not _LIGHT_SCAN_LOCK.acquire(blocking=False):
-        return None   # a peer is scanning; callers degrade for one pass
+        # A peer is scanning. Serve the LAST-GOOD (stale) scan instead of
+        # None (ghost fix 2026-08-09): returning None made every loser of
+        # this race skip the thread collapse entirely and serve — and CACHE —
+        # the uncollapsed view, resurrecting dismissed conversations' older
+        # needs_review siblings right after any action busted the caches.
+        # A few-seconds-stale collapse is strictly better than none; brand-new
+        # rows unknown to the stale scan pass through via the `known` set.
+        return _REP_IDS_CACHE.get("rows")
     try:
         ent2 = _REP_IDS_CACHE.get("rows")   # the peer may have landed it
         if ent2 is not None and (_time.time() - _REP_IDS_CACHE.get("rows_at", 0.0)) < _REP_IDS_TTL:
@@ -6974,7 +7009,9 @@ def _light_rows_all():
                              "&select=id,status,smartlead_campaign_id,lead_email,"
                              "replied_at,created_at,is_test,workspace")
             if not isinstance(got, list):
-                return None
+                # Failed fetch: last-good stale scan beats no collapse at all
+                # (ghost fix 2026-08-09, same rationale as the lock branch).
+                return _REP_IDS_CACHE.get("rows")
             light.extend(got)
             if len(got) < 1000:
                 break
@@ -7001,19 +7038,26 @@ def _thread_rep_ids():
     try:
         light = _light_rows_all()
         if not isinstance(light, list):
-            return None
+            # Degrade to the LAST-GOOD rep set (ghost fix 2026-08-09) — None
+            # (skip-the-collapse) resurrected dismissed conversations' older
+            # siblings; a stale collapse never does, and rows the stale scan
+            # has never seen pass the filter via the `known` set.
+            return _REP_IDS_CACHE["val"]
         val = {r.get("id") for r in _collapse_threads(light) if isinstance(r, dict)}
         if not val:
             # An empty representative-set while the queue has rows (the KPIs show
             # a backlog) means the light fetch came back empty/short — a cold-boot
-            # or transient blip, never a real "zero threads". Return None so
-            # callers SKIP the collapse and show the uncollapsed inbox rather than
-            # filtering every row out and blanking an inbox that says "19 needs
-            # review". Don't cache the empty (10s TTL) — retry on the next read.
-            return None
+            # or transient blip, never a real "zero threads". Serve the last-good
+            # rep set (None only on a true cold boot) so callers never flip to
+            # the uncollapsed view. Don't cache the empty (10s TTL) — retry on
+            # the next read.
+            return _REP_IDS_CACHE["val"]
     except Exception:  # noqa: BLE001 - collapse is best-effort, never sink the queue
-        return None
+        return _REP_IDS_CACHE["val"]
     _REP_IDS_CACHE["val"] = val
+    # Every id the scan saw: the pill filter keeps ids OUTSIDE this set (a
+    # brand-new intake a stale rep set can't know about must never be hidden).
+    _REP_IDS_CACHE["known"] = {r.get("id") for r in light if isinstance(r, dict)}
     _REP_IDS_CACHE["at"] = now
     return val
 
@@ -7200,7 +7244,12 @@ def _fetch_queue_rows(status: str, limit: int):
         # own state decides its pill.
         rep_ids = _thread_rep_ids()
         if rep_ids is not None:
-            rows = [r for r in rows if isinstance(r, dict) and r.get("id") in rep_ids]
+            # A row the (possibly stale) scan never saw passes through: hiding
+            # a brand-new reply for a scan cycle is worse than briefly showing
+            # a sibling pair (ghost fix 2026-08-09).
+            known = _REP_IDS_CACHE.get("known") or set()
+            rows = [r for r in rows if isinstance(r, dict)
+                    and (r.get("id") in rep_ids or r.get("id") not in known)]
         if status in ("needs_review", "sent", "auto_sent"):
             rows = _reclassify_queue(rows, status)
         rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
@@ -8022,6 +8071,35 @@ def _learn_from_edit_async(row: dict, agent: dict, original: str, sent: str, tra
     return t
 
 
+def _dismiss_conversation_siblings(row: dict):
+    """Dismiss is a CONVERSATION verb, not a row verb (owner report
+    2026-08-09: "dismissed conversations come back after a send/reload").
+    Intake stores one row per inbound reply, so a thread accumulates sibling
+    rows and only the read-time collapse hides the older ones — dismissing
+    just the representative left its needs_review siblings alive in the
+    table, and any collapse degrade (cold boot, scan contention right after
+    a mutation busts the caches) resurrected the whole conversation. Sweep
+    every still-open sibling of the same (workspace, campaign, lead, is_test)
+    thread to dismissed. Best-effort: the representative's own patch already
+    succeeded, so a failure here just leaves the old (collapse-shielded)
+    behaviour."""
+    try:
+        em = str(row.get("lead_email") or "").strip()
+        cid = row.get("smartlead_campaign_id")
+        if not em or cid is None or not _SB:
+            return
+        _SB("PATCH",
+            f"{QUEUE_TABLE}?workspace=eq.{row.get('workspace') or WORKSPACE}"
+            f"&smartlead_campaign_id=eq.{cid}"
+            f"&lead_email=eq.{quote(em, safe='')}"
+            f"&is_test=eq.{'true' if row.get('is_test') else 'false'}"
+            f"&status=in.(needs_review,new,error)",
+            {"status": "dismissed"})
+    except Exception as e:  # noqa: BLE001 - sweep is belt-and-braces, never fail the dismiss
+        print(f"[setter] dismiss sibling-sweep failed for row {row.get('id')}: {e}",
+              file=sys.stderr)
+
+
 def route_queue_action(payload):
     try:
         payload = payload or {}
@@ -8101,6 +8179,7 @@ def route_queue_action(payload):
             updated = _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{qid}",
                           {"status": "dismissed"}, "return=representation") if _SB else None
             if isinstance(updated, list) and updated:
+                _dismiss_conversation_siblings(updated[0])
                 _bust_read_caches()
                 return 200, {"ok": True, "status": "dismissed"}
             # The id missed - re-intake may have swapped it (owner bug
@@ -8117,6 +8196,7 @@ def route_queue_action(payload):
                     re_up = _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{row['id']}",
                                 {"status": "dismissed"}, "return=representation") if _SB else None
                     if isinstance(re_up, list) and re_up:
+                        _dismiss_conversation_siblings(re_up[0])
                         _bust_read_caches()
                         return 200, {"ok": True, "status": "dismissed"}
             return 404, {"error": "Queue row not found."}
