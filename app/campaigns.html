@@ -2316,6 +2316,7 @@
      Replaced the old full-breakdown dump (every finding + 8-col table). */
   .cockpit .why-empty { margin: 8px 0 0; font-size: 0.78rem; color: var(--fg-subtle); }
   .cockpit .why-verdict { margin: 10px 0 0; font-size: 0.84rem; font-weight: 700; color: var(--fg); line-height: 1.4; }
+  .cockpit .why-cat { display: block; width: 100%; max-width: 340px; height: auto; margin: 10px 0 4px; }
   .cockpit .why-hero { display: flex; align-items: center; gap: 14px; margin: 10px 0 4px; }
   .cockpit .why-hero-n { font-size: 40px; font-weight: 700; letter-spacing: -0.03em; line-height: 1; color: var(--fg); font-variant-numeric: tabular-nums; }
   .cockpit .why-hero-n.why-hero--bad { color: var(--danger); }
@@ -3558,6 +3559,91 @@
      actions" and the list's inline "Review N" panel, so both surfaces stay in
      lock-step. Keeps the .action-card / .action-state-btn / data-action-key
      contract the shared wiring (wireActionCards) depends on. */
+  /* Catalogue insight visuals (insight-visuals-uxlab picks, Bjion 2026-08-09:
+     1A meter, 3B flow, 4C donut, 6C pace line, 7B waffle pair. Type 2 keeps
+     the race bars and Type 5 shows each version's numbers, both via the
+     existing lazy why-bars). Each renderer returns "" when the payload lacks
+     the numbers it needs, so the old hero path stays the fallback. */
+  function catalogueVizHTML(p) {
+    var act = p.act || "", st = p.stats || {};
+    var m;
+    if (/^Audit the list$/.test(act) && st.reply_rate != null) {
+      /* 1A: reply meter vs the 1% line, green from 1.5% */
+      var rr = Math.max(0, Math.min(2, +st.reply_rate));
+      var x = 10 + rr / 2 * 300;
+      return '<svg class="why-cat" viewBox="0 0 320 84" role="img" aria-label="reply meter">' +
+        '<rect x="10" y="38" width="150" height="10" rx="5" fill="#F7DCD5"/>' +
+        '<rect x="160" y="38" width="75" height="10" fill="#F8EAC4"/>' +
+        '<rect x="235" y="38" width="75" height="10" rx="5" fill="#E2F1E9"/>' +
+        '<text x="10" y="66" font-size="10" fill="#6B6055">0%</text>' +
+        '<text x="160" y="66" font-size="10" fill="#6B6055" text-anchor="middle">1%</text>' +
+        '<text x="235" y="66" font-size="10" fill="#2E7D5B" text-anchor="middle">1.5% good</text>' +
+        '<line x1="160" y1="30" x2="160" y2="56" stroke="#14110E" stroke-width="1.5" stroke-dasharray="3 2"/>' +
+        '<circle cx="' + x.toFixed(1) + '" cy="43" r="7" fill="#FF4D00"/>' +
+        '<text x="' + x.toFixed(1) + '" y="22" font-size="13" font-weight="700" fill="#14110E" text-anchor="middle">' + esc(String(st.reply_rate)) + '%</text>' +
+        '<text x="' + x.toFixed(1) + '" y="80" font-size="10" fill="#C2371F" text-anchor="middle">this list</text></svg>';
+    }
+    if ((m = act.match(/^Move all sending to variant ([A-Z]) on email \d+$/))) {
+      /* 3B: sends flow to the winner; the rest fades out */
+      var W = m[1];
+      return '<svg class="why-cat" viewBox="0 0 320 108" role="img" aria-label="all sends flow to the winner">' +
+        '<rect x="10" y="14" width="120" height="30" rx="8" fill="#FFE4D6"/>' +
+        '<text x="70" y="33" font-size="12" font-weight="700" fill="#A83100" text-anchor="middle">' + W +
+        (st.ratio ? ' &middot; 1 per ' + fmtInt(Math.round(st.ratio)) : ' wins') + '</text>' +
+        '<rect x="10" y="64" width="120" height="30" rx="8" fill="#F1EFEC" opacity=".6"/>' +
+        '<text x="70" y="83" font-size="12" fill="#6B6055" text-anchor="middle" opacity=".7">the other versions</text>' +
+        '<path d="M140 29 C 200 29 200 29 244 29" stroke="#FF4D00" stroke-width="7" fill="none" stroke-linecap="round"/>' +
+        '<path d="M140 79 C 200 79 210 40 244 32" stroke="#FF4D00" stroke-width="4" fill="none" stroke-linecap="round" stroke-dasharray="1 8"/>' +
+        '<circle cx="272" cy="30" r="22" fill="#FF4D00"/>' +
+        '<text x="272" y="35" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">' + W + '</text>' +
+        '<text x="272" y="70" font-size="10" fill="#6B6055" text-anchor="middle">all sends</text></svg>';
+    }
+    if ((m = act.match(/^Add new versions of variant ([A-Z]) on email \d+$/))) {
+      /* 4C: 80/20 donut, incumbent in the middle */
+      var V = m[1];
+      return '<svg class="why-cat" viewBox="0 0 320 110" role="img" aria-label="80 20 split">' +
+        '<circle cx="70" cy="55" r="38" fill="none" stroke="#F1EFEC" stroke-width="16"/>' +
+        '<circle cx="70" cy="55" r="38" fill="none" stroke="#FF4D00" stroke-width="16" stroke-dasharray="191 48" stroke-dashoffset="60"/>' +
+        '<text x="70" y="60" font-size="15" font-weight="700" fill="#14110E" text-anchor="middle">' + V + '</text>' +
+        '<text x="140" y="46" font-size="12" fill="#14110E"><tspan font-weight="700" fill="#FF4D00">80%</tspan> stays with ' + V + '</text>' +
+        '<text x="140" y="70" font-size="12" fill="#6B6055"><tspan font-weight="700">20%</tspan> for new tries</text></svg>';
+    }
+    if (/^Add new offers, drop the current ones$/.test(act) && st.sent) {
+      /* 6C: where a good offer would be by now vs where this one is */
+      var goal = Math.max(1, Math.round(st.sent / 1500)), got = st.pos || 0;
+      var gy = 36, ay = Math.min(88, 88 - (goal ? got / goal * 52 : 0));
+      return '<svg class="why-cat" viewBox="0 0 320 110" role="img" aria-label="pace vs a good offer">' +
+        '<polyline points="20,84 300,' + gy + '" fill="none" stroke="#2E7D5B" stroke-width="2" stroke-dasharray="5 4"/>' +
+        '<circle cx="300" cy="' + gy + '" r="5" fill="#2E7D5B"/>' +
+        '<text x="290" y="26" font-size="11" font-weight="700" fill="#2E7D5B" text-anchor="end">a good offer: ' + fmtInt(goal) + ' yes</text>' +
+        '<polyline points="20,86 160,' + Math.round((86 + ay) / 2) + ' 300,' + Math.round(ay) + '" fill="none" stroke="#C2371F" stroke-width="2.5"/>' +
+        '<circle cx="300" cy="' + Math.round(ay) + '" r="5" fill="#C2371F"/>' +
+        '<text x="290" y="' + Math.min(104, Math.round(ay) + 18) + '" font-size="11" font-weight="700" fill="#C2371F" text-anchor="end">this one: ' + fmtInt(got) + ' yes</text>' +
+        '<line x1="20" y1="92" x2="300" y2="92" stroke="#DDDDDA"/>' +
+        '<text x="20" y="106" font-size="10" fill="#6B6055">start</text>' +
+        '<text x="300" y="106" font-size="10" fill="#6B6055" text-anchor="end">' + fmtInt(st.sent) + ' emails in</text></svg>';
+    }
+    if (/^Add more /.test(act) && st.share_pos != null && st.share_rest != null) {
+      /* 7B: two waffles, big % first so nobody counts squares */
+      var waffle = function (x0, pct, col) {
+        var out = [], n = Math.round(pct);
+        for (var k = 0; k < 100; k++) {
+          var cx = x0 + (k % 10) * 10, cy = 34 + Math.floor(k / 10) * 10;
+          out.push('<rect x="' + cx + '" y="' + cy + '" width="8" height="8" rx="1.5" fill="' + (k < n ? col : "#F1EFEC") + '"/>');
+        }
+        return out.join("");
+      };
+      return '<svg class="why-cat" viewBox="0 0 320 152" role="img" aria-label="share of yes vs share of list">' +
+        '<text x="14" y="22" font-size="17" font-weight="700" fill="#A83100">' + esc(String(st.share_pos)) + '%</text>' +
+        waffle(14, st.share_pos, "#FF4D00") +
+        '<text x="14" y="148" font-size="10" font-weight="700" fill="#A83100">of who said yes</text>' +
+        '<text x="180" y="22" font-size="17" font-weight="700" fill="#6B6055">' + esc(String(st.share_rest)) + '%</text>' +
+        waffle(180, st.share_rest, "#C0B0A0") +
+        '<text x="180" y="148" font-size="10" fill="#6B6055">of the whole list</text></svg>';
+    }
+    return "";
+  }
+
   function actionCardHTML(c, r, i) {
     var p = r.payload || {};
     var badge = p.tag === "decide" ? '<span class="badge badge--red">High</span>' : p.tag === "fine" ? '<span class="badge badge--neutral">Low</span>' : '<span class="badge badge--amber">Medium</span>';
@@ -3626,11 +3712,15 @@
     var heroCap = (heroUnit + " " + (verdictTxt || "")).trim();
     /* the move line restates the card's own call as a short imperative */
     var moveTxt = (p.act || "").split(/[,.:]/)[0].trim().split(/\s+/).slice(0, 9).join(" ");
-    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '" data-why-ik="' + esc(r.insight_key || "") + '" data-why-v="' + ((hero || verdictTxt) ? "1" : "") + '"><summary>Why?</summary>' +
-      (hero
+    /* catalogue cards get their picked visual instead of the number hero */
+    var catViz = catalogueVizHTML(p);
+    var whyHTML = '<details class="opt-why" data-why-cid="' + esc(c.id) + '" data-why-ik="' + esc(r.insight_key || "") + '" data-why-v="' + ((catViz || hero || verdictTxt) ? "1" : "") + '"><summary>Why?</summary>' +
+      (catViz
+        ? (verdictTxt ? '<p class="why-verdict">' + esc(verdictTxt) + "</p>" : "") + catViz
+        : hero
         ? '<div class="why-hero"><span class="why-hero-n' + heroCls + '">' + esc(hero) + '</span><span class="why-hero-cap">' + esc(heroCap) + "</span></div>"
         : (verdictTxt ? '<p class="why-verdict">' + esc(verdictTxt) + "</p>" : "")) +
-      '<div class="why-full"></div>' +
+      (catViz ? "" : '<div class="why-full"></div>') +
       (moveTxt ? '<p class="why-move">&#8594; ' + esc(moveTxt) + ".</p>" : "") +
       "</details>";
     return '<div class="action-card" data-action-id="' + esc(c.id) + "-" + i + '" data-action-key="' + actionKey + '">' +
@@ -4654,7 +4744,7 @@
         }
         return;
       }
-      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations, id);
+      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations, id, m.paths);
       vawWireMessaging(root, c, m);
     };
     if (STATE.messaging[id]) { apply(STATE.messaging[id]); return; }
@@ -5540,7 +5630,7 @@
   }
   /* ══ end variant-action-wire module ═══════════════════════════════════ */
 
-  function versionTableHTML(versions, note, meetings, combinations, cid) {
+  function versionTableHTML(versions, note, meetings, combinations, cid, paths) {
     /* Meetings attach to the COPY, not the label: Smartlead exposes no
        sent-variant per lead, so the backend clusters identical copy and credits
        a booking to the cluster's ACTIVE (representative) label. Every row shows
@@ -5683,10 +5773,43 @@
       }
       return band + warn + body;
     }).join('');
-    /* combinations: opener → follow-up paths deduced from booked replies. Keys
-       and sent counts are per representative label (i.e. per distinct copy). */
+    /* Best path: EVERY opener → follow-up journey compared on replies /
+       positives / meetings (zeros included), deduced from the copy each
+       replier quoted back. Keys and sent counts are per representative label
+       (i.e. per distinct copy). Falls back to the old meetings-only
+       combinations table for stale payloads that predate `paths`. */
     var comboHTML = '';
-    if (combinations && Object.keys(combinations).length) {
+    if (paths && Object.keys(paths).length) {
+      var prows = Object.keys(paths).map(function (k) {
+        var p = k.split('>'), d = paths[k] || {};
+        return { e1: p[0], e2: p[1], mt: d.meetings || 0, pos: d.positives || 0,
+                 snt: (sentByRep['1|' + p[0]] || 0) + (sentByRep['2|' + p[1]] || 0) };
+      }).sort(function (a, b) {
+        return b.mt - a.mt || b.pos - a.pos ||
+          String(a.e1).localeCompare(String(b.e1)) || String(a.e2).localeCompare(String(b.e2));
+      });
+      /* winner: most meetings; no meetings anywhere yet → fewest sends per
+         positive (among paths that HAVE a positive). All-zero table → no medal. */
+      var winKey = null;
+      if (prows.length && prows[0].mt > 0) {
+        winKey = prows[0].e1 + '>' + prows[0].e2;
+      } else {
+        var posOnly = prows.filter(function (c) { return c.pos > 0; })
+          .sort(function (a, b) { return (a.snt / a.pos) - (b.snt / b.pos); });
+        if (posOnly.length) winKey = posOnly[0].e1 + '>' + posOnly[0].e2;
+      }
+      comboHTML = '<div class="vp-combos"><div class="vp-combos-h">Best path <span class="ring-caption">the opener the lead first saw &rarr; the follow-up · every journey compared · sent counts both emails</span></div>' +
+        '<div class="leads-table-wrap"><table class="leads-table version-perf-table"><thead><tr><th>Path</th><th class="tnum">Sent</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead><tbody>' +
+        prows.map(function (c) {
+          var isb = winKey === (c.e1 + '>' + c.e2);
+          return '<tr' + (isb ? ' class="vp-win"' : '') + '><td data-label="Path">' + esc(c.e1) + ' <span class="ring-caption">&rarr;</span> ' + esc(c.e2) + (isb ? ' <span class="vp-best">best path</span>' : '') + '</td>' +
+            '<td class="tnum" data-label="Sent">' + (c.snt ? fmtInt(c.snt) : '<span class="ring-caption">—</span>') + '</td>' +
+            '<td class="tnum" data-label="Positives">' + (c.pos ? fmtInt(c.pos) : '<span class="ring-caption">—</span>') + '</td>' +
+            '<td class="tnum" data-label="Sent / positive">' + (c.pos && c.snt ? fmtInt(Math.round(c.snt / c.pos)) : '<span class="ring-caption">—</span>') + '</td>' +
+            '<td class="tnum" data-label="Meetings">' + (c.mt ? fmtInt(c.mt) : '<span class="ring-caption">—</span>') + '</td>' +
+            '<td class="tnum" data-label="Sent / meeting">' + (c.mt && c.snt ? fmtInt(Math.round(c.snt / c.mt)) : '<span class="ring-caption">—</span>') + '</td></tr>';
+        }).join('') + '</tbody></table></div></div>';
+    } else if (combinations && Object.keys(combinations).length) {
       var crows = Object.keys(combinations).map(function (k) {
         var p = k.split('>');
         return { e1: p[0], e2: p[1], mt: combinations[k], snt: (sentByRep['1|' + p[0]] || 0) + (sentByRep['2|' + p[1]] || 0) };
@@ -6898,11 +7021,10 @@
       vs = whyHarvestVariants(rows, { vars: {}, emails: {}, anyVar: false, anyEmail: false });
     }
     var showCut = /\b(scrap|replace|kill|retire|drop|cut|swap|remove)\b/i.test(cardText || "");
-    /* variant-action-wire: the digest's own row-scoping decides which actions
-       belong on this card — the buttons render under the bars they prove. */
-    var actsHTML = vawWhyActionsHTML(rows, tok, ik, cid);
-    if (!vs.length) return (hasVerdict ? "" : '<p class="why-empty">No further findings behind this one.</p>') + actsHTML;
-    return (hasVerdict ? "" : '<p class="why-verdict">' + whyVariantVerdict(vs, showCut) + "</p>") + whyBarsHTML(vs, showCut) + actsHTML;
+    /* "More moves" removed for good (insight-visuals ruling, Bjion 2026-08-09):
+       the card is title, visual, one line, receipts. Nothing else. */
+    if (!vs.length) return (hasVerdict ? "" : '<p class="why-empty">No further findings behind this one.</p>');
+    return (hasVerdict ? "" : '<p class="why-verdict">' + whyVariantVerdict(vs, showCut) + "</p>") + whyBarsHTML(vs, showCut);
   }
 
   /* Populate a row's inline "Review N" panel from the campaign's in-memory
