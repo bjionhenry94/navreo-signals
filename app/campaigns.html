@@ -3905,6 +3905,42 @@
       '<div class="ovm-scale"><span>0</span><span class="ovm-cap">1,500 line</span></div></div>';
   }
 
+  /* Header-dial completion %, one precedence chain shared with the list ring
+     and liveBucket: live platform answer first, then Smartlead's own synced
+     per-lead split, then the crunch snapshot, then the sent÷(leads×2)
+     heuristic as last resort. Null only when NO source can answer. */
+  function headerDialPct(c) {
+    var st = c.stats;
+    var ls = STATE.liveStatus && STATE.liveStatus[c.id];
+    var clamp = function (v) { return Math.max(0, Math.min(100, v)); };
+    if (ls && ls.completion != null) return clamp(ls.completion);
+    if (ls && ls.lead_stats && ls.lead_stats.total)
+      return clamp(100 * (ls.lead_stats.completed || 0) / ls.lead_stats.total);
+    if (st.completedLeads != null && st.leads > 0) return clamp(100 * st.completedLeads / st.leads);
+    if (st.completion != null) return clamp(st.completion);
+    if (st.leads && st.sent != null) return clamp(100 * st.sent / (st.leads * 2));
+    return null;
+  }
+  function dialInnerHTML(compPct) {
+    var DIAL_C = 163.36; /* 2πr for r=26 */
+    return '<div class="dial-ring"><svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">' +
+      '<circle cx="32" cy="32" r="26" class="dial-track"/>' +
+      '<circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="' + DIAL_C + '" stroke-dashoffset="' + (DIAL_C * (1 - compPct / 100)).toFixed(1) + '" transform="rotate(-90 32 32)"/>' +
+      '</svg><span class="dial-value tnum">' + compPct.toFixed(0) + "%</span></div>";
+  }
+  /* Repaint the header dial in place once a better completion source lands
+     (the live-status fetch) — same page-guard rule as paintAudience. */
+  function paintDial(c) {
+    if (!onPage(c.id)) return; /* audit #0 */
+    var el = document.getElementById("hdr-dial");
+    if (!el) return;
+    var compPct = headerDialPct(c);
+    if (compPct == null) return; /* never blank a dial that's already showing */
+    el.hidden = false;
+    el.setAttribute("aria-label", compPct.toFixed(0) + "% of the list has finished the sequence");
+    el.innerHTML = dialInnerHTML(compPct);
+  }
+
   function campaignPageHTML(c, tab) {
     var st = c.stats;
     var replyPct = pct(st.replied, st.sent, 2);
@@ -3920,16 +3956,15 @@
       '<span id="cstat-controls"></span>' +
       '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a></span>' +
       "</div>");
-    var dial = "";
-    if (st.completion != null) {
-      var compPct = Math.max(0, Math.min(100, st.completion));
-      var DIAL_C = 163.36; /* 2πr for r=26 */
-      dial = '<div class="progress-dial" role="img" aria-label="' + compPct.toFixed(0) + '% of the list has finished the sequence">' +
-        '<div class="dial-ring"><svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">' +
-        '<circle cx="32" cy="32" r="26" class="dial-track"/>' +
-        '<circle cx="32" cy="32" r="26" class="dial-fill" stroke-dasharray="' + DIAL_C + '" stroke-dashoffset="' + (DIAL_C * (1 - compPct / 100)).toFixed(1) + '" transform="rotate(-90 32 32)"/>' +
-        '</svg><span class="dial-value tnum">' + compPct.toFixed(0) + "%</span></div></div>";
-    }
+    /* The dial always renders when ANY completion source can answer — a
+       finished campaign keeps its 100% ring (Bjion, 9 Aug 2026); source
+       precedence mirrors the list ring (live → synced per-lead split →
+       crunch snapshot → heuristic), and paintDial() upgrades it in place
+       once the live check lands. */
+    var compPct = headerDialPct(c);
+    var dial = '<div class="progress-dial" id="hdr-dial" role="img"' +
+      (compPct == null ? " hidden" : ' aria-label="' + compPct.toFixed(0) + '% of the list has finished the sequence"') +
+      '>' + (compPct == null ? "" : dialInnerHTML(compPct)) + "</div>";
     var slStatus = c.slStatus ? String(c.slStatus) : "";
     if (slStatus) slStatus = slStatus.charAt(0).toUpperCase() + slStatus.slice(1).toLowerCase();
     h.push('<div class="campaign-header-main">' + dial + '<div>' +
@@ -7252,11 +7287,13 @@
           paint(c.slStatus); /* honest fallback: the synced status */
         }
         paintAudience(c); /* exact split rides this fetch; also settles the estimate note */
+        paintDial(c); /* header dial upgrades to the live answer on the same landing */
       })
       .catch(function () {
         (STATE.liveTried = STATE.liveTried || {})[c.id] = true;
         if (!(ls && ls.status)) paint(c.slStatus);
         paintAudience(c); /* live check failed — let the bar settle honestly */
+        paintDial(c); /* cached sources may still answer where the render-time pass couldn't */
       });
   }
 
