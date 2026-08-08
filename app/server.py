@@ -9591,6 +9591,44 @@ def _vp_shingles(t):
     return set(" ".join(w[i:i + 7]) for i in range(max(0, len(w) - 6)))
 
 
+def _vp_spin_shingles(body: str) -> set:
+    """Shingles of a body with {spintax} RESOLVED instead of blanked — an
+    all-spintax bump email has no fixed scaffolding, so blanking leaves zero
+    shingles and the step can never be matched. Each group is expanded one
+    option at a time (other groups pinned to their first option); a reply
+    quotes ONE resolved realization, whose windows live in this union.
+    Realizations are capped; flat spintax only (nested leftovers get blanked
+    by _vp_shingles downstream, harmlessly)."""
+    t = re.sub(r"\{\{[^}]*\}\}", " ", body or "")
+    spin = re.compile(r"\{([^{}]*)\}")
+    groups = spin.findall(t)
+
+    def realize(gi_target=None, oi_target=0):
+        i = [-1]
+
+        def sub(m):
+            i[0] += 1
+            opts = m.group(1).split("|")
+            oi = oi_target if gi_target is not None and i[0] == gi_target else 0
+            return opts[min(oi, len(opts) - 1)]
+        return spin.sub(sub, t)
+
+    outs = {realize()}
+    budget = 24
+    for gi, g in enumerate(groups):
+        for oi in range(1, len(g.split("|"))):
+            outs.add(realize(gi, oi))
+            budget -= 1
+            if budget <= 0:
+                break
+        if budget <= 0:
+            break
+    sh = set()
+    for o in outs:
+        sh |= _vp_shingles(o)
+    return sh
+
+
 def _vp_cluster_steps(seqs: list) -> dict:
     """Group each step's variants by COPY, not by label. A/B tests routinely run
     six spintax siblings of one email under labels A..G; they are the same copy,
@@ -9609,7 +9647,20 @@ def _vp_cluster_steps(seqs: list) -> dict:
             body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
             variants.append((lbl, _vp_shingles(body), bool(v.get("is_deleted"))))
         if not variants:
-            continue
+            # Inline step (no labelled variants): still ONE real copy the lead
+            # journeys through — synthesize a single "Email N" cluster so
+            # opener→inline-follow-up paths exist (Best-path 2026-08-09; the
+            # prototype's "A → Email 2" rows). Label letters are single chars,
+            # so "Email N" can never collide with a real variant label.
+            body = s.get("email_body")
+            if s.get("sequence_variants"):
+                body = body if body is not None else (s["sequence_variants"][0] or {}).get("email_body")
+            # spin-resolved shingles: an all-spintax bump has nothing left
+            # after blanking, but its resolved realizations ARE quotable copy
+            sh = _vp_spin_shingles(body)
+            if not sh:
+                continue
+            variants.append(("Email " + st, sh, False))
         clusters = []  # {labels, dels, shset}
         for lbl, sh, dele in variants:
             placed = False

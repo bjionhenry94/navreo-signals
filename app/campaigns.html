@@ -5654,7 +5654,13 @@
     });
     var sentByRep = {};
     versions.forEach(function (v) {
-      if (v.inline || v.label == null) return;
+      if (v.inline || v.label == null) {
+        /* inline step: the engine keys its single cluster "Email N", so the
+           path table's Sent can still count both emails on that journey */
+        var ki = String(v.step) + '|Email ' + String(v.step);
+        sentByRep[ki] = (sentByRep[ki] || 0) + (v.sent || 0);
+        return;
+      }
       var rep = repOf[String(v.step) + '|' + v.label] || v.label;
       var kk = String(v.step) + '|' + rep;
       sentByRep[kk] = (sentByRep[kk] || 0) + (v.sent || 0);
