@@ -14760,8 +14760,7 @@ def compose_positive_card_payload(lead: dict, history: list, campaign_id, catego
         # fields, so this is inert for client cards until deliberately mapped.
         "setter_url": setter._chat_permalink(
             lead.get("email") or "",
-            (f"{lead.get('id')}-{last_reply.get('time')}"
-             if lead.get("id") and last_reply.get("time") else "")),
+            last_reply.get("message_id") or ""),
         "lead_category": {"old_id": None, "old_name": None,
                           "new_id": None, "new_name": category},
         "lead_data": {

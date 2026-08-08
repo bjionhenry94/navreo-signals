@@ -5740,7 +5740,7 @@ function permalinkFor(row) {
        + (mid ? "/" + encodeURIComponent(mid) : "");
 }
 async function openPermalink() {
-  const m = (location.hash || "").match(/^#\/r\/([^/]+)(?:\/(.+))?$/);
+  const m = (location.hash || "").match(/^#\/r\/([^/]+)(?:\/(.*))?$/);
   if (!m) return false;
   let email = "", mid = "";
   try {
