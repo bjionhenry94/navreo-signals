@@ -1030,6 +1030,13 @@ async function fetchRun(){
     }
     const j=await r.json();const run=j.run||j;const ideas=(run&&run.ideas)||[];
     SERVED_RUN_ID=j.run_id||RUN_ID||'';
+    // Permalink permanence (strategy-permalink-permanence, 2026-08-09): a board
+    // opened BARE serves the newest session, so a URL copied from the address
+    // bar would silently drift to whichever session publishes next. The moment
+    // we know which run we're showing, pin it into the hash — every URL copied
+    // or shared from this page is a permanent #/r/<run_id> permalink. replaceState
+    // fires no hashchange, and RUN_ID is set first so later polls stay keyed.
+    if(!RUN_ID&&SERVED_RUN_ID){RUN_ID=SERVED_RUN_ID;try{history.replaceState(null,'',location.pathname+location.search+'#/r/'+SERVED_RUN_ID);}catch(e){}}
     if(CLIENT_MODE&&j.viewer==='gtme'){CLIENT_MODE=false;lastFP=lastFP&&lastFP+'|up';}
     const foc=j.focus||run.focus||{};
     const fp=JSON.stringify(ideas)+'|'+JSON.stringify(run.people||{})+'|'+(j.updated||run.updated||'')+'|'+(foc.ts||'')+'|'+(foc.note||'');
