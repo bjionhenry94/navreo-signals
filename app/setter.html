@@ -5281,6 +5281,20 @@ if (document.documentElement.classList.contains("headless")) {
     e.preventDefault();
     e.stopPropagation();
     const label = (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 48) || "Link";
+    // Open-first, copy-fallback (owner ask 2026-08-09 pm): TRY a programmatic
+    // new tab — a popup the host must answer, unlike the in-place navigation
+    // it hijacks. If the host honours it, the user gets the real new tab; if
+    // it blocks (window.open → null), we're still inside the same click
+    // gesture, so the synchronous copy path below still lands. The
+    // preventDefault above means the board itself can never navigate away,
+    // whichever way the host answers.
+    let opened = null;
+    try { opened = window.open(abs, "_blank"); } catch { opened = null; }
+    if (opened) {
+      try { opened.opener = null; } catch { /* cross-origin proxy: fine */ }
+      showCopyToast(`${label} — opened in a new tab.`);
+      return;
+    }
     copyTextToClipboard(abs).then((ok) => {
       showCopyToast(ok
         ? `${label} — link copied to your clipboard. Paste it into a new tab.`
