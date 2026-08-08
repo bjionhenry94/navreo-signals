@@ -196,7 +196,7 @@
      ============================================================ */
   // Flags a REAL domain-health row for the rotation view (live logic — used
   // by derive() and the domain-health CSV exports).
-  // Maildoso replies structurally lower than Gmail/Outlook, so the 0.8% fleet
+  // Maildoso replies structurally lower than Gmail/Outlook, so the 0.7% fleet
   // floor unfairly parks it. Owner ruling 2026-07-24: Maildoso is exempt from the
   // fleet floor and only goes to warm-up when it replies under its OWN 0.5% floor
   // AND has real send volume behind it (>= minSent). It warms externally, so a
@@ -242,7 +242,7 @@
       blacklistCleared: 0,
       blacklistRows: [],
       campaignsFlagged: [],
-      domainHealth: { start: addDays(today, -7), end: today, minSent: 500, cutoff: 0.8, rows: [], resting: {}, restingDue: {} },
+      domainHealth: { start: addDays(today, -7), end: today, minSent: 500, cutoff: 0.7, rows: [], resting: {}, restingDue: {} },
       inboxRows: [],
       sigTemplates: { navreo: "Best,\n{{name}}\nNavreo Growth Team", arnic: "Cheers,\n{{name}}\nArnic", amplifyy: "Thanks,\n{{name}}\nAmplifyy Team", _all: "Best,\n{{name}}" },
     };
@@ -1351,6 +1351,8 @@ table.dlv-bt td{padding:9px 12px;border-bottom:1px solid var(--line)}
 table.dlv-bt tbody tr:last-child td{border-bottom:none}
 table.dlv-bt th:not(:first-child),table.dlv-bt td:not(:first-child){text-align:right;white-space:nowrap}
 .dlv-bt-name{font-weight:600}
+.dlv-bt-idle{display:inline-block;margin-left:6px;padding:1px 6px;border-radius:4px;font-size:10px;font-weight:700;letter-spacing:.03em;text-transform:uppercase;color:var(--ink-3);background:var(--bg-sunken);border:1px solid var(--line);vertical-align:middle}
+.dlv-bt-sub{margin-top:2px;font-size:11px;font-weight:400;color:var(--ink-3)}
 .dlv-bt-g{color:var(--green);font-weight:700} .dlv-bt-y{color:var(--amber);font-weight:700} .dlv-bt-r{color:var(--red);font-weight:700} .dlv-bt-mut{color:var(--ink-3)}
 .dlv-bt-summary{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:12px}
 .dlv-bt-sum{font-size:12.5px;padding:9px 13px;border-radius:9px;border:1px solid var(--line);flex:1;min-width:240px}
@@ -3067,7 +3069,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   }
   function kpiSev(metric, value) {
     if (value == null) return "";
-    if (metric === "reply") return value >= 1 ? "g" : (value >= 0.8 ? "a" : "r");
+    if (metric === "reply") return value >= 1 ? "g" : (value >= 0.7 ? "a" : "r");
     if (metric === "bounce") return value < 2 ? "g" : (value < 3 ? "a" : "r");
     if (metric === "issues") return value === 0 ? "g" : ((value >= 3 || (S.A.blacklistRows || []).length > 0) ? "r" : "a");
     return ""; // "sent" carries no severity — see task brief
@@ -4582,7 +4584,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const bounce = b.sent ? `<span class="dlv-bt-${brc(b.bounce_rate)}">${b.bounce_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
       const blk = b.blacklisted ? `<span class="dlv-bt-r">${b.blacklisted}</span>` : `<span class="dlv-bt-mut">0</span>`;
       const issues = b.dead + b.blocked;
-      return `<tr><td class="dlv-bt-name">${esc(b.batch)}</td><td>${b.mailboxes}</td><td>${b.sending}</td><td>${b.warmup}</td><td>${b.sent ? fmtN(b.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${blk}</td><td>${issues ? `<span class="dlv-bt-y">${issues}</span>` : `<span class="dlv-bt-mut">0</span>`}</td></tr>`;
+      // A warmed pool that's currently between campaigns (no sends in the
+      // latest window) gets an "idle" badge, and — since its window columns
+      // read "—" — its real trailing-30-day performance on a sub-line, so the
+      // row says "here's the pool, here's how it last performed" instead of
+      // looking blank. Regular active batches never carry these fields.
+      const idleBadge = b.idle ? ` <span class="dlv-bt-idle" title="Warmed mailboxes with no live campaign — nothing sent in the latest window">idle</span>` : "";
+      const sub = (!b.sent && b.sent30) ? `<div class="dlv-bt-sub">Last 30 days: ${fmtN(b.sent30)} sent · ${b.reply30}% reply · ${b.bounce30}% bounce</div>` : "";
+      return `<tr><td class="dlv-bt-name">${esc(b.batch)}${idleBadge}${sub}</td><td>${b.mailboxes}</td><td>${b.sending}</td><td>${b.warmup}</td><td>${b.sent ? fmtN(b.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${blk}</td><td>${issues ? `<span class="dlv-bt-y">${issues}</span>` : `<span class="dlv-bt-mut">0</span>`}</td></tr>`;
     }).join("");
     const w = S.A.batchWindowDays; // set when sent/reply/bounce were rebuilt from sweep deltas
     const wLabel = w ? (w === 7 ? "7d" : w + "d") : "7d";
@@ -5966,7 +5975,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     D.dhRows.forEach((d) => {
       if (d.maildoso || d.sent < minSent || (D.resting[d.domain] || 0) > 0) return;
       let tier = null;
-      if (d.reply_rate >= 0.8 && d.reply_rate < 1.0) tier = 1;
+      if (d.reply_rate >= 0.7 && d.reply_rate < 1.0) tier = 1;
       else if (d.reply_rate >= 1.0 && d.reply_rate < 1.2) tier = 2;
       else if (d.reply_rate >= 1.2) tier = 4;
       if (!tier) return;
@@ -5995,10 +6004,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       const total = p.mailboxesToChange || 0;
       $id("dlv-caps-body").innerHTML = total ? `
         <p class="small muted" style="margin-bottom:10px">Set daily send caps by reply rate — OUTLOOK/AZURE mailboxes only (Maildoso excluded):</p>
-        <div class="small" style="margin-bottom:10px">0.8–1.0% reply → 1/day &nbsp;·&nbsp; 1.0–1.2% → 2/day &nbsp;·&nbsp; ≥1.2% → 4/day</div>
+        <div class="small" style="margin-bottom:10px">0.7–1.0% reply → 1/day &nbsp;·&nbsp; 1.0–1.2% → 2/day &nbsp;·&nbsp; ≥1.2% → 4/day</div>
         <div class="small" style="margin-bottom:10px"><b>${p.domains || 0}</b> domain(s) qualify · <b>${total}</b> mailbox(es) will change</div>
         <div class="small muted">→ 1/day: ${t["1"] || 0} mbx · 2/day: ${t["2"] || 0} mbx · 4/day: ${t["4"] || 0} mbx</div>
-        <div class="small muted" style="margin-top:10px">Resting and below-0.8% domains are left alone. A backup is saved.</div>` : `<div class="dlv-empty">Nothing to change — Outlook/Azure caps already match their reply-rate tier.</div>`;
+        <div class="small muted" style="margin-top:10px">Resting and below-0.7% domains are left alone. A backup is saved.</div>` : `<div class="dlv-empty">Nothing to change — Outlook/Azure caps already match their reply-rate tier.</div>`;
       $id("dlv-caps-overlay").querySelector('[data-act="caps-apply"]').disabled = !total;
       return;
     }
@@ -6007,10 +6016,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const domains = new Set([].concat(tiers[1], tiers[2], tiers[4]).map((r) => r.domain)).size;
     $id("dlv-caps-body").innerHTML = total ? `
       <p class="small muted" style="margin-bottom:10px">Set daily send caps by reply rate — OUTLOOK/AZURE mailboxes only (Maildoso excluded):</p>
-      <div class="small" style="margin-bottom:10px">0.8–1.0% reply → 1/day &nbsp;·&nbsp; 1.0–1.2% → 2/day &nbsp;·&nbsp; ≥1.2% → 4/day</div>
+      <div class="small" style="margin-bottom:10px">0.7–1.0% reply → 1/day &nbsp;·&nbsp; 1.0–1.2% → 2/day &nbsp;·&nbsp; ≥1.2% → 4/day</div>
       <div class="small" style="margin-bottom:10px"><b>${domains}</b> domain(s) qualify · <b>${total}</b> mailbox(es) will change</div>
       <div class="small muted">→ 1/day: ${tiers[1].length} mbx · 2/day: ${tiers[2].length} mbx · 4/day: ${tiers[4].length} mbx</div>
-      <div class="small muted" style="margin-top:10px">Resting and below-0.8% domains are left alone. A backup is saved.</div>` : `<div class="dlv-empty">Nothing to change — Outlook/Azure caps already match their reply-rate tier.</div>`;
+      <div class="small muted" style="margin-top:10px">Resting and below-0.7% domains are left alone. A backup is saved.</div>` : `<div class="dlv-empty">Nothing to change — Outlook/Azure caps already match their reply-rate tier.</div>`;
     $id("dlv-caps-overlay").querySelector('[data-act="caps-apply"]').disabled = !total;
     openModal("dlv-caps-overlay");
   }
@@ -8129,7 +8138,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function dispatchDlvInput(t, act) {
     if (act === "mgr-search") { UI.mgr.search = t.value; paintManagerRows(); return; }
     if (act === "mgr-dh-minsent") { UI.dh.minSent = Number(t.value) || 500; dhDebouncedPaint(); return; }
-    if (act === "mgr-dh-cutoff") { UI.dh.cutoff = Number(t.value) || 0.8; dhDebouncedPaint(); return; }
+    if (act === "mgr-dh-cutoff") { UI.dh.cutoff = Number(t.value) || 0.7; dhDebouncedPaint(); return; }
     if (act === "rem-date-input") { updateRemDateHint(t.value); return; }
     // Item 5a: typing in the domains field clears the inline "type a domain
     // first" error state as soon as it's no longer true.

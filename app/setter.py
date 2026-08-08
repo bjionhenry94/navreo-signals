@@ -645,6 +645,35 @@ def resolve_timezone(hints: dict, classification: dict):
 
 # ── slot picking + labelling ─────────────────────────────────────────────────
 
+
+def slot_situation(slot_status: str, tz, slots, error: str = "") -> dict:
+    """The WHY behind the call-time outcome, as two guardrails-jsonb keys
+    ({slot_status, slot_reason}) persisted at every draft site. The UI used to
+    reverse-engineer this from decision_reason text, which went generic (or
+    silent) whenever the hold reason was about something else entirely — e.g. a
+    row held for "wants custom work" with a known timezone showed a bare
+    "no call times proposed" and the reviewer couldn't tell whether Calendly was
+    empty, disconnected, or broken (owner report 2026-08-09)."""
+    status = slot_status or "not_configured"
+    n = len(slots or [])
+    if status == "ok" and n:
+        reason = f"{n} call time{'' if n == 1 else 's'} proposed in {tz}."
+    elif status == "none_available":
+        reason = (f"Timezone known ({tz}), but Calendly had no bookable slots inside the "
+                  "booking window — the draft offers the booking link instead.")
+    elif status == "tz_unknown":
+        reason = ("The lead's timezone couldn't be pinned down, so no fixed times were "
+                  "proposed — the draft asks for their availability instead.")
+    elif status == "error":
+        detail = f" ({str(error)[:120]})" if error else ""
+        reason = (f"Couldn't load Calendly availability{detail} — the draft falls back "
+                  "to the booking link.")
+    else:  # not_configured (and any future unknown status degrades to this)
+        reason = ("No Calendly is connected for this agent, so no live times could be "
+                  "offered — the draft uses the booking link.")
+    return {"slot_status": status, "slot_reason": reason}
+
+
 _ORDINAL_SUFFIX = {1: "st", 2: "nd", 3: "rd"}
 
 
@@ -3377,18 +3406,20 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                                               snapshot, owner_hints=mem_hints)
                     now = _dt.datetime.now(_dt.timezone.utc)
                     tz = row.get("timezone")
-                    slots, slot_status = [], "not_configured"
+                    slots, slot_status, serr = [], "not_configured", ""
                     if tz:
                         eff_settings = dict(_load_settings())
                         eff_settings["_agent"] = snapshot
                         eff_settings["_lead"] = {"first_name": row.get("lead_first_name"),
                                                  "last_name": row.get("lead_last_name"),
                                                  "email": row.get("lead_email")}
-                        slot_status, avail, _serr = get_calendly_availability(snapshot, eff_settings, now)
+                        slot_status, avail, serr = get_calendly_availability(snapshot, eff_settings, now)
                         if slot_status == "ok":
                             slots = pick_slots(avail, tz, eff_settings, now)
                             if not slots:
                                 slot_status = "none_available"
+                    else:
+                        slot_status = "tz_unknown"
                     thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
                     d = draft_reply(
                         {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
@@ -3401,7 +3432,9 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                         draft_html, _changed = proofread_draft(draft_html, _sender_first_for(snapshot))
                     patch = {"agent_id": agent.get("id"), "classification": classification,
                              "draft_subject": d.get("subject"), "draft_body": draft_html,
-                             "original_draft_body": draft_html, "slots": slots}
+                             "original_draft_body": draft_html, "slots": slots,
+                             "guardrails": {**(row.get("guardrails") or {}),
+                                            **slot_situation(slot_status, tz, slots, serr)}}
                     if tz:
                         patch["timezone"] = tz
                     _apply_patch(row, patch)
@@ -3905,7 +3938,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         (category in POSITIVE_CATEGORIES) or bool(classification.get("live_lead")))
     wants_draft = (not is_clear_negative) or negative_but_surfaces
 
-    slots, slot_status = [], "not_configured"
+    slots, slot_status, serr = [], "not_configured", ""
     if wants_draft:
         eff_settings = dict(settings)
         eff_settings["_agent"] = agent
@@ -3925,6 +3958,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         else:
             slot_status = "tz_unknown"
     row["slots"] = slots
+    row["guardrails"].update(slot_situation(slot_status, tz, slots, serr))
 
     draft_subject, draft_body = None, None
     if wants_draft:
@@ -4495,6 +4529,20 @@ def _ep_campaign_names(workspace, ids) -> dict:
     return out
 
 
+def _chat_permalink(email: str, message_id: str = "") -> str:
+    """Deep link straight to this lead's chat in the setter (resolved by
+    /api/setter/queue/locate; message_id refines, email alone still lands).
+    Used by every Slack alert composer — the tool-root link never is."""
+    email = (email or "").strip().lower()
+    if not email:
+        return ""
+    url = f"{DEFAULT_BASE_URL}/app/setter.html#/r/{quote(email, safe='')}"
+    mid = str(message_id or "").strip()
+    if mid:
+        url += f"/{quote(mid, safe='')}"
+    return url
+
+
 def _ep_smartlead_link(campaign_id, email: str) -> str:
     """Best-effort master-inbox deep link for the alert. Never raises."""
     try:
@@ -4528,6 +4576,9 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict) -> str:
          f"{str(prior.get('replied_at') or '')[:10]} ({pname})"),
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
+    chat = _chat_permalink(row.get("email") or "", row.get("smartlead_message_id") or "")
+    if chat:
+        lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
         lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
     lines += ["", "Reply:", snippet or "(no body archived)"]
@@ -4551,7 +4602,7 @@ def run_ever_positive_alerts() -> dict:
                           f"&notify_alerted_at=is.null"
                           f"&replied_at=gte.{quote(since, safe='')}"
                           f"&select=id,workspace,smartlead_campaign_id,email,"
-                          f"replied_at,category,reply_body"
+                          f"replied_at,category,reply_body,smartlead_message_id"
                           f"&order=replied_at.asc&limit=200")
         if not isinstance(rows, list):
             summary["ok"] = False
@@ -4678,6 +4729,9 @@ def _cp_compose(row: dict, cname: str, link: str) -> str:
         f"Workspace: {ws} (client)",
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
+    chat = _chat_permalink(row.get("email") or "", row.get("smartlead_message_id") or "")
+    if chat:
+        lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
         lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
     lines += ["", "Reply:", snippet or "(no body archived)"]
@@ -4702,7 +4756,7 @@ def run_client_positive_alerts() -> dict:
                           f"&notify_alerted_at=is.null"
                           f"&replied_at=gte.{quote(since, safe='')}"
                           f"&select=id,workspace,smartlead_campaign_id,email,"
-                          f"replied_at,category,reply_body"
+                          f"replied_at,category,reply_body,smartlead_message_id"
                           f"&order=replied_at.asc&limit=200")
         if not isinstance(rows, list):
             summary["ok"] = False
@@ -6751,7 +6805,13 @@ def _annotate_queue_row(row: dict) -> dict:
                               or held_by_switch)
     slots = row.get("slots") or []
     no_slots = None
-    if not slots and row.get("draft_body"):
+    g = row.get("guardrails") or {}
+    if not slots and row.get("draft_body") and g.get("slot_status") not in (None, "ok") and g.get("slot_reason"):
+        # Structured truth, stamped at draft time by slot_situation() — no
+        # guessing. The text heuristic below only serves rows drafted before
+        # the stamp existed (2026-08-09).
+        no_slots = str(g["slot_reason"])
+    elif not slots and row.get("draft_body"):
         r = reason.lower()
         if "timezone" in r:
             no_slots = ("The lead's timezone couldn't be pinned down, so no fixed "
@@ -7691,6 +7751,39 @@ def route_queue_row_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def route_queue_locate_get(params):
+    """GET /api/setter/queue/locate?email=X&message_id=Y - resolve a chat
+    permalink to its queue row. Keyed on lead_email + message_id because row
+    ids don't survive re-intake. message_id is a REFINEMENT, not a gate: its
+    time half is format-fluid across intake paths, so a miss falls back to
+    the lead's most recent row rather than a dead link. One indexed select
+    per attempt; workspace-scoped like every other queue read."""
+    try:
+        email = _qp(params, "email", "").strip().lower()
+        mid = _qp(params, "message_id", "").strip()
+        if not email:
+            return 400, {"error": "email is required"}
+        if not _SB:
+            return 404, {"error": "Conversation not found."}
+        row = None
+        if mid:
+            rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=ilike.{quote(email, safe='')}"
+                              f"&message_id=eq.{quote(mid, safe='')}"
+                              f"&{_list_ws_filter()}&select=*&limit=1")
+            row = rows[0] if isinstance(rows, list) and rows else None
+        matched = "message_id" if row else "email"
+        if not row:
+            rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=ilike.{quote(email, safe='')}"
+                              f"&{_list_ws_filter()}&select=*"
+                              f"&order=replied_at.desc.nullslast&limit=1")
+            row = rows[0] if isinstance(rows, list) and rows else None
+        if not row:
+            return 404, {"error": "Conversation not found."}
+        return 200, {"row": _annotate_queue_row(row), "matched": matched}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def _kick_thread_rehydrate(row: dict):
     """Live-refresh one row's thread OFF the request path (cache-first open,
     2026-07-30). Per-row single-flight; the refreshed thread persists via the
@@ -8482,10 +8575,10 @@ def _redraft_sync(payload):
         # the real calendar to match it. Nothing is invented - the plan only
         # skips slots this row already proposed and/or moves the floor forward.
         time_plan = time_feedback_plan(feedback_text, tz, now)
-        slots, slot_status = [], "not_configured"
+        slots, slot_status, serr = [], "not_configured", ""
         slot_note = ""
         if tz:
-            slot_status, avail, _serr = get_calendly_availability(agent, eff_settings, now)
+            slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
             if slot_status == "ok":
                 if time_plan:
                     prior = [str(s.get("iso")) for s in (row.get("slots") or []) if isinstance(s, dict)]
@@ -8504,6 +8597,8 @@ def _redraft_sync(payload):
                     slots = pick_slots(avail, tz, eff_settings, now)
                 if not slots:
                     slot_status = "none_available"
+        else:
+            slot_status = "tz_unknown"
         thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
         # Standing memory always applies first, then this specific redraft's
         # feedback on top of it - same order Feature 1's spec sets for every
@@ -8571,7 +8666,9 @@ def _redraft_sync(payload):
         # the LATEST thing the agent wrote, not its first attempt. Edits the
         # reviewer makes after this regenerate are measured against this draft.
         patch = {"draft_subject": d.get("subject"), "draft_body": draft_html,
-                 "original_draft_body": draft_html, "slots": slots}
+                 "original_draft_body": draft_html, "slots": slots,
+                 "guardrails": {**(row.get("guardrails") or {}),
+                                **slot_situation(slot_status, tz, slots, serr)}}
         if fresh_classification is not None:
             # Persist what the redraft-classify learned so the UI's Intent
             # line updates and the next Regenerate doesn't re-classify.
@@ -10820,6 +10917,7 @@ GET_ROUTES = {
     "/api/setter/campaigns": route_campaigns_get,
     "/api/setter/queue": route_queue_get,
     "/api/setter/queue/row": route_queue_row_get,
+    "/api/setter/queue/locate": route_queue_locate_get,
     "/api/setter/categories": route_categories_get,
     "/api/setter/thread": route_thread_get,
     "/api/setter/lead-contact": route_lead_contact_get,

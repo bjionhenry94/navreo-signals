@@ -85,8 +85,15 @@
 .inbox-shell.list-collapsed .il-resizer { display: none; }
 @media (max-width: 900px) {
   /* Collapse/resize are desktop-only (the JS also refuses to apply the
-     collapsed class at this width — this hides the controls). */
-  .il-collapse-btn, .il-resizer { display: none !important; }
+     collapsed class at this width — this hides the controls). Scoped to the
+     normal view (2026-08-09): the ?chrome=none embed usually lives in a
+     700-900px side pane where the three-pane row still renders — hiding the
+     handle there was half of "the sidebar isn't adjustable". */
+  html:not(.headless) .il-collapse-btn, html:not(.headless) .il-resizer { display: none !important; }
+}
+@media (max-width: 699px) {
+  /* Headless stacks to one column below 700px — nothing to resize. */
+  html.headless .il-collapse-btn, html.headless .il-resizer { display: none !important; }
 }
 .il-search { padding: 10px; border-bottom: 1px solid var(--line); flex-shrink: 0; }
 .il-search input {
@@ -388,7 +395,11 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
     height: auto; min-height: 0;
   }
   html.headless .inbox-left {
-    width: clamp(228px, 26%, 340px); flex: 0 0 auto;
+    /* Drag-resize works here too (owner report 2026-08-09: "the sidebar isn't
+       actually adjustable") — the drag writes --il-w, and this width must READ
+       it; the old fixed clamp() silently ignored every drag in ?chrome=none.
+       No stored width -> the same fluid clamp as before. */
+    width: var(--il-w, clamp(228px, 26%, 340px)); max-width: 55%; flex: 0 0 auto;
     border-right: 1px solid var(--line); border-top: none; border-radius: 0;
     height: auto; min-height: 0;
   }
@@ -550,6 +561,20 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
   opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease;
 }
 .lesson-toast.on { opacity: 1; pointer-events: auto; transform: translateX(-50%) translateY(0); }
+/* Copied-link toast (headless copy-links, 2026-08-09): in the ?chrome=none
+   embed every external link COPIES instead of opening (the host pane hijacks
+   new tabs), and this is the "it's on your clipboard" confirmation. */
+.copy-toast {
+  position: fixed; left: 50%; transform: translateX(-50%) translateY(12px);
+  bottom: 18px; z-index: 320; max-width: min(520px, 92vw);
+  background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(20, 17, 14, 0.18); padding: 10px 14px;
+  font: 500 12.5px var(--font-sans);
+  opacity: 0; pointer-events: none; transition: opacity 0.2s ease, transform 0.2s ease;
+}
+.copy-toast.on { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* Signal on the quick-link buttons that a click copies (headless only). */
+html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55; margin-left: 3px; }
 .lesson-toast .lt-head { font: 600 12.5px var(--font-sans); }
 .lesson-toast .lt-rule { font-size: 12.5px; color: var(--ink-2); margin: 5px 0 9px; line-height: 1.5; }
 .lesson-toast .lt-actions { display: flex; gap: 8px; }
@@ -1300,7 +1325,12 @@ async function fetchJson(url, opts) {
     }
     const transient = !out.ok && (!out.status || [502, 503, 504].includes(out.status));
     if (transient && attempt < retries) {
-      await new Promise((r) => setTimeout(r, 1500 + Math.random() * 2000));
+      // Escalating, not flat (502 fix 2026-08-09): most 502 windows are a
+      // deploying/restarting instance and last 20-60s — a single flat ~2s
+      // retry lands inside the same window and the banner shows anyway.
+      // 1.5s → 3s → 6s → 12s (+jitter) lets a 4-retry read-only call bridge
+      // a whole restart without hammering the box that's coming up.
+      await new Promise((r) => setTimeout(r, Math.min(12000, 1500 * Math.pow(2, attempt)) + Math.random() * 1000));
       continue;
     }
     return out;
@@ -1471,6 +1501,7 @@ function reconcileQueuePayload(rows) {
 
 let _queueChain = null;
 let _queuePending = 0;
+let _bannerRetryTimer = null;
 function loadQueue(prefetch) {
   if (_queuePending >= 2) return _queueChain;   // running + one queued: enough
   _queuePending++;
@@ -1491,10 +1522,13 @@ async function _loadQueueInner(prefetch) {
   // agents/campaigns load instead of waiting for it (the fetch is pill-status
   // specific, so it's only reused for the initial default-status load).
   _queueLoading = true;
-  // 25s abort + one jittered retry on 502/503/504 (read-only, safe to retry):
-  // most 502s are a restarting instance and clear within seconds.
+  // 25s abort + FOUR escalating retries on 502/503/504 (read-only, safe to
+  // retry): most 502s are a deploying/restarting instance — parallel Claude
+  // sessions push several times a day and each deploy is a 20-60s 502 window
+  // that a single quick retry could never bridge (owner report 2026-08-09:
+  // "Couldn't refresh the queue (502)" showing regularly).
   const res = await (prefetch ||
-    fetchJson(`/api/setter/queue?${params.toString()}`, { _timeoutMs: 25000, _retries: 1 }));
+    fetchJson(`/api/setter/queue?${params.toString()}`, { _timeoutMs: 25000, _retries: 4 }));
   _queueLoading = false;
   if (res.ok) {
     QUEUE_ROWS = reconcileQueuePayload(res.data.rows || []);
@@ -1531,6 +1565,12 @@ async function _loadQueueInner(prefetch) {
     }
     showError("Couldn't refresh the queue: " + res.error +
       (QUEUE_ROWS.length ? " - showing the last loaded conversations." : ""));
+    // Self-heal (502 fix 2026-08-09): don't leave the banner sitting for the
+    // full 60s poll gap — one gentle re-try in ~20s clears it as soon as the
+    // restarting instance is back. Single-flight: never stacks timers.
+    if (!_bannerRetryTimer) {
+      _bannerRetryTimer = setTimeout(() => { _bannerRetryTimer = null; loadQueue(); }, 20000);
+    }
   }
   // A COPY, not an alias (panel fix 2026-08-01): shared row objects keep the
   // cross-pill mutations cheap, but tray-opened shells are pushed into
@@ -2545,7 +2585,13 @@ function wireListSidebar() {
   if (eBtn) eBtn.addEventListener("click", () => setCollapsed(false));
   if (resizer) resizer.addEventListener("pointerdown", (e) => {
     e.preventDefault();
-    resizer.setPointerCapture(e.pointerId);
+    // setPointerCapture FIRST + no try/catch was the "click and hold but it
+    // won't move" bug (owner report 2026-08-09): in an embedded pane the call
+    // can throw on a synthesized pointer, which aborted the handler BEFORE the
+    // move/up listeners were ever attached. Capture is now best-effort, and
+    // move/up live on window so the drag keeps tracking even when the pointer
+    // leaves the 7px handle (which a real drag does almost immediately).
+    try { resizer.setPointerCapture(e.pointerId); } catch { /* best-effort */ }
     resizer.classList.add("dragging");
     const startX = e.clientX, startW = left.getBoundingClientRect().width;
     const move = (ev) => {
@@ -2554,13 +2600,15 @@ function wireListSidebar() {
     };
     const up = () => {
       resizer.classList.remove("dragging");
-      resizer.removeEventListener("pointermove", move);
-      resizer.removeEventListener("pointerup", up);
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+      window.removeEventListener("pointercancel", up);
       const w = Math.round(left.getBoundingClientRect().width);
       try { localStorage.setItem(LIST_WIDTH_KEY, String(w)); } catch { /* ignore */ }
     };
-    resizer.addEventListener("pointermove", move);
-    resizer.addEventListener("pointerup", up);
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+    window.addEventListener("pointercancel", up);
   });
 }
 /* Every reply the pane has ever shown, by row id -> the four fields that
@@ -2714,6 +2762,7 @@ function renderDetail(row) {
         <span class="dh-emailgrp">
           <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
           ${row.lead_email ? `<button type="button" class="dh-copy" id="copyEmailBtn" data-email="${esc(row.lead_email)}" title="Copy email address" aria-label="Copy email address">${ICON_COPY}</button>` : ""}
+          ${permalinkFor(row) ? `<button type="button" class="dh-copy" id="copyLinkBtn" data-link="${esc(permalinkFor(row))}" title="Copy link to this chat" aria-label="Copy link to this chat">${ICON_LINK}</button>` : ""}
         </span>
         <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
       </div>
@@ -2785,6 +2834,31 @@ function renderDetail(row) {
       setTimeout(() => { copyBtn.classList.remove("copied"); copyBtn.innerHTML = ICON_COPY; }, 1500);
     } else {
       protoNote("Couldn't copy automatically - select the address and copy it manually");
+    }
+  });
+  // Copy-link (chat permalinks 2026-08-09): same clipboard mechanics as the
+  // email copy above — clipboard API, textarea fallback, ✓ confirmation. No
+  // native dialogs (they die in embedded panes).
+  const linkBtn = document.getElementById("copyLinkBtn");
+  if (linkBtn) linkBtn.addEventListener("click", async () => {
+    const url = linkBtn.getAttribute("data-link") || "";
+    let done = false;
+    try { await navigator.clipboard.writeText(url); done = true; } catch { /* fallback below */ }
+    if (!done) {
+      const hadFocus = document.activeElement;
+      const tmp = document.createElement("textarea");
+      tmp.value = url; document.body.appendChild(tmp); tmp.select();
+      try { done = document.execCommand("copy"); } catch { /* reported below */ }
+      tmp.remove();
+      if (hadFocus && hadFocus.focus) hadFocus.focus();
+    }
+    if (done) {
+      linkBtn.classList.add("copied");
+      linkBtn.innerHTML = "&#10003;";
+      setTimeout(() => { linkBtn.classList.remove("copied"); linkBtn.innerHTML = ICON_LINK; }, 1500);
+      protoNote("Chat link copied — paste it anywhere to open this conversation directly.");
+    } else {
+      protoNote("Couldn't copy automatically - the link is: " + url);
     }
   });
   // Restore the reader's place BEFORE wiring (wireDetailEvents only centres
@@ -2906,6 +2980,17 @@ function howDecidedContentHtml(row, opts) {
 function slotSituationText(row) {
   const slots = row.slots || [];
   if (slots.length) return `${slots.length} time${slots.length === 1 ? "" : "s"} proposed`;
+  /* Structured slot_status stamped into guardrails at draft time (2026-08-09)
+     — the exact WHY, no reverse-engineering. Older rows fall through to the
+     decision_reason text guess below. */
+  const g = row.guardrails || {};
+  if (g.slot_status && g.slot_status !== "ok") {
+    const tz = row.timezone || "";
+    if (g.slot_status === "none_available") return `timezone known${tz ? ` (${tz})` : ""} — no free Calendly slots in the booking window`;
+    if (g.slot_status === "tz_unknown") return "timezone unknown — draft asks for their availability";
+    if (g.slot_status === "not_configured") return "no Calendly connected — draft uses the booking link";
+    if (g.slot_status === "error") return "couldn't load Calendly availability";
+  }
   const reason = String(row.decision_reason || "");
   if (reason.includes("Calendly is not connected")) return "Calendly is not connected";
   if (reason.includes("no free Calendly slots coming up") || reason.includes("no Calendly availability")) return "no free slots inside the working window";
@@ -2938,6 +3023,7 @@ const ICON_EXTERNAL = `<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden=
 // Right-panel toggle glyph: a framed rectangle with a right-hand column.
 const ICON_PANEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4.5" width="18" height="15" rx="2"/><line x1="15" y1="4.5" x2="15" y2="19.5"/></svg>`;
 const ICON_COPY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
+const ICON_LINK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>`;
 
 function companyBrandFromDomain(d) {
   d = String(d || "").trim().toLowerCase().replace(/^www\./, "");
@@ -4465,7 +4551,7 @@ function showLessonToast(rowId, rule, undoable) {
    synchronously (no job_id) is used as-is, and a job lost to a restart is
    recovered by re-reading the row, whose draft was persisted before the job
    ended. */
-async function runRedraftJob(payload, onTick) {
+async function runRedraftJob(payload, onTick, prior) {
   const res = await fetchJson("/api/setter/queue/redraft", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, async: true }),
@@ -4491,10 +4577,25 @@ async function runRedraftJob(payload, onTick) {
     const state = st.data && st.data.state;
     if (state === "running") continue;
     if (state === "unknown") {
+      // The server restarted mid-job (OOM bounce / deploy) and lost the job
+      // map. The row is the only truth left — but painting it blindly was the
+      // surviving half of "first Regenerate shows nothing" (owner report
+      // 2026-08-09): a restart that killed the job BEFORE the draft persisted
+      // re-read the row, got the OLD draft back, and reported success over a
+      // regeneration that never happened. Compare against the pre-click draft
+      // and say so honestly when nothing actually changed.
       const rowRes = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(payload.id)}`);
-      return (rowRes.ok && rowRes.data && rowRes.data.row)
-        ? { ok: true, data: { row: rowRes.data.row, feedback_note: "" } }
-        : { ok: false, error: "the draft was regenerated but the result couldn't be read back - reload to see it" };
+      if (!(rowRes.ok && rowRes.data && rowRes.data.row)) {
+        return { ok: false, error: "the draft was regenerated but the result couldn't be read back - reload to see it" };
+      }
+      const got = rowRes.data.row;
+      const unchanged = prior &&
+        String(got.draft_body || "") === String(prior.draft_body || "") &&
+        String(got.draft_subject || "") === String(prior.draft_subject || "");
+      if (unchanged) {
+        return { ok: false, error: "the server restarted before the regeneration finished, so the draft is unchanged - click Regenerate to try again" };
+      }
+      return { ok: true, data: { row: got, feedback_note: "" } };
     }
     if (state === "error") return { ok: false, error: (st.data && st.data.error) || "the regenerate failed" };
     return { ok: true, data: st.data };         // done
@@ -4611,7 +4712,7 @@ async function doRedraft(btn, feedback, scope) {
   const res = await runRedraftJob(payload, (secs) => {
     // 40 seconds of a silent spinner reads as broken; say it is still working.
     btn.textContent = secs < 10 ? "Regenerating…" : `Regenerating… ${secs}s`;
-  });
+  }, hintRow ? { draft_body: hintRow.draft_body, draft_subject: hintRow.draft_subject } : null);
   restore();
   if (!res.ok) {
     showError("Couldn't regenerate the draft: " + res.error);
@@ -4688,7 +4789,7 @@ async function doDraftAnyway(btn) {
   const res = await runRedraftJob(hintRow2 && hintRow2.agent_id
       ? { id: Number(id), agent_hint: hintRow2.agent_id } : { id: Number(id) }, (secs) => {
     btn.textContent = secs < 10 ? "Drafting…" : `Drafting… ${secs}s`;
-  });
+  }, hintRow2 ? { draft_body: hintRow2.draft_body, draft_subject: hintRow2.draft_subject } : null);
   restore();
   if (!res.ok) {
     showError("Couldn't draft a reply: " + res.error);
@@ -4905,6 +5006,65 @@ setInterval(() => {
   // 60s + per-tab jitter (502 fix 2026-07-30): N open tabs used to fire on
   // the same boundary, stacking N GETs behind one global build lock.
 }, 60000 + Math.floor(Math.random() * 10000));
+
+/* ── Headless copy-links (owner ask 2026-08-09) ─────────────────────────────
+   In the ?chrome=none embed the host pane (Claude) opens every link IN PLACE,
+   destroying the board — so there, every externally-facing link (the Website /
+   LinkedIn / Smartlead quick-links and any other link that leaves this app)
+   COPIES its URL to the clipboard and says so, instead of navigating. One
+   delegated capture-phase handler, so late-rendered rows are covered without
+   per-button wiring. The normal setter.html keeps open-in-new-tab untouched. */
+async function copyTextToClipboard(text) {
+  try { await navigator.clipboard.writeText(text); return true; } catch { /* fallback below */ }
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta); ta.select();
+    const ok = document.execCommand("copy");
+    ta.remove();
+    return ok;
+  } catch { return false; }
+}
+let _copyToastTimer = null;
+function showCopyToast(msg) {
+  let el = document.getElementById("copyToast");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "copyToast";
+    el.className = "copy-toast";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.classList.add("on");
+  if (_copyToastTimer) clearTimeout(_copyToastTimer);
+  _copyToastTimer = setTimeout(() => el.classList.remove("on"), 2600);
+}
+if (document.documentElement.classList.contains("headless")) {
+  document.addEventListener("click", (e) => {
+    const a = e.target && e.target.closest ? e.target.closest("a[href]") : null;
+    if (!a) return;
+    // Links inside the editable draft never navigate anyway — leave the
+    // caret alone (clicking near an anchor while editing must stay an edit).
+    if (a.closest(".qc-draft[contenteditable]")) return;
+    const href = a.getAttribute("href") || "";
+    if (!href || href.startsWith("#") || href.startsWith("javascript:")) return;
+    let abs = href, external = a.target === "_blank";
+    try {
+      const u = new URL(href, location.href);
+      abs = u.href;
+      if (!external) external = u.origin !== location.origin;
+    } catch { /* unparsable: only treat as external if target=_blank */ }
+    if (!external) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const label = (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 48) || "Link";
+    copyTextToClipboard(abs).then((ok) => {
+      showCopyToast(ok
+        ? `${label} — link copied to your clipboard. Paste it into a new tab.`
+        : `Couldn't copy automatically — the link is: ${abs}`);
+    });
+  }, true);
+}
 
 /* ── Slide-over drawers ────────────────────────────────── */
 function openDrawer(id) { document.getElementById(id).classList.add("on"); }
@@ -5562,6 +5722,54 @@ document.addEventListener("click", (e) => {
   if (/^https?:/i.test(href)) window.open(href, "_blank", "noopener");
 });
 
+/* ── Chat permalinks (2026-08-09) ──────────────────────────────────────────
+   #/r/<urlencoded email>[/<urlencoded message_id>] deep-links straight to one
+   conversation. Keyed on email+message_id (row ids die on re-intake); the
+   message_id half only REFINES — its time half is format-fluid across intake
+   paths, so /api/setter/queue/locate falls back to the lead's latest row
+   rather than a dead link. #uncategorised keeps its meaning untouched. */
+function permalinkFor(row) {
+  const email = String((row && row.lead_email) || "").trim().toLowerCase();
+  if (!email) return "";
+  const mid = String((row && (row.message_id || row.source_message_id)) || "").trim();
+  return location.origin + "/app/setter.html#/r/" + encodeURIComponent(email)
+       + (mid ? "/" + encodeURIComponent(mid) : "");
+}
+async function openPermalink() {
+  const m = (location.hash || "").match(/^#\/r\/([^/]+)(?:\/(.+))?$/);
+  if (!m) return false;
+  let email = "", mid = "";
+  try {
+    email = decodeURIComponent(m[1] || "").trim().toLowerCase();
+    mid = m[2] ? decodeURIComponent(m[2]).trim() : "";
+  } catch { /* malformed escape → treated as not found below */ }
+  if (!email) { showError("That conversation link is malformed."); return true; }
+  // Already loaded? Exact message match first; a lone email only matches when
+  // it's unambiguous locally — otherwise the server picks the latest row.
+  const pool = QUEUE_ROWS.concat(ALL_ROWS);
+  let row = mid ? pool.find((r) =>
+    String(r.lead_email || "").toLowerCase() === email
+    && [r.message_id, r.source_message_id].map(String).includes(mid)) : null;
+  if (!row) {
+    const qs = `email=${encodeURIComponent(email)}${mid ? `&message_id=${encodeURIComponent(mid)}` : ""}`;
+    const res = await fetchJson(`/api/setter/queue/locate?${qs}`, { _timeoutMs: 15000, _retries: 2 });
+    row = (res.ok && res.data && res.data.row) || null;
+    if (row) {
+      const idx = ALL_ROWS.findIndex((r) => String(r.id) === String(row.id));
+      if (idx >= 0) { Object.assign(ALL_ROWS[idx], row); row = ALL_ROWS[idx]; }
+      else ALL_ROWS.push(row);
+      // Survive the next queue reload exactly like a tray-opened row does.
+      overrideRow(row);
+    }
+  }
+  if (!row) {
+    showError("Couldn't find that conversation — the link may be old, or the reply hasn't been pulled into the Setter yet.");
+    return true;
+  }
+  selectRow(row.id);
+  return true;
+}
+
 (async function init() {
   wireListSidebar();   // restore + wire the persisted list width/collapse first — pure DOM, no network
   // Everything that can start at once, starts at once (perf pass 2026-07-16).
@@ -5586,6 +5794,11 @@ document.addEventListener("click", (e) => {
   const kickP = fetchJson("/api/setter/poll", { method: "POST" });
   await loadAgentsAndCampaigns();
   await loadQueue(queueP);
+  // Chat permalinks (#/r/<email>[/<message_id>], 2026-08-09): a Slack card's
+  // "Open this chat" link must land ON the chat, not the tool's front door.
+  // Resolved after the first queue paint so a hit selects in a rendered list.
+  openPermalink();
+  window.addEventListener("hashchange", () => { openPermalink(); });
   kickP.then(async (kick) => {
     if (kick && kick.ok) {
       // Same wait-for-the-sweep rule as the old header button (owner report

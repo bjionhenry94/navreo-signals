@@ -682,6 +682,47 @@ def test_guess_timezone():
 
 # ── 3. slot picker ───────────────────────────────────────────────────────────
 
+def test_slot_situation_transparency():
+    """Owner report 2026-08-09: a row with a KNOWN timezone but no proposed
+    times gave no clue why. slot_situation() stamps {slot_status, slot_reason}
+    into guardrails at draft time, and _annotate_queue_row surfaces it verbatim
+    — even when decision_reason is about something else entirely (the exact
+    reported case: held for "wants custom work")."""
+    tz = "America/New_York"
+    # (a) confident tz + slots available -> the situation says times WERE proposed.
+    slots = [{"iso": "2026-08-11T14:00:00-04:00", "label": "Tuesday, 11th August at 2:00 PM EDT", "link": "x"}]
+    ok = setter.slot_situation("ok", tz, slots)
+    check("slot situation: ok+slots says times proposed in the lead's tz",
+          ok["slot_status"] == "ok" and "proposed" in ok["slot_reason"] and tz in ok["slot_reason"], ok)
+    row_ok = {"decision_reason": "Held for review: the autopilot master switch is off.",
+              "draft_body": "<p>hi</p>", "slots": slots,
+              "guardrails": {"lexicon_hits": [], "llm_red_flags": [], **ok}}
+    check("slot situation: annotated ok row carries NO no_slots_reason",
+          setter._annotate_queue_row(row_ok).get("no_slots_reason") is None)
+    # (b) confident tz + EMPTY Calendly availability -> the explicit reason
+    # (timezone named, empty calendar named) reaches the row annotation even
+    # though decision_reason never mentions slots or timezones.
+    empty = setter.slot_situation("none_available", tz, [])
+    check("slot situation: none_available names the tz and the empty calendar",
+          tz in empty["slot_reason"] and "no bookable slots" in empty["slot_reason"], empty)
+    row_no = {"decision_reason": "Held for review: the lead is asking for custom or bespoke work, which needs a person.",
+              "draft_body": "<p>hi</p>", "slots": [],
+              "guardrails": {"lexicon_hits": [], "llm_red_flags": [], **empty}}
+    annotated = setter._annotate_queue_row(row_no)
+    check("slot situation: structured reason wins over the decision_reason text guess",
+          annotated.get("no_slots_reason") == empty["slot_reason"], annotated.get("no_slots_reason"))
+    # Every non-ok status yields a human sentence (no bare/empty reasons, ever).
+    for st in ("none_available", "tz_unknown", "not_configured", "error", "", None):
+        s = setter.slot_situation(st, tz, [], error="boom")
+        check(f"slot situation: status {st!r} always explains itself",
+              isinstance(s["slot_reason"], str) and len(s["slot_reason"]) > 20, s)
+    # Legacy rows (no stamp) keep the old text-guess behaviour.
+    legacy = {"decision_reason": "Held for review: no free Calendly slots coming up.",
+              "draft_body": "<p>hi</p>", "slots": [], "guardrails": {"lexicon_hits": []}}
+    check("slot situation: legacy un-stamped row still gets the heuristic reason",
+          bool(setter._annotate_queue_row(legacy).get("no_slots_reason")))
+
+
 def test_pick_slots():
     from zoneinfo import ZoneInfo
     now_utc = dt.datetime(2026, 7, 11, 8, 0, tzinfo=dt.timezone.utc)  # a Saturday
@@ -9347,6 +9388,7 @@ if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
     test_pick_slots()
+    test_slot_situation_transparency()
     test_lint_draft()
     test_lint_draft_url_discipline()
     test_lint_draft_calendly_fallback_booking_link()

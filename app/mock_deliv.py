@@ -629,7 +629,7 @@ def _domain_health(q: dict):
         })
     return 200, {"rows": rows, "resting": resting, "restingDue": resting_due,
                 "start": q.get("start") or _days_ago(7), "end": q.get("end") or _today(),
-                "minSent": int(q.get("minSent") or 500), "cutoff": float(q.get("cutoff") or 0.8)}
+                "minSent": int(q.get("minSent") or 500), "cutoff": float(q.get("cutoff") or 0.7)}
 
 
 def _reminder_add(q: dict):
