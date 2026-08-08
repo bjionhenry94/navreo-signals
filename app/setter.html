@@ -5770,6 +5770,7 @@ async function openPermalink() {
     showError("Couldn't find that conversation — the link may be old, or the reply hasn't been pulled into the Setter yet.");
     return true;
   }
+  clearError();   // a resolved link must not sit under a stale not-found banner
   selectRow(row.id);
   return true;
 }
