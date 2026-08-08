@@ -1903,7 +1903,6 @@
   .vp-combos-h .ring-caption { text-transform: none; letter-spacing: 0; font-weight: 500; }
   table.version-perf-table tr.vp-win { background: linear-gradient(90deg, rgba(255,77,0,0.06), transparent); }
   table.version-perf-table tr.vp-win td:first-child { box-shadow: inset 3px 0 0 var(--nav-orange); }
-  .vp-sib { text-transform: none; letter-spacing: 0; opacity: 0.75; }
 
   /* -- B. "the sequence": Smartlead-editor-like vertical step rail -- */
   .seq-rail { margin-top: 16px; display: flex; flex-direction: column; }
@@ -1943,8 +1942,8 @@
   .seq-pill:hover { border-color: var(--nav-ink-3); color: var(--fg); }
   .seq-pill.is-active { background: var(--chip-active-bg); border-color: var(--chip-active-bg); color: var(--chip-active-fg); }
   /* off (0% split) and deleted variants stay cyclable but read as muted */
-  .seq-pill--off { opacity: 0.66; font-style: italic; }
-  .seq-pill--del { opacity: 0.5; text-decoration: line-through; }
+  .seq-pill--off { opacity: 0.66; }
+  .seq-pill--del { opacity: 0.5; }
   .seq-pill--off.is-active, .seq-pill--del.is-active { opacity: 1; }
   .seq-fail { display: flex; flex-direction: column; gap: 10px; align-items: flex-start; }
   .seq-connector {
@@ -4677,7 +4676,13 @@
          mistakes an off variant for a live one. Default-active = first live. */
       function vRank(v) { return v.deleted ? 2 : (v.split === 0 ? 1 : 0); }
       var variants = (s.variants || []).slice().sort(function (a, b) { return vRank(a) - vRank(b); });
-      function vTag(v) { return v.deleted ? " (deleted)" : v.split === 0 ? " (off)" : ""; }
+      /* state reads as a dot, never wording: green = sending, grey = inactive
+         (off or deleted). The words live only in title/aria text. */
+      function vDot(v) {
+        var off = v.deleted || v.split === 0;
+        return '<span class="vp-dot vp-dot--' + (off ? "off" : "on") + '" title="' +
+          (v.deleted ? "inactive — deleted in Smartlead" : off ? "inactive — 0% of sends" : "active — sending") + '"></span>';
+      }
       var pills = "";
       if (variants.length > 1) {
         /* keyed by INDEX, not label (audit #9): Smartlead can carry a deleted
@@ -4687,8 +4692,9 @@
           variants.map(function (v, vi) {
             return '<button type="button" class="seq-pill' + (vi === 0 ? " is-active" : "") +
               (v.deleted ? " seq-pill--del" : v.split === 0 ? " seq-pill--off" : "") +
-              '" data-step="' + esc(stepNo) + '" data-vidx="' + vi + '" aria-pressed="' + (vi === 0 ? "true" : "false") + '">' +
-              esc((v.label || "?") + vTag(v)) + "</button>";
+              '" data-step="' + esc(stepNo) + '" data-vidx="' + vi + '" aria-pressed="' + (vi === 0 ? "true" : "false") +
+              '" aria-label="Version ' + esc(v.label || "?") + (v.deleted || v.split === 0 ? " (inactive)" : " (active)") + '">' +
+              esc(v.label || "?") + vDot(v) + "</button>";
           }).join("") + "</div>";
       }
       var panels = variants.map(function (v, vi) {
@@ -4701,8 +4707,8 @@
               ? "This variant was deleted; Smartlead no longer stores its copy."
               : "No copy stored for this variant.") + "</p>";
         return '<div class="seq-version-panel" data-step="' + esc(stepNo) + '" data-vidx="' + vi + '"' + (vi === 0 ? "" : " hidden") + ">" +
-          (v.deleted ? '<p class="card-subtitle">Deleted variant &mdash; no longer sending.</p>'
-            : v.split === 0 ? '<p class="card-subtitle">Switched off (0% of sends) &mdash; kept here so you can still read it.</p>' : "") +
+          (v.deleted || v.split === 0
+            ? '<p class="card-subtitle">' + vDot(v) + ' Inactive &mdash; kept here so you can still read it.</p>' : "") +
           '<p class="seq-subject"><strong>Subject:</strong> ' + subj + "</p>" +
           '<div class="seq-body-scroll">' + body +
           (v.truncated ? '<p class="card-subtitle">&hellip; copy truncated &mdash; open the sequence in Smartlead for the rest.</p>' : "") +
@@ -4855,6 +4861,8 @@
       ".vaw-swap{font-size:.74rem;background:var(--sunken);border-radius:var(--r-md,8px);padding:7px 10px;margin:0 0 6px}",
       ".vaw-swap b{text-transform:capitalize}",
       ".vaw-swap .old{color:var(--fg-subtle);text-decoration:line-through}",
+      ".vaw-inline-err{color:var(--danger,#B3261E);font-size:.8rem;margin:6px 0}",
+      ".vaw-inline-err--toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--nav-white,#fff);border:1px solid var(--danger,#B3261E);border-radius:8px;padding:8px 14px;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.15)}",
       "@media (prefers-reduced-motion:reduce){.vaw-toggle,.vaw-toggle .vaw-knob{transition:none}}"
     ].join("\n");
     var el = document.createElement("style");
@@ -4870,6 +4878,63 @@
       body: JSON.stringify(body || {})
     }).then(function (r) {
       return r.json().catch(function () { return { ok: false, message: "bad response (" + r.status + ")" }; });
+    });
+  }
+
+  /* ── background variant writes: the server 202s with a job id; the UI stays
+     interactive, polls, and only repaints from server truth when it lands.
+     On failure: revert the optimistic state + inline error (never alert —
+     native dialogs die in embedded panes). ── */
+  function vawPollJob(cid, job, onDone, onFail) {
+    var tries = 0;
+    (function tick() {
+      if (++tries > 100) { onFail("timed out waiting for the background write — refresh to see the real state"); return; }
+      fetch("/api/campaigns/" + cid + "/variant-action-status/" + job, { credentials: "same-origin" })
+        .then(function (r) { return r.json(); })
+        .then(function (j) {
+          if (!j || j.status === "running") { setTimeout(tick, 1500); return; }
+          if (j.status === "done") { onDone(j.body || {}); return; }
+          onFail((j.body && j.body.message) || j.message || "the write was refused — nothing changed");
+        })
+        .catch(function () { setTimeout(tick, 3000); });
+    })();
+  }
+  function vawInlineErr(msg) {
+    var host = document.getElementById("messaging-root");
+    var p = document.createElement("p");
+    p.className = "vaw-inline-err" + (host && host.parentNode ? "" : " vaw-inline-err--toast");
+    p.textContent = "⚠ Background write failed — " + msg;
+    if (host && host.parentNode) host.parentNode.insertBefore(p, host);
+    else document.body.appendChild(p);
+    setTimeout(function () { p.remove(); }, 25000);
+  }
+  function vawTrackJob(c, resp, el) {
+    if (!resp || !resp.job) { vawRefreshCampaign(c); return; }
+    if (el) el.setAttribute("data-busy", "1");
+    vawPollJob(c.id, resp.job, function () {
+      if (el) el.removeAttribute("data-busy");
+      vawRefreshCampaign(c);
+    }, function (msg) {
+      if (el) el.removeAttribute("data-busy");
+      vawInlineErr(msg);
+      vawRefreshCampaign(c);
+    });
+  }
+  function vawTrackToggle(c, t, resp) {
+    if (!resp || !resp.job) { vawRefreshCampaign(c); return; }
+    var wasOn = t.classList.contains("is-on");
+    t.classList.toggle("is-on");
+    t.setAttribute("aria-pressed", wasOn ? "false" : "true");
+    t.setAttribute("data-busy", "1");
+    vawPollJob(c.id, resp.job, function () {
+      t.removeAttribute("data-busy");
+      vawRefreshCampaign(c);
+    }, function (msg) {
+      t.classList.toggle("is-on", wasOn);
+      t.setAttribute("aria-pressed", wasOn ? "true" : "false");
+      t.removeAttribute("data-busy");
+      vawInlineErr(msg);
+      vawRefreshCampaign(c);
     });
   }
 
@@ -4921,7 +4986,10 @@
           go.disabled = false; go.textContent = opts.confirmLabel || "Confirm — write it";
           return;
         }
-        var rec = opts.receipt ? opts.receipt(resp) : { title: "Saved", lines: [], foot: "" };
+        var rec = (resp.queued && resp.job)
+          ? { title: "Queued — writing in the background", lines: [],
+              foot: "You can close this. The table updates itself when the write lands (usually under a minute); if it fails, the error shows by the table and nothing changes." }
+          : (opts.receipt ? opts.receipt(resp) : { title: "Saved", lines: [], foot: "" });
         modal.innerHTML = '<div class="vaw-receipt"><h4>&#10003; ' + esc(rec.title) + "</h4>" +
           '<div class="vaw-lines">' + (rec.lines || []).map(function (l) {
             return '<div class="vaw-line"><span class="k">' + esc(l[0]) + '</span><span class="v">' + l[1] + "</span></div>";
@@ -4975,7 +5043,7 @@
               foot: "It stopped sending but keeps its stats — switch it back on any time."
             };
           },
-          after: function () { vawRefreshCampaign(c); }
+          after: function (resp) { vawTrackToggle(c, t, resp); }
         } : {
           title: "Switch Version " + lab + " back on (Email " + step + ")?",
           sub: (c.name || "Campaign " + c.id) + " · campaign " + c.id,
@@ -4997,7 +5065,7 @@
               foot: "Same version ID as before — its new sends stack onto its old history."
             };
           },
-          after: function () { vawRefreshCampaign(c); }
+          after: function (resp) { vawTrackToggle(c, t, resp); }
         });
       });
     });
@@ -5026,7 +5094,7 @@
               foot: "The others are paused at 0% with their IDs and history intact."
             };
           },
-          after: function () { vawRefreshCampaign(c); }
+          after: function (resp) { vawTrackJob(c, resp, b); }
         });
       });
     });
@@ -5175,7 +5243,7 @@
               }),
               foot: "Both keep their IDs and history — nothing recreated." };
           },
-          after: function () { vawMarkCardDone(b); vawRefreshCampaign(c); }
+          after: function (resp) { vawMarkCardDone(b); vawTrackJob(c, resp); }
         });
       });
     });
@@ -5230,7 +5298,7 @@
               }),
               foot: "The rest are paused at 0% — IDs and history intact." };
           },
-          after: function () { vawMarkCardDone(b); vawRefreshCampaign(c); }
+          after: function (resp) { vawMarkCardDone(b); vawTrackJob(c, resp); }
         });
       });
     });
@@ -5255,7 +5323,7 @@
               }),
               foot: "Every version keeps its ID — the ones that never sent start counting now." };
           },
-          after: function () { vawMarkCardDone(b); vawRefreshCampaign(c); }
+          after: function (resp) { vawMarkCardDone(b); vawTrackJob(c, resp); }
         });
       });
     });
@@ -5413,12 +5481,12 @@
 
   function versionTableHTML(versions, note, meetings, combinations, cid) {
     /* Meetings attach to the COPY, not the label: Smartlead exposes no
-       sent-variant per lead, and A/B tests routinely run several identical
-       spintax siblings under different labels. The backend clusters variants by
-       copy and credits a booking to the cluster's ACTIVE (representative) label.
-       So a cluster's meetings render once, on the active row; its siblings read
-       "= A". Engagement stats (Sent/Replies/Positives) stay per-label — those
-       Smartlead does track. */
+       sent-variant per lead, so the backend clusters identical copy and credits
+       a booking to the cluster's ACTIVE (representative) label. Every row shows
+       its OWN attributed integer — a sibling of an identical-copy cluster shows
+       0 with a tooltip naming where the credit sits, never "= A". Engagement
+       stats (Sent/Replies/Positives) stay per-label — those Smartlead does
+       track. */
     var hasMeet = !!(meetings && (meetings.by_step || meetings.by_variant));
     var byVar = (meetings && meetings.by_variant) || {};
     var clusters = (meetings && meetings.clusters) || {};
@@ -5427,10 +5495,9 @@
     /* map every member label to its cluster's representative, and sum each
        cluster's Sent (meetings belong to the whole copy, so Sent/meeting must
        divide by the copy's total sends, not one sibling's). */
-    var repOf = {}, hasGroup = false;
+    var repOf = {};
     Object.keys(clusters).forEach(function (sk) {
       (clusters[sk] || []).forEach(function (cl) {
-        if ((cl.labels || []).length > 1) hasGroup = true;
         (cl.labels || [cl.rep]).forEach(function (l) { repOf[sk + '|' + l] = cl.rep; });
       });
     });
@@ -5445,9 +5512,19 @@
     var byStep = {};
     versions.forEach(function (v) { var k = v.step != null ? String(v.step) : '?'; (byStep[k] = byStep[k] || []).push(v); });
     var stepKeys = Object.keys(byStep).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
-    /* best opener: Email-1, active, with positives, fewest sends per positive */
+    /* best opener: Email-1, active, most meetings per email sent (lowest
+       Sent/meeting, own sends). If no opener has a meeting yet, fall back to
+       fewest sends per positive so young campaigns still get a pill. */
     var best = null;
     (byStep['1'] || []).forEach(function (v) {
+      if (v.disabled || v.inline || !v.sent || v.label == null) return;
+      var rep = repOf['1|' + v.label] || v.label;
+      var mv = rep === v.label ? (byVar['1|' + rep] || 0) : 0;
+      if (!(mv > 0)) return;
+      var pm = v.sent / mv;
+      if (best === null || pm < best.pm) best = { label: v.label, pm: pm };
+    });
+    if (best === null) (byStep['1'] || []).forEach(function (v) {
       if (v.disabled || v.inline || !(v.positives > 0) || !v.sent) return;
       var pp = v.sent / v.positives;
       if (best === null || pp < best.pp) best = { label: v.label, pp: pp };
@@ -5461,16 +5538,19 @@
         var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
         var rep = (!v.inline && v.label != null) ? (repOf[sk + '|' + v.label] || v.label) : null;
         var isRep = rep != null && rep === v.label;
-        /* meetings render on the representative row only; siblings point to it */
+        /* every row shows its own attributed integer; an identical-copy
+           sibling shows 0 with a tooltip naming where the credit sits */
         var meetCell, pmCell = '';
         if (!hasMeet) { meetCell = ''; }
         else if (rep == null) { meetCell = '<span class="ring-caption">&middot;</span>'; }
-        else if (!isRep) { meetCell = '<span class="ring-caption vp-sib">= ' + esc(rep) + '</span>'; }
         else {
-          var mv = byVar[sk + '|' + rep] || 0;
-          meetCell = mv > 0 ? fmtInt(mv) : '<span class="ring-caption">0</span>';
-          var cs = sentByRep[sk + '|' + rep] || v.sent;
-          if (mv && cs) pmCell = fmtInt(Math.round(cs / mv));
+          var mv = isRep ? (byVar[sk + '|' + rep] || 0) : 0;
+          var clMv = byVar[sk + '|' + rep] || 0;
+          meetCell = mv > 0 ? fmtInt(mv)
+            : (!isRep && clMv > 0)
+              ? '<span class="ring-caption" title="identical copy — meetings credited to ' + esc(rep) + '">0</span>'
+              : '<span class="ring-caption">0</span>';
+          if (mv && v.sent) pmCell = fmtInt(Math.round(v.sent / mv));
         }
         /* P2 (variant-action-wire): live on/off TOGGLE replaces the read-only
            dot wherever the true split is known. deleted -> dot--off ("deleted",
@@ -5534,22 +5614,9 @@
             '<td class="tnum" data-label="Sent / meeting">' + (c.mt && c.snt ? fmtInt(Math.round(c.snt / c.mt)) : '<span class="ring-caption">—</span>') + '</td></tr>';
         }).join('') + '</tbody></table></div></div>';
     }
-    var meetNote = '';
-    if (hasMeet) {
-      var tot = meetings.total || 0, att = meetings.attributed || 0, rem = meetings.removed || 0;
-      var traceless = Math.max(0, tot - att - rem);
-      meetNote = fmtInt(tot) + ' meeting' + (tot === 1 ? '' : 's') + ' on this campaign, one per person. ' +
-        fmtInt(att) + ' traced to the copy each booker quoted back in their reply' +
-        (rem ? '; ' + fmtInt(rem) + ' came from an opener since removed from the sequence (its copy is gone from Smartlead, so it has no row above)' : '') +
-        (traceless ? '; ' + fmtInt(traceless) + " didn't quote enough to place" : '') + '. ' +
-        (hasGroup ? 'Variants with identical copy count as one version — the meetings show on the active label and the rest read “= it”. ' : '') +
-        (meetings.reconciled ? 'A booked meeting always counts as a positive on the version it is credited to, so that version’s Positives include its booked leads. ' : '') +
-        "A booked call runs through an opener and a follow-up, so a version's Meetings counts every call whose journey passed through it.";
-    }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
       '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
       '<tbody>' + rows + '</tbody></table></div>' + comboHTML +
-      (meetNote ? '<p class="sample-footer">' + esc(meetNote) + '</p>' : '') +
       (note ? '<p class="sample-footer">' + esc(note) + '</p>' : '');
   }
 

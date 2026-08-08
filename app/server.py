@@ -4193,6 +4193,94 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
                  "after": by_label, "ids_intact": True}
 
 
+# ── variant-action background jobs ─────────────────────────────────────────
+# The Smartlead re-save is slow (fresh GET + full POST behind
+# save_sequence_ids_intact), so the HTTP route enqueues and returns 202
+# immediately; ONE daemon worker drains the queue (512MB box — never a
+# thread per job, and serialising the writes also stops two re-saves racing
+# on the same sequence). The UI polls the status route below.
+_VA_JOBS: dict = {}
+_VA_JOBS_LOCK = threading.Lock()
+_VA_JOB_TTL = 3600  # done/failed jobs readable for an hour, then pruned
+
+
+def _va_worker(q):
+    while True:
+        job_id, cid, payload = q.get()
+        try:
+            status, body = api_campaign_variant_action(cid, payload)
+        except Exception as e:  # noqa: BLE001 — job must always resolve
+            status, body = 500, {"ok": False, "message": f"variant action crashed: {str(e)[:200]}"}
+        with _VA_JOBS_LOCK:
+            job = _VA_JOBS.get(job_id)
+            if job is not None:
+                job["status"] = "done" if (200 <= status < 300 and body.get("ok")) else "failed"
+                job["status_code"] = status
+                job["body"] = body
+                job["finished"] = time.time()
+        q.task_done()
+
+
+_VA_QUEUE = None  # lazily built so the worker thread only exists once used
+
+
+def _va_enqueue(cid: str, payload: dict) -> str:
+    global _VA_QUEUE
+    import queue as _q
+    job_id = os.urandom(8).hex()
+    now = time.time()
+    with _VA_JOBS_LOCK:
+        for k in [k for k, j in _VA_JOBS.items()
+                  if j.get("finished") and now - j["finished"] > _VA_JOB_TTL]:
+            _VA_JOBS.pop(k, None)
+        _VA_JOBS[job_id] = {"status": "running", "campaign_id": str(cid),
+                            "action": payload.get("action"), "created": now}
+        if _VA_QUEUE is None:
+            _VA_QUEUE = _q.Queue()
+            threading.Thread(target=_va_worker, args=(_VA_QUEUE,),
+                             daemon=True, name="variant-action-worker").start()
+    _VA_QUEUE.put((job_id, cid, payload))
+    return job_id
+
+
+def api_campaign_variant_action_async(cid: str, payload: dict) -> tuple:
+    """POST /api/campaigns/{cid}/variant-action — validates the cheap parts
+    synchronously (obvious mistakes still 400 instantly), then enqueues the
+    Smartlead write and returns 202 {job}. Poll /variant-action-status/{job}."""
+    action = str(payload.get("action") or "").strip()
+    want = _VARIANT_ACTION_CONFIRM.get(action)
+    if not want:
+        return 400, {"ok": False, "message": f"unknown action (allowed: {sorted(_VARIANT_ACTION_CONFIRM)})"}
+    if payload.get("confirm") != want:
+        return 400, {"ok": False, "message": f'confirmation required: send {{"confirm":"{want}"}}'}
+    try:
+        int(str(cid).strip())
+        int(payload.get("email"))
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign id and email must be numeric"}
+    if action in ("disable", "enable", "scale_winner", "shift_share") and not str(payload.get("variant_label") or "").strip():
+        return 400, {"ok": False, "message": "variant_label is required for this action"}
+    if action == "shift_share" and not str(payload.get("to_label") or "").strip():
+        return 400, {"ok": False, "message": "to_label is required for shift_share"}
+    job_id = _va_enqueue(cid, payload)
+    return 202, {"ok": True, "queued": True, "job": job_id, "executed": action,
+                 "message": "queued — the write runs in the background"}
+
+
+def api_campaign_variant_action_status(job_id: str) -> tuple:
+    with _VA_JOBS_LOCK:
+        job = _VA_JOBS.get(str(job_id))
+        if job is None:
+            return 404, {"ok": False, "status": "unknown",
+                         "message": "no such job (it may have expired — refresh the table to see the real state)"}
+        out = {"ok": True, "status": job["status"], "action": job.get("action"),
+               "campaign_id": job.get("campaign_id")}
+        if job["status"] != "running":
+            out["status_code"] = job.get("status_code")
+            out["body"] = job.get("body")
+        return 200, out
+
+
 # ── P7: draft a challenger variant (preview first, write only on approve) ──
 
 CHALLENGER_COMPONENTS = ("problem", "offer", "social_proof")
@@ -9907,8 +9995,7 @@ def _cockpit_messaging(cid) -> dict:
         meetings["reconciled"] = _reconcile_meeting_positive(versions, meetings)
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "combinations": vpaths.get("combinations") or {},
-            "degraded": False,
-            "note": "Smartlead counters reset when a sequence is re-saved: read as since relaunch."}
+            "degraded": False}
 
 
 _COCKPIT_MESSAGING_SWR = _SWRKeyedCache(
@@ -14893,6 +14980,131 @@ def _deliv_fix_batch_stats(blob):
         print(f"[deliv] WARNING batchStats correction failed: {e}", file=sys.stderr)
 
 
+# Provider pools we always want visible in Performance-by-batch even when the
+# external audit engine omits them. That engine lists only pools that are
+# ACTIVELY sending on a short (~3-day) window, so a warmed pool sitting between
+# campaigns (e.g. sending.ac — 300 boxes that ran through early Aug then went
+# idle) silently vanishes from the tab. Each entry is identified by the sender
+# DOMAINS provisioned for that provider: the Supabase mirror carries no
+# Smartlead tags, and for a bought-infrastructure pool the domains ARE the pool.
+# If a provider gains domains, add them here (resolve from the Smartlead tag).
+_DELIV_MANUAL_BATCHES = (
+    {"label": "navreo-bjion-henry-sending.ac",
+     "domains": ("navreomeetingsbooked.com", "navreogtmengine.com", "navreolab.com",
+                 "navreobookedcalls.com", "navreogrowthengine.com", "navreodealflow.com")},
+)
+
+
+def _deliv_add_manual_batches(blob):
+    """Append batchStats rows for the _DELIV_MANUAL_BATCHES pools the audit
+    engine didn't already surface. Computed from the SAME authoritative sources
+    as _deliv_fix_batch_stats — Supabase `mailboxes` (fleet/health) +
+    `mailbox_stats_daily` (trailing-30d counters). Each row carries
+    window-consistent Sent/Reply/Bounce (so it sits correctly beside the
+    engine's rows) plus 30-day extras and an `idle` flag for a warmed pool
+    that's currently between campaigns. Idempotent + best-effort: a label the
+    engine already emitted is skipped, and any failure leaves batchStats
+    untouched."""
+    try:
+        from datetime import date, datetime, timedelta
+        if not isinstance(blob, dict) or not isinstance(blob.get("batchStats"), list):
+            return
+        existing = {str(r.get("batch", "")).lower() for r in blob["batchStats"]}
+        specs = [s for s in _DELIV_MANUAL_BATCHES if s["label"].lower() not in existing]
+        if not specs:
+            return
+        # Same sweep-delta window _deliv_fix_batch_stats uses, so a manual row's
+        # Sent/Reply/Bounce mean exactly what every engine row beside it means.
+        cutoff = (date.today() - timedelta(days=8)).isoformat()
+        dnew = sb("GET", f"mailbox_stats_daily?select=stat_date&stat_date=gte.{cutoff}"
+                         "&order=stat_date.desc&limit=1", prefer="return=representation")
+        newest = dnew[0]["stat_date"] if dnew else None
+        base = None
+        if newest:
+            dold = sb("GET", f"mailbox_stats_daily?select=stat_date&stat_date=gte.{cutoff}"
+                             f"&stat_date=lt.{newest}&order=stat_date.asc&limit=1", prefer="return=representation")
+            base = dold[0]["stat_date"] if dold else None
+
+        def _pool_stats(sids, dates_in):
+            rows = []
+            for i in range(0, len(sids), 200):  # keep each id-filtered page well under PostgREST's 1000-row cap
+                inlist = ",".join(str(s) for s in sids[i:i + 200])
+                page = sb("GET", "mailbox_stats_daily?select=smartlead_id,stat_date,sent_30d,replies_30d,bounces_30d"
+                                 f"&smartlead_id=in.({inlist})&stat_date=in.({dates_in})")
+                if isinstance(page, list):
+                    rows.extend(page)
+            return rows
+
+        for spec in specs:
+            dom_list = ",".join('"%s"' % d for d in spec["domains"])
+            boxes = sb_get_all("mailboxes?select=smartlead_id,domain,warmup_status,campaign_count,"
+                               "blocked_reason,smtp_ok,imap_ok&order=smartlead_id"
+                               "&domain=in.(%s)" % dom_list)
+            if not boxes:  # None (Supabase down) or [] (no such domains) — skip, don't invent a row
+                continue
+            sids = [b["smartlead_id"] for b in boxes if b.get("smartlead_id") is not None]
+            mailboxes = len(boxes)
+            domains = len({b.get("domain") for b in boxes})
+            # Health flags (dead/blocked) come from the mirror — the same source
+            # the engine's own dead/blocked columns use. Sending vs warmup and
+            # the `idle` flag are derived from ACTUAL send activity below, NOT
+            # the mirror's campaign_count: that column is a daily snapshot that
+            # lags reality (seen live 2026-08 — mirror still said "in 41
+            # campaigns" days after the pool had detached and gone quiet).
+            dead = sum(1 for b in boxes if b.get("smtp_ok") is False or b.get("imap_ok") is False)
+            blocked = sum(1 for b in boxes if b.get("blocked_reason"))
+
+            want = ",".join(d for d in (newest, base) if d)
+            per = {}
+            for s in (_pool_stats(sids, want) if (sids and want) else []):
+                per.setdefault(s["smartlead_id"], {})[s["stat_date"]] = s
+            sent30 = rep30 = bnc30 = 0          # trailing-30d (newest counter per box)
+            wsent = wrep = wbnc = 0             # window delta (newest - base), same window as engine rows
+            active = 0                          # boxes that actually sent across the window
+            for by_date in per.values():
+                n = by_date.get(newest)
+                s_new = (n.get("sent_30d") or 0) if n else 0
+                if n:
+                    sent30 += s_new
+                    rep30 += n.get("replies_30d") or 0
+                    bnc30 += n.get("bounces_30d") or 0
+                a = by_date.get(base) if base else None
+                if base and a and n:
+                    dsent = max(0, s_new - (a.get("sent_30d") or 0))
+                    wsent += dsent
+                    wrep += max(0, (n.get("replies_30d") or 0) - (a.get("replies_30d") or 0))
+                    wbnc += max(0, (n.get("bounces_30d") or 0) - (a.get("bounces_30d") or 0))
+                    if dsent > 0:
+                        active += 1
+                elif not base and s_new > 0:   # only one sweep on record — fall back to any recent sends
+                    active += 1
+            sending = active
+            warmup = mailboxes - active         # warmed, but sent nothing across the window
+            idle = active == 0                  # whole pool quiet — surfaces the "idle" badge + 30d history
+
+            row = {
+                "batch": spec["label"], "mailboxes": mailboxes, "domains": domains,
+                "sending": sending, "warmup": warmup, "dead": dead, "blocked": blocked,
+                "blacklisted": 0, "sent": wsent,
+                "reply_rate": round(100.0 * wrep / wsent, 2) if wsent else 0,
+                "bounce_rate": round(100.0 * wbnc / wsent, 2) if wsent else 0,
+                "positive_rate": 0,
+                # Extras the batch table surfaces for a warmed pool between
+                # campaigns: an "idle" badge + its real trailing-30d numbers,
+                # so an idle pool reads as "here, and how it last performed"
+                # rather than a blank row.
+                "idle": idle,
+                "sent30": sent30,
+                "reply30": round(100.0 * rep30 / sent30, 2) if sent30 else 0,
+                "bounce30": round(100.0 * bnc30 / sent30, 2) if sent30 else 0,
+            }
+            blob["batchStats"].append(row)
+            print(f"[deliv] manual batch '{spec['label']}' added ({mailboxes} mbx, {domains} dom, "
+                  f"window sent={wsent}, 30d sent={sent30}, idle={row['idle']})", file=sys.stderr)
+    except Exception as e:  # noqa: BLE001 — never break the audit over a display extra
+        print(f"[deliv] WARNING manual batch add failed: {e}", file=sys.stderr)
+
+
 def _deliv_audit_persist(blob):
     """Best-effort: mirror the finished audit blob to Supabase so it survives
     process restarts. Deploys restart the process and wiped the in-memory
@@ -15018,6 +15230,7 @@ def _deliv_audit_run_bg():
             blob = json.loads(resp.read())
         _deliv_fix_resting_due((blob or {}).get("domainHealth"))
         _deliv_fix_batch_stats(blob)  # replace top-59-domain batch metrics with sweep-delta truth
+        _deliv_add_manual_batches(blob)  # surface warmed provider pools (e.g. sending.ac) the engine skips while idle
         with _DELIV_AUDIT_LOCK:
             _DELIV_AUDIT.update(blob=blob, ts=time.time(), running=False, error=None)
         _deliv_audit_persist(blob)  # survives the next deploy/restart
@@ -15477,7 +15690,7 @@ def _deliv_bundle_run_bg_inner():
     from datetime import date, timedelta
     blob_dh = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {})
     min_sent = blob_dh.get("minSent", 500)
-    cutoff = blob_dh.get("cutoff", 0.8)
+    cutoff = blob_dh.get("cutoff", 0.7)
     out = {"views": {}, "dh": {}, "errors": {}, "minSent": min_sent, "cutoff": cutoff,
            "mock": _deliv_mock_on()}
     for v in _DELIV_BUNDLE_VIEWS:
@@ -16779,7 +16992,7 @@ def _restore_client_of(domain: str, tags=None) -> str:
 GOOGLE_CAP_TIERS = (          # (min reply rate %, cap/day) — first match wins, descending
     (1.3, 30),
     (1.0, 20),
-    (0.8, 10),
+    (0.7, 10),
 )
 GOOGLE_CAP_PAUSE = 0          # below the lowest tier: park the domain into warm-up
 # Floor on the domain's 30d sends before ANY move fires. saleswithnavreo.info
@@ -16793,7 +17006,7 @@ GOOGLE_CAP_MIN_SENDS = 300
 OUTLOOK_CAP_TIERS = (         # Outlook boxes sit an order of magnitude below
     (1.2, 4),                 # Google's ceiling — a shared engine could never
     (1.0, 2),                 # serve both, which is why these are two systems.
-    (0.8, 1),
+    (0.7, 1),
 )
 OUTLOOK_CAP_PAUSE = None      # below the lowest tier: LEAVE ALONE (never park).
 # Outlook's floor has to be far lower than Google's: a 4/day box tops out at
@@ -16820,7 +17033,7 @@ CAP_PROFILES = {
 
 def _cap_for(reply_rate: float, prof: dict):
     """Cap for a reply rate under `prof`. None means 'no verdict — leave the
-    domain exactly as it is' (Outlook's posture below 0.8%)."""
+    domain exactly as it is' (Outlook's posture below 0.7%)."""
     for floor, cap in prof["tiers"]:
         if reply_rate >= floor:
             return cap
@@ -16919,7 +17132,7 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
             continue
         cap = _cap_for(rate, prof)
         if cap is None:
-            # No verdict at this rate under this profile (Outlook below 0.8%):
+            # No verdict at this rate under this profile (Outlook below 0.7%):
             # report it and leave the domain exactly as it is.
             skipped.append({**row, "reason": "below lowest tier — left untouched"})
             continue
@@ -16985,7 +17198,7 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
 
 
 def google_reply_caps(mode: str = "preview") -> dict:
-    """Google/Gmail boxes: 30/20/10 a day, park below 0.8%."""
+    """Google/Gmail boxes: 30/20/10 a day, park below 0.7%."""
     return provider_reply_caps("GOOGLE", mode)
 
 
@@ -19274,6 +19487,11 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(_COCKPIT_MESSAGING_SWR.get((q.get("id") or [""])[0]))
+        if path.startswith("/api/campaigns/") and "/variant-action-status/" in path:
+            # background variant-action job poll: /api/campaigns/{cid}/variant-action-status/{job}
+            job_id = path.rsplit("/variant-action-status/", 1)[1]
+            status, body = api_campaign_variant_action_status(job_id)
+            return self._json(body, status)
         if path == "/api/cockpit/sequence-copy":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -20075,7 +20293,7 @@ class Handler(SimpleHTTPRequestHandler):
         # and route through save_sequence_ids_intact (the one sequences door).
         if path.startswith("/api/campaigns/"):
             _va_rest = path[len("/api/campaigns/"):]
-            for _va_suffix, _va_fn in (("/variant-action", api_campaign_variant_action),
+            for _va_suffix, _va_fn in (("/variant-action", api_campaign_variant_action_async),
                                         ("/draft-challenger", api_campaign_draft_challenger),
                                         ("/add-variant", api_campaign_add_variant)):
                 if _va_rest.endswith(_va_suffix) and len(_va_rest) > len(_va_suffix):

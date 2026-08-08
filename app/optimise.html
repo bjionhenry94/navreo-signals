@@ -189,7 +189,6 @@
   .vp-combos-h .ring-caption{text-transform:none;letter-spacing:0;font-weight:500}
   table.version-perf-table tr.vp-win{background:linear-gradient(90deg,rgba(255,77,0,0.06),transparent)}
   table.version-perf-table tr.vp-win td:first-child{box-shadow:inset 3px 0 0 var(--nav-orange)}
-  .vp-sib{text-transform:none;letter-spacing:0;opacity:.75}
 
   /* ── Messaging: "the sequence" Smartlead-editor-like step rail ── */
   .seq-rail{margin-top:16px;display:flex;flex-direction:column}
@@ -202,8 +201,8 @@
     transition:background var(--dur-2) var(--ease-out),color var(--dur-2) var(--ease-out),border-color var(--dur-2) var(--ease-out)}
   .seq-pill:hover{border-color:var(--nav-ink-3);color:var(--fg)}
   .seq-pill.is-active{background:var(--chip-active-bg);border-color:var(--chip-active-bg);color:var(--chip-active-fg)}
-  .seq-pill--off{opacity:.66;font-style:italic}
-  .seq-pill--del{opacity:.5;text-decoration:line-through}
+  .seq-pill--off{opacity:.66}
+  .seq-pill--del{opacity:.5}
   .seq-pill--off.is-active,.seq-pill--del.is-active{opacity:1}
   .seq-fail{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
   .seq-connector{align-self:flex-start;margin:4px 0 4px 18px;padding:6px 0 6px 16px;border-left:2px dashed var(--border-strong);
@@ -533,10 +532,9 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
   const clusters=(meetings&&meetings.clusters)||{};
   function rateSpan(n,d){ return (d&&n)? ' <span class="ring-caption">'+(n/d*100).toFixed(1)+'%</span>':''; }
   function perPos(v){ return (v.positives>0&&v.sent)? fmt(Math.round(v.sent/v.positives)) : '<span class="ring-caption">'+(v.sent<300?'early':'—')+'</span>'; }
-  const repOf={}; let hasGroup=false;
+  const repOf={};
   Object.keys(clusters).forEach(sk=>{
     (clusters[sk]||[]).forEach(cl=>{
-      if((cl.labels||[]).length>1) hasGroup=true;
       (cl.labels||[cl.rep]).forEach(l=>{ repOf[sk+'|'+l]=cl.rep; });
     });
   });
@@ -550,9 +548,19 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
   const byStep={};
   versions.forEach(v=>{ const k=v.step!=null?String(v.step):'?'; (byStep[k]=byStep[k]||[]).push(v); });
   const stepKeys=Object.keys(byStep).sort((a,b)=>(parseInt(a,10)||0)-(parseInt(b,10)||0));
-  /* best opener: Email-1, active, with positives, fewest sends per positive */
+  /* best opener: Email-1, active, most meetings per email sent (lowest
+     Sent/meeting, own sends); fallback to fewest sends per positive when no
+     opener has a meeting yet (campaign-page parity). */
   let best=null;
   (byStep['1']||[]).forEach(v=>{
+    if(v.disabled||v.inline||!v.sent||v.label==null) return;
+    const rep=repOf['1|'+v.label]||v.label;
+    const mv=rep===v.label?(byVar['1|'+rep]||0):0;
+    if(!(mv>0)) return;
+    const pm=v.sent/mv;
+    if(best===null||pm<best.pm) best={label:v.label,pm:pm};
+  });
+  if(best===null)(byStep['1']||[]).forEach(v=>{
     if(v.disabled||v.inline||!(v.positives>0)||!v.sent) return;
     const pp=v.sent/v.positives;
     if(best===null||pp<best.pp) best={label:v.label,pp:pp};
@@ -569,12 +577,14 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
       let meetCell, pmCell='';
       if(!hasMeet){ meetCell=''; }
       else if(rep==null){ meetCell='<span class="ring-caption">&middot;</span>'; }
-      else if(!isRep){ meetCell='<span class="ring-caption vp-sib">= '+esc(rep)+'</span>'; }
       else{
-        const mv=byVar[sk+'|'+rep]||0;
-        meetCell= mv>0? fmt(mv) : '<span class="ring-caption">0</span>';
-        const cs=sentByRep[sk+'|'+rep]||v.sent;
-        if(mv&&cs) pmCell=fmt(Math.round(cs/mv));
+        const mv=isRep?(byVar[sk+'|'+rep]||0):0;
+        const clMv=byVar[sk+'|'+rep]||0;
+        meetCell= mv>0? fmt(mv)
+          : (!isRep&&clMv>0)
+            ? '<span class="ring-caption" title="identical copy — meetings credited to '+esc(rep)+'">0</span>'
+            : '<span class="ring-caption">0</span>';
+        if(mv&&v.sent) pmCell=fmt(Math.round(v.sent/mv));
       }
       /* live on/off TOGGLE wherever the true split is known (campaign-page
          parity): deleted -> dot--off (can't re-enable a purged variant);
@@ -634,22 +644,9 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
           +'<td class="tnum" data-label="Sent / meeting">'+(c.mt&&c.snt?fmt(Math.round(c.snt/c.mt)):'<span class="ring-caption">—</span>')+'</td></tr>';
       }).join('')+'</tbody></table></div></div>';
   }
-  let meetNote='';
-  if(hasMeet){
-    const tot=meetings.total||0, att=meetings.attributed||0, rem=meetings.removed||0;
-    const traceless=Math.max(0,tot-att-rem);
-    meetNote=fmt(tot)+' meeting'+(tot===1?'':'s')+' on this campaign, one per person. '
-      +fmt(att)+' traced to the copy each booker quoted back in their reply'
-      +(rem?'; '+fmt(rem)+' came from an opener since removed from the sequence (its copy is gone from Smartlead, so it has no row above)':'')
-      +(traceless?'; '+fmt(traceless)+" didn't quote enough to place":'')+'. '
-      +(hasGroup?'Variants with identical copy count as one version — the meetings show on the active label and the rest read “= it”. ':'')
-      +(meetings.reconciled?'A booked meeting always counts as a positive on the version it is credited to, so that version’s Positives include its booked leads. ':'')
-      +"A booked call runs through an opener and a follow-up, so a version's Meetings counts every call whose journey passed through it.";
-  }
   return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">'
     +'<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>'
     +'<tbody>'+rows+'</tbody></table></div>'+comboHTML
-    +(meetNote?'<p class="sample-footer">'+esc(meetNote)+'</p>':'')
     +(note?'<p class="sample-footer">'+esc(note)+'</p>':'');
 }
 
@@ -696,6 +693,8 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
     ".vaw-receipt{border:1px solid var(--success-bd);background:var(--success-bg);border-radius:12px;padding:12px 14px;margin:0 0 10px}",
     ".vaw-receipt h4{margin:0 0 8px;font-size:.9rem;color:var(--success)}",
     ".vaw-receipt .vaw-line{background:transparent;padding:4px 0}",
+    ".vaw-inline-err{color:var(--danger,#B3261E);font-size:.8rem;margin:6px 0}",
+    ".vaw-inline-err--toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);background:var(--nav-white,#fff);border:1px solid var(--danger,#B3261E);border-radius:8px;padding:8px 14px;z-index:9999;box-shadow:0 4px 14px rgba(0,0,0,.15)}",
     "@media (prefers-reduced-motion:reduce){.vaw-toggle,.vaw-toggle .vaw-knob{transition:none}}"
   ].join("\n");
   const el=document.createElement("style");
@@ -715,6 +714,62 @@ function vawChangeV(from, to){
   return '<span class="old">'+esc(String(from))+'</span><span class="arr">&rarr;</span>'+esc(String(to));
 }
 const VAW_IDNOTE="Saved the ID-intact way: fresh pull, every step & version ID echoed back, so all history is kept.";
+
+/* ── background variant writes (campaign-page parity): the server 202s with a
+   job id; the UI stays interactive, polls, and repaints from server truth
+   when it lands. On failure: revert + inline error (never alert). ── */
+function vawPollJob(cid, job, onDone, onFail){
+  let tries=0;
+  (function tick(){
+    if(++tries>100){ onFail("timed out waiting for the background write — refresh to see the real state"); return; }
+    fetch("/api/campaigns/"+cid+"/variant-action-status/"+job,{credentials:"same-origin"})
+      .then(r=>r.json())
+      .then(j=>{
+        if(!j||j.status==="running"){ setTimeout(tick,1500); return; }
+        if(j.status==="done"){ onDone(j.body||{}); return; }
+        onFail((j.body&&j.body.message)||j.message||"the write was refused — nothing changed");
+      })
+      .catch(()=>setTimeout(tick,3000));
+  })();
+}
+function vawInlineErr(msg){
+  const host=document.getElementById("messaging-root");
+  const p=document.createElement("p");
+  p.className="vaw-inline-err"+(host&&host.parentNode?"":" vaw-inline-err--toast");
+  p.textContent="⚠ Background write failed — "+msg;
+  if(host&&host.parentNode) host.parentNode.insertBefore(p,host);
+  else document.body.appendChild(p);
+  setTimeout(()=>p.remove(),25000);
+}
+function vawTrackJob(c, resp, el){
+  if(!resp||!resp.job){ vawRefreshCampaign(); return; }
+  if(el) el.setAttribute("data-busy","1");
+  vawPollJob(c.id, resp.job, ()=>{
+    if(el) el.removeAttribute("data-busy");
+    vawRefreshCampaign();
+  },(msg)=>{
+    if(el) el.removeAttribute("data-busy");
+    vawInlineErr(msg);
+    vawRefreshCampaign();
+  });
+}
+function vawTrackToggle(c, t, resp){
+  if(!resp||!resp.job){ vawRefreshCampaign(); return; }
+  const wasOn=t.classList.contains("is-on");
+  t.classList.toggle("is-on");
+  t.setAttribute("aria-pressed", wasOn?"false":"true");
+  t.setAttribute("data-busy","1");
+  vawPollJob(c.id, resp.job, ()=>{
+    t.removeAttribute("data-busy");
+    vawRefreshCampaign();
+  },(msg)=>{
+    t.classList.toggle("is-on", wasOn);
+    t.setAttribute("aria-pressed", wasOn?"true":"false");
+    t.removeAttribute("data-busy");
+    vawInlineErr(msg);
+    vawRefreshCampaign();
+  });
+}
 
 /* Typed-token confirm modal — same contract as the campaign page. */
 function vawModal(opts){
@@ -752,7 +807,10 @@ function vawModal(opts){
         go.disabled=false; go.textContent=opts.confirmLabel||"Confirm — write it";
         return;
       }
-      const rec=opts.receipt?opts.receipt(resp):{title:"Saved",lines:[],foot:""};
+      const rec=(resp.queued&&resp.job)
+        ? {title:"Queued — writing in the background", lines:[],
+           foot:"You can close this. The table updates itself when the write lands (usually under a minute); if it fails, the error shows by the table and nothing changes."}
+        : (opts.receipt?opts.receipt(resp):{title:"Saved",lines:[],foot:""});
       modal.innerHTML='<div class="vaw-receipt"><h4>&#10003; '+esc(rec.title)+'</h4>'
         +'<div class="vaw-lines">'+(rec.lines||[]).map(l=>'<div class="vaw-line"><span class="k">'+esc(l[0])+'</span><span class="v">'+l[1]+'</span></div>').join("")+'</div>'
         +(rec.foot?'<p class="vaw-idnote">'+rec.foot+'</p>':"")+'</div>'
@@ -794,7 +852,7 @@ function vawWireMessaging(root, c){
           lines:Object.keys(resp.after||{}).map(k=>["Version "+k+" share",vawChangeV((resp.before||{})[k]+"%",(resp.after||{})[k]+"%")]),
           foot:"It stopped sending but keeps its stats — switch it back on any time."
         }),
-        after:()=>vawRefreshCampaign()
+        after:(resp)=>vawTrackToggle(c, t, resp)
       }:{
         title:"Switch Version "+lab+" back on (Email "+step+")?",
         sub:(c.name||"Campaign "+c.id)+" · campaign "+c.id,
@@ -810,7 +868,7 @@ function vawWireMessaging(root, c){
           lines:Object.keys(resp.after||{}).map(k=>["Version "+k+" share",vawChangeV((resp.before||{})[k]+"%",(resp.after||{})[k]+"%")]),
           foot:"Same version ID as before — its new sends stack onto its old history."
         }),
-        after:()=>vawRefreshCampaign()
+        after:(resp)=>vawTrackToggle(c, t, resp)
       });
     });
   });
@@ -833,7 +891,7 @@ function vawWireMessaging(root, c){
           lines:Object.keys(resp.after||{}).map(k=>["Version "+k+" share",vawChangeV((resp.before||{})[k]+"%",(resp.after||{})[k]+"%")]),
           foot:"The others are paused at 0% with their IDs and history intact."
         }),
-        after:()=>vawRefreshCampaign()
+        after:(resp)=>vawTrackJob(c, resp, b)
       });
     });
   });
@@ -907,14 +965,21 @@ function sequenceCopyHTML(sc){
     /* live first, then switched-off (0% split), then deleted — labelled */
     const vRank=(v)=> v.deleted?2:(v.split===0?1:0);
     const variants=(s.variants||[]).slice().sort((a,b)=>vRank(a)-vRank(b));
-    const vTag=(v)=> v.deleted?" (deleted)":v.split===0?" (off)":"";
+    /* state reads as a dot, never wording: green = sending, grey = inactive
+       (off or deleted). The words live only in title/aria text. */
+    const vDot=(v)=>{
+      const off=v.deleted||v.split===0;
+      return '<span class="vp-dot vp-dot--'+(off?"off":"on")+'" title="'
+        +(v.deleted?"inactive — deleted in Smartlead":off?"inactive — 0% of sends":"active — sending")+'"></span>';
+    };
     let pills="";
     if(variants.length>1){
       pills='<div class="seq-version-pills" aria-label="Email '+esc(stepNo)+' versions">'
         +variants.map((v,vi)=>'<button type="button" class="seq-pill'+(vi===0?" is-active":"")
           +(v.deleted?" seq-pill--del":v.split===0?" seq-pill--off":"")
-          +'" data-step="'+esc(stepNo)+'" data-vidx="'+vi+'" aria-pressed="'+(vi===0?"true":"false")+'">'
-          +esc((v.label||"?")+vTag(v))+'</button>').join("")+'</div>';
+          +'" data-step="'+esc(stepNo)+'" data-vidx="'+vi+'" aria-pressed="'+(vi===0?"true":"false")
+          +'" aria-label="Version '+esc(v.label||"?")+(v.deleted||v.split===0?" (inactive)":" (active)")+'">'
+          +esc(v.label||"?")+vDot(v)+'</button>').join("")+'</div>';
     }
     const panels=variants.map((v,vi)=>{
       const subj=v.subject
@@ -926,8 +991,8 @@ function sequenceCopyHTML(sc){
             ? "This variant was deleted; Smartlead no longer stores its copy."
             : "No copy stored for this variant.")+'</p>';
       return '<div class="seq-version-panel" data-step="'+esc(stepNo)+'" data-vidx="'+vi+'"'+(vi===0?"":" hidden")+'>'
-        +(v.deleted?'<p class="card-subtitle">Deleted variant &mdash; no longer sending.</p>'
-          : v.split===0?'<p class="card-subtitle">Switched off (0% of sends) &mdash; kept here so you can still read it.</p>':"")
+        +(v.deleted||v.split===0
+          ?'<p class="card-subtitle">'+vDot(v)+' Inactive &mdash; kept here so you can still read it.</p>':"")
         +'<p class="seq-subject"><strong>Subject:</strong> '+subj+'</p>'
         +'<div class="seq-body-scroll">'+body
         +(v.truncated?'<p class="card-subtitle">&hellip; copy truncated &mdash; open the sequence in Smartlead for the rest.</p>':"")
