@@ -9683,8 +9683,11 @@ _SL_SEQS_SWR = _SWRKeyedCache(
 
 
 def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) -> dict:
-    """Per-COPY meeting attribution + opener\u2192follow-up combinations, deduced from
-    the copy each booked lead saw. Smartlead exposes no sent-variant per lead, so
+    """Per-COPY meeting attribution + opener\u2192follow-up journeys, deduced from
+    the copy each replying lead saw. `combinations` counts booked meetings per
+    path (unchanged); `paths` compares EVERY possible opener\u2192follow-up journey
+    on replies/positives/meetings, zeros included, so paths are comparable
+    before any meeting lands. Smartlead exposes no sent-variant per lead, so
     the variant is recovered from the sent thread the lead QUOTES BACK in their
     reply (Supabase archive), with a message-history fallback (the SENT body) for
     quiet repliers. Variants that share identical copy are ONE version here \u2014 a
@@ -9713,29 +9716,42 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
     clusters_out = {st: [{"rep": cl["rep"], "labels": cl["labels"]} for cl in cls]
                     for st, cls in step_clusters.items()}
 
-    rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}&category=eq.Call%20Booked"
-                     "&select=id,email,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath2"
+    # WHOLE archive, not just Call Booked (Best-path 2026-08-09): every replier
+    # who quoted the copy they saw reveals their opener\u2192follow-up journey, so
+    # paths can be compared on positives long before a meeting is traced.
+    # Meetings semantics below stay Call-Booked-only, exactly as before.
+    rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}"
+                     "&select=id,email,category,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath2"
                      "&order=replied_at.asc")
     if not isinstance(rows, list):
         return {}
-    # Group rows per booker (audit r2): a booker with several Call-Booked rows
-    # used to have only their FIRST row stamped \u2014 the later rows stayed
-    # vpath2-null forever and kept their campaign in every backfill sweep.
+    # Group rows per lead (audit r2): a lead with several rows used to have
+    # only their FIRST row stamped \u2014 the later rows stayed vpath2-null forever
+    # and kept their campaign in every backfill sweep.
     groups: dict = {}  # email -> [rows, earliest first]
     for r in rows:
         em = (r.get("email") or "").strip().lower()
         if em:
             groups.setdefault(em, []).append(r)
-    by_variant, combos = {}, {}
-    seen = set(groups)  # distinct bookers \u2014 len(seen) is the booked count
+    booked_set = {em for em, grp in groups.items()
+                  if any((rr.get("category") or "") == "Call Booked" for rr in grp)}
+    positive_set = {em for em, grp in groups.items()
+                    if any((rr.get("category") or "") in _AH_POSITIVE_CATS for rr in grp)}
+    by_variant, combos, paths = {}, {}, {}
     attributed = 0
     fetches = 0
     unresolved = []  # (email, shingles) \u2014 bookers with a real quote but no live-copy match
-    for em, grp in groups.items():
+    # Bookers first, then other positives: the cron's history budget goes to
+    # the leads whose journey the table actually credits.
+    for em in sorted(groups, key=lambda e: (e not in booked_set, e not in positive_set)):
+        grp = groups[em]
         r = grp[0]
         path = {}
         exhausted = set()
-        cached = r.get("vpath")
+        # The stamp may sit on ANY of the lead's rows — historically the cron
+        # only stamped their Call-Booked rows, which are no longer always
+        # grp[0] now the group holds every category. First stamped row wins.
+        cached = next((rr.get("vpath") for rr in grp if rr.get("vpath")), None)
         if isinstance(cached, str) and cached:
             try:
                 cp = json.loads(cached)
@@ -9751,16 +9767,21 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
             except Exception:  # noqa: BLE001
                 path = {}
         cached_path, cached_x = dict(path), set(exhausted)
-        body = _vp_norm(r.get("reply_body") or r.get("rawbody") or "")
+        bodies = [_vp_norm(rr.get("reply_body") or rr.get("rawbody") or "") for rr in grp]
+        body = bodies[0] if bodies else ""
         if set(step_clusters) - set(path) - exhausted:
             for st, clusters in step_clusters.items():
                 if st in path or st in exhausted:
                     continue
-                cl = _vp_match_cluster(body, clusters)
-                if cl:
-                    path[st] = cl["rep"]
+                for b in bodies:
+                    cl = _vp_match_cluster(b, clusters)
+                    if cl:
+                        path[st] = cl["rep"]
+                        break
             need = set(step_clusters) - set(path) - exhausted
-            if need and fetches < history_budget:
+            # History crawls are rationed (cron-only budget) — spend them on
+            # positives/bookers, never on OOO-grade repliers.
+            if need and fetches < history_budget and em in positive_set:
                 fetches += 1
                 sent = _vp_sent_bodies_from_history(n, em)
                 for st in list(need):
@@ -9786,20 +9807,28 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
                 if cur != stamp:
                     _vp_stamp_path(rr.get("id"), stamp)
         if not path:
-            # No live copy matched. If the booker still quoted a substantial
+            # No live copy matched. If a BOOKER still quoted a substantial
             # thread, their opener was real but has since been removed from the
             # sequence (Smartlead purges a deleted variant's body) \u2014 count it as
             # 'removed', honestly, rather than guess a label. Too little text to
             # quote \u2192 genuinely traceless.
-            if len(_vp_shingles(body)) >= 6:
+            if em in booked_set and len(_vp_shingles(body)) >= 6:
                 unresolved.append((em, _vp_shingles(body)))
             continue
-        attributed += 1
-        for st, key in path.items():
-            by_variant[st + "|" + key] = by_variant.get(st + "|" + key, 0) + 1
+        if em in booked_set:
+            attributed += 1
+            for st, key in path.items():
+                by_variant[st + "|" + key] = by_variant.get(st + "|" + key, 0) + 1
         e1, e2 = path.get("1"), path.get("2")
         if e1 and e2:
-            combos[e1 + ">" + e2] = combos.get(e1 + ">" + e2, 0) + 1
+            if em in booked_set:
+                combos[e1 + ">" + e2] = combos.get(e1 + ">" + e2, 0) + 1
+            p = paths.setdefault(e1 + ">" + e2, {"replies": 0, "positives": 0, "meetings": 0})
+            p["replies"] += 1
+            if em in positive_set:
+                p["positives"] += 1
+            if em in booked_set:
+                p["meetings"] += 1
     # Removed-opener recovery: cluster the unresolved bookers by mutual copy so
     # two people who saw the same since-deleted opener count as one distinct
     # removed version (surfaced as a count + reason, never a fake label).
@@ -9816,8 +9845,15 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
         if not placed:
             removed_groups.append({"n": 1, "shset": set(sh)})
     removed = sum(g["n"] for g in removed_groups)
-    return {"by_variant": by_variant, "combinations": combos, "clusters": clusters_out,
-            "attributed": attributed, "booked": len(seen),
+    # Every POSSIBLE opener→follow-up journey gets a row, zeros included — the
+    # table's job is comparing paths, and an untried path is a real answer.
+    for c1 in step_clusters.get("1") or []:
+        for c2 in step_clusters.get("2") or []:
+            paths.setdefault(c1["rep"] + ">" + c2["rep"],
+                             {"replies": 0, "positives": 0, "meetings": 0})
+    return {"by_variant": by_variant, "combinations": combos, "paths": paths,
+            "clusters": clusters_out,
+            "attributed": attributed, "booked": len(booked_set),
             "removed": removed, "removed_versions": len(removed_groups)}
 
 
@@ -10038,6 +10074,7 @@ def _cockpit_messaging(cid) -> dict:
         meetings["reconciled"] = _reconcile_meeting_positive(versions, meetings)
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "combinations": vpaths.get("combinations") or {},
+            "paths": vpaths.get("paths") or {},
             "degraded": False}
 
 
@@ -10060,13 +10097,25 @@ def vpath_backfill(per_campaign_history: int = 12) -> dict:
     counts as stamped) or no step/backfill stamp — fully-stamped campaigns
     age out of the sweep instead of recurring 8x/day forever. sb_get_all
     paginates past PostgREST's silent 1000-row default cap."""
+    # Positive categories, not just Call Booked (Best-path 2026-08-09): the
+    # paths table credits positives too, so their unstamped vpath2 rows must
+    # pull a campaign into the sweep. The seq-number arm stays Call-Booked-only
+    # — those stamps only ever land on booked rows, so widening it would trap
+    # every positive-bearing campaign in the sweep forever. Plain replies (OOO
+    # etc.) stay out entirely — quote-matched on the web read, never crawled.
     rows = sb_get_all(
+        "replies?category=in.(%22Interested%22,%22Call%20Booked%22,"
+        "%22Meeting%20Request%22,%22Information%20Request%22)"
+        "&raw->>vpath2=is.null"
+        "&select=smartlead_campaign_id")
+    rows_seq = sb_get_all(
         "replies?category=eq.Call%20Booked"
-        "&or=(raw->>vpath2.is.null,and(raw->>email_seq_number.is.null,"
-        "raw->>email_seq_number_backfill.is.null))"
+        "&raw->>email_seq_number=is.null&raw->>email_seq_number_backfill=is.null"
         "&select=smartlead_campaign_id")
     if not isinstance(rows, list):
         return {"error": "archive unreachable"}
+    if isinstance(rows_seq, list):
+        rows = rows + rows_seq
     ids = sorted({str(r.get("smartlead_campaign_id")) for r in rows
                   if isinstance(r, dict) and str(r.get("smartlead_campaign_id") or "").isdigit()})
     out = {}
