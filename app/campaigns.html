@@ -3618,10 +3618,8 @@
         '<text x="290" y="26" font-size="11" font-weight="700" fill="#2E7D5B" text-anchor="end">a good offer: ' + fmtInt(goal) + ' yes</text>' +
         '<polyline points="20,86 160,' + Math.round((86 + ay) / 2) + ' 300,' + Math.round(ay) + '" fill="none" stroke="#C2371F" stroke-width="2.5"/>' +
         '<circle cx="300" cy="' + Math.round(ay) + '" r="5" fill="#C2371F"/>' +
-        '<text x="290" y="' + Math.min(104, Math.round(ay) + 18) + '" font-size="11" font-weight="700" fill="#C2371F" text-anchor="end">this one: ' + fmtInt(got) + ' yes</text>' +
-        '<line x1="20" y1="92" x2="300" y2="92" stroke="#DDDDDA"/>' +
-        '<text x="20" y="106" font-size="10" fill="#6B6055">start</text>' +
-        '<text x="300" y="106" font-size="10" fill="#6B6055" text-anchor="end">' + fmtInt(st.sent) + ' emails in</text></svg>';
+        '<text x="290" y="' + Math.min(106, Math.round(ay) + 18) + '" font-size="11" font-weight="700" fill="#C2371F" text-anchor="end">this one: ' + fmtInt(got) + ' yes</text>' +
+        '<line x1="20" y1="92" x2="300" y2="92" stroke="#DDDDDA"/></svg>';
     }
     if (/^Add more /.test(act) && st.share_pos != null && st.share_rest != null) {
       /* 7B: two waffles, big % first so nobody counts squares */
