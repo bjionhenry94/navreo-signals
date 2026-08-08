@@ -212,19 +212,24 @@
    the left, Website / LinkedIn / Smartlead links on the right - pinned above
    the conversation while it scrolls. The category control lives in the sidebar. */
 .detail-topbar { position: sticky; top: 0; z-index: 20; background: var(--bg); padding: 16px 0 12px; margin-bottom: 14px; border-bottom: 1px solid var(--line); }
-/* Identity block, stacked: row 1 = name (left) + links (right); row 2 = email
-   (left) + replied (right); row 3 = campaign name. */
-.dh-row1 { display: flex; align-items: center; justify-content: space-between; gap: 10px 20px; flex-wrap: wrap; }
-.dh-row2 { display: flex; align-items: center; justify-content: space-between; gap: 6px 16px; flex-wrap: wrap; }
+/* Two-tier identity header (shipped 2026-08-09): top tier = name + copy-chat-link
+   (left) with email + copy-email beneath it, and the "replied" pill on the right;
+   a soft cream band below holds the client pill + campaign and the Website /
+   LinkedIn / Smartlead links + panel toggle. */
+.dh-row1 { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px 20px; flex-wrap: wrap; margin-bottom: 12px; }
+.dh-id { min-width: 0; }
+/* Name + the copy-chat-link button ride together on the top line. */
+.dh-nameline { display: flex; align-items: center; gap: 4px; min-width: 0; flex-wrap: wrap; }
 .dh-email { font-size: 12.5px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* Keep the copy button hugging the address (owner ask): email + copy travel as
-   one group, the "replied" pill still floats to the far right of the row. */
-.dh-emailgrp { display: inline-flex; align-items: center; gap: 4px; min-width: 0; }
+/* email + copy-email travel as one group, beneath the name line. */
+.dh-emailgrp { display: inline-flex; align-items: center; gap: 4px; min-width: 0; margin-top: 3px; }
 /* "replied X ago" as a neutral pill (matches the app's pill/age-badge look). */
 .dh-replied { font-size: 11px; font-weight: 500; color: var(--ink-2); white-space: nowrap; flex-shrink: 0; background: #F2F2F0; padding: 3px 10px; border-radius: 999px; }
+/* Soft warm band grouping the campaign context + the action links. */
+.dh-band { display: flex; align-items: center; justify-content: space-between; gap: 10px 14px; flex-wrap: wrap; background: var(--cream-50); border-radius: 12px; padding: 9px 8px 9px 12px; }
 .dh-campaign { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); min-width: 0; }
 .dh-campaign .dh-campaign-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The Website / LinkedIn / Smartlead links, content-width, on the right. */
+/* The Website / LinkedIn / Smartlead links, content-width, in the band. */
 .dh-links { flex: 0 0 auto; margin: 0; }
 .dh-links .lp-qbtn { flex: 0 0 auto; min-height: 34px; }
 /* The decision */
@@ -593,7 +598,7 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
    phones. */
 .inbox-shell.lead-hidden .lead-panel { display: none; }
 .lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; }
-.dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+.dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 1 auto; min-width: 0; flex-wrap: wrap; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
   width: 36px; min-height: 36px; padding: 0; border: 1px solid var(--line-2);
@@ -2956,21 +2961,25 @@ function renderDetail(row) {
     <a class="back-link mobile-back" href="#" id="backToInboxLink">&larr; Back to inbox</a>
     <div class="detail-head">
       <div class="dh-row1">
-        <h2 class="dh-name" title="reported ${esc(pulledAgo(row.created_at))}">${esc(leadName(row))} ${testChip}</h2>
+        <div class="dh-id">
+          <div class="dh-nameline">
+            <h2 class="dh-name" title="reported ${esc(pulledAgo(row.created_at))}">${esc(leadName(row))} ${testChip}</h2>
+            ${permalinkFor(row) ? `<button type="button" class="dh-copy" id="copyLinkBtn" data-link="${esc(permalinkFor(row))}" title="Copy link to this chat" aria-label="Copy link to this chat">${ICON_LINK}</button>` : ""}
+          </div>
+          <span class="dh-emailgrp">
+            <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
+            ${row.lead_email ? `<button type="button" class="dh-copy" id="copyEmailBtn" data-email="${esc(row.lead_email)}" title="Copy email address" aria-label="Copy email address">${ICON_COPY}</button>` : ""}
+          </span>
+        </div>
+        <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
+      </div>
+      <div class="dh-band">
+        <div class="dh-campaign" title="${esc(campaignNameFor(row))}">${clientPillHtml(row)}<span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>
         <div class="dh-actions">
           <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
           <button type="button" class="lp-panel-toggle" id="panelToggleBtn" aria-pressed="true" title="Hide lead details">${ICON_PANEL}</button>
         </div>
       </div>
-      <div class="dh-row2">
-        <span class="dh-emailgrp">
-          <span class="dh-email">${row.lead_email ? esc(row.lead_email) : "No email on file"}</span>
-          ${row.lead_email ? `<button type="button" class="dh-copy" id="copyEmailBtn" data-email="${esc(row.lead_email)}" title="Copy email address" aria-label="Copy email address">${ICON_COPY}</button>` : ""}
-          ${permalinkFor(row) ? `<button type="button" class="dh-copy" id="copyLinkBtn" data-link="${esc(permalinkFor(row))}" title="Copy link to this chat" aria-label="Copy link to this chat">${ICON_LINK}</button>` : ""}
-        </span>
-        <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
-      </div>
-      <div class="dh-campaign" title="${esc(campaignNameFor(row))}">${clientPillHtml(row)}<span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>
     </div>
     </div>
     <div id="detailErrBanner" class="err-banner detail-err" style="display:none"></div>
