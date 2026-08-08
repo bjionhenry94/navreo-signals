@@ -5281,27 +5281,16 @@ if (document.documentElement.classList.contains("headless")) {
     e.preventDefault();
     e.stopPropagation();
     const label = (a.textContent || "").replace(/\s+/g, " ").trim().slice(0, 48) || "Link";
-    // Copy FIRST, then try a real new tab (owner ask 2026-08-09 pm). Order is
-    // load-bearing: a BLOCKED window.open consumes the click's transient
-    // activation, and the sync execCommand copy needs that activation — the
-    // open-first version left the user with neither tab nor clipboard (found
-    // live). execCommand does NOT consume activation, so copying first keeps
-    // the window.open attempt intact. window.open is a popup the host must
-    // answer, unlike the in-place navigation it hijacks — when honoured (real
-    // human clicks do get popups here) the reviewer lands in a genuine new
-    // tab, and the clipboard carries the link either way. preventDefault
-    // above means the board itself can never navigate away.
-    copyTextToClipboard(abs).then((copied) => {
-      let opened = null;
-      try { opened = window.open(abs, "_blank"); } catch { opened = null; }
-      if (opened) {
-        try { opened.opener = null; } catch { /* cross-origin proxy: fine */ }
-        showCopyToast(`${label} — opened in a new tab${copied ? " (link also copied)" : ""}.`);
-      } else {
-        showCopyToast(copied
-          ? `${label} — link copied to your clipboard. Paste it into a new tab.`
-          : `Couldn't copy automatically — the link is: ${abs}`);
-      }
+    // Copy, full stop (owner ruling 2026-08-09, after two live experiments).
+    // Auto-opening a new tab from the embed is a dead end: the host blocks
+    // window.open here (tried db43342, owner confirmed no tab), and a BLOCKED
+    // window.open even consumes the click's transient activation — which the
+    // sync execCommand copy needs — so keeping the attempt around risks the
+    // clipboard for nothing. Don't re-add it.
+    copyTextToClipboard(abs).then((ok) => {
+      showCopyToast(ok
+        ? `${label} — link copied to your clipboard. Paste it into a new tab.`
+        : `Couldn't copy automatically — the link is: ${abs}`);
     });
   }, true);
 }
