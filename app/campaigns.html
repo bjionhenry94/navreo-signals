@@ -1903,6 +1903,14 @@
   .vp-combos-h .ring-caption { text-transform: none; letter-spacing: 0; font-weight: 500; }
   table.version-perf-table tr.vp-win { background: linear-gradient(90deg, rgba(255,77,0,0.06), transparent); }
   table.version-perf-table tr.vp-win td:first-child { box-shadow: inset 3px 0 0 var(--nav-orange); }
+  /* on/off toggle + the live share number beside it (owner ask 2026-08-09) */
+  .vp-ctl { display: inline-flex; align-items: center; gap: 8px; margin-left: 6px; vertical-align: middle; }
+  .vp-ctl .vaw-toggle { margin-left: 0; }
+  .vp-share { font-variant-numeric: tabular-nums; font-weight: 700; font-size: 0.82rem; color: var(--fg); }
+  .vp-share--off { color: var(--fg-subtle); font-weight: 600; }
+  /* all-off guard row */
+  table.version-perf-table tr.vp-warn td { background: var(--warning-bg); border-bottom: 1px solid var(--warning-bd); box-shadow: inset 4px 0 0 var(--warning); padding: 10px 12px; }
+  .vp-warn-txt { color: var(--warning); font-weight: 700; font-size: 0.78rem; }
 
   /* -- B. "the sequence": Smartlead-editor-like vertical step rail -- */
   .seq-rail { margin-top: 16px; display: flex; flex-direction: column; }
@@ -4817,6 +4825,13 @@
       ".vaw-toggle.is-locked{opacity:.45;cursor:not-allowed}",
       ".vaw-mini{font:inherit;font-size:.72rem;font-weight:600;padding:2px 8px;margin-left:8px;border-radius:999px;border:1px solid var(--border-strong);background:transparent;color:var(--fg-muted);cursor:pointer}",
       ".vaw-mini:hover{border-color:var(--nav-orange);color:var(--nav-orange)}",
+      ".vaw-mini--best{display:flex;align-items:center;width:fit-content;margin:9px 0 2px 0;border-color:var(--nav-orange);color:var(--fg)}",
+      ".vaw-mini--best:hover{color:var(--fg);border-color:var(--nav-orange)}",
+      ".vaw-mini .vp-best{margin:0 6px 0 0;vertical-align:baseline}",
+      ".vaw-arr{margin-left:8px;font-weight:800;color:var(--nav-orange);transition:transform .15s var(--ease-out)}",
+      ".vaw-mini:hover .vaw-arr{transform:translateX(2px)}",
+      ".vaw-mini.vp-warn-fix{margin-left:8px;border-color:var(--warning);color:var(--warning)}",
+      ".vaw-mini.vp-warn-fix:hover{background:color-mix(in srgb,var(--warning) 12%,transparent)}",
       ".vaw-acts{margin-top:12px;padding-top:10px;border-top:1px dashed var(--border-strong);display:flex;flex-direction:column;gap:7px}",
       ".vaw-acts-kick{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--fg-subtle)}",
       ".vaw-act{display:flex;align-items:center;gap:8px;flex-wrap:wrap}",
@@ -5564,23 +5579,31 @@
           stateCell = ' <span class="vp-dot vp-dot--' + 'on' + '" title="active"></span>';
         else {
           var on = v.split > 0;
-          stateCell = ' <button type="button" class="vaw-toggle' + (on ? ' is-on' : '') +
+          /* toggle + the live share number beside it (owner ask 2026-08-09):
+             the number is the resolved v.split, refreshed after every write;
+             0% reads "Off", never "0%". */
+          stateCell = ' <span class="vp-ctl"><button type="button" class="vaw-toggle' + (on ? ' is-on' : '') +
             '" data-vaw-toggle data-step="' + esc(String(sk)) + '" data-vlabel="' + esc(String(v.label)) +
             '" data-split="' + v.split + '" aria-pressed="' + (on ? 'true' : 'false') +
             '" title="' + (on ? 'Sending (' + v.split + '% of Email ' + esc(String(sk)) + ') — click to switch off'
                               : 'Switched off — click to give it a share again') +
-            '"><span class="vaw-knob"></span></button>';
+            '"><span class="vaw-knob"></span></button>' +
+            '<span class="vp-share' + (on ? '' : ' vp-share--off') + '">' + (on ? v.split + '%' : 'Off') + '</span></span>';
         }
         /* P5 seam on the table: the proven best opener gets an explicit
            scale control — the button says exactly what it does. */
-        var scaleBtn = '';
-        if (isBest && v.split != null && v.split > 0 && v.split < 100 && cid != null)
-          scaleBtn = ' <button type="button" class="vaw-mini" data-vaw-scale data-step="' + esc(String(sk)) +
+        /* the best opener's scale control carries the BEST pill inside it and an
+           arrow so it reads as a button (owner ask 2026-08-09); the standalone
+           "best" pill only shows when there is no scale button to host it. */
+        var hasScale = isBest && v.split != null && v.split > 0 && v.split < 100 && cid != null;
+        var scaleBtn = hasScale
+          ? ' <button type="button" class="vaw-mini vaw-mini--best" data-vaw-scale data-step="' + esc(String(sk)) +
             '" data-vlabel="' + esc(String(v.label)) + '" data-split="' + v.split +
-            '">Send 100% of Email ' + esc(String(sk)) + ' to it</button>';
+            '"><span class="vp-best">BEST</span> Send 100% of Email ' + esc(String(sk)) + ' to it<span class="vaw-arr" aria-hidden="true">&rarr;</span></button>'
+          : '';
         return '<tr>' +
           '<td data-label="Version">' + esc(label) + stateCell +
-            (isBest ? ' <span class="vp-best">best</span>' : '') + scaleBtn + '</td>' +
+            ((isBest && !hasScale) ? ' <span class="vp-best">best</span>' : '') + scaleBtn + '</td>' +
           /* a deleted variant's counters were PURGED by Smartlead, not zero —
              '—' with the why, never a false 'Sent 0' (audit #8) */
           (v.stats_purged
@@ -5594,7 +5617,22 @@
           '<td class="tnum" data-label="Meetings">' + meetCell + '</td>' +
           '<td class="tnum" data-label="Sent / meeting">' + pmCell + '</td></tr>';
       }).join('');
-      return band + body;
+      /* all-off guard (owner ruling 2026-08-09: "we cannot let that happen"):
+         a step whose every live version is at 0% sends nothing — flag it loudly
+         with a one-click re-enable (the most-sent still-eligible version). The
+         last-live version's off is already refused server-side. */
+      var nonInline = vs.filter(function (x) { return !x.inline; });
+      var anyLive = nonInline.some(function (x) { return !x.disabled && (x.split || 0) > 0; });
+      var warn = '';
+      if (nonInline.length && !anyLive && cid != null) {
+        var cand = nonInline.filter(function (x) { return !x.disabled && x.variant_id != null; })
+                            .sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); })[0];
+        warn = '<tr class="vp-warn"><td colspan="7"><span class="vp-warn-txt">Nothing is sending on Email ' + esc(String(sk)) + ' — every version is off.</span>' +
+          (cand ? ' <button type="button" class="vaw-mini vp-warn-fix" data-vaw-toggle data-step="' + esc(String(sk)) +
+            '" data-vlabel="' + esc(String(cand.label)) + '" data-split="0" aria-pressed="false">Turn Version ' + esc(String(cand.label)) + ' back on</button>' : '') +
+          '</td></tr>';
+      }
+      return band + warn + body;
     }).join('');
     /* combinations: opener → follow-up paths deduced from booked replies. Keys
        and sent counts are per representative label (i.e. per distinct copy). */
