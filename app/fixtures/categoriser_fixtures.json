@@ -11,7 +11,7 @@
   },
   {
    "id": "tom@zinkt.com",
-   "reply": "Hi I’m interested in this can we meet on Wednesday at 16:00 gmt please Tom Swinbourne CEO",
+   "reply": "Hi I\u2019m interested in this can we meet on Wednesday at 16:00 gmt please Tom Swinbourne CEO",
    "expected": [
     "Meeting Request"
    ],
@@ -184,7 +184,7 @@
   },
   {
    "id": "herbalplantasia@gmail.com",
-   "reply": "Hi, Sorry, What's you mean ? I'm not understand. Thank you. Emp ในวันที่ ศุกร์ 31 ก.ค. 2026 เวลา 21:24 Jane Smithson เขียนว่า: Hi Herbal Plantasia team, If my last email wasn't quite right, we've put together a sho",
+   "reply": "Hi, Sorry, What's you mean ? I'm not understand. Thank you. Emp \u0e43\u0e19\u0e27\u0e31\u0e19\u0e17\u0e35\u0e48 \u0e28\u0e38\u0e01\u0e23\u0e4c 31 \u0e01.\u0e04. 2026 \u0e40\u0e27\u0e25\u0e32 21:24 Jane Smithson \u0e40\u0e02\u0e35\u0e22\u0e19\u0e27\u0e48\u0e32: Hi Herbal Plantasia team, If my last email wasn't quite right, we've put together a sho",
    "expected": [
     "Not Interested"
    ],
@@ -249,12 +249,36 @@
   },
   {
    "id": "kor.foekens@oxycom.com",
-   "reply": "Yes, sounds good. Friday 11.00 in the morning Dutch time? Met vriendelijke groet, best regards, mit Freundlichen Grüssen, Kor Foekens Commercial Director kor.foekens@oxycom.com Mobile: +31 613 757 978 Office: +31 572 349 400 ww",
+   "reply": "Yes, sounds good. Friday 11.00 in the morning Dutch time? Met vriendelijke groet, best regards, mit Freundlichen Gr\u00fcssen, Kor Foekens Commercial Director kor.foekens@oxycom.com Mobile: +31 613 757 978 Office: +31 572 349 400 ww",
    "expected": [
     "Meeting Request",
     "Call Booked"
    ],
    "note": "accepts + proposes Friday 11.00"
+  },
+  {
+   "id": "mr-trap-bare-sure-mixed-ctas",
+   "reply": "Sure\n\n> On Thu, Jul 30, Liam at Navreo wrote:\n> Worth a quick 15-min call next week to walk through it?\n>\n>> On Mon, Jul 27, Liam at Navreo wrote:\n>> We help B2B teams book meetings with cold email. Want me to send over a 2-page breakdown of how we'd do it for Acme?",
+   "expected": [
+    "Information Request"
+   ],
+   "note": "owner ruling 2026-08-09: bare 'Sure' after soft asset-CTA (e1) + hard call-CTA (e2) is NOT a Meeting Request \u2014 it inherits the softest offer (the asset)"
+  },
+  {
+   "id": "mr-trap-bare-sure-call-cta-only",
+   "reply": "Sure, sounds good.\n\n> On Thu, Jul 30, Liam at Navreo wrote:\n> Open to a quick call next week to see if this fits?",
+   "expected": [
+    "Interested"
+   ],
+   "note": "owner ruling 2026-08-09: a bare affirmative is never a Meeting Request \u2014 MR must be authored in the prospect's own words; door open -> Interested"
+  },
+  {
+   "id": "mr-real-own-words-availability",
+   "reply": "Yes I'd be open to a chat - I'm free Tuesday or Wednesday afternoon, does that work?\n\n> On Thu, Jul 30, Liam at Navreo wrote:\n> Open to a quick call next week?",
+   "expected": [
+    "Meeting Request"
+   ],
+   "note": "control: own-words openness + availability IS a Meeting Request"
   }
  ]
 }

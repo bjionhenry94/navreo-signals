@@ -8615,8 +8615,10 @@ def _campaign_source_ids(smartlead_id) -> list:
 #   leads_added — signal_leads by pulled_at UTC date (scoped to the campaign's
 #                 source ids when a campaign is selected)
 #   positives   — replies in POSITIVE_CATEGORIES by replied_at UTC date
-#   meetings    — distinct booked LEADS by the UTC date of their first
-#                 Call Booked / Meeting Request reply (one per person —
+#   meetings    — Call Booked ONLY (a Meeting Request is never a meeting).
+#                 Calendly-synced rows (raw.source='calendly') count one per
+#                 booking DAY at true booking time; legacy-only leads count
+#                 once, dated by their first Call Booked reply (one per person —
 #                 reply-row counting inflated chatty threads)
 #   reply_rate  — fleet: mailbox_stats_daily 30d rolling; per-campaign: 30d
 #                 trailing replies÷sent over the archive (bounded, campaign-scoped)
@@ -8804,7 +8806,7 @@ def perf_daily(p: dict) -> dict:
                                 if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
                 "positives": ("Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)"
                               if campaign else "Positive replies/day (whole fleet — Smartlead day-wise positive replies, stored in fleet_daily_stats)"),
-                "meetings": "Meetings/day (people whose first Call Booked reply landed that day — one per person; weekend bookings roll into Monday)",
+                "meetings": "Meetings/day (calls booked that day — Calendly bookings at true booking time, else first Call Booked reply; weekend bookings roll into Monday)",
                 "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
                                if campaign else "Reply rate % (whole fleet — Smartlead day-wise replies÷sent, stored in fleet_daily_stats)"),
                 "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise bounced÷sent, stored in fleet_daily_stats)"},
