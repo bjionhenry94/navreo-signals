@@ -9908,8 +9908,19 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
     removed = sum(g["n"] for g in removed_groups)
     # Every POSSIBLE opener→follow-up journey gets a row, zeros included — the
     # table's job is comparing paths, and an untried path is a real answer.
+    # But a cluster whose every variant is DELETED is not a possible journey:
+    # zero-filling it fabricates a ghost row for an arm nobody can travel
+    # (audit 2026-08-09: deleted opener B got a "B→A" row). Leads who really
+    # did travel a since-deleted arm still surface via the accumulation above.
+    def _cl_alive(cl):
+        dels = cl.get("dels") or []
+        return not dels or not all(dels)
     for c1 in step_clusters.get("1") or []:
+        if not _cl_alive(c1):
+            continue
         for c2 in step_clusters.get("2") or []:
+            if not _cl_alive(c2):
+                continue
             paths.setdefault(c1["rep"] + ">" + c2["rep"],
                              {"replies": 0, "positives": 0, "meetings": 0})
     return {"by_variant": by_variant, "combinations": combos, "paths": paths,
@@ -9994,6 +10005,7 @@ def _reconcile_meeting_positive(versions, meetings) -> int:
     if not by_variant:
         return 0
     raised = 0
+    moved = 0  # bookers whose positive credit was raised onto an opener row
     for v in versions:
         if not isinstance(v, dict) or v.get("inline") or v.get("label") is None:
             continue
@@ -10001,11 +10013,36 @@ def _reconcile_meeting_positive(versions, meetings) -> int:
             continue
         mv = by_variant.get(str(v.get("step")) + "|" + str(v.get("label"))) or 0
         if mv > (v.get("positives") or 0):
+            moved += mv - (v.get("positives") or 0)
             v["positives"] = mv
             v["positives_include_booked"] = True
             if (v.get("replies") or 0) < mv:
                 v["replies"] = mv
             raised += 1
+    # MOVE the credit, never duplicate it: Smartlead already counted the same
+    # booker's positive reply on the variant of the step they REPLIED at
+    # (usually the follow-up), so raising the opener without a matching
+    # subtraction double-counts the person and the column sums beat the
+    # campaign total (audit 2026-08-09: table said 7 positives, campaign 5).
+    # The archive's by_step says which step each booker's reply landed on;
+    # subtract there — but only when exactly one non-raised row on that step
+    # holds positives, so the sibling that counted them is unambiguous.
+    # Floor at 0 and cap at what was raised: a straight-to-calendar booker was
+    # never in Smartlead's counters, so there is nothing to take back.
+    if moved:
+        for s, booked_n in (meetings.get("by_step") or {}).items():
+            rows_s = [v for v in versions
+                      if isinstance(v, dict) and str(v.get("step")) == str(s)
+                      and not v.get("stats_purged")
+                      and not v.get("positives_include_booked")
+                      and (v.get("positives") or 0) > 0]
+            if len(rows_s) != 1:
+                continue  # ambiguous sibling — keep the overcount rather than guess
+            take = min(int(booked_n or 0), rows_s[0]["positives"], moved)
+            if take > 0:
+                rows_s[0]["positives"] -= take
+                rows_s[0]["positives_credited_to_opener"] = take
+                moved -= take
     return raised
 
 
