@@ -615,7 +615,7 @@ def fetch_sequences(campaign_id) -> dict:
     return variants
 
 
-def fetch_variant_stats(campaign_id, variant_index: dict | None = None) -> dict:
+def fetch_variant_stats(campaign_id) -> dict:
     """Paginate /campaigns/{id}/statistics fully (limit=1000 pages, bounded by
     total_stats) and aggregate per seq_variant_id. Null variant-id rows (Email
     2 or any inline step) bucket into the synthetic key "__email2__".
@@ -624,19 +624,17 @@ def fetch_variant_stats(campaign_id, variant_index: dict | None = None) -> dict:
     skill's rule), then counted per bucket, guaranteeing variant totals track
     unique positive leads. Exact-equality category match only.
 
-    MEETING leads carry JOURNEY credit (align 2026-08-09): a booker's positive
-    + meeting land on the Email-1 variant they first saw (when variant_index
-    can name it), matching the Messaging tab's opener attribution — the old
-    latest-reply credit starved the opener and had Section 4 telling founders
-    to drop the very variant that booked the meetings, directly contradicting
-    the table beside it."""
+    PARITY RULING (Bjion 2026-08-09): counts stay at the grain Smartlead
+    reports them — no journey-credit moves. The short-lived opener-credit
+    variant of this function double-told the story the Messaging tab's
+    Meetings column already tells; booked-journey awareness now lives in
+    fetch_booked_journey_labels + the Section-4 drop guard instead."""
     sent_by_key: dict = {}
     replies_by_key: dict = {}
     best_positive: dict = {}  # email -> (reply_time, key)  for deduped positives
     anon_positives: dict = {}  # key -> count for positive rows with no email
     best_meeting: dict = {}  # email -> (reply_time, key)  for deduped meetings
     anon_meetings: dict = {}  # key -> count for meeting rows with no email
-    opener_of: dict = {}  # email -> Email-1 variant key (journey credit for bookers)
     offset, total = 0, None
     while offset < STATS_MAX_ROWS:
         page = sl_get(f"/campaigns/{campaign_id}/statistics",
@@ -655,9 +653,6 @@ def fetch_variant_stats(campaign_id, variant_index: dict | None = None) -> dict:
                 (r.get("lead") or {}).get("email") if isinstance(r.get("lead"), dict)
                 else r.get("email"))
             rt = str(r.get("reply_time") or "")
-            if (email and vid is not None and email not in opener_of
-                    and (variant_index or {}).get(vid, {}).get("seq_number") == 1):
-                opener_of[email] = key
             if cat in POSITIVE_CATEGORIES:  # exact equality via set membership
                 if email:
                     prev = best_positive.get(email)
@@ -682,24 +677,44 @@ def fetch_variant_stats(campaign_id, variant_index: dict | None = None) -> dict:
     agg: dict = {}
     for key, sent in sent_by_key.items():
         agg[key] = {"sent": sent, "positives": 0, "replies": replies_by_key.get(key, 0), "meetings": 0}
-    for email, (_rt, key) in best_positive.items():
-        # a booker's yes belongs to the opener that started their journey
-        if email in best_meeting and email in opener_of:
-            key = opener_of[email]
+    for _rt, key in best_positive.values():
         agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["positives"] += 1
     for key, n in anon_positives.items():
         agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["positives"] += n
-    for email, (_rt, key) in best_meeting.items():
-        if email in opener_of:
-            key = opener_of[email]
+    for _rt, key in best_meeting.values():
         agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["meetings"] += 1
     for key, n in anon_meetings.items():
         agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["meetings"] += n
     return agg
+
+
+def fetch_booked_journey_labels(campaign_id) -> set:
+    """(step, label) pairs credited by a booked lead's journey, read from the
+    archive's vpath2 stamps on Call Booked rows (the same evidence the
+    Messaging tab's Meetings column uses). Evidence-only: unstamped rows
+    contribute nothing. Consulted by the Section-4 drop guard so the builder
+    can never call a meeting-booking opener a loser while per-variant
+    positives stay Smartlead-verbatim (parity ruling 2026-08-09 — the old
+    answer, moving the positive itself onto the opener, broke parity)."""
+    rows = sb("GET", f"replies?smartlead_campaign_id=eq.{campaign_id}"
+                     "&category=eq.Call%20Booked&select=vp:raw->>vpath2")
+    out: set = set()
+    for r in rows if isinstance(rows, list) else []:
+        vp = r.get("vp") if isinstance(r, dict) else None
+        if isinstance(vp, str) and vp:
+            try:
+                vp = json.loads(vp)
+            except ValueError:
+                continue
+        if isinstance(vp, dict):
+            for st, lbl in vp.items():
+                if st != "_x" and lbl:
+                    out.add((str(st), str(lbl)))
+    return out
 
 
 def reconcile_positives(agg: dict, campaign_positives: int) -> None:
@@ -926,8 +941,12 @@ def build_variants_list(ctx: dict) -> list[dict]:
         if meta["is_deleted"] or (dist == 0 and sent > 0):
             flags.append("disabled")
         # failing wins over winner - the two ratio rules overlap between
-        # 800 and 1,500 sent/pos, and showing both would contradict itself
-        if is_failing(sent, positives):
+        # 800 and 1,500 sent/pos, and showing both would contradict itself.
+        # A booked-journey variant (archive vpath evidence) is never "failing"
+        # even at 0 Smartlead-verbatim positives (parity ruling 2026-08-09).
+        booked_j = ctx.get("booked_journeys") or set()
+        if (is_failing(sent, positives)
+                and (str(meta["seq_number"]), str(meta["label"])) not in booked_j):
             flags.append("failing")
         elif is_performing_variant(sent, positives):
             flags.append("winner")
@@ -1193,8 +1212,14 @@ def build_campaign_findings(ctx: dict) -> tuple[list[dict], list[dict]]:
                             "bullet": f"Drop the {angle_txt}{audience_suffix(ctx)}: "
                                       f"{sent:,} sent and 0 positives so far."})
         else:
-            # per-variant calls on judged Email 1+ variants
-            failing = [v for v in judged if is_failing(v["sent"], v["positives"])]
+            # per-variant calls on judged Email 1+ variants. A variant whose
+            # journey a booked meeting credits (archive vpath evidence) is
+            # never a loser, whatever its Smartlead-verbatim positive count —
+            # the drop-the-winner call on Latka's D was exactly this hole.
+            booked_j = ctx.get("booked_journeys") or set()
+            failing = [v for v in judged
+                       if is_failing(v["sent"], v["positives"])
+                       and (str(v["seq_number"]), str(v["label"])) not in booked_j]
             # clear winner: positives, ratio at most half of every other judged
             # sibling with positives, at least one other judged sibling
             winner = None
@@ -1613,7 +1638,8 @@ def main() -> int:
             continue
         in_report += 1
         ctx["variant_index"] = fetch_sequences(c["id"])
-        ctx["variant_stats"] = fetch_variant_stats(c["id"], ctx["variant_index"])
+        ctx["variant_stats"] = fetch_variant_stats(c["id"])
+        ctx["booked_journeys"] = fetch_booked_journey_labels(c["id"])
         reconcile_positives(ctx["variant_stats"], positives)
         ctx["meetings"] = sum(a.get("meetings", 0)
                               for a in ctx["variant_stats"].values())
