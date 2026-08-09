@@ -5676,10 +5676,23 @@
        reply-grain (2026-08-09b) and no longer carries journey credit, so the
        badge reads the same data the Best-path medal does — one signal. */
     if (paths) {
-      var bpTop = Object.keys(paths).map(function (k) {
+      /* same EFFICIENCY ranking as the Best-path medal (fewest sends per
+         meeting, 800-send floor preferred; then fewest sends per positive) —
+         the badge and the medal must never crown two different openers. */
+      var s1Tot = 0;
+      Object.keys(sentByRep).forEach(function (k) { if (k.indexOf('1|') === 0) s1Tot += sentByRep[k]; });
+      var bpAll = Object.keys(paths).map(function (k) {
         var p = k.split('>'), d = paths[k] || {};
-        return { e1: p[0], mt: d.meetings || 0, pos: d.positives || 0 };
-      }).sort(function (a, b) { return b.mt - a.mt || b.pos - a.pos; })[0];
+        var e1S = sentByRep['1|' + p[0]] || 0;
+        var e2S = sentByRep['2|' + p[1]] || 0;
+        var snt = e1S ? e1S + Math.round(s1Tot ? e2S * e1S / s1Tot : e2S) : 0;
+        return { e1: p[0], mt: d.meetings || 0, pos: d.positives || 0, snt: snt };
+      });
+      var bpMt = bpAll.filter(function (c) { return c.mt > 0 && c.snt > 0; })
+        .sort(function (a, b) { return (a.snt / a.mt) - (b.snt / b.mt); });
+      var bpTop = bpMt.filter(function (c) { return c.snt >= 800; })[0] || bpMt[0] ||
+        bpAll.filter(function (c) { return c.pos > 0 && c.snt > 0; })
+          .sort(function (a, b) { return (a.snt / a.pos) - (b.snt / b.pos); })[0];
       if (bpTop && (bpTop.mt > 0 || bpTop.pos > 0)) {
         (byStep['1'] || []).forEach(function (v) {
           if (best || v.disabled || v.inline || !v.sent || v.label == null) return;
@@ -5836,17 +5849,32 @@
            journey (stale zero-fill) — comparing it misleads */
         return c.e1Sent > 0 || c.mt > 0 || c.pos > 0 || c.rep > 0;
       }).sort(function (a, b) {
-        return b.mt - a.mt || b.pos - a.pos ||
+        /* EFFICIENCY ranks the journeys, not raw volume (Bjion 2026-08-09c:
+           "if G→A has the lowest meetings per email sent, why is B→A best?"
+           — raw counts just crown whoever sent the most). Meetings-bearing
+           paths first by fewest sends per meeting, then positive-bearing by
+           fewest sends per positive, then the rest by replies. */
+        var am = a.mt > 0 && a.snt > 0, bm = b.mt > 0 && b.snt > 0;
+        if (am !== bm) return am ? -1 : 1;
+        if (am && (a.snt / a.mt) !== (b.snt / b.mt)) return (a.snt / a.mt) - (b.snt / b.mt);
+        var ap = a.pos > 0 && a.snt > 0, bp = b.pos > 0 && b.snt > 0;
+        if (ap !== bp) return ap ? -1 : 1;
+        if (ap && (a.snt / a.pos) !== (b.snt / b.pos)) return (a.snt / a.pos) - (b.snt / b.pos);
+        return (b.rep - a.rep) ||
           String(a.e1).localeCompare(String(b.e1)) || String(a.e2).localeCompare(String(b.e2));
       });
-      /* winner: most meetings; no meetings anywhere yet → fewest sends per
-         positive (among paths that HAVE a positive). All-zero table → no medal. */
+      /* winner: the most EFFICIENT meetings-bearing path — preferring paths
+         past the house 800-send judging floor so a tiny fluke can't medal
+         over a proven arm; none past the floor → best rate wins anyway. No
+         meetings anywhere yet → fewest sends per positive. All-zero → none. */
       var winKey = null;
-      if (prows.length && prows[0].mt > 0) {
-        winKey = prows[0].e1 + '>' + prows[0].e2;
+      var withMt = prows.filter(function (c) { return c.mt > 0 && c.snt > 0; });
+      var judged = withMt.filter(function (c) { return c.snt >= 800; });
+      var w = judged[0] || withMt[0] || null;
+      if (w) {
+        winKey = w.e1 + '>' + w.e2;
       } else {
-        var posOnly = prows.filter(function (c) { return c.pos > 0; })
-          .sort(function (a, b) { return (a.snt / a.pos) - (b.snt / b.pos); });
+        var posOnly = prows.filter(function (c) { return c.pos > 0 && c.snt > 0; });
         if (posOnly.length) winKey = posOnly[0].e1 + '>' + posOnly[0].e2;
       }
       /* SAME table, banded section (owner ruling 2026-08-09): the path rows
