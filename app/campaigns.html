@@ -5717,7 +5717,16 @@
            locked-on toggle + 100% so it reads like every other row (owner ask
            2026-08-09), not the word "inline". */
         if (v.inline) stateCell = ' <span class="vp-ctl"><button type="button" class="vaw-toggle is-on is-soleon" aria-pressed="true" aria-disabled="true" title="The only version on Email ' + esc(String(sk)) + ' — it sends to everyone. Add a second version to split the traffic."><span class="vaw-knob"></span></button><span class="vp-share">100%</span></span>';
-        else if (v.disabled) stateCell = ' <button type="button" class="vaw-toggle is-locked" aria-pressed="false" aria-disabled="true" title="Deleted in Smartlead — its stats stay above, but a deleted version can\'t be switched back on"><span class="vaw-knob"></span></button>';
+        else if (v.disabled && v.restorable && cid != null)
+          /* deleted in Smartlead but the copy survives — the enable action can
+             bring it back (is_deleted flipped on the id-intact save), so it
+             gets a REAL toggle, not the locked one (Bjion 2026-08-09: "we're
+             unable to re-enable them - fix this"). */
+          stateCell = ' <span class="vp-ctl"><button type="button" class="vaw-toggle" data-vaw-toggle data-step="' + esc(String(sk)) +
+            '" data-vlabel="' + esc(String(v.label)) + '" data-split="0" aria-pressed="false"' +
+            ' title="Deleted in Smartlead, but its copy is saved — click to bring it back"><span class="vaw-knob"></span></button>' +
+            '<span class="vp-share vp-share--off">Off</span></span>';
+        else if (v.disabled) stateCell = ' <button type="button" class="vaw-toggle is-locked" aria-pressed="false" aria-disabled="true" title="Deleted in Smartlead and its copy is gone — it can\'t be switched back on; draft it as a new version instead"><span class="vaw-knob"></span></button>';
         else if (v.split == null || v.variant_id == null || cid == null)
           stateCell = ' <span class="vp-dot vp-dot--' + 'on' + '" title="active"></span>';
         else {

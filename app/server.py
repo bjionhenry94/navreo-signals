@@ -10144,16 +10144,25 @@ def _cockpit_messaging(cid) -> dict:
                     _split = int(_split) if _split is not None else None
                 except (TypeError, ValueError):
                     _split = None
+                # a deleted variant whose copy still rides the GET can be
+                # brought back by the enable action (is_deleted flipped on the
+                # id-intact save) — flag it so the UI offers a real toggle
+                # instead of the locked one (Bjion 2026-08-09).
+                _restorable = bool(_v.get("is_deleted")) and bool(
+                    str(_v.get("subject") or "").strip()
+                    or str(_v.get("email_body") or "").strip())
                 _hit = _idx.get(_key)
                 if _hit is not None:
                     if _v.get("is_deleted"):
                         _hit["disabled"] = True
+                        _hit["restorable"] = _restorable
                     _hit["split"] = _split
                     _hit["variant_id"] = _v.get("id")
                     continue
                 _new = {"step": _step, "label": _v.get("variant_label"), "inline": False,
                         "sent": 0, "replies": 0, "positives": 0, "bounces": 0,
                         "disabled": bool(_v.get("is_deleted")),
+                        "restorable": _restorable,
                         "stats_purged": bool(_v.get("is_deleted")),
                         "split": _split, "variant_id": _v.get("id")}
                 _idx[_key] = _new
