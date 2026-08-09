@@ -5907,6 +5907,27 @@
             '<td class="tnum" data-label="Meetings">' + (c.mt ? fmtInt(c.mt) : '<span class="ring-caption">—</span>') + '</td>' +
             '<td class="tnum" data-label="Sent / meeting">' + (c.mt && c.snt ? fmtInt(Math.round(c.snt / c.mt)) : '<span class="ring-caption">—</span>') + '</td></tr>';
         }).join('');
+      /* every booked meeting is placed on exactly one arm, in the removed
+         bucket, or nowhere — so the journey column must sum to the campaign
+         total the same way the version rows do (Bjion 2026-08-09: "the best
+         path also needs to be updated to reflect"). Meetings whose opener
+         can't be identified get a visible row, never a silent shortfall. */
+      var pathMtSum = prows.reduce(function (a, c) { return a + (c.mt || 0); }, 0);
+      var mtRemoved = (meetings && meetings.removed) || 0;
+      var mtUnplaced = Math.max(0, ((meetings && meetings.total) || 0) - pathMtSum - mtRemoved);
+      if (mtRemoved > 0) {
+        comboHTML += '<tr class="vp-unattr"><td data-label="Path">Deleted opener ' +
+          '<span class="ring-caption" title="These bookers quoted an opener that has since been deleted from the sequence — Smartlead purged its copy, so it can\'t be a named row. The meetings are real.">their opener was since deleted &mdash; its copy is purged</span></td>' +
+          '<td class="tnum" data-label="Sent"><span class="ring-caption">&mdash;</span></td><td class="tnum" data-label="Replies"><span class="ring-caption">&mdash;</span></td>' +
+          '<td class="tnum" data-label="Positives"><span class="ring-caption">&mdash;</span></td><td class="tnum" data-label="Sent / positive"><span class="ring-caption">&mdash;</span></td>' +
+          '<td class="tnum" data-label="Meetings">' + fmtInt(mtRemoved) + '</td><td class="tnum" data-label="Sent / meeting"><span class="ring-caption">&mdash;</span></td></tr>';
+      }
+      if (mtUnplaced > 0) {
+        comboHTML += '<tr class="vp-unattr"><td data-label="Path">Opener unknown <span class="ring-caption" title="The reply (or send record) says which follow-up these bookers saw, but not which Email 1 opener — so their journey can\'t sit on one arm. The meetings are real and count in the campaign total.">can\'t tell which Email 1 they saw</span></td>' +
+          '<td class="tnum" data-label="Sent"><span class="ring-caption">&mdash;</span></td><td class="tnum" data-label="Replies"><span class="ring-caption">&mdash;</span></td>' +
+          '<td class="tnum" data-label="Positives"><span class="ring-caption">&mdash;</span></td><td class="tnum" data-label="Sent / positive"><span class="ring-caption">&mdash;</span></td>' +
+          '<td class="tnum" data-label="Meetings">' + fmtInt(mtUnplaced) + '</td><td class="tnum" data-label="Sent / meeting"><span class="ring-caption">&mdash;</span></td></tr>';
+      }
     } else if (combinations && Object.keys(combinations).length) {
       var crows = Object.keys(combinations).map(function (k) {
         var p = k.split('>');
