@@ -9345,8 +9345,11 @@ def _cockpit_insights() -> dict:
     # Meetings = distinct leads with a Call Booked / Meeting Request reply in
     # the archive, per campaign — one per PERSON, not per reply row (a chatty
     # thread used to inflate the tile). Same definition as the messaging tab
-    # and the Sources tab, so every surface reconciles.
-    meetings = _reply_archive_meetings() or {}
+    # and the Sources tab, so every surface reconciles. workspace=None because
+    # the campaigns page now shows EVERY workspace (messaging-truth sweep
+    # 2026-08-09: Alpine 3396455 tiled 0 meetings while its messaging table
+    # counted 1 — the tile was navreo-only, the table wasn't).
+    meetings = _reply_archive_meetings(workspace=None) or {}
     sc = sb("GET", "campaign_scorecard?select=updated_at&order=updated_at.desc&limit=1")
     stats_at = sc[0].get("updated_at") if isinstance(sc, list) and sc else None
     return {"insights": rows, "track_record": track if isinstance(track, list) else [],
@@ -10042,6 +10045,11 @@ def _meetings_reply_grain(versions: list, by_email: dict, booked_paths: dict):
                   for v in versions
                   if not v.get("inline") and v.get("label") is not None
                   and not v.get("stats_purged")}
+    for v in versions:
+        # inline steps cluster under "Email N" — cap those rows too, so an
+        # inline row can never show meetings beside a smaller positives number
+        if v.get("inline"):
+            pos_by_key[str(v.get("step")) + "|Email " + str(v.get("step"))] = (v.get("positives") or 0)
     reply_grain: dict = {}
     untied = 0
     for em, s in (by_email or {}).items():
@@ -10212,7 +10220,19 @@ def _cockpit_messaging(cid) -> dict:
             vpaths.get("booked_paths") or {})
         meetings["by_variant"] = reply_grain
         meetings["unattributed"] = untied
+    # Campaign-level positives from the SAME scorecard row the overview glance
+    # reads, so the table can reconcile its Positives column against the tile
+    # (messaging-truth sweep 2026-08-09: an interested lead with no tracked
+    # reply on any version left the column summing 1 short of the overview).
+    campaign_positives = None
+    try:
+        _sc = sb("GET", f"campaign_scorecard?smartlead_campaign_id=eq.{n}&select=positives")
+        if isinstance(_sc, list) and _sc:
+            campaign_positives = _sc[0].get("positives")
+    except Exception:  # noqa: BLE001 — reconciliation is best-effort, never break the tab
+        pass
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
+            "campaign_positives": campaign_positives,
             "combinations": vpaths.get("combinations") or {},
             "paths": vpaths.get("paths") or {},
             "degraded": False}

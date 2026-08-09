@@ -4742,7 +4742,7 @@
         }
         return;
       }
-      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations, id, m.paths);
+      root.innerHTML = versionTableHTML(m.versions, m.note, m.meetings, m.combinations, id, m.paths, m.campaign_positives);
       vawWireMessaging(root, c, m);
     };
     if (STATE.messaging[id]) { apply(STATE.messaging[id]); return; }
@@ -5628,7 +5628,7 @@
   }
   /* ══ end variant-action-wire module ═══════════════════════════════════ */
 
-  function versionTableHTML(versions, note, meetings, combinations, cid, paths) {
+  function versionTableHTML(versions, note, meetings, combinations, cid, paths, campaignPositives) {
     /* Meetings attach to the COPY, not the label: Smartlead exposes no
        sent-variant per lead, so the backend clusters identical copy and credits
        a booking to the cluster's ACTIVE (representative) label. Every row shows
@@ -5717,8 +5717,14 @@
       var vs = byStep[sk].slice().sort(function (a, b) { return (a.label == null ? '￿' : String(a.label)).localeCompare(b.label == null ? '￿' : String(b.label)); });
       var band = '<tr class="vp-band"><td class="vp-l" colspan="7">Email ' + esc(sk) +
         ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') + '</span></td></tr>';
+      /* an inline (step-level) counter row can coexist with real versions of
+         the same email — Smartlead keeps the pre-split sends on it. Calling it
+         "the only version" beside version rows contradicts itself (founder
+         panel 2026-08-09): label it "Original" with the why, and only show the
+         locked "only version" toggle when it truly is alone on the step. */
+      var soleStep = !vs.some(function (x) { return !x.inline; });
       var body = vs.map(function (v) {
-        var label = v.inline ? 'A' : (v.label || '?');
+        var label = v.inline ? (soleStep ? 'A' : 'Original') : (v.label || '?');
         var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
         var rep = (!v.inline && v.label != null) ? (repOf[sk + '|' + v.label] || v.label) : null;
         var isRep = rep != null && rep === v.label;
@@ -5726,6 +5732,15 @@
            sibling shows 0 with a tooltip naming where the credit sits */
         var meetCell, pmCell = '';
         if (!hasMeet) { meetCell = ''; }
+        else if (v.inline) {
+          /* inline steps cluster under "Email N" — read that key so a meeting
+             booked on a single-version step shows on its row, not nowhere
+             (messaging-truth sweep 2026-08-09: 3507001 held 2 meetings on
+             "2|Email 2" that rendered as a dot) */
+          var imv = byVar[sk + '|Email ' + sk] || 0;
+          meetCell = imv > 0 ? fmtInt(imv) : '<span class="ring-caption">0</span>';
+          if (imv && v.sent) pmCell = fmtInt(Math.round(v.sent / imv));
+        }
         else if (rep == null) { meetCell = '<span class="ring-caption">&middot;</span>'; }
         else {
           var mv = isRep ? (byVar[sk + '|' + rep] || 0) : 0;
@@ -5745,7 +5760,8 @@
            switched off (that would leave the step sending nothing). Show a
            locked-on toggle + 100% so it reads like every other row (owner ask
            2026-08-09), not the word "inline". */
-        if (v.inline) stateCell = ' <span class="vp-ctl"><button type="button" class="vaw-toggle is-on is-soleon" aria-pressed="true" aria-disabled="true" title="The only version on Email ' + esc(String(sk)) + ' — it sends to everyone. Add a second version to split the traffic."><span class="vaw-knob"></span></button><span class="vp-share">100%</span></span>';
+        if (v.inline && soleStep) stateCell = ' <span class="vp-ctl"><button type="button" class="vaw-toggle is-on is-soleon" aria-pressed="true" aria-disabled="true" title="The only version on Email ' + esc(String(sk)) + ' — it sends to everyone. Add a second version to split the traffic."><span class="vaw-knob"></span></button><span class="vp-share">100%</span></span>';
+        else if (v.inline) stateCell = ' <span class="vp-dot vp-dot--on" title="Counters from before Email ' + esc(String(sk)) + ' was split into versions — these sends aren\'t part of any version below"></span> <span class="ring-caption">before versions</span>';
         else if (v.disabled && v.restorable && cid != null)
           /* deleted in Smartlead but the copy survives — the enable action can
              bring it back (is_deleted flipped on the id-intact save), so it
@@ -5909,12 +5925,50 @@
             '<td class="tnum" data-label="Sent / meeting">' + (c.mt && c.snt ? fmtInt(Math.round(c.snt / c.mt)) : '<span class="ring-caption">—</span>') + '</td></tr>';
         }).join('');
     }
+    /* Unattributed meetings AND positives get their own visible ROW, not a
+       footnote (Bjion 2026-08-09: "overview says 9, the column adds to 8") —
+       the Meetings and Positives columns must literally sum to the overview
+       tiles. A booking with no traceable email reply (e.g. straight from the
+       calendar link), or a lead marked interested without a tracked reply on
+       one version, can't honestly sit on a version row, so they sit here. */
+    var unattrMt = (meetings && meetings.unattributed > 0) ? meetings.unattributed : 0;
+    var vPosSum = 0;
+    versions.forEach(function (v) { if (!v.stats_purged) vPosSum += (v.positives || 0); });
+    var posGap = (campaignPositives != null) ? campaignPositives - vPosSum : 0;
+    var unattrHTML = '';
+    if (unattrMt > 0 || posGap > 0) {
+      var mtWhy = 'Booked without a traceable email reply — for example straight from the calendar link — so it can\'t be credited to one version. Still part of the campaign total.';
+      var posWhy = 'Positives Smartlead counts for the campaign that can\'t be placed on one version above &mdash; a reply on a deleted version whose counters Smartlead purged, or a lead marked interested without a tracked reply. Still part of the campaign total.';
+      unattrHTML = '<tr class="vp-unattr"><td data-label="Version">No version <span class="ring-caption">not tied to one email version</span></td>' +
+        '<td class="tnum" data-label="Sent"><span class="ring-caption">&mdash;</span></td>' +
+        '<td class="tnum" data-label="Replies"><span class="ring-caption">&mdash;</span></td>' +
+        '<td class="tnum" data-label="Positives">' + (posGap > 0 ? '<span title="' + esc(posWhy) + '">' + fmtInt(posGap) + '</span>' : '<span class="ring-caption">&mdash;</span>') + '</td>' +
+        '<td class="tnum" data-label="Sent / positive"><span class="ring-caption">&mdash;</span></td>' +
+        '<td class="tnum" data-label="Meetings">' + (unattrMt > 0 ? '<span title="' + esc(mtWhy) + '">' + fmtInt(unattrMt) + '</span>' : '<span class="ring-caption">&mdash;</span>') + '</td>' +
+        '<td class="tnum" data-label="Sent / meeting"><span class="ring-caption">&mdash;</span></td></tr>';
+    }
+    /* posGap < 0: the version counters add to MORE than the campaign total —
+       Smartlead counts a person once for the campaign but once per version
+       they replied on. State the arithmetic plainly instead of hiding it. */
+    var posNote = (campaignPositives != null && posGap < 0)
+      ? '<p class="sample-footer">Smartlead counts each person once in the campaign total (' + fmtInt(campaignPositives) +
+        ' positives) but once per email version they replied to in the rows above (' + fmtInt(vPosSum) +
+        ' added up) &mdash; someone who replied positively to more than one email shows on each of those versions.</p>'
+      : '';
+    /* unattributed meetings get a VISIBLE sentence, not just a hover tooltip
+       (founder panel 2026-08-09: a meeting with no positive behind it and no
+       on-screen explanation reads as a counting bug) */
+    var mtNote = '';
+    if (unattrMt > 0) {
+      var mtTotal = (meetings && meetings.total) || 0;
+      mtNote = '<p class="sample-footer">' + fmtInt(unattrMt) + ' booked meeting' + (unattrMt === 1 ? '' : 's') +
+        ' on the &ldquo;No version&rdquo; row came without a tracked positive reply &mdash; usually booked straight from the calendar link.' +
+        ((campaignPositives != null && mtTotal > campaignPositives)
+          ? ' That is why this campaign shows more meetings than positive replies.' : '') + '</p>';
+    }
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
       '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
-      '<tbody>' + rows + comboHTML + '</tbody></table></div>' +
-      ((meetings && meetings.unattributed > 0)
-        ? '<p class="sample-footer">' + fmtInt(meetings.unattributed) + ' booked meeting' + (meetings.unattributed === 1 ? '' : 's') +
-          " can't be tied to a version yet &mdash; counted in the campaign total only." + '</p>' : '') +
+      '<tbody>' + rows + unattrHTML + comboHTML + '</tbody></table></div>' + posNote + mtNote +
       (note ? '<p class="sample-footer">' + esc(note) + '</p>' : '');
   }
 
