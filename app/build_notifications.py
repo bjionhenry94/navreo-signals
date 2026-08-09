@@ -701,19 +701,24 @@ def fetch_booked_journey_labels(campaign_id) -> set:
     positives stay Smartlead-verbatim (parity ruling 2026-08-09 — the old
     answer, moving the positive itself onto the opener, broke parity)."""
     rows = sb("GET", f"replies?smartlead_campaign_id=eq.{campaign_id}"
-                     "&category=eq.Call%20Booked&select=vp:raw->>vpath2")
+                     "&category=eq.Call%20Booked"
+                     "&select=vp:raw->>vpath3,vp2:raw->>vpath2")
     out: set = set()
     for r in rows if isinstance(rows, list) else []:
-        vp = r.get("vp") if isinstance(r, dict) else None
-        if isinstance(vp, str) and vp:
-            try:
-                vp = json.loads(vp)
-            except ValueError:
-                continue
-        if isinstance(vp, dict):
-            for st, lbl in vp.items():
-                if st != "_x" and lbl:
-                    out.add((str(st), str(lbl)))
+        # vpath3 is the current per-label stamp; vpath2 (old cluster-rep
+        # vocabulary) is kept as a fallback until the 3-hourly cron restamps —
+        # a stale rep label only ever widens this guard, never a drop call.
+        for k in ("vp", "vp2"):
+            vp = r.get(k) if isinstance(r, dict) else None
+            if isinstance(vp, str) and vp:
+                try:
+                    vp = json.loads(vp)
+                except ValueError:
+                    continue
+            if isinstance(vp, dict):
+                for st, lbl in vp.items():
+                    if st != "_x" and lbl:
+                        out.add((str(st), str(lbl)))
     return out
 
 
