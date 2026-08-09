@@ -5764,10 +5764,10 @@
               '<td class="tnum" data-label="Positives"><span class="ring-caption">&mdash;</span></td>'
             : '<td class="tnum" data-label="Sent">' + fmtInt(v.sent) + '</td>' +
               '<td class="tnum" data-label="Replies">' + fmtInt(v.replies) + rateSpan(v.replies, v.sent) + '</td>' +
-              '<td class="tnum" data-label="Positives"' +
-                (v.positives_include_booked ? ' title="includes booked meetings credited to this opener version"'
-                  : v.positives_credited_to_opener ? ' title="' + v.positives_credited_to_opener + ' positive' + (v.positives_credited_to_opener === 1 ? '' : 's') + ' counted on the opener version the lead first saw"' : '') +
-              '>' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>') +
+              /* positives are Smartlead's own per-variant count, verbatim
+                 (parity ruling 2026-08-09) — booked-meeting credit lives in
+                 the Meetings column and the Best-path journey rows only */
+              '<td class="tnum" data-label="Positives">' + fmtInt(v.positives) + rateSpan(v.positives, v.sent) + '</td>') +
           '<td class="tnum" data-label="Sent / positive">' + (v.stats_purged ? '<span class="ring-caption">&mdash;</span>' : perPos(v)) + '</td>' +
           '<td class="tnum" data-label="Meetings">' + meetCell + '</td>' +
           '<td class="tnum" data-label="Sent / meeting">' + pmCell + '</td></tr>';

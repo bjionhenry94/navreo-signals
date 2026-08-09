@@ -10020,67 +10020,6 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
             "total": len(booked)}
 
 
-def _reconcile_meeting_positive(versions, meetings) -> int:
-    """MEETING ⟹ POSITIVE (Bjion's standing ruling, 2026-08-04): a booked
-    meeting IS a positive outcome, so no numeric row may ever render more
-    meetings than positives. Meetings are attributed per copy-cluster and shown
-    on the cluster's representative label, while Smartlead may have credited
-    the booker's "interested" mark to a different step/variant — or nowhere,
-    when the lead booked straight to calendar. On the row that carries the
-    meeting, positives (and replies, to keep sent ≥ replies ≥ positives sane)
-    come UP to the meeting count. Positives are only ever raised to match real
-    bookers from the reply archive; meetings are never suppressed. Purged rows
-    ('—' cells) carry no numbers, so nothing to reconcile there. Returns the
-    number of rows raised (served as meetings["reconciled"] for the footnote).
-    This is also the runtime clamp: the endpoint structurally cannot serve a
-    numeric meetings>positives row while this runs at the fold."""
-    if not isinstance(meetings, dict) or not isinstance(versions, list):
-        return 0
-    by_variant = meetings.get("by_variant") or {}
-    if not by_variant:
-        return 0
-    raised = 0
-    moved = 0  # bookers whose positive credit was raised onto an opener row
-    for v in versions:
-        if not isinstance(v, dict) or v.get("inline") or v.get("label") is None:
-            continue
-        if v.get("stats_purged"):
-            continue
-        mv = by_variant.get(str(v.get("step")) + "|" + str(v.get("label"))) or 0
-        if mv > (v.get("positives") or 0):
-            moved += mv - (v.get("positives") or 0)
-            v["positives"] = mv
-            v["positives_include_booked"] = True
-            if (v.get("replies") or 0) < mv:
-                v["replies"] = mv
-            raised += 1
-    # MOVE the credit, never duplicate it: Smartlead already counted the same
-    # booker's positive reply on the variant of the step they REPLIED at
-    # (usually the follow-up), so raising the opener without a matching
-    # subtraction double-counts the person and the column sums beat the
-    # campaign total (audit 2026-08-09: table said 7 positives, campaign 5).
-    # The archive's by_step says which step each booker's reply landed on;
-    # subtract there — but only when exactly one non-raised row on that step
-    # holds positives, so the sibling that counted them is unambiguous.
-    # Floor at 0 and cap at what was raised: a straight-to-calendar booker was
-    # never in Smartlead's counters, so there is nothing to take back.
-    if moved:
-        for s, booked_n in (meetings.get("by_step") or {}).items():
-            rows_s = [v for v in versions
-                      if isinstance(v, dict) and str(v.get("step")) == str(s)
-                      and not v.get("stats_purged")
-                      and not v.get("positives_include_booked")
-                      and (v.get("positives") or 0) > 0]
-            if len(rows_s) != 1:
-                continue  # ambiguous sibling — keep the overcount rather than guess
-            take = min(int(booked_n or 0), rows_s[0]["positives"], moved)
-            if take > 0:
-                rows_s[0]["positives"] -= take
-                rows_s[0]["positives_credited_to_opener"] = take
-                moved -= take
-    return raised
-
-
 def _cockpit_messaging(cid) -> dict:
     """Per-version table from Smartlead variant-statistics (the per-variant
     sent/reply counters), with meetings + per-variant attribution served
@@ -10213,7 +10152,15 @@ def _cockpit_messaging(cid) -> dict:
         # honestly accounted for here). traceless = the rest.
         meetings["removed"] = vpaths.get("removed") or 0
         meetings["removed_versions"] = vpaths.get("removed_versions") or 0
-        meetings["reconciled"] = _reconcile_meeting_positive(versions, meetings)
+        # PARITY RULING (Bjion 2026-08-09, supersedes the 2026-08-04 bump):
+        # per-variant positives are served EXACTLY as Smartlead reports them —
+        # never raised for booked meetings, never subtracted to rebalance.
+        # Meeting⟹positive stays true at the LEAD grain (overview tile, Best
+        # path journey rows); a row showing meetings beside 0 positives is the
+        # honest state when the booking came without a platform-counted
+        # positive reply. The old reconcile falsified Latka 3710654: Calendly-
+        # synced bookings raised cluster C 0→2 and the rebalance stripped
+        # variant A's one genuine positive.
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "combinations": vpaths.get("combinations") or {},
             "paths": vpaths.get("paths") or {},

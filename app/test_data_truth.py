@@ -1,7 +1,10 @@
-"""Campaign data truth tests (audit 2026-08-09): the numbers every campaign
-surface shows must foot to each other and to the platform. Pure python, NO
-network — server.sb and build_notifications.sl_get are monkeypatched.
-Run: python3 app/test_data_truth.py"""
+"""Campaign data truth tests — PARITY RULING (Bjion 2026-08-09): per-variant
+positives are served exactly as Smartlead reports them, never raised for booked
+meetings and never subtracted to rebalance; meetings are attributed only with
+evidence (archive vpath stamps) and booked-journey variants are never called
+losers. Pure python, NO network — server.sb and build_notifications.sb/sl_get
+are monkeypatched. Run: python3 app/test_data_truth.py"""
+import inspect
 import os
 import sys
 sys.path.insert(0, os.path.dirname(__file__))
@@ -44,64 +47,83 @@ check("live opener journey zero-filled", "A>A" in pk, pk)
 check("deleted-only opener gets NO ghost row", not any(k.startswith("B>") for k in pk), pk)
 
 # ---------------------------------------------------------------------------
-# 2 — Builder journey credit: a booker's positive + meeting land on the
-#     Email-1 variant they first saw, not the follow-up bucket — so Section 4
-#     can never tell a founder to drop the opener that booked the meetings
-#     while the Messaging table beside it crowns the same opener.
+# 2 — PARITY: the messaging fold contains no positive-count mutation. The
+#     2026-08-04 bump and the 2026-08-09 subtraction are both gone; deleting
+#     this guarantee (or reintroducing a reconcile at the fold) is the
+#     regression these checks catch.
 # ---------------------------------------------------------------------------
-VARIANT_INDEX = {
-    101: {"seq_number": 1, "label": "D", "distribution_pct": 33, "is_deleted": False, "angle": "d"},
-    100: {"seq_number": 1, "label": "A", "distribution_pct": 34, "is_deleted": False, "angle": "a"},
-}
-ROWS = [
-    # openers sent (no replies on these rows)
-    {"seq_variant_id": 101, "lead_email": "kor@x.com"},
-    {"seq_variant_id": 101, "lead_email": "omar@x.com"},
-    {"seq_variant_id": 100, "lead_email": "jonas@x.com"},
-    # jonas replies positively at Email 1 on A — stays reply-grain credit
-    {"seq_variant_id": 100, "lead_email": "jonas@x.com", "reply_time": "2026-07-20",
-     "lead_category": "Meeting Request"},
-    # kor + omar book after Email 2 (null variant id -> "__email2__" bucket)
-    {"seq_variant_id": None, "lead_email": "kor@x.com", "reply_time": "2026-07-21",
-     "lead_category": "Call Booked"},
-    {"seq_variant_id": None, "lead_email": "omar@x.com", "reply_time": "2026-07-22",
-     "lead_category": "Call Booked"},
-    # a non-booker positive at Email 2 keeps its reply-step credit
-    {"seq_variant_id": None, "lead_email": "deborah@x.com", "reply_time": "2026-07-23",
-     "lead_category": "Information Request"},
-]
-_orig_sl_get = bn.sl_get
-bn.sl_get = lambda path, params=None: {"data": ROWS, "total_stats": len(ROWS)} \
-    if str(params or {}).find("'offset': 0") != -1 or (params or {}).get("offset", 0) == 0 else {"data": []}
-try:
-    agg = bn.fetch_variant_stats(3649281, VARIANT_INDEX)
-finally:
-    bn.sl_get = _orig_sl_get
-d, e2 = agg.get(101) or {}, agg.get("__email2__") or {}
-check("booker positives credited to their opener", d.get("positives") == 2, agg)
-check("booker meetings credited to their opener", d.get("meetings") == 2, agg)
-check("follow-up bucket keeps only non-booker credit", e2.get("positives") == 1 and e2.get("meetings") == 0, agg)
-check("total positives still unique people", sum(a.get("positives", 0) for a in agg.values()) == 4, agg)
-check("the drop-the-winner call can no longer fire",
-      not (bn.is_failing(1012, d.get("positives", 0)) and d.get("positives", 0) == 0))
+check("_reconcile_meeting_positive is deleted",
+      not hasattr(server, "_reconcile_meeting_positive"))
+src = inspect.getsource(server._cockpit_messaging)
+check("_cockpit_messaging never rewrites positives",
+      "positives_include_booked" not in src and 'v["positives"] =' not in src
+      and "_reconcile_meeting_positive" not in src)
 
 # ---------------------------------------------------------------------------
-# 3 — Cross-surface foot: reconciled variant rows sum to the same positives
-#     total the Overview serves (the 7-vs-5 bug shape, end to end in-memory).
+# 3 — Builder parity: fetch_variant_stats keeps counts at Smartlead's grain.
+#     A booker who replied at Email 2 counts there, NOT on their opener —
+#     the Latka corruption started with exactly this move.
 # ---------------------------------------------------------------------------
-versions = [
-    {"step": 1, "label": "A", "inline": False, "sent": 1022, "replies": 8, "positives": 2, "bounces": 39},
-    {"step": 1, "label": "C", "inline": False, "sent": 1018, "replies": 10, "positives": 1, "bounces": 42},
-    {"step": 1, "label": "D", "inline": False, "sent": 1012, "replies": 17, "positives": 0, "bounces": 28},
-    {"step": 2, "label": "A", "inline": False, "sent": 2149, "replies": 26, "positives": 2, "bounces": 3},
+ROWS = [
+    {"seq_variant_id": 101, "lead_email": "kor@x.com"},
+    {"seq_variant_id": 100, "lead_email": "jonas@x.com"},
+    {"seq_variant_id": 100, "lead_email": "jonas@x.com", "reply_time": "2026-07-20",
+     "lead_category": "Meeting Request"},
+    {"seq_variant_id": None, "lead_email": "kor@x.com", "reply_time": "2026-07-21",
+     "lead_category": "Call Booked"},
 ]
-meetings = {"by_variant": {"1|D": 2}, "by_step": {"2": 2}, "total": 2}
-server._reconcile_meeting_positive(versions, meetings)
-table_total = sum(v["positives"] for v in versions)
-check("table positives foot to the campaign total (5, not 7)", table_total == 5, versions)
-check("no numeric row violates meeting<=positives",
-      all((meetings["by_variant"].get(str(v["step"]) + "|" + str(v["label"]), 0) <= v["positives"])
-          for v in versions), versions)
+_orig_sl_get = bn.sl_get
+bn.sl_get = lambda path, params=None: (
+    {"data": ROWS, "total_stats": len(ROWS)} if (params or {}).get("offset", 0) == 0
+    else {"data": []})
+try:
+    agg = bn.fetch_variant_stats(3710654)
+finally:
+    bn.sl_get = _orig_sl_get
+check("booker counts at the step they replied (parity)",
+      (agg.get("__email2__") or {}).get("positives") == 1
+      and (agg.get(101) or {}).get("positives", 0) == 0, agg)
+check("non-booker positive stays at its reply row",
+      (agg.get(100) or {}).get("positives") == 1, agg)
+
+# ---------------------------------------------------------------------------
+# 4 — Booked-journey evidence: vpath stamps parse into (step, label) pairs;
+#     unstamped/exhausted rows contribute nothing.
+# ---------------------------------------------------------------------------
+_orig_bn_sb = bn.sb
+bn.sb = lambda *a, **k: [
+    {"vp": '{"1": "D", "_x": ["2"]}'},
+    {"vp": None},
+    {"vp": "not json"},
+]
+try:
+    bj = bn.fetch_booked_journey_labels(3649281)
+finally:
+    bn.sb = _orig_bn_sb
+check("stamps parse to (step,label) evidence", bj == {("1", "D")}, bj)
+
+# ---------------------------------------------------------------------------
+# 5 — Drop guard: a booked-journey opener at 0 Smartlead positives is never
+#     flagged failing in the receipts; a genuinely dry sibling still is.
+# ---------------------------------------------------------------------------
+ctx = {
+    "variant_stats": {
+        7057838: {"sent": 1012, "positives": 0, "replies": 17, "meetings": 0},
+        7057837: {"sent": 1018, "positives": 0, "replies": 10, "meetings": 0},
+    },
+    "variant_index": {
+        7057838: {"seq_number": 1, "label": "D", "distribution_pct": 33,
+                  "is_deleted": False, "angle": "d"},
+        7057837: {"seq_number": 1, "label": "C", "distribution_pct": 33,
+                  "is_deleted": False, "angle": "c"},
+    },
+    "booked_journeys": {("1", "D")},
+}
+vl = {v["variant"]: v for v in bn.build_variants_list(ctx)}
+check("booked-journey variant never flagged failing",
+      "failing" not in (vl.get("D") or {}).get("flags", []), vl)
+check("dry sibling still flagged failing",
+      "failing" in (vl.get("C") or {}).get("flags", []), vl)
 
 print("FAIL" if _fail else "ALL PASS")
 sys.exit(1 if _fail else 0)
