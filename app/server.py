@@ -9824,6 +9824,7 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
     positive_set = {em for em, grp in groups.items()
                     if any((rr.get("category") or "") in _AH_POSITIVE_CATS for rr in grp)}
     by_variant, combos, paths = {}, {}, {}
+    booked_paths: dict = {}  # email -> {step: label} for booked leads (reply-grain join)
     attributed = 0
     fetches = 0
     unresolved = []  # (email, shingles) \u2014 bookers with a real quote but no live-copy match
@@ -9905,6 +9906,7 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
             attributed += 1
             for st, key in path.items():
                 by_variant[st + "|" + key] = by_variant.get(st + "|" + key, 0) + 1
+            booked_paths[em] = dict(path)
         e1, e2 = path.get("1"), path.get("2")
         if e1 and e2 and em in booked_set:
             # legacy combos stay strictly evidence-resolved on BOTH steps
@@ -9959,7 +9961,7 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
             paths.setdefault(c1["rep"] + ">" + c2["rep"],
                              {"replies": 0, "positives": 0, "meetings": 0})
     return {"by_variant": by_variant, "combinations": combos, "paths": paths,
-            "clusters": clusters_out,
+            "clusters": clusters_out, "booked_paths": booked_paths,
             "attributed": attributed, "booked": len(booked_set),
             "removed": removed, "removed_versions": len(removed_groups)}
 
@@ -10017,7 +10019,49 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
         else:
             unattributed += 1
     return {"by_step": by_step, "unattributed": unattributed,
-            "total": len(booked)}
+            "total": len(booked),
+            # per-person reply step (None = unknown) — the messaging fold uses
+            # this to place each meeting on the variant the booker REPLIED on
+            "by_email": {em: rec["step"] for em, rec in booked.items()}}
+
+
+def _meetings_reply_grain(versions: list, by_email: dict, booked_paths: dict):
+    """(reply_grain, untied): each booked meeting placed on the variant the
+    booker REPLIED on — the same variant whose positive counter Smartlead
+    credited them to — so no table row can show meetings beside a smaller
+    positives number (Bjion 2026-08-09b). A booking whose reply step or
+    variant is unknown, or that exceeds the platform's positives on its row
+    (a booker Smartlead never counted), goes to `untied` for the footnote —
+    never a guessed or law-breaking cell. Single-variant steps resolve the
+    variant unambiguously without needing a path stamp."""
+    def _rows_at(s):
+        return [v for v in versions
+                if str(v.get("step")) == s and not v.get("inline")
+                and v.get("label") is not None and not v.get("stats_purged")]
+    pos_by_key = {str(v.get("step")) + "|" + str(v.get("label")): (v.get("positives") or 0)
+                  for v in versions
+                  if not v.get("inline") and v.get("label") is not None
+                  and not v.get("stats_purged")}
+    reply_grain: dict = {}
+    untied = 0
+    for em, s in (by_email or {}).items():
+        s = str(s) if s else None
+        lbl = (booked_paths.get(em) or {}).get(s) if s else None
+        if not lbl and s and len(_rows_at(s)) == 1:
+            lbl = str(_rows_at(s)[0].get("label"))
+        if s and lbl:
+            reply_grain[s + "|" + lbl] = reply_grain.get(s + "|" + lbl, 0) + 1
+        else:
+            untied += 1
+    for k in list(reply_grain):
+        cap = pos_by_key.get(k)
+        if cap is not None and reply_grain[k] > cap:
+            untied += reply_grain[k] - cap
+            if cap:
+                reply_grain[k] = cap
+            else:
+                del reply_grain[k]
+    return reply_grain, untied
 
 
 def _cockpit_messaging(cid) -> dict:
@@ -10143,7 +10187,6 @@ def _cockpit_messaging(cid) -> dict:
     except Exception:  # noqa: BLE001 — attribution is best-effort, never break the tab
         vpaths = {}
     if isinstance(meetings, dict):
-        meetings["by_variant"] = vpaths.get("by_variant") or {}
         meetings["clusters"] = vpaths.get("clusters") or {}
         meetings["attributed"] = vpaths.get("attributed") or 0
         # 'removed' = meetings whose booker clearly quoted an opener that has
@@ -10152,15 +10195,23 @@ def _cockpit_messaging(cid) -> dict:
         # honestly accounted for here). traceless = the rest.
         meetings["removed"] = vpaths.get("removed") or 0
         meetings["removed_versions"] = vpaths.get("removed_versions") or 0
-        # PARITY RULING (Bjion 2026-08-09, supersedes the 2026-08-04 bump):
-        # per-variant positives are served EXACTLY as Smartlead reports them —
-        # never raised for booked meetings, never subtracted to rebalance.
-        # Meeting⟹positive stays true at the LEAD grain (overview tile, Best
-        # path journey rows); a row showing meetings beside 0 positives is the
-        # honest state when the booking came without a platform-counted
-        # positive reply. The old reconcile falsified Latka 3710654: Calendly-
-        # synced bookings raised cluster C 0→2 and the rebalance stripped
-        # variant A's one genuine positive.
+        # PARITY RULING (Bjion 2026-08-09): per-variant positives are served
+        # EXACTLY as Smartlead reports them — never raised, never rebalanced.
+        # REPLY-GRAIN MEETINGS (Bjion 2026-08-09b, "how can it have more
+        # meetings than positives"): the Meetings cell shares the Positives
+        # cell's grain — a meeting sits on the variant the booker REPLIED on,
+        # the same variant whose positive counter Smartlead credited them to,
+        # so no row can show meetings beside a smaller positives number.
+        # Journey credit (which OPENER started the arm) lives exclusively in
+        # the Best-path table. A booking whose reply step or variant is
+        # unknown — or that exceeds the platform's positives on its row (a
+        # booker Smartlead never counted) — lands in `unattributed`, shown as
+        # a footnote, never a guessed or law-breaking cell.
+        reply_grain, untied = _meetings_reply_grain(
+            versions, meetings.pop("by_email", None) or {},
+            vpaths.get("booked_paths") or {})
+        meetings["by_variant"] = reply_grain
+        meetings["unattributed"] = untied
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "combinations": vpaths.get("combinations") or {},
             "paths": vpaths.get("paths") or {},

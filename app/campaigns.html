@@ -5671,7 +5671,23 @@
        Sent/meeting, own sends). If no opener has a meeting yet, fall back to
        fewest sends per positive so young campaigns still get a pill. */
     var best = null;
-    (byStep['1'] || []).forEach(function (v) {
+    /* the best OPENER is a journey verdict: the opener of the winning path
+       (most meetings, then most positives). The Meetings column itself is
+       reply-grain (2026-08-09b) and no longer carries journey credit, so the
+       badge reads the same data the Best-path medal does — one signal. */
+    if (paths) {
+      var bpTop = Object.keys(paths).map(function (k) {
+        var p = k.split('>'), d = paths[k] || {};
+        return { e1: p[0], mt: d.meetings || 0, pos: d.positives || 0 };
+      }).sort(function (a, b) { return b.mt - a.mt || b.pos - a.pos; })[0];
+      if (bpTop && (bpTop.mt > 0 || bpTop.pos > 0)) {
+        (byStep['1'] || []).forEach(function (v) {
+          if (best || v.disabled || v.inline || !v.sent || v.label == null) return;
+          if (v.label === bpTop.e1 || (repOf['1|' + v.label] || v.label) === bpTop.e1) best = { label: v.label };
+        });
+      }
+    }
+    if (best === null) (byStep['1'] || []).forEach(function (v) {
       if (v.disabled || v.inline || !v.sent || v.label == null) return;
       var rep = repOf['1|' + v.label] || v.label;
       var mv = rep === v.label ? (byVar['1|' + rep] || 0) : 0;
@@ -5868,6 +5884,9 @@
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
       '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
       '<tbody>' + rows + comboHTML + '</tbody></table></div>' +
+      ((meetings && meetings.unattributed > 0)
+        ? '<p class="sample-footer">' + fmtInt(meetings.unattributed) + ' booked meeting' + (meetings.unattributed === 1 ? '' : 's') +
+          " can't be tied to a version yet &mdash; counted in the campaign total only." + '</p>' : '') +
       (note ? '<p class="sample-footer">' + esc(note) + '</p>' : '');
   }
 

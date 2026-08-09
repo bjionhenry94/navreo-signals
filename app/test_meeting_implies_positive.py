@@ -50,5 +50,41 @@ check("fold serves Smartlead positives verbatim",
       "_reconcile_meeting_positive" not in src and "positives_include_booked" not in src)
 check("the ruling is documented at the fold", "PARITY RULING" in src)
 
+# 4 — REPLY-GRAIN MEETINGS (Bjion 2026-08-09b: "how can it have more meetings
+#     than positives"): the Meetings cell shares the Positives cell's grain,
+#     so no row can show meetings beside a smaller positives count. Journey
+#     credit lives only in Best path; the excess goes to the footnote.
+VERSIONS = [
+    {"step": 1, "label": "G", "inline": False, "sent": 581, "replies": 25, "positives": 0},
+    {"step": 1, "label": "B", "inline": False, "sent": 3848, "replies": 26, "positives": 2},
+    {"step": 2, "label": "A", "inline": False, "sent": 20648, "replies": 243, "positives": 9},
+]
+# two bookers opened on G but replied+booked at Email 2 (their positives are
+# in E2-A's 9); one booker has no known step at all
+rg, untied = server._meetings_reply_grain(
+    VERSIONS,
+    {"kor@x.com": "2", "omar@x.com": "2", "ghost@x.com": None},
+    {"kor@x.com": {"1": "G", "2": "A"}, "omar@x.com": {"1": "G", "2": "A"}})
+check("meetings land on the reply variant, not the opener",
+      rg.get("2|A") == 2 and "1|G" not in rg, rg)
+check("stepless booking goes to the footnote", untied == 1, untied)
+check("no cell breaks meetings<=positives",
+      all(rg.get(str(v["step"]) + "|" + str(v["label"]), 0) <= v["positives"] for v in VERSIONS), rg)
+
+# 5 — the clamp: a booking placed on a row whose platform positives can't
+#     cover it (Smartlead never counted the booker) moves to the footnote.
+rg, untied = server._meetings_reply_grain(
+    [{"step": 1, "label": "G", "inline": False, "sent": 581, "replies": 25, "positives": 0}],
+    {"kor@x.com": "1"},
+    {"kor@x.com": {"1": "G"}})
+check("uncovered booking clamps to the footnote", rg == {} and untied == 1, (rg, untied))
+
+# 6 — single-variant step resolves without a path stamp; cap still honoured.
+rg, untied = server._meetings_reply_grain(
+    [{"step": 2, "label": "A", "inline": False, "sent": 100, "replies": 5, "positives": 1}],
+    {"a@x.com": "2", "b@x.com": "2"}, {})
+check("single-variant step attributes unambiguously, capped by positives",
+      rg.get("2|A") == 1 and untied == 1, (rg, untied))
+
 print("FAIL" if _fail else "ALL PASS")
 sys.exit(1 if _fail else 0)
