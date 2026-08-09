@@ -9501,7 +9501,10 @@ def _meeting_step_from_history(cid: int, email: str):
     (backstop-ingested rows never do — the categoriser-hook payload is minimal).
     Rule, in order of trust: the first REPLY item's own email_seq_number; else
     the seq of the SENT sharing that REPLY's stats_id; else the last
-    seq-carrying SENT before that REPLY. None when Smartlead can't say."""
+    seq-carrying SENT before that REPLY. A lead with NO reply at all (booked
+    straight from the calendar link) credits the LAST email they received
+    (Bjion 2026-08-09: "they would've received first and second email, so
+    attribute it to the second"). None when Smartlead can't say."""
     from urllib.parse import quote
 
     def _seq(m):
@@ -9516,11 +9519,11 @@ def _meeting_step_from_history(cid: int, email: str):
             lead = first.get("lead") if isinstance(first, dict) and isinstance(first.get("lead"), dict) else first
         lid = lead.get("id") if isinstance(lead, dict) else None
         if not lid:
-            return None
+            return None, None
         hr = _smartlead_json("GET", f"/campaigns/{cid}/leads/{lid}/message-history")
         hist = hr.get("history") if isinstance(hr, dict) else hr
         if not isinstance(hist, list):
-            return None
+            return None, None
         items = [m for m in hist if isinstance(m, dict)]  # API order is chronological
         last_sent_seq, first_reply = None, None
         for m in items:
@@ -9531,30 +9534,37 @@ def _meeting_step_from_history(cid: int, email: str):
                 first_reply = m
                 break
         if first_reply is None:
-            return None
+            return last_sent_seq, "sent"
         if _seq(first_reply):
-            return _seq(first_reply)
+            return _seq(first_reply), "reply"
         sid_ = first_reply.get("stats_id")
         if sid_:
             for m in items:
                 if (str(m.get("type") or "").upper() == "SENT"
                         and m.get("stats_id") == sid_ and _seq(m)):
-                    return _seq(m)
-        return last_sent_seq
+                    return _seq(m), "reply"
+        return last_sent_seq, "reply"
     except Exception:  # noqa: BLE001 — attribution is best-effort, never break the tab
-        return None
+        return None, None
 
 
-def _stamp_meeting_step(reply_id, step: str):
+def _stamp_meeting_step(reply_id, step: str, sent_grain: bool = False):
     """Write the derived step back onto the archived reply row (raw key
     email_seq_number_backfill) so the Smartlead lookup never repeats. The
-    original webhook payload keys are untouched — a marked enrichment."""
+    original webhook payload keys are untouched — a marked enrichment.
+    sent_grain=True marks a step derived from the LAST SENT email of a
+    no-reply thread (calendar-link booking, Bjion 2026-08-09c) so readers
+    know no positive backs it."""
     try:
         rows = sb("GET", f"replies?id=eq.{reply_id}&select=raw")
         raw = rows[0].get("raw") if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
         if not isinstance(raw, dict):
             raw = {}
         raw["email_seq_number_backfill"] = str(step)
+        if sent_grain and str(step).isdigit():
+            raw["email_seq_number_backfill_grain"] = "sent"
+        else:
+            raw.pop("email_seq_number_backfill_grain", None)
         sb("PATCH", f"replies?id=eq.{reply_id}", {"raw": raw}, prefer="return=minimal")
     except Exception:  # noqa: BLE001
         pass
@@ -9985,26 +9995,40 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
     mrows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}"
                       "&category=eq.Call%20Booked"
                       "&select=id,email,step:raw->>email_seq_number,"
-                      "stepbf:raw->>email_seq_number_backfill"
+                      "stepbf:raw->>email_seq_number_backfill,"
+                      "grain:raw->>email_seq_number_backfill_grain"
                       "&order=replied_at.asc")
     if not isinstance(mrows, list):
         return None  # archive unreachable: the UI omits the column rather than showing false zeros
-    booked: dict = {}   # email -> {"step", "unstamped": [ids of rows with no step field]}
+    booked: dict = {}   # email -> {"step", "direct", "reply_stepped", "unstamped"}
     for mr in mrows:
         em = (mr.get("email") or "").strip().lower()
-        rec = booked.setdefault(em, {"step": None, "unstamped": []})
-        s = str(mr.get("step") or mr.get("stepbf") or "").strip()
-        if not s:
+        rec = booked.setdefault(em, {"step": None, "direct": False,
+                                     "reply_stepped": False, "unstamped": []})
+        s_reply = str(mr.get("step") or "").strip()
+        if s_reply.isdigit():
+            rec["reply_stepped"] = True  # a real reply names the step — reply grain
+        s = s_reply or str(mr.get("stepbf") or "").strip()
+        if not s or not s.isdigit():
+            # no stamp OR a 'none' marker: both restampable, so a later lookup
+            # that CAN answer (e.g. the last-sent fallback) actually persists
             rec["unstamped"].append(mr.get("id"))
         if rec["step"] is None and s.isdigit():
             rec["step"] = s
+            if not s_reply.isdigit() and (mr.get("grain") or "").strip().lower() == "sent":
+                rec["direct"] = True  # step = last email SENT; no reply exists
+    for rec in booked.values():
+        if rec["reply_stepped"]:
+            rec["direct"] = False  # any reply-named step outranks the sent-grain marker
     lookups = 0
     for em, rec in booked.items():
         attempted = False
         if rec["step"] is None and em and lookups < lookup_budget:
             lookups += 1
             attempted = True
-            rec["step"] = _meeting_step_from_history(n, em)
+            rec["step"], _grain = _meeting_step_from_history(n, em)
+            rec["direct"] = (_grain == "sent" and rec["step"] is not None
+                             and not rec["reply_stepped"])
         if lookup_budget and rec["unstamped"] and (rec["step"] or attempted):
             # Stamp EVERY step-less row (audit r2): the answer when there is
             # one, else a non-digit 'none' marker after a failed lookup so the
@@ -10012,7 +10036,8 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
             # can't say — readers isdigit()-guard it into 'unattributed', and
             # the backfill feeder stops selecting the row.
             for rid in rec["unstamped"]:
-                _stamp_meeting_step(rid, rec["step"] or "none")
+                _stamp_meeting_step(rid, rec["step"] or "none",
+                                    sent_grain=rec.get("direct", False))
             rec["unstamped"] = []
     by_step: dict = {}
     unattributed = 0
@@ -10025,18 +10050,26 @@ def _booked_meeting_steps(n: int, lookup_budget: int = 0):
             "total": len(booked),
             # per-person reply step (None = unknown) — the messaging fold uses
             # this to place each meeting on the variant the booker REPLIED on
-            "by_email": {em: rec["step"] for em, rec in booked.items()}}
+            "by_email": {em: rec["step"] for em, rec in booked.items()},
+            # sent-grain bookers (no reply anywhere — booked via the calendar
+            # link; step = last email received): the positives cap exempts them
+            "direct_emails": [em for em, rec in booked.items() if rec["direct"]]}
 
 
-def _meetings_reply_grain(versions: list, by_email: dict, booked_paths: dict):
-    """(reply_grain, untied): each booked meeting placed on the variant the
-    booker REPLIED on — the same variant whose positive counter Smartlead
-    credited them to — so no table row can show meetings beside a smaller
-    positives number (Bjion 2026-08-09b). A booking whose reply step or
-    variant is unknown, or that exceeds the platform's positives on its row
-    (a booker Smartlead never counted), goes to `untied` for the footnote —
-    never a guessed or law-breaking cell. Single-variant steps resolve the
-    variant unambiguously without needing a path stamp."""
+def _meetings_reply_grain(versions: list, by_email: dict, booked_paths: dict,
+                          direct_emails=None):
+    """(reply_grain, untied, direct_ct): each booked meeting placed on the
+    variant the booker REPLIED on — the same variant whose positive counter
+    Smartlead credited them to — so no table row can show meetings beside a
+    smaller positives number (Bjion 2026-08-09b). EXCEPTION (Bjion
+    2026-08-09c): a calendar-link booker who never replied is credited to the
+    LAST email they received (sent-grain); no positive exists for them by
+    definition, so the cap exempts them and their row may honestly show
+    meetings above positives — the UI footnotes it. A booking whose step or
+    variant stays unknown goes to `untied` — never a guessed cell.
+    Single-variant steps resolve the variant unambiguously; a direct booking
+    on a step whose only row is the inline counter resolves to that row."""
+    direct_emails = set(direct_emails or [])
     def _rows_at(s):
         return [v for v in versions
                 if str(v.get("step")) == s and not v.get("inline")
@@ -10050,26 +10083,40 @@ def _meetings_reply_grain(versions: list, by_email: dict, booked_paths: dict):
         # inline row can never show meetings beside a smaller positives number
         if v.get("inline"):
             pos_by_key[str(v.get("step")) + "|Email " + str(v.get("step"))] = (v.get("positives") or 0)
+    def _inline_only(s):
+        rows = [v for v in versions if str(v.get("step")) == s]
+        others = [v for v in rows if not v.get("inline")
+                  and v.get("label") is not None and not v.get("stats_purged")]
+        return bool([v for v in rows if v.get("inline")]) and not others
     reply_grain: dict = {}
+    direct_ct: dict = {}
     untied = 0
     for em, s in (by_email or {}).items():
         s = str(s) if s else None
         lbl = (booked_paths.get(em) or {}).get(s) if s else None
         if not lbl and s and len(_rows_at(s)) == 1:
             lbl = str(_rows_at(s)[0].get("label"))
+        if not lbl and s and em in direct_emails and _inline_only(s):
+            lbl = "Email " + s
         if s and lbl:
-            reply_grain[s + "|" + lbl] = reply_grain.get(s + "|" + lbl, 0) + 1
+            k = s + "|" + lbl
+            reply_grain[k] = reply_grain.get(k, 0) + 1
+            if em in direct_emails:
+                direct_ct[k] = direct_ct.get(k, 0) + 1
         else:
             untied += 1
     for k in list(reply_grain):
         cap = pos_by_key.get(k)
-        if cap is not None and reply_grain[k] > cap:
-            untied += reply_grain[k] - cap
-            if cap:
-                reply_grain[k] = cap
+        if cap is None:
+            continue
+        allowed = cap + direct_ct.get(k, 0)  # calendar-direct bookings sit above the cap
+        if reply_grain[k] > allowed:
+            untied += reply_grain[k] - allowed
+            if allowed:
+                reply_grain[k] = allowed
             else:
                 del reply_grain[k]
-    return reply_grain, untied
+    return reply_grain, untied, sum(direct_ct.values())
 
 
 def _cockpit_messaging(cid) -> dict:
@@ -10215,11 +10262,15 @@ def _cockpit_messaging(cid) -> dict:
         # unknown — or that exceeds the platform's positives on its row (a
         # booker Smartlead never counted) — lands in `unattributed`, shown as
         # a footnote, never a guessed or law-breaking cell.
-        reply_grain, untied = _meetings_reply_grain(
+        reply_grain, untied, direct_ct = _meetings_reply_grain(
             versions, meetings.pop("by_email", None) or {},
-            vpaths.get("booked_paths") or {})
+            vpaths.get("booked_paths") or {},
+            meetings.pop("direct_emails", None))
         meetings["by_variant"] = reply_grain
         meetings["unattributed"] = untied
+        # calendar-link bookings credited to the last email received (no reply,
+        # so no positive backs them) — the UI footnotes these
+        meetings["calendar_direct"] = direct_ct
     # Campaign-level positives from the SAME scorecard row the overview glance
     # reads, so the table can reconcile its Positives column against the tile
     # (messaging-truth sweep 2026-08-09: an interested lead with no tracked
