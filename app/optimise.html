@@ -425,16 +425,23 @@ function cleanWhy(detail){
 }
 
 function barsFrom(variants){
-  const vs=(variants||[]).map(v=>({label:v.angle||"", rate: v.sent>0? v.replies/v.sent:0,
-     sent:v.sent, rep:v.replies, win:(v.flags||[]).includes("winner")}))
+  /* same payload + same story as the campaign page's Why bars: width encodes
+     how often a version lands a YES (positives/sent). Ranking by reply rate
+     here while campaigns.html ranked by positives told two different winners
+     off identical data (audit 2026-08-09). Falls back to reply rate only
+     when nothing has converted yet, and says so. */
+  const anyPos=(variants||[]).some(v=>(v.positives||0)>0);
+  const vs=(variants||[]).map(v=>({label:v.angle||"",
+     rate: v.sent>0? (anyPos?(v.positives||0):v.replies)/v.sent:0,
+     sent:v.sent, num:(anyPos?(v.positives||0):v.replies), win:(v.flags||[]).includes("winner")}))
      .filter(v=>v.sent>0).sort((a,b)=>b.rate-a.rate).slice(0,3);
   if(!vs.length) return "";
   const max=vs[0].rate||1;
   const shortLabel=(a,i)=>{ const s=humanTags((a||"").split("/")[0].trim()); return s? s.slice(0,26) : ("Version "+String.fromCharCode(65+i)); };
   const rows=vs.map((v,i)=>`<div class="vbar"><span class="vb-l">${v.win?("<b>"+esc(shortLabel(v.label,i))+"</b>"):esc(shortLabel(v.label,i))}</span>`
      +`<div class="vb-t"><div class="vb-f${v.win?" win":""}" style="width:${Math.max(8,Math.round(v.rate/max*100))}%"></div></div>`
-     +`<span class="vb-v">${esc(ratio(v.sent,v.rep))}</span></div>`).join("");
-  return `<div class="pin-proof"><div class="vbars"><div class="vbars-h">Which version is winning · reply rate · higher = better</div>${rows}</div></div>`;
+     +`<span class="vb-v">${esc(ratio(v.sent,v.num))}</span></div>`).join("");
+  return `<div class="pin-proof"><div class="vbars"><div class="vbars-h">Which version is winning · ${anyPos?"how often it lands a yes":"reply rate (no positives yet)"} · higher = better</div>${rows}</div></div>`;
 }
 
 /* ── Overview: the glance card (P5 clean scoreboard, mirrors campaigns.html
