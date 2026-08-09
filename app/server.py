@@ -4070,13 +4070,30 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
             receipt["target_id"] = result["target_id"]
         elif action == "enable":
             target = _find_variant(step, variant_label)
-            if target is None or target.get("is_deleted"):
+            if target is None:
                 raise SequenceActionRefused(404, {
-                    "ok": False, "message": f"variant {variant_label} not found (or deleted) on Email {email_num}"})
-            if _pct_of(target) > 0:
+                    "ok": False, "message": f"variant {variant_label} not found on Email {email_num}"})
+            if target.get("is_deleted"):
+                # A Smartlead-deleted variant is restorable when its copy still
+                # rides the GET: flip is_deleted back and give it a share on the
+                # same id-intact save — same id, history kept (Bjion 2026-08-09:
+                # "we're unable to re-enable them - fix this"). Copy gone =
+                # refuse honestly; restoring it would send an empty email.
+                if not (str(target.get("subject") or "").strip()
+                        or str(target.get("email_body") or "").strip()):
+                    raise SequenceActionRefused(400, {
+                        "ok": False,
+                        "message": f"variant {variant_label} was deleted and Smartlead no longer stores "
+                                   "its copy - it can't be brought back; draft it as a new version instead"})
+                target["is_deleted"] = False
+                receipt["restored_id"] = target.get("id")
+                receipt["labels"][target.get("id")] = target.get("variant_label")
+                receipt["pcts_before"][target.get("id")] = 0
+            elif _pct_of(target) > 0:
                 raise SequenceActionRefused(400, {
                     "ok": False, "message": "this variant is already receiving traffic - nothing to switch on"})
-            live = _active_variants(step) + [{"id": target.get("id"), "pct": 0}]
+            live = [m for m in _active_variants(step) if m.get("id") != target.get("id")] \
+                + [{"id": target.get("id"), "pct": 0}]
             shares = _even_shares(len(live))
             new_pcts = {m["id"]: shares[i] for i, m in enumerate(live)}
             _apply_step_pcts(steps, email_num, new_pcts)
@@ -4173,7 +4190,16 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
         if step is None:
             return False
         got = {v.get("id"): _pct_of(v) for v in (step.get("sequence_variants") or [])}
-        return all(got.get(k) == p for k, p in receipt["pcts_after"].items())
+        if not all(got.get(k) == p for k, p in receipt["pcts_after"].items()):
+            return False
+        # a restore must actually stick: the target may no longer be deleted
+        rid = receipt.get("restored_id")
+        if rid is not None:
+            back = next((v for v in (step.get("sequence_variants") or [])
+                         if v.get("id") == rid), None)
+            if back is None or back.get("is_deleted"):
+                return False
+        return True
 
     try:
         saved = save_sequence_ids_intact(campaign_id, _mutate, verify_fn=_verify)
@@ -9570,7 +9596,11 @@ def _vp_stamp_path(reply_id, path: dict) -> None:
         raw = rows[0].get("raw") if isinstance(rows, list) and rows and isinstance(rows[0], dict) else None
         if not isinstance(raw, dict):
             raw = {}
-        raw["vpath2"] = path
+        # vpath3 (2026-08-09): per-LABEL attribution. vpath2 stamps carried
+        # cluster-rep shorthand ("A" meaning the A/B copy group) — reading
+        # them as exact labels would misattribute, so the key was bumped and
+        # every lead re-resolves under the per-label matcher.
+        raw["vpath3"] = path
         sb("PATCH", f"replies?id=eq.{reply_id}", {"raw": raw}, prefer="return=minimal")
     except Exception:  # noqa: BLE001
         pass
@@ -9645,7 +9675,11 @@ def _vp_cluster_steps(seqs: list) -> dict:
             if lbl is None:
                 continue
             body = v.get("email_body") if v.get("email_body") is not None else s.get("email_body")
-            variants.append((lbl, _vp_shingles(body), bool(v.get("is_deleted"))))
+            # spin-RESOLVED shingles (per-label 2026-08-09): sibling labels
+            # often share their fixed scaffolding and differ only inside
+            # {spintax} blocks — blanking those made them identical twins.
+            # Resolved, each label's unique spin lines are its fingerprint.
+            variants.append((lbl, _vp_spin_shingles(body), bool(v.get("is_deleted"))))
         if not variants:
             # Inline step (no labelled variants): still ONE real copy the lead
             # journeys through — synthesize a single "Email N" cluster so
@@ -9665,17 +9699,14 @@ def _vp_cluster_steps(seqs: list) -> dict:
         for lbl, sh, dele in variants:
             placed = False
             for cl in clusters:
-                a, b = sh, cl["shset"]
-                if a and b:
-                    sim = len(a & b) / min(len(a), len(b))
-                elif not a and not b:
-                    sim = 1.0            # two empty bodies \u2192 same (empty) copy
-                else:
-                    sim = 0.0
-                if sim >= 0.8:           # near-identical copy \u2192 one real version
+                # EXACT-identical copy only (owner ruling 2026-08-09: every
+                # variant is an individual \u2014 the old 0.8 near-match folded
+                # genuinely different A/B tests into one row). Two labels fold
+                # ONLY when their normalized copy is literally the same email:
+                # no data source on earth can tell those apart per lead.
+                if sh == cl["shset"]:
                     cl["labels"].append(lbl)
                     cl["dels"].append(dele)
-                    cl["shset"] |= sh
                     placed = True
                     break
             if not placed:
@@ -9699,10 +9730,14 @@ def _vp_match_cluster(body_norm: str, clusters: list):
     rather than a guess."""
     if not body_norm:
         return None
+    # FULL-set scoring with a strict winner (per-label 2026-08-09): variants
+    # now overlap heavily (only exact duplicates fold), so distinctive-set
+    # disjointness no longer holds. Shared windows score for every variant
+    # containing them; a variant wins only by the windows exclusive to it. A
+    # quote compatible with two variants ties → unattributed, never a guess.
     scored = []
     for cl in clusters:
-        probe = cl["dist"] or cl["shset"]
-        hit = sum(1 for p in probe if p and p in body_norm)
+        hit = sum(1 for p in cl["shset"] if p and p in body_norm)
         scored.append((hit, cl))
     scored.sort(key=lambda x: -x[0])
     if not scored or scored[0][0] == 0:
@@ -9772,7 +9807,7 @@ def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) ->
     # paths can be compared on positives long before a meeting is traced.
     # Meetings semantics below stay Call-Booked-only, exactly as before.
     rows = sb("GET", f"replies?smartlead_campaign_id=eq.{n}"
-                     "&select=id,email,category,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath2"
+                     "&select=id,email,category,reply_body,rawbody:raw->>email_body,vpath:raw->>vpath3"
                      "&order=replied_at.asc")
     if not isinstance(rows, list):
         return {}
@@ -10204,7 +10239,7 @@ def vpath_backfill(per_campaign_history: int = 12) -> dict:
     rows = sb_get_all(
         "replies?category=in.(%22Interested%22,%22Call%20Booked%22,"
         "%22Meeting%20Request%22,%22Information%20Request%22)"
-        "&raw->>vpath2=is.null"
+        "&raw->>vpath3=is.null"
         "&select=smartlead_campaign_id")
     rows_seq = sb_get_all(
         "replies?category=eq.Call%20Booked"
