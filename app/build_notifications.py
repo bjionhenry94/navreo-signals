@@ -615,20 +615,28 @@ def fetch_sequences(campaign_id) -> dict:
     return variants
 
 
-def fetch_variant_stats(campaign_id) -> dict:
+def fetch_variant_stats(campaign_id, variant_index: dict | None = None) -> dict:
     """Paginate /campaigns/{id}/statistics fully (limit=1000 pages, bounded by
     total_stats) and aggregate per seq_variant_id. Null variant-id rows (Email
     2 or any inline step) bucket into the synthetic key "__email2__".
 
     Positives are deduped by lead email keeping the greatest reply_time (the
     skill's rule), then counted per bucket, guaranteeing variant totals track
-    unique positive leads. Exact-equality category match only."""
+    unique positive leads. Exact-equality category match only.
+
+    MEETING leads carry JOURNEY credit (align 2026-08-09): a booker's positive
+    + meeting land on the Email-1 variant they first saw (when variant_index
+    can name it), matching the Messaging tab's opener attribution — the old
+    latest-reply credit starved the opener and had Section 4 telling founders
+    to drop the very variant that booked the meetings, directly contradicting
+    the table beside it."""
     sent_by_key: dict = {}
     replies_by_key: dict = {}
     best_positive: dict = {}  # email -> (reply_time, key)  for deduped positives
     anon_positives: dict = {}  # key -> count for positive rows with no email
     best_meeting: dict = {}  # email -> (reply_time, key)  for deduped meetings
     anon_meetings: dict = {}  # key -> count for meeting rows with no email
+    opener_of: dict = {}  # email -> Email-1 variant key (journey credit for bookers)
     offset, total = 0, None
     while offset < STATS_MAX_ROWS:
         page = sl_get(f"/campaigns/{campaign_id}/statistics",
@@ -647,6 +655,9 @@ def fetch_variant_stats(campaign_id) -> dict:
                 (r.get("lead") or {}).get("email") if isinstance(r.get("lead"), dict)
                 else r.get("email"))
             rt = str(r.get("reply_time") or "")
+            if (email and vid is not None and email not in opener_of
+                    and (variant_index or {}).get(vid, {}).get("seq_number") == 1):
+                opener_of[email] = key
             if cat in POSITIVE_CATEGORIES:  # exact equality via set membership
                 if email:
                     prev = best_positive.get(email)
@@ -671,13 +682,18 @@ def fetch_variant_stats(campaign_id) -> dict:
     agg: dict = {}
     for key, sent in sent_by_key.items():
         agg[key] = {"sent": sent, "positives": 0, "replies": replies_by_key.get(key, 0), "meetings": 0}
-    for _rt, key in best_positive.values():
+    for email, (_rt, key) in best_positive.items():
+        # a booker's yes belongs to the opener that started their journey
+        if email in best_meeting and email in opener_of:
+            key = opener_of[email]
         agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["positives"] += 1
     for key, n in anon_positives.items():
         agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["positives"] += n
-    for _rt, key in best_meeting.values():
+    for email, (_rt, key) in best_meeting.items():
+        if email in opener_of:
+            key = opener_of[email]
         agg.setdefault(key, {"sent": 0, "positives": 0, "replies": 0, "meetings": 0})
         agg[key]["meetings"] += 1
     for key, n in anon_meetings.items():
@@ -1597,7 +1613,7 @@ def main() -> int:
             continue
         in_report += 1
         ctx["variant_index"] = fetch_sequences(c["id"])
-        ctx["variant_stats"] = fetch_variant_stats(c["id"])
+        ctx["variant_stats"] = fetch_variant_stats(c["id"], ctx["variant_index"])
         reconcile_positives(ctx["variant_stats"], positives)
         ctx["meetings"] = sum(a.get("meetings", 0)
                               for a in ctx["variant_stats"].values())
