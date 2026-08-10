@@ -6179,40 +6179,65 @@ def _sl_find_subsequences(parent_campaign_id):
     subsequence IS a campaign whose own `parent_campaign_id` field points back
     at the parent (docs: https://api.smartlead.ai/api-reference/campaigns/get-all
     lists `parent_campaign_id` on every campaign object). Read-only GET
-    /campaigns/ - never a write. Returns a list of {"id","name","status"}."""
+    /campaigns/ - never a write.
+
+    Returns a list of {"id","name","status"} on a SUCCESSFUL lookup (possibly
+    empty when the campaign genuinely has no subsequences), or **None** when the
+    Smartlead fetch itself failed - timeout, rate-limit, a non-list body, no key,
+    or any exception. The None sentinel is load-bearing (root-cause fix
+    2026-08-10): the old code returned [] for BOTH "no subsequences" AND
+    "couldn't check", so a slow or rate-limited /campaigns/ read (navreo alone is
+    ~997 campaigns / ~860KB under a 15s timeout) silently became a false "no
+    subsequence" 502. Callers MUST treat None as retryable, never as "none".
+
+    `campaign_id=parent_campaign_id` routes the listing to the OWNING workspace's
+    key - without it a client-workspace campaign (ThunderBird etc.) is read with
+    the navreo key and its subsequences are invisible, an always-"no subsequence"
+    lie. The push path (_push_to_subsequence / _sl_campaign_lead_map_id) already
+    passes campaign_id; detection was the odd one out."""
     if not parent_campaign_id:
         return []
     try:
-        resp = _sl_get("/campaigns/")
-        rows = resp if isinstance(resp, list) else []
-        out = []
-        for r in rows:
-            if not isinstance(r, dict):
-                continue
-            if r.get("parent_campaign_id") and str(r.get("parent_campaign_id")) == str(parent_campaign_id):
-                out.append({"id": r.get("id"), "name": r.get("name"), "status": r.get("status")})
-        return out
-    except Exception:  # noqa: BLE001
-        return []
+        resp = _sl_get("/campaigns/", campaign_id=parent_campaign_id)
+    except Exception:  # noqa: BLE001 - fetch failed; do NOT claim "no subsequence"
+        return None
+    if not isinstance(resp, list):
+        return None
+    out = []
+    for r in resp:
+        if not isinstance(r, dict):
+            continue
+        if r.get("parent_campaign_id") and str(r.get("parent_campaign_id")) == str(parent_campaign_id):
+            out.append({"id": r.get("id"), "name": r.get("name"), "status": r.get("status")})
+    return out
 
 
 def _resolve_subsequence_id(campaign_id, sub_sequence_id_override):
     """Picks the subsequence to push a lead into. An explicit override always
     wins (the caller already knows which one, e.g. a picker in the UI for
     campaigns with several). Otherwise looks up campaign_id's subsequences via
-    _sl_find_subsequences(): exactly one -> use it; none -> honest 502; more
-    than one -> 400 asking the caller to disambiguate (with the list attached
-    so a picker can be built from it).
+    the shared workspace-aware cache: fetch failed -> retryable 503 (NEVER a
+    false "none"); exactly one -> use it; none -> clear 422; more than one ->
+    400 asking the caller to disambiguate (with the list attached so a picker
+    can be built). Uses _subsequences_for_campaign_cached (not a raw
+    _sl_find_subsequences) so a push reuses the picker's 10-min cache instead of
+    re-pulling the whole ~860KB /campaigns/ listing on every click.
     Returns (sub_sequence_id, error_response) where error_response is None on
     success or a ready-to-return (status, body) tuple otherwise."""
     if sub_sequence_id_override:
         return sub_sequence_id_override, None
-    subs = _sl_find_subsequences(campaign_id)
+    subs = _subsequences_for_campaign_cached(campaign_id)
+    if subs is None:
+        # Fetch failed (timeout / rate-limit / non-list). NOT "no subsequence":
+        # a retryable 503 so the UI says "try again" instead of the misleading
+        # "this campaign has none". Never 502 - that reads as a gateway crash,
+        # indistinguishable from a Render OOM, and is what made this so confusing.
+        return None, (503, {"error": "Couldn't check this campaign's subsequences in Smartlead just now - please try again.", "retryable": True})
     if len(subs) == 1:
         return subs[0]["id"], None
     if len(subs) > 1:
         return None, (400, {"error": "This campaign has multiple subsequences - pick one.", "subsequences": subs})
-    return None, (502, {"error": "No subsequence is configured for this campaign in Smartlead."})
+    return None, (422, {"error": "No subsequence is configured for this campaign in Smartlead."})
 
 
 # ── Send-gate: subsequence picker + follow-up decision (2026-07-17) ────────
@@ -6225,11 +6250,18 @@ _SUBSEQ_LIST_CACHE = {}   # str(campaign_id) -> {"at": ts, "list": [{"id","name"
 
 
 def _subsequences_for_campaign_cached(campaign_id):
+    """Cached {id,name} list of campaign_id's subsequences, or **None** when the
+    Smartlead lookup failed (the sentinel from _sl_find_subsequences). A failure
+    is NEVER cached - it would freeze a false "no subsequence" for 10 minutes -
+    so the next call retries live. Only a genuinely successful listing (even an
+    empty one) is cached."""
     key = str(campaign_id)
     ent = _SUBSEQ_LIST_CACHE.get(key)
     if ent and (_time.time() - ent["at"]) < _SUBSEQ_LIST_TTL:
         return ent["list"]
     subs = _sl_find_subsequences(campaign_id)
+    if subs is None:
+        return None  # fetch failed - do NOT cache, let the caller retry
     out = [{"id": s.get("id"), "name": s.get("name")} for s in subs if s.get("id") is not None]
     _SUBSEQ_LIST_CACHE[key] = {"at": _time.time(), "list": out}
     return out
@@ -6239,12 +6271,17 @@ def route_subsequences_get(params):
     """GET /api/setter/subsequences?campaign_id=X - the send gate's chip
     list. Wraps _sl_find_subsequences with a 10-minute in-process cache per
     campaign_id so opening reply after reply in the same campaign doesn't
-    cost a live Smartlead lookup each time."""
+    cost a live Smartlead lookup each time. A failed lookup answers 503
+    (retryable) - never an empty list, which would falsely read as "no
+    subsequence"."""
     try:
         campaign_id = _qp(params, "campaign_id", "")
         if not campaign_id:
             return 400, {"error": "campaign_id is required"}
-        return 200, {"subsequences": _subsequences_for_campaign_cached(campaign_id)}
+        subs = _subsequences_for_campaign_cached(campaign_id)
+        if subs is None:
+            return 503, {"error": "Couldn't check this campaign's subsequences in Smartlead just now - please try again.", "retryable": True}
+        return 200, {"subsequences": subs}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 

@@ -2147,7 +2147,16 @@ async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
     return;
   }
   if (!res.ok) {
-    showError("Couldn't add to subsequence: " + res.error);
+    // Prefer the server's plain-English reason (422 "no subsequence configured",
+    // 503 "couldn't check — try again"). Only a genuine gateway/OOM 502 has no
+    // body — show a human line then, never the bare "Request failed (502)"
+    // (owner report 2026-08-10). The 503/timeout case is retryable, so nudge it.
+    const msg = res.error || (res.data && res.data.error)
+      || "Smartlead didn't respond just now — please try again in a moment.";
+    const retryable = res.status === 503 || res.status === 502
+      || (res.data && res.data.retryable);
+    showError("Couldn't add to subsequence: " + msg
+      + (retryable ? " You can try again." : ""));
     return;
   }
   clearError();
@@ -2974,19 +2983,20 @@ function renderDetail(row) {
     sendStateHtml = `<div class="send-confirm ok">&#10003; Reply sent to ${esc(row.lead_email || "the lead")} &middot; ${pulledAgo(row.sent_at)}</div>`;
   }
 
-  // Auto-sent / sent rows keep one calm line, placed right above the draft
-  // itself rather than at the top of the page.
+  // Auto-sent rows keep one calm signal line (proof autopilot fired, and how
+  // fast). MANUALLY-sent rows show nothing here: the "Sent by you · Xd ago" box
+  // was pure noise stacked under the thread that already shows the sent message
+  // with its timestamp (owner report 2026-08-10: "these boxes don't need to be
+  // there").
   let sentLineHtml = "";
-  if (row.status === "auto_sent" || row.status === "sent") {
+  if (row.status === "auto_sent") {
     let mins = null;
     if (row.sent_at && row.replied_at) {
       const d = (new Date(row.sent_at) - new Date(row.replied_at)) / 60000;
       if (!isNaN(d)) mins = Math.max(0, Math.round(d));
     }
-    const line = row.status === "auto_sent"
-      ? `Sent automatically · ${pulledAgo(row.sent_at)}${mins != null ? ` · ${mins} minutes after their reply` : ""}`
-      : `Sent by you · ${pulledAgo(row.sent_at)}`;
-    sentLineHtml = `<div class="sent-line ${esc(row.status)}">${line}</div>`;
+    const line = `Sent automatically · ${pulledAgo(row.sent_at)}${mins != null ? ` · ${mins} minutes after their reply` : ""}`;
+    sentLineHtml = `<div class="sent-line auto_sent">${line}</div>`;
   }
 
   // No-slots guidance: only when the hold is specifically about Calendly
@@ -3015,9 +3025,12 @@ function renderDetail(row) {
       String(r.id) !== String(row.id)
       && String(r.lead_email || "").toLowerCase() === String(row.lead_email || "").toLowerCase()
       && r.replied_at && new Date(r.replied_at) > new Date(row.sent_at));
+    // Only the USEFUL half survives: a later reply is a real cross-link into
+    // its own queue item. The "No reply from them since this was sent" line was
+    // noise the owner asked to drop (2026-08-10).
     repliedBackHtml = later
       ? `<div class="sent-line auto_sent">They replied ${pulledAgo(later.replied_at)} - it's in this queue as its own item.</div>`
-      : `<div class="sent-line sent">No reply from them since this was sent.</div>`;
+      : "";
   }
 
   el.innerHTML = `
@@ -4237,9 +4250,11 @@ function composerHtml(row) {
   if (row.status === "auto_sent" || row.status === "sent") {
     // A sent thread stays writable (owner ask 2026-07-28: "even after an
     // email has been sent, you should still be able to send more emails").
-    // Collapsed behind one button so the sent view stays calm.
-    return `<div class="qc-draft" style="background:var(--bg-sunken)">${row.sent_body || row.draft_body || ""}</div>
-      <div class="qc-followup" data-id="${esc(row.id)}">
+    // NO echo of the sent body here - the Conversation thread above already
+    // shows it, and repeating it in the reply box read as a confusing duplicate
+    // (owner report 2026-08-10: "why is the same message duplicated?"). Straight
+    // to the compose affordance so sending another email is the one obvious act.
+    return `<div class="qc-followup" data-id="${esc(row.id)}">
         <button class="btn qc-followup-open" type="button" data-id="${esc(row.id)}">Write another email</button>
         <div class="qc-followup-box" style="display:none">
           <div class="qc-draft qc-followup-draft" contenteditable="true" data-id="${esc(row.id)}"></div>

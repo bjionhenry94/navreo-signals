@@ -602,6 +602,11 @@ def fresh_setter(fake_sb=None, fake_http=None):
     setter._SEND_INFLIGHT.clear()
     setter._LEAD_CONTACT_CACHE.clear()
     setter._QUEUE_RESP_RESTORE.update(done=False, next_try=0.0)
+    # Subsequence detection cache (subsequence detect-fix 2026-08-10): the push
+    # resolver now shares the picker's per-campaign cache, so a stale entry would
+    # leak a prior test's subsequence set into a later one. Clear it like the
+    # other SWR caches above.
+    setter._SUBSEQ_LIST_CACHE.clear()
     return sb, http
 
 
@@ -2008,6 +2013,107 @@ def test_subsequence_ambiguous_multiple_subsequences_needs_override():
     check("subsequence override: explicit sub_sequence_id succeeds", status2 == 200, (status2, resp2))
     check("subsequence override: pushes to the requested subsequence, not the other one",
          resp2.get("subsequence_id") == 1002, resp2)
+
+
+# ── subsequence DETECTION robustness (detect-fix 2026-08-10) ──────────────
+# Root cause of "it says no subsequence when it has one / it 502s sometimes":
+# _sl_find_subsequences pulled the whole /campaigns/ listing (navreo ~997 rows)
+# under a 15s timeout wrapped in `except: return []`, with NO workspace key. A
+# slow/rate-limited fetch collapsed to a false "no subsequence" 502; a client-
+# workspace campaign (ThunderBird) was invisible to the navreo key. These lock
+# the fix: workspace-aware key, fetch-failure != "none", clear non-502 codes.
+
+def test_subsequence_detection_passes_owning_workspace_key():
+    """RC2: detection must route GET /campaigns/ through the OWNING workspace's
+    key (campaign_id passed), or a client-workspace campaign is read with the
+    navreo key and its subsequence is invisible = a permanent false 'none'."""
+    fresh_setter()
+    captured = {}
+    orig = setter._sl_get
+    def fake(path, params=None, campaign_id=None):
+        captured["path"], captured["campaign_id"] = path, campaign_id
+        return []
+    setter._sl_get = fake
+    try:
+        setter._sl_find_subsequences(3753451)
+    finally:
+        setter._sl_get = orig
+    check("detection routes /campaigns/ to the owning workspace key",
+         captured.get("path") == "/campaigns/" and captured.get("campaign_id") == 3753451, captured)
+
+
+def test_subsequence_fetch_failure_is_retryable_not_false_none():
+    """RC1/RC3: a failed fetch (exception OR non-list body) returns the None
+    sentinel, and the resolver answers a retryable 503 - never [] and never the
+    old 502 'no subsequence' that made a timeout look like a config gap."""
+    fresh_setter()
+    orig = setter._sl_get
+    try:
+        setter._sl_get = lambda *a, **k: (_ for _ in ()).throw(RuntimeError("timeout"))
+        check("exception -> None sentinel (not a false empty list)",
+             setter._sl_find_subsequences(777) is None)
+        setter._SUBSEQ_LIST_CACHE.clear()
+        setter._sl_get = lambda *a, **k: {"message": "Too many requests"}  # rate-limit dict
+        check("non-list body -> None sentinel", setter._sl_find_subsequences(777) is None)
+        setter._SUBSEQ_LIST_CACHE.clear()
+        sub_id, err = setter._resolve_subsequence_id(777, None)
+        check("fetch failure -> retryable 503, never 502/'none'",
+             sub_id is None and err and err[0] == 503 and err[1].get("retryable") is True, err)
+    finally:
+        setter._sl_get = orig
+
+
+def test_subsequence_failure_is_never_cached():
+    """A failed lookup must NOT be cached, or one transient blip freezes a false
+    'no subsequence' for the whole 10-minute TTL."""
+    fresh_setter()
+    orig = setter._sl_get
+    try:
+        setter._sl_get = lambda *a, **k: None   # fetch failed
+        check("failed lookup -> None", setter._subsequences_for_campaign_cached(888) is None)
+        check("failure is NOT cached", "888" not in setter._SUBSEQ_LIST_CACHE)
+    finally:
+        setter._sl_get = orig
+
+
+def test_subsequence_genuine_empty_is_422_not_502():
+    """A campaign that really has no subsequences: a successful lookup returns []
+    and the resolver answers a clear 422 - not the old 502 that read like a
+    gateway crash indistinguishable from a Render OOM."""
+    fresh_setter()
+    orig = setter._sl_get
+    try:
+        setter._sl_get = lambda *a, **k: [{"id": 111, "name": "Parent", "status": "ACTIVE", "parent_campaign_id": None}]
+        check("genuine empty -> [] (a real successful lookup, not None)",
+             setter._sl_find_subsequences(111) == [])
+        setter._SUBSEQ_LIST_CACHE.clear()
+        sub_id, err = setter._resolve_subsequence_id(111, None)
+        check("no subsequence -> clear 422, never 502", sub_id is None and err and err[0] == 422, err)
+    finally:
+        setter._sl_get = orig
+
+
+def test_subsequence_two_subs_offers_picker_not_false_none():
+    """The reported Navreo campaigns really have TWO subs each (Interested Reply
+    + Meeting Request). Detection must find both and the resolver must offer a
+    picker (400 + list), never a false 'none'. Mirrors Amazon Agencies 3745798."""
+    fresh_setter()
+    orig = setter._sl_get
+    try:
+        setter._sl_get = lambda *a, **k: [
+            {"id": 3745798, "name": "Navreo | Amazon Agencies", "status": "ACTIVE", "parent_campaign_id": None},
+            {"id": 3745799, "name": "Interested Reply", "status": "ACTIVE", "parent_campaign_id": 3745798},
+            {"id": 3745800, "name": "Meeting Request", "status": "DRAFTED", "parent_campaign_id": 3745798},
+        ]
+        subs = setter._sl_find_subsequences(3745798)
+        check("both children found", isinstance(subs, list) and {s["id"] for s in subs} == {3745799, 3745800}, subs)
+        setter._SUBSEQ_LIST_CACHE.clear()
+        sub_id, err = setter._resolve_subsequence_id(3745798, None)
+        check("two subs -> 400 picker with both candidates",
+             sub_id is None and err and err[0] == 400
+             and {s["id"] for s in err[1].get("subsequences", [])} == {3745799, 3745800}, err)
+    finally:
+        setter._sl_get = orig
 
 
 # ── map-id resolution: by-email first, paging fallback (2026-07-17) ────────
@@ -9474,6 +9580,11 @@ if __name__ == "__main__":
     test_subsequence_no_queue_row_route_resolves_by_email_and_pushes()
     test_subsequence_uncheck_makes_no_smartlead_call()
     test_subsequence_ambiguous_multiple_subsequences_needs_override()
+    test_subsequence_detection_passes_owning_workspace_key()
+    test_subsequence_fetch_failure_is_retryable_not_false_none()
+    test_subsequence_failure_is_never_cached()
+    test_subsequence_genuine_empty_is_422_not_502()
+    test_subsequence_two_subs_offers_picker_not_false_none()
     test_map_id_by_email_resolves_in_one_call_no_paging()
     test_map_id_by_email_error_falls_back_to_paging()
     test_map_id_beyond_2000_lead_paging_cap_resolves_by_email()
