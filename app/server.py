@@ -16658,14 +16658,23 @@ def _client_win_build():
     # (Bjion: "we don't need to guess it, it's right here").
     nav_key = ws_key("navreo")
     if nav_key:
+        # Scoped series span EVERY scorecard campaign of the client except
+        # DRAFTED (never sent) — NOT the sweep's status filter: a campaign
+        # ARCHIVED after sending inside the window still holds real window
+        # sends (Amplifyy 2026-08-10: 21 archived campaigns = 8,021 of its
+        # 68,673 30d sends, 12% missing from the page), and Smartlead's own
+        # name-filtered analytics counts them. The window-total override
+        # below then inherits the same completeness.
         ids_by_client = {}
-        for cid, cws, name in cands:
-            if (cws or "navreo").lower() != "navreo":
+        for r in rows:
+            if str(r.get("workspace") or "navreo").lower() != "navreo":
                 continue
-            cl = _client_win_label(cws, name)
+            if str(r.get("status") or "").upper() == "DRAFTED":
+                continue
+            cl = _client_win_label(r.get("workspace"), r.get("name"))
             if cl == _CLIENT_UNASSIGNED or _client_hidden(cl):
                 continue
-            ids_by_client.setdefault(cl, []).append(cid)
+            ids_by_client.setdefault(cl, []).append(str(r.get("smartlead_campaign_id")))
         for cl, ids in ids_by_client.items():
             try:
                 out_series[cl] = _daywise_series(
@@ -16745,6 +16754,30 @@ def _client_win_build():
                                         "bounced": sum(agg_all["bounced"][-w:])}
         else:
             windows[str(w)]["__all"] = tot
+    # Window totals from each client's EXACT day-wise series (the same
+    # total-must-equal-line rule __all already follows): the campaign sweep
+    # above only sums ACTIVE/PAUSED/STOPPED/COMPLETED campaigns, so a campaign
+    # archived after sending inside the window silently vanished from its
+    # client's totals (Amplifyy: −12% on 30d sent, seen 2026-08-10), and
+    # analytics-by-date day boundaries drift ~1% against Smartlead's own
+    # day-wise view. Where a client's scoped/workspace series exists and
+    # covers at least the swept total, the series sums ARE the window
+    # numbers — matching Smartlead's UI to the digit. A short or failed
+    # series keeps the campaign-sum fallback.
+    for w in _CLIENT_WIN_WINDOWS:
+        for cl, s in out_series.items():
+            if cl in ("__navreo_ws", "__all"):
+                continue
+            ssent = sum((s.get("sent") or [])[-w:])
+            wk = windows[str(w)].get(cl)
+            if wk is None:
+                if ssent <= 0:
+                    continue
+                wk = windows[str(w)].setdefault(cl, {"sent": 0, "replied": 0, "bounced": 0})
+            if ssent >= wk["sent"]:
+                wk.update(sent=ssent,
+                          replied=sum((s.get("replied") or [])[-w:]),
+                          bounced=sum((s.get("bounced") or [])[-w:]))
     if calls == 0:
         raise RuntimeError(f"no analytics-by-date call succeeded ({len(cands)} candidates; first errors: {errs[:2]})")
     # Windowed positives + meetings per campaign, from the same replies archive
