@@ -14944,6 +14944,18 @@ def _reply_sync_bg():
             "action": ("client_reply_sync_done" if res_c.get("ok")
                        else "client_reply_sync_failed"),
             "entity": "replies", "payload": res_c})
+        # Trailing-window reconcile for client workspaces (~6h self-throttle):
+        # backfills pre-watermark replies and late-fills categories the client's
+        # team set in Smartlead after our pull — the analytics page's Interested/
+        # Meetings read the archive, so a gap here was a wrong page (KRG 1-vs-7
+        # positives, 2026-08-10). See setter.run_client_reply_reconcile.
+        res_r = setter.run_client_reply_reconcile()
+        if not res_r.get("skipped"):
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+                "action": ("client_reply_reconcile_done" if res_r.get("ok")
+                           else "client_reply_reconcile_failed"),
+                "entity": "replies", "payload": res_r})
         # Positive-thread re-reply sweep rides the same tick, self-throttled to
         # ~15 min inside run_positive_resweep (the watermark backstop above is
         # blind to NEW replies on OLD threads — Smartlead's replyTimeBetween

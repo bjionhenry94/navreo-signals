@@ -4440,6 +4440,129 @@ def run_client_reply_sync() -> dict:
     return summary
 
 
+# ── client-workspace archive reconcile (analytics-accuracy 2026-08-10) ──────
+# run_client_reply_sync above only moves FORWARD from a first-run watermark
+# seeded now-minus-2h, so every reply that predates a workspace's first sync
+# never reaches `replies` (KRG: 6 of its 7 window positives were missing —
+# the analytics page said 1), and `category` is stamped once at archive time,
+# so a client team categorising in Smartlead AFTER our pull leaves the archive
+# stale forever (Asteri: 52 NULL-category rows). This sweep re-walks the
+# trailing RECONCILE_WINDOW_D days of each enabled client workspace's master
+# inbox and (a) inserts any reply missing from the archive, (b) re-stamps
+# `category` from Smartlead when it differs — on client workspaces the
+# client's own Smartlead categorisation is category-truth. Existing rows are
+# matched by mid AND by (email, replied_at): router-archived rows can carry a
+# different message-id vocabulary and must not be duplicated. Rides the 3-min
+# reply-sync tick, self-throttled via a reply_sync_seen KV row (the
+# reply_sync_state table has a check constraint pinning id to existing rows,
+# so the throttle rides the same store the per-ws watermarks use).
+_RECONCILE_WM_KEY = "wm:reconcile"
+RECONCILE_THROTTLE_H = 6
+RECONCILE_WINDOW_D = 35        # covers the page's 30d range with margin
+RECONCILE_PAGE_CAP = 1500      # per-ws replies per sweep; hitting it reports FAILED
+
+
+def _reconcile_last_run():
+    rows = _SB("GET", f"reply_sync_seen?message_id=eq.{quote(_RECONCILE_WM_KEY, safe='')}"
+                      f"&select=seen_at&limit=1")
+    if isinstance(rows, list) and rows and rows[0].get("seen_at"):
+        return _parse_iso(rows[0]["seen_at"])
+    return None
+
+
+def run_client_reply_reconcile(force: bool = False, days: int = RECONCILE_WINDOW_D) -> dict:
+    """Trailing-window archive reconcile for every enabled non-navreo
+    workspace: backfill missing replies + late-fill categories. Never raises.
+    force=True skips the cadence throttle (tests / manual runs)."""
+    summary = {"ok": True, "skipped": False, "workspaces": {}, "errors": 0}
+    if not _SB:
+        summary.update(ok=False, errors=1, error="Supabase not configured")
+        return summary
+    now = _dt.datetime.now(_dt.timezone.utc)
+    last = _reconcile_last_run()
+    if not force and last is not None and \
+            (now - last) < _dt.timedelta(hours=RECONCILE_THROTTLE_H):
+        summary["skipped"] = True
+        return summary
+    rows = _SB("GET", "workspaces?select=id,api_key,status&order=added_at")
+    targets = [(r.get("id"), r.get("api_key")) for r in (rows if isinstance(rows, list) else [])
+               if isinstance(r, dict) and r.get("id") and r.get("id") != "navreo"
+               and (r.get("status") or "enabled") == "enabled" and r.get("api_key")]
+    since_dt = now - _dt.timedelta(days=days)
+    since_iso = since_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    until_iso = now.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    for ws, api_key in targets:
+        s = {"ok": True, "checked": 0, "backfilled": 0, "recategorised": 0,
+             "already_ok": 0, "errors": 0, "overflow": False}
+        summary["workspaces"][ws] = s
+        try:
+            inbox, overflow = _fetch_master_inbox_window(since_iso, until_iso,
+                                                         RECONCILE_PAGE_CAP, api_key=api_key)
+            s["checked"] = len(inbox)
+            s["overflow"] = overflow
+            if overflow:
+                s["ok"] = False       # partial coverage must be visible, never silent
+                summary["ok"] = False
+            # one bulk read of the ws's archived window -> match maps
+            arch, off = [], 0
+            while True:
+                page = _SB("GET", f"replies?workspace=eq.{ws}&select=id,email,replied_at,"
+                                  f"category,smartlead_message_id"
+                                  f"&replied_at=gte.{since_dt.date().isoformat()}"
+                                  f"&order=id&limit=1000&offset={off}") or []
+                arch.extend(page)
+                if len(page) < 1000:
+                    break
+                off += 1000
+            by_mid = {str(a.get("smartlead_message_id") or ""): a for a in arch}
+            by_em_t = {((a.get("email") or "").lower(), str(a.get("replied_at") or "")[:19]): a
+                       for a in arch}
+            catmap = _ws_category_names(api_key)
+            for r in inbox[:RECONCILE_PAGE_CAP]:
+                if not isinstance(r, dict):
+                    continue
+                lead_id = r.get("email_lead_id")
+                rtime = r.get("last_reply_time")
+                cid = r.get("email_campaign_id")
+                email = (r.get("lead_email") or "").strip().lower()
+                if not lead_id or not rtime or not cid or not email:
+                    continue
+                mid = f"{lead_id}-{rtime}"
+                raw_cat = r.get("lead_category_id")
+                try:
+                    raw_cat = int(raw_cat)
+                except (TypeError, ValueError):
+                    raw_cat = None
+                sl_cat = (catmap.get(raw_cat) or "") if raw_cat is not None else ""
+                hit = by_mid.get(mid) or by_em_t.get((email, str(rtime)[:19]))
+                if hit is None:
+                    text = _ws_reply_body(api_key, cid, lead_id, rtime)
+                    _SB("POST", "replies",
+                        {"workspace": ws, "client_id": ws,
+                         "smartlead_campaign_id": cid, "email": email,
+                         "replied_at": rtime, "category": sl_cat,
+                         "smartlead_message_id": mid,
+                         "reply_subject": "", "reply_body": text},
+                        prefer="resolution=ignore-duplicates")
+                    _mark_reply_seen(mid)
+                    s["backfilled"] += 1
+                elif sl_cat and (hit.get("category") or "") != sl_cat:
+                    _SB("PATCH", f"replies?id=eq.{hit['id']}", {"category": sl_cat})
+                    s["recategorised"] += 1
+                else:
+                    s["already_ok"] += 1
+        except Exception as e:  # noqa: BLE001 - one workspace must never sink the rest
+            s["ok"] = False
+            s["errors"] += 1
+            s["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+            summary["ok"] = False
+            summary["errors"] += 1
+    _SB("POST", "reply_sync_seen?on_conflict=message_id",
+        {"message_id": _RECONCILE_WM_KEY, "seen_at": now.isoformat()},
+        prefer="resolution=merge-duplicates,return=minimal")
+    return summary
+
+
 # ── positive-thread re-reply sweep ───────────────────────────────────────────
 # run_reply_sync's watermark window CANNOT see a new reply landing on an old
 # thread: Smartlead's inbox-replies replyTimeBetween filter (and its
