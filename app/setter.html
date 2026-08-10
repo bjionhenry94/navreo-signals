@@ -16,22 +16,26 @@
   border-radius: 8px; padding: 9px 13px; font-size: 12.5px; margin: 10px 0; line-height: 1.5;
 }
 
-/* ── Slim inline stats row (replaces the 3 big KPI cards) ─────────────── */
-.stats-inline { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-2); margin: 0; flex-wrap: wrap; }
-.stats-inline b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
-.stats-inline b.amber { color: #6B4A00; }
-.stats-inline .sep { color: var(--line-2); }
+/* ── One-row header (P4 · Icon Stat Chips, shipped 2026-08-10): Inbox title +
+   filter chips on the left; stat pills (auto-sent / avg response / last checked),
+   the Autopilot pill and the settings gear on the right. Same elements as the old
+   two rows, ~half the height. Title size unchanged (owner ask 2026-08-10).
+   No manual check button - every page load runs the reply check itself (see
+   init), so refreshing the page IS the check (owner ask 2026-07-26). ── */
+.setter-head-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 0 0 14px; }
+.sh-title { font-family: var(--font-display); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: -0.03em; margin: 0; white-space: nowrap; }
+.setter-head-row .sh-spacer { flex: 1; min-width: 8px; }
+.setter-head-row .filters { display: flex; gap: 8px; overflow-x: auto; min-width: 0; scrollbar-width: none; }
+.setter-head-row .filters::-webkit-scrollbar { display: none; }
 
-/* ── One compact header row: title + inline stats + last-checked note.
-   No manual check button - every page load runs the reply check itself
-   (see init), so refreshing the page IS the check (owner ask 2026-07-26). ── */
-.setter-head-row { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 0 0 28px; }
-.sh-title { font-family: var(--font-display); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: -0.03em; margin: 0; }
-.setter-head-row .sh-spacer { flex: 1; }
+/* Stat pills: auto-sent today / avg response / last checked. Icon + value, the
+   full label on hover (title attr). Replaces the old plain-text stats strip. */
+.stats-inline { display: flex; align-items: center; gap: 7px; margin: 0; flex-wrap: wrap; }
+.mchip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--ink-2); background: var(--bg-sunken); border-radius: 999px; padding: 4px 10px; white-space: nowrap; }
+.mchip b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.mchip b.amber { color: #6B4A00; }
+.mchip svg { width: 13px; height: 13px; color: var(--ink-3); flex: 0 0 auto; }
 
-/* ── Toolbar row: filters + test toggle + settings gear (agents drawer) + master switch pill ── */
-.setter-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin: 0 0 12px; }
-.setter-toolbar .filters { display: flex; gap: 8px; flex-wrap: wrap; }
 .client-filter-sel {
   border: 1px solid var(--line-2); background: transparent; color: var(--ink-2);
   border-radius: 999px; padding: 5px 13px; font: 500 12.5px var(--font-sans);
@@ -39,12 +43,11 @@
 }
 .client-filter-sel:hover { background: var(--bg-sunken); }
 .test-toggle { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--ink-2); white-space: nowrap; }
-.setter-toolbar .tb-spacer { flex: 1; }
-.setter-toolbar .tb-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .autopilot-pill { cursor: pointer; border: none; font: 500 11px var(--font-sans); }
-/* Icon-only toolbar button (the gear that opens Agents & settings) - same
-   36px rounded-square idiom as .lp-panel-toggle in the detail bar. */
-.btn.icon-btn { width: 36px; height: 36px; padding: 0; justify-content: center; border-radius: 10px; color: var(--ink-2); }
+/* Icon-only header button (the gear that opens Agents & settings) - same
+   rounded-square idiom as .lp-panel-toggle in the detail bar. Slimmed to 34px
+   so it never sets the one-row height. */
+.btn.icon-btn { width: 34px; height: 34px; padding: 0; justify-content: center; border-radius: 10px; color: var(--ink-2); }
 .btn.icon-btn svg { width: 16px; height: 16px; }
 
 /* ── Three-pane inbox shell: list | conversation | fixed lead-info sidebar ── */
@@ -313,20 +316,20 @@
   .setter-head-row { gap: 8px 10px; margin-bottom: 8px; }
   .sh-title { font-size: 26px; }
   .stats-inline { width: 100%; order: 3; }
+  .setter-head-row #lastCheckedNote { order: 3; }
 
   /* Status lenses = one horizontal scroll strip of touch pills */
-  .setter-toolbar { gap: 8px; margin-bottom: 8px; }
-  .setter-toolbar .filters {
+  .setter-head-row .filters {
     flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch;
     width: 100%; padding-bottom: 2px; scrollbar-width: none;
   }
-  .setter-toolbar .filters::-webkit-scrollbar { display: none; }
-  .setter-toolbar .filters .chip { flex: 0 0 auto; min-height: 40px; }
-  .setter-toolbar .test-toggle { order: 4; }
-  /* Admin cluster (Autopilot pill / Agents / Settings / Try it) is not the
-     on-the-go job - hidden on phones for a clean triage view (owner ask
-     2026-07-22). Reachable on desktop, where config actually happens. */
-  .setter-toolbar .tb-actions { display: none; }
+  .setter-head-row .filters::-webkit-scrollbar { display: none; }
+  .setter-head-row .filters .chip { flex: 0 0 auto; min-height: 40px; }
+  .setter-head-row .test-toggle { order: 4; }
+  /* Admin cluster (Autopilot pill / Agents / Settings) is not the on-the-go
+     job - hidden on phones for a clean triage view (owner ask 2026-07-22).
+     Reachable on desktop, where config actually happens. */
+  .setter-head-row #autopilotPill, .setter-head-row #openAgentsBtn { display: none; }
 
   /* Full-screen reply card: give the body room for the pinned action bar
      (the bar measures ~160px once the gate hint wraps — 150px used to let the
@@ -420,8 +423,7 @@
 
   /* Full-screen reply card (the July intent): the list header, stats and
      filter pills belong to the LIST, not to an open conversation. */
-  .main:has(.inbox-shell.mobile-detail) .setter-head-row,
-  .main:has(.inbox-shell.mobile-detail) .setter-toolbar { display: none; }
+  .main:has(.inbox-shell.mobile-detail) .setter-head-row { display: none; }
 
   /* A one-tap exit from anywhere in a 3,000px thread. Sticky can't do this —
      it never escapes its parent, and the back row's parent (.detail-topbar)
@@ -509,8 +511,8 @@
 
   /* Tighter pills, wrapping to a second line — a clipped "Auto-se…" at the
      screen edge reads as broken, not as "scroll me". */
-  .setter-toolbar .filters { flex-wrap: wrap; overflow-x: visible; }
-  .setter-toolbar .filters .chip { padding: 8px 12px; }
+  .setter-head-row .filters { flex-wrap: wrap; overflow-x: visible; }
+  .setter-head-row .filters .chip { padding: 8px 12px; }
 
   /* The one-time learning banner: let "Got it" drop under the text instead
      of squeezing the sentence into a crop. */
@@ -998,24 +1000,18 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
   <main class="main">
     <div class="setter-head-row">
       <h1 class="sh-title">Inbox</h1>
-      <div class="stats-inline" id="statsInline"><span class="muted"><span class="btnspin"></span> Loading…</span></div>
-      <div class="sh-spacer"></div>
-      <span class="small muted" id="lastCheckedNote"></span>
-    </div>
-
-    <div id="errBanner" class="err-banner" style="display:none"></div>
-
-    <div class="setter-toolbar">
       <div class="filters" id="queueFilters"></div>
       <label class="test-toggle" id="testToggleWrap" style="display:none">
         <input type="checkbox" id="showTestChk" checked> Show test items
       </label>
-      <div class="tb-spacer"></div>
-      <div class="tb-actions">
-        <span class="pill autopilot-pill" id="autopilotPill" title="Open agents &amp; settings"></span>
-        <button class="btn icon-btn" id="openAgentsBtn" type="button" title="Agents &amp; settings" aria-label="Agents and settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
-      </div>
+      <div class="sh-spacer"></div>
+      <div class="stats-inline" id="statsInline"><span class="muted"><span class="btnspin"></span> Loading…</span></div>
+      <span class="small muted" id="lastCheckedNote"></span>
+      <span class="pill autopilot-pill" id="autopilotPill" title="Open agents &amp; settings"></span>
+      <button class="btn icon-btn" id="openAgentsBtn" type="button" title="Agents &amp; settings" aria-label="Agents and settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
     </div>
+
+    <div id="errBanner" class="err-banner" style="display:none"></div>
 
     <div class="inbox-shell" id="inboxShell">
       <div class="inbox-left">
@@ -1149,8 +1145,14 @@ let LAST_CHECKED = null;  // ISO time of the last COMPLETED reply-check (server-
 function renderLastChecked() {
   const el = document.getElementById("lastCheckedNote");
   if (!el) return;
-  // pulledAgo returns markup (a titled <span>) - render it, don't quote it
-  el.innerHTML = LAST_CHECKED ? `Last checked ${pulledAgo(LAST_CHECKED)}` : "";
+  // Shown as a stat pill matching the auto-sent / avg-response chips; the full
+  // "Last checked" label lives in the title attr (pulledAgo returns markup - a
+  // titled <span> - so render it, don't quote it). Empty => no pill.
+  el.className = LAST_CHECKED ? "mchip" : "small muted";
+  el.title = LAST_CHECKED ? "Last checked" : "";
+  el.innerHTML = LAST_CHECKED
+    ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-3-6.7"/><path d="M21 3v5h-5"/></svg> ${pulledAgo(LAST_CHECKED)}`
+    : "";
 }
 /* One viewport, one scroll per pane: pure CSS now (the desktop flex column
    in the styles above) - the shell height tracks resizes and banner shifts
@@ -2333,9 +2335,8 @@ function renderKpis() {
   // below carries the live count and is also the control that filters to it,
   // so this strip keeps only the facts the chips don't already state.
   el.innerHTML = `
-    <span>Auto-sent today <b>${fmt(as)}</b></span>
-    <span class="sep">·</span>
-    <span>Avg response <b>${esc(avgTxt)}</b></span>
+    <span class="mchip" title="Auto-sent today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg> Auto-sent <b>${fmt(as)}</b></span>
+    <span class="mchip" title="Average response time (last 7 days)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <b>${esc(avgTxt)}</b></span>
   `;
 }
 
