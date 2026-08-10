@@ -224,6 +224,8 @@ body.solo .wrap{margin:0 auto;}
 .opos{font-family:var(--font-display);font-size:14px;color:var(--ink-3);}
 .oarrow{width:24px;height:18px;border:1px solid var(--line);background:var(--bg);border-radius:6px;color:var(--ink-3);cursor:pointer;font-size:9px;line-height:1;padding:0;}
 .oarrow:disabled{opacity:.3;cursor:default;}
+.ice-x{font-size:11px;color:#b3261e;border-color:rgba(179,38,30,.4);}
+.ice-x:hover{background:#fdf3f2;border-color:#b3261e;}
 .ib-name{font-size:15px;font-weight:600;margin:0 0 5px;display:flex;align-items:center;gap:9px;}
 .ib-rec{font-size:10px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--orange-600);background:var(--orange-100);border-radius:999px;padding:2px 8px;}
 .ib-plain{font-size:13.5px;color:var(--ink-3);margin:0 0 8px;}
@@ -341,7 +343,7 @@ let RUN_META={};
 let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
 let copyVer={}; // Copy tab: active version index per sequence step (reset per idea)
 let sumEdit=null; // Preview tab: {si,vi} while an email is being edited inline (Bjion 2026-08-05)
-let pendingDel=null; // {id,si,vi,ver,timer} while a version delete waits out its Undo window (Bjion 2026-08-05)
+let pendingDel=null; // {id,si,vi,ver,timer} version delete, or {kind:'ice',id,ai,angle,timer} opener delete, waiting out its Undo window (Bjion 2026-08-05 / 2026-08-10)
 let SIG=null;   // run.signature {name, role, company, domain} — resolves %signature%
 // House signature format (Bjion rule 2026-08-03): name / role / company / website line.
 function sigHtml(){
@@ -523,10 +525,12 @@ function showUndoToast(msg,onUndo){
 function commitPendingDel(){
   if(!pendingDel)return;
   const pd=pendingDel;pendingDel=null;clearTimeout(pd.timer);
+  const field=pd.kind==='ice'?('ice:'+pd.ai+':delete'):('seq:'+pd.si+':'+pd.vi+':delete');
+  const oops=pd.kind==='ice'?'Could not remove that opener.':'Could not remove that version.';
   fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
-    body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:pd.id,field:'seq:'+pd.si+':'+pd.vi+':delete',share:SHARE})})
-    .then(r=>r.json()).then(j=>{if(!j.ok){nvToast(j.message||'Could not remove that version.');lastFP=null;fetchRun();}})
-    .catch(()=>{nvToast('Could not remove that version.');lastFP=null;fetchRun();});
+    body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:pd.id,field:field,share:SHARE})})
+    .then(r=>r.json()).then(j=>{if(!j.ok){nvToast(j.message||oops);lastFP=null;fetchRun();}})
+    .catch(()=>{nvToast(oops);lastFP=null;fetchRun();});
 }
 async function persistVisibleEdits(x){
   const eds=[...document.querySelectorAll('[data-edit]')].filter(el=>el.dataset.dirty==='1'&&el.innerText.trim());
@@ -692,7 +696,7 @@ function panelHTML(x){
         // hiring / tool angles MUST list exactly what triggers them
         const trigs=(a.triggers&&a.triggers.length)
           ?`<div class="ib-triggers"><span class="ib-trig-lbl">${esc(a.triggerLabel||'Fires on')}</span>${a.triggers.map(t=>`<span class="chip">${esc(t)}</span>`).join('')}</div>`:'';
-        const arrows=CLIENT_MODE?'':`<button class="oarrow" data-ibmove="${i}" data-dir="-1"${i===0?' disabled':''}>&#9650;</button><button class="oarrow" data-ibmove="${i}" data-dir="1"${i===N-1?' disabled':''}>&#9660;</button>`;
+        const arrows=CLIENT_MODE?'':`<button class="oarrow" data-ibmove="${i}" data-dir="-1"${i===0?' disabled':''}>&#9650;</button><button class="oarrow" data-ibmove="${i}" data-dir="1"${i===N-1?' disabled':''}>&#9660;</button><button class="oarrow ice-x" data-ibdel="${i}" aria-label="Remove this opener" title="Remove this opener">&#215;</button>`;
         return `<div class="opener-row"><div class="opener-order"><span class="opos">${i+1}</span>${arrows}</div>`
         +`<div class="opener-body"><p class="ib-name">${esc(a.name)}${a.recommended?' <span class="ib-rec">Recommended</span>':''}</p>`
         +(a.note?`<p class="ib-plain">${esc(a.note)}</p>`:'')
@@ -909,6 +913,30 @@ function renderWorkspace(){
   work.querySelectorAll('.btn-ink[data-goto]').forEach(b=>b.onclick=async()=>{
     await persistVisibleEdits(x);tab=b.dataset.goto;renderWorkspace();});
   work.querySelectorAll('.oarrow[data-ibmove]').forEach(b=>b.onclick=()=>reorderIcebreaker(x,+b.dataset.ibmove,+b.dataset.dir));
+  // opener delete (Bjion 2026-08-10, tool-user side only): same optimistic one-click +
+  // Undo pattern as the version cross — act on the CURRENT idea, server hears it only
+  // after the Undo window closes, poll stays paused while it's pending.
+  work.querySelectorAll('[data-ibdel]').forEach(b=>b.onclick=(e)=>{
+    e.stopPropagation();e.preventDefault();
+    const cur=IDEAS[active];if(!cur)return;
+    const ib=cur.icebreaker,angles=ib&&ib.angles;
+    if(!Array.isArray(angles))return;
+    if(angles.length<=1){nvToast('An idea needs at least one opener, so this one stays.');return;}
+    if(pendingDel)commitPendingDel();          // flush any earlier pending delete first
+    const ai=+b.dataset.ibdel;
+    const angle=angles.splice(ai,1)[0];        // remove now — vanishes on this one click
+    pendingDel={kind:'ice',id:cur.id,ai,angle};
+    renderWorkspace();
+    showUndoToast('Opener removed',()=>{
+      if(!pendingDel)return;                   // already committed — too late to undo
+      const pd=pendingDel;pendingDel=null;clearTimeout(pd.timer);
+      const tgt=(IDEAS[active]&&IDEAS[active].id===pd.id)?IDEAS[active]:cur;
+      const as2=tgt.icebreaker&&tgt.icebreaker.angles;
+      if(as2)as2.splice(Math.min(pd.ai,as2.length),0,pd.angle);
+      renderWorkspace();nvToast('Kept it.');
+    });
+    pendingDel.timer=setTimeout(commitPendingDel,4200);
+  });
   const lgc=work.querySelector('#lg-copy');
   if(lgc)lgc.onclick=async()=>{const t=(work.querySelector('#lg-phrase')||{}).textContent||'';
     try{await navigator.clipboard.writeText(t);lgc.textContent='Copied';setTimeout(()=>{lgc.textContent='Copy';},3000);}catch(e){lgc.textContent='Select and copy';}};

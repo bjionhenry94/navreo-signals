@@ -2063,14 +2063,20 @@ def strategy_copy_edit(p: dict, gtme: str | None = None) -> dict:
     seq_m = re.match(r"^seq:(\d+):(\d+)(?::subject)?$", field)
     del_m = re.match(r"^seq:(\d+):(\d+):delete$", field)
     ice_m = re.match(r"^ice:(\d+)$", field)
+    # opener DELETE "ice:<angle>:delete" — tool-user side only (Bjion 2026-08-10):
+    # the cross on the opener row; clients can edit opener text but never remove one.
+    ice_del_m = re.match(r"^ice:(\d+):delete$", field)
     dismiss = field == "idea:dismiss"
     if field not in _STRATEGY_CLIENT_FIELDS and not ver_m and not seq_m \
-            and not del_m and not ice_m and field != "ice:fallback" and not dismiss:
+            and not del_m and not ice_m and not ice_del_m \
+            and field != "ice:fallback" and not dismiss:
         return {"ok": False, "message": "only the copy can be edited from this link"}
     if dismiss and not gtme:
         return {"ok": False, "message": "only your Navreo contact can take an idea off the board"}
+    if ice_del_m and not gtme:
+        return {"ok": False, "message": "only your Navreo contact can remove an opener"}
     value = p.get("value")
-    if not del_m and not dismiss:
+    if not del_m and not dismiss and not ice_del_m:
         if not isinstance(value, str) or not value.strip() or len(value) > 4000:
             return {"ok": False, "message": "the new text must be 1-4000 characters"}
         value = value.strip()
@@ -2107,6 +2113,15 @@ def strategy_copy_edit(p: dict, gtme: str | None = None) -> dict:
         if si == 0:  # primary mirrors the first remaining version
             idea["email"] = versions[0].get("email", idea.get("email"))
             idea["subject"] = versions[0].get("subject", idea.get("subject"))
+    elif ice_del_m:
+        ib = idea.get("icebreaker")
+        angles = ib.get("angles") if isinstance(ib, dict) else None
+        ai = int(ice_del_m.group(1))
+        if not isinstance(angles, list) or ai < 0 or ai >= len(angles):
+            return {"ok": False, "message": "that opener is no longer on the board"}
+        if len(angles) <= 1:
+            return {"ok": False, "message": "an idea needs at least one opener, so this one stays"}
+        angles.pop(ai)
     elif ice_m or field == "ice:fallback":
         ib = idea.get("icebreaker")
         if not isinstance(ib, dict):
