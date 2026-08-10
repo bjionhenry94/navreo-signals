@@ -9061,6 +9061,12 @@ def _scorecard_sync_loop():
 # client workspaces read 0 there, which the card must caveat). Fully additive +
 # defensive: any failure leaves the card blank, never the two siblings.
 _SUBSEQ_STATS: dict = {}
+# str(subsequence campaign id) -> parent client label. Maintained by the same
+# hourly sweep; the analytics hub uses it to re-home subsequence replies that
+# the RPC's scorecard join would otherwise drop (subsequences are deliberately
+# NOT in campaign_scorecard). Snapshot-persisted so a fresh deploy re-homes
+# from its first hub build instead of waiting out the hourly sweep.
+_SUBSEQ_CLIENT_MAP: dict = {}
 _SUBSEQ_LOCK = threading.Lock()
 _SUBSEQ_TS = 0.0
 _SUBSEQ_SYNC_INTERVAL_S = 3600
@@ -9196,10 +9202,14 @@ def _subseq_stats_sync_all():
         if allc.pop("wfail", False):
             allc.pop("win", None)
         out["All"] = allc
+        smap = {str(sid): cl for cl, e in per.items() for sid in e.get("sub_ids") or []}
         with _SUBSEQ_LOCK:
             _SUBSEQ_STATS.clear()
             _SUBSEQ_STATS.update(out)
+            _SUBSEQ_CLIENT_MAP.clear()
+            _SUBSEQ_CLIENT_MAP.update(smap)
             _SUBSEQ_TS = time.time()
+        _blob_snapshot_save("subseq_client_map", {"map": smap})
         print(f"[subseq-sync] refreshed {len(out) - 1} clients", flush=True)
     finally:
         _SUBSEQ_SYNC_LOCK.release()
@@ -10668,6 +10678,90 @@ def _blob_snapshot_load_aged(cache_id: str, max_age_s: float) -> dict | None:
     return None
 
 
+def _hub_rehome_subseq(r: dict) -> None:
+    """Fold subsequence-campaign replies into their parent client's hub series,
+    in place. A reply landing on a subsequence campaign carries the SUB's
+    smartlead id, which matches no campaign_scorecard row (subsequences are
+    deliberately excluded from the scorecard), so analytics_hub_v1's inner join
+    dropped those rows from every series INCLUDING '__all' — 30 window
+    positives were invisible (16 Amplifyy / 9 Navreo, found 2026-08-10 chasing
+    ThunderBird's count). Attribution rides _SUBSEQ_CLIENT_MAP (hourly sweep,
+    snapshot-restored after a deploy). Meetings are folded only when the lead's
+    first-ever 'Call Booked' lives on the sub — any Call Booked on a scorecard
+    campaign (incl. calendly synthetics) means the RPC already counted the
+    lead, and a re-book must never double-count."""
+    smap = dict(_SUBSEQ_CLIENT_MAP)
+    if not smap:
+        snap = _blob_snapshot_load_aged("subseq_client_map", _SNAP_SEED_MAX_AGE_S)
+        if snap and isinstance(snap.get("map"), dict):
+            smap = {str(k): v for k, v in snap["map"].items()}
+            with _SUBSEQ_LOCK:
+                if not _SUBSEQ_CLIENT_MAP:
+                    _SUBSEQ_CLIENT_MAP.update(smap)
+    if not smap:
+        return
+    days = [str(d)[:10] for d in (r.get("days") or [])]
+    idx = {d: i for i, d in enumerate(days)}
+    if not idx:
+        return
+    ids = sorted(smap)
+    rows = []
+    for i in range(0, len(ids), 120):
+        chunk = ",".join(ids[i:i + 120])
+        rows += sb_get_all("replies?select=smartlead_campaign_id,email,category,replied_at"
+                           f"&smartlead_campaign_id=in.({chunk})"
+                           f"&replied_at=gte.{days[0]}") or []
+    if not rows:
+        return
+    series = r.setdefault("series", {})
+
+    def _bump(cl, metric, i):
+        arr = series.setdefault(cl, {}).setdefault(metric, [0] * len(days))
+        while len(arr) < len(days):
+            arr.append(0)
+        arr[i] += 1
+
+    rehomed = 0
+    cb_first: dict = {}
+    for row in rows:
+        cl = smap.get(str(row.get("smartlead_campaign_id")))
+        if not cl or cl == _CLIENT_UNASSIGNED or _client_hidden(cl):
+            continue
+        i = idx.get(str(row.get("replied_at") or "")[:10])
+        if i is None:
+            continue
+        cat = row.get("category") or ""
+        for key in (cl, "__all"):
+            _bump(key, "replies", i)
+            if cat in _AH_POSITIVE_CATS:
+                _bump(key, "interested", i)
+        rehomed += 1
+        if cat == "Call Booked":
+            em = (row.get("email") or "").strip().lower()
+            t = str(row.get("replied_at") or "")
+            if em and ((cl, em) not in cb_first or t < cb_first[(cl, em)]):
+                cb_first[(cl, em)] = t
+    if cb_first:
+        ems = sorted({em for (_c, em) in cb_first})
+        seen_main = set()
+        _cbq = urllib.parse.quote("Call Booked")
+        for i in range(0, len(ems), 100):
+            chunk = urllib.parse.quote(",".join(f'"{e}"' for e in ems[i:i + 100]), safe="")
+            for row in sb_get_all("replies?select=email,smartlead_campaign_id"
+                                  f"&category=eq.{_cbq}&email=in.({chunk})") or []:
+                if str(row.get("smartlead_campaign_id")) not in smap:
+                    seen_main.add((row.get("email") or "").strip().lower())
+        for (cl, em), t in cb_first.items():
+            if em in seen_main:
+                continue
+            i = idx.get(t[:10])
+            if i is not None:
+                _bump(cl, "meetings", i)
+                _bump("__all", "meetings", i)
+    if rehomed:
+        r["_subseq_rehomed"] = rehomed
+
+
 def _analytics_hub_cached(days) -> dict:
     try:
         n = max(7, min(30, int(days or 30)))
@@ -10680,6 +10774,10 @@ def _analytics_hub_cached(days) -> dict:
         r = r.get("analytics_hub_v1")
     if not isinstance(r, dict) or not r.get("days"):
         return {"error": "Supabase read failed"}
+    try:
+        _hub_rehome_subseq(r)
+    except Exception as e:  # noqa: BLE001 — re-homing is additive, never fatal
+        print(f"[analytics-hub] subseq re-home failed: {e}", file=sys.stderr)
     if n == 30:
         _blob_snapshot_save("analytics_hub_30", r)
     return r
