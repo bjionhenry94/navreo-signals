@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server  # noqa: E402
 import build_notifications  # noqa: E402 — Lilly Optimiser notifications generator
 import campaign_register  # noqa: E402 — server-side auto-registration reconcile
+import subsequence_optimisations  # noqa: E402 — "no live campaign without a subsequence" audit
 
 LOG = Path(__file__).parent / "data" / "daily_log.json"
 
@@ -156,6 +157,19 @@ def main():
               + (f", {len(r['errors'])} error(s)" if r["errors"] else ""))
     except Exception as e:  # noqa: BLE001 — registration must never kill the run
         print(f"campaign register · FAILED: {str(e)[:200]}")
+
+    # No live campaign without a subsequence (Bjion 2026-08-10): put an "Add a
+    # subsequence" card on every ACTIVE campaign that has no Interested Reply /
+    # Meeting Request child, and clear it the moment one appears. Cheap — one
+    # /campaigns list — so it runs every tick, no gate. Runs AFTER the crunch so
+    # a same-tick optimiser regen of a 1,500+ scope can't leave the card wiped.
+    try:
+        s = subsequence_optimisations.refresh()
+        print(f"subsequence audit · {s.get('missing', 0)} missing "
+              f"(+{s.get('added', 0)} new, {s.get('refreshed', 0)} refreshed, "
+              f"{s.get('cleared', 0)} cleared)")
+    except Exception as e:  # noqa: BLE001 — the audit must never kill the run
+        print(f"subsequence audit · FAILED: {str(e)[:200]}")
 
 
 if __name__ == "__main__":
