@@ -7178,9 +7178,11 @@ _CAMP_NAME_LOCK = threading.Lock()
 
 def _campaign_names_for(ids) -> dict:
     """{str(campaign_id): display name} for every resolvable id, across ALL
-    workspaces (the queue federates; the mirror holds every workspace's
-    campaigns). Unresolvable ids are simply absent — the client keeps its
-    "Campaign <id>" fallback for those. Never raises."""
+    workspaces (the queue federates). Resolution tiers: campaigns mirror →
+    campaign_scorecard (every workspace's sweep) → navreo Smartlead listing →
+    capped per-id Smartlead read with a federated key. Unresolvable ids map to
+    None or are absent — the client keeps its "Campaign <id>" fallback for
+    those. Never raises."""
     want = sorted({str(i) for i in ids if i})
     if not want:
         return {}
@@ -7205,6 +7207,23 @@ def _campaign_names_for(ids) -> dict:
             pass
         still = [c for c in missing if c not in out]
         if still:
+            # Scorecard tier (federation fix 2026-08-12, campaign 3725976 /
+            # Asteri): the register cron can MISS a client-workspace campaign
+            # entirely — the mirror had no row for 3 of asteri's 8 queue
+            # campaigns — but the scorecard sweep stamps every workspace's
+            # campaigns (name included) on its regular pass, so it names the
+            # rows the mirror never saw. Same batched-read shape as above.
+            try:
+                rows = _SB("GET", "campaign_scorecard?smartlead_campaign_id=in.(" + ",".join(still) + ")"
+                                  "&select=smartlead_campaign_id,name")
+                if isinstance(rows, list):
+                    for r in rows:
+                        if isinstance(r, dict) and str(r.get("name") or "").strip():
+                            out[str(r.get("smartlead_campaign_id"))] = str(r["name"]).strip()
+            except Exception:  # noqa: BLE001
+                pass
+            still = [c for c in still if c not in out]
+        if still:
             # Mirror-lag fallback: the (cached) Smartlead listing knows a
             # brand-new campaign minutes before the register cron lands its
             # mirror row. _parent_map is TTL-cached, so this is usually free.
@@ -7216,10 +7235,25 @@ def _campaign_names_for(ids) -> dict:
                         out[cid] = names[cid]
             except Exception:  # noqa: BLE001
                 pass
+            still = [c for c in still if c not in out]
+        # Last resort, capped: a direct per-id Smartlead read. _sl_get
+        # federates the key via _WS_KEY_FOR_CAMPAIGN (scorecard/mirror-backed),
+        # so a client-workspace id resolves with the CLIENT's key. Capped at 3
+        # per call and negative-cached below, so a permanently-unresolvable id
+        # can never turn every queue rebuild into a Smartlead storm.
+        for cid in still[:3]:
+            try:
+                r = _sl_get(f"/campaigns/{cid}", campaign_id=cid)
+                if isinstance(r, dict) and str(r.get("name") or "").strip():
+                    out[cid] = str(r["name"]).strip()
+            except Exception:  # noqa: BLE001
+                pass
         with _CAMP_NAME_LOCK:
             for cid in missing:
-                if cid in out:
-                    _CAMP_NAME_CACHE[cid] = (out[cid], now)
+                # Misses cache as None (negative cache): "known unresolvable,
+                # don't re-hammer the fallbacks until the TTL turns over".
+                # The attach helper's `if n:` guard skips None stamps.
+                _CAMP_NAME_CACHE[cid] = (out.get(cid), now)
     return out
 
 

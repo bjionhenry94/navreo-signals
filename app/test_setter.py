@@ -9554,6 +9554,10 @@ def test_attach_campaign_names():
         # cross-workspace read: the query must NOT be workspace-filtered
         check("campaign-name lookup is cross-workspace",
               "workspace=eq." not in path, path)
+        if path.startswith("campaign_scorecard?"):
+            # scorecard tier: names a campaign the register cron never
+            # mirrored (federation fix 2026-08-12, asteri campaign 3725976)
+            return [{"smartlead_campaign_id": 3725976, "name": "Past Work 8 -  District Energy"}]
         return [{"smartlead_campaign_id": 3765590,
                  "name": "Amplifyy - Skincare brands on Amazon"},
                 {"smartlead_campaign_id": 111, "name": "Asteri - Client WS campaign"}]
@@ -9562,12 +9566,15 @@ def test_attach_campaign_names():
         rows = [{"id": 1, "smartlead_campaign_id": "3765590", "workspace": "navreo"},
                 {"id": 2, "smartlead_campaign_id": 111, "workspace": "asteri"},
                 {"id": 3, "smartlead_campaign_id": "999", "workspace": "navreo"},
-                {"id": 4, "smartlead_campaign_id": None}]
+                {"id": 4, "smartlead_campaign_id": None},
+                {"id": 5, "smartlead_campaign_id": 3725976, "workspace": "asteri"}]
         setter._attach_campaign_names(rows)
         check("navreo row named", rows[0].get("campaign_name") == "Amplifyy - Skincare brands on Amazon", rows[0])
         check("federated row named", rows[1].get("campaign_name") == "Asteri - Client WS campaign", rows[1])
         check("unresolvable row untouched", "campaign_name" not in rows[2], rows[2])
         check("campaign-less row untouched", "campaign_name" not in rows[3], rows[3])
+        check("mirror-missing row named from scorecard",
+              rows[4].get("campaign_name") == "Past Work 8 -  District Energy", rows[4])
         # cached: a second attach must not need Supabase at all
         setter._SB = None
         rows2 = [{"id": 5, "smartlead_campaign_id": 3765590}]
