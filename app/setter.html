@@ -3470,13 +3470,23 @@ function leadPanelHtml(row) {
   // with this campaign's id in hand (see wireAssignAgentPrompt). The Campaign
   // name section itself was dropped (owner ask 2026-08-11), so this prompt is
   // the only thing that still renders a campaign-scoped section.
-  const noAgentHtml = row.agent_id ? "" : `
+  // Monitor-only truth (identification fix 2026-08-12): a client-workspace
+  // row (Asteri, Grout, KRG, …) surfaces for REVIEW only — intake is
+  // deliberately agentless and sending is 403-gated server-side
+  // (_is_monitor_ws, fail-closed), so the assign prompt was a dead end that
+  // read as "it can't identify the campaign". State the real situation
+  // instead, mirroring the send gate's own wording.
+  const wsMon = (row.workspace || "navreo") !== "navreo";
+  const noAgentHtml = row.agent_id ? "" : (wsMon ? `
+    <div class="lp-section">
+      <div class="lp-line muted lp-noagent">${esc(clientForRow(row))} is a monitor-only workspace — replies surface here for review and are answered in Smartlead directly, so no agent drafts for this campaign.</div>
+    </div>` : `
     <div class="lp-section">
       <div class="lp-line muted lp-noagent">No agent is assigned to this campaign, so nothing is drafted for it automatically.</div>
       <button class="btn sm lp-assign-agent" type="button"
         data-campaign-id="${esc(row.smartlead_campaign_id || "")}"
         data-campaign-name="${esc(campaignNameFor(row))}">Assign an agent</button>
-    </div>`;
+    </div>`);
 
   // Lead category: the shared control (tone pill + live Smartlead dropdown),
   // wrapped here in the sidebar's sunken card section.
