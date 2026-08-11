@@ -2239,20 +2239,33 @@ def strategy_focus_post(p: dict) -> dict:
     doc = {"ideaId": p.get("ideaId"), "view": p["view"], "note": str(p.get("note") or "")[:120]}
     now = _dtmod.datetime.utcnow().isoformat() + "Z"
     fp = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:32]
-    # insert-then-supersede (same reasoning as strategy_run_post): never leave a
-    # gap with zero live focus rows for a poll to read.
-    ins = sb("POST", "campaign_insights", {
-        "scope": "strategy", "insight_key": fkey, "payload": doc,
-        "data_fingerprint": fp, "expires_at": "2036-01-01T00:00:00Z",
-        "generated_by": "chat", "status": "live"},
-        prefer="return=representation")
-    row = ins[0] if isinstance(ins, list) and ins else None
+    # update-in-place (same reasoning as strategy_run_post): the unique constraint
+    # campaign_insights_live_unique forbids a second live row per scope+insight_key,
+    # so PATCH the existing live row rather than inserting; INSERT only when none
+    # exists. Keeps exactly one live row and never leaves a zero-live-rows gap.
+    fields = {"payload": doc, "data_fingerprint": fp,
+              "expires_at": "2036-01-01T00:00:00Z",
+              "generated_by": "chat", "status": "live", "generated_at": now}
+    existing = sb("GET", f"campaign_insights?scope=eq.strategy&insight_key=eq.{fkey}"
+                         f"&status=eq.live&order=generated_at.desc&select=id")
+    live_ids = [r["id"] for r in existing if isinstance(r, dict) and r.get("id")] \
+        if isinstance(existing, list) else []
+    if live_ids:
+        upd = sb("PATCH", f"campaign_insights?id=eq.{live_ids[0]}", fields,
+                 prefer="return=representation")
+        row = upd[0] if isinstance(upd, list) and upd else None
+        for stray in live_ids[1:]:
+            sb("PATCH", f"campaign_insights?id=eq.{stray}",
+               {"status": "superseded", "superseded_at": now})
+    else:
+        ins = sb("POST", "campaign_insights",
+                 {"scope": "strategy", "insight_key": fkey, **fields},
+                 prefer="return=representation")
+        row = ins[0] if isinstance(ins, list) and ins else None
     if not row or not row.get("generated_at"):
-        msg = ins.get("message") if isinstance(ins, dict) else None
+        src = upd if live_ids else ins
+        msg = src.get("message") if isinstance(src, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
-    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{fkey}"
-                f"&status=eq.live&generated_at=lt.{row['generated_at']}",
-       {"status": "superseded", "superseded_at": now})
     # the run payload carries focus too — bust the 20s memo so the open board
     # follows the chat's focus move on its very next poll
     _strategy_run_memo_bust()
@@ -2272,32 +2285,44 @@ def strategy_run_post(p: dict) -> dict:
     import hashlib
     now = _dtmod.datetime.utcnow().isoformat() + "Z"
     fp = hashlib.sha256(json.dumps(p, sort_keys=True, default=str).encode()).hexdigest()[:32]
-    # INSERT-then-supersede (NOT supersede-then-insert). A save busts the 20s
-    # read-memo, so the board's 5s poll reads live from the DB. If we superseded
-    # the old row first, a poll landing in the gap before the new row is inserted
-    # would find ZERO live rows -> strategy_run_get returns run=null -> the board
-    # wipes to "0 CAMPAIGN IDEAS / Pick an idea on the left" (intermittent clobber
-    # on save). Inserting first guarantees a reader always sees >=1 live row, and
-    # strategy_run_get's order=generated_at.desc&limit=1 returns the new one.
-    ins = sb("POST", "campaign_insights", {
-        "scope": "strategy", "insight_key": key, "payload": p,
+    # UPDATE-in-place (the table now carries a unique constraint
+    # campaign_insights_live_unique = one live row per scope+insight_key, so a
+    # plain INSERT of a second live row fails with a duplicate-key error). We GET
+    # the current live row and PATCH it by id, keeping EXACTLY one live row and
+    # never leaving a zero-live-rows gap for the board's 5s poll to read as
+    # run=null (the original reason this code inserted-first). Only INSERT when no
+    # live row exists yet.
+    fields = {
+        "payload": p,
         "data_fingerprint": fp,  # NOT NULL on this table
         # the table defaults expires_at to +7 days for cockpit insights; the
         # strategy board must not silently die in a week
         "expires_at": "2036-01-01T00:00:00Z",
-        "generated_by": str(p.get("generated_by") or "chat"), "status": "live"},
-        prefer="return=representation")
+        "generated_by": str(p.get("generated_by") or "chat"),
+        "status": "live", "generated_at": now}
+    existing = sb("GET", f"campaign_insights?scope=eq.strategy&insight_key=eq.{key}"
+                         f"&status=eq.live&order=generated_at.desc&select=id")
+    live_ids = [r["id"] for r in existing if isinstance(r, dict) and r.get("id")] \
+        if isinstance(existing, list) else []
+    if live_ids:
+        upd = sb("PATCH", f"campaign_insights?id=eq.{live_ids[0]}", fields,
+                 prefer="return=representation")
+        row = upd[0] if isinstance(upd, list) and upd else None
+        # retire any stray extra live rows (constraint should prevent >1, but be safe)
+        for stray in live_ids[1:]:
+            sb("PATCH", f"campaign_insights?id=eq.{stray}",
+               {"status": "superseded", "superseded_at": now})
+    else:
+        ins = sb("POST", "campaign_insights",
+                 {"scope": "strategy", "insight_key": key, **fields},
+                 prefer="return=representation")
+        row = ins[0] if isinstance(ins, list) and ins else None
     # http_json returns PostgREST 4xx error BODIES as truthy dicts - only a
     # representation row with generated_at counts as a successful write
-    row = ins[0] if isinstance(ins, list) and ins else None
     if not row or not row.get("generated_at"):
-        msg = ins.get("message") if isinstance(ins, dict) else None
+        src = upd if live_ids else ins
+        msg = src.get("message") if isinstance(src, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
-    # now retire every OLDER live row for this key (leaves the row we just wrote
-    # untouched). A read that briefly saw two live rows already picked the newest.
-    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{key}"
-                f"&status=eq.live&generated_at=lt.{row['generated_at']}",
-       {"status": "superseded", "superseded_at": now})
     _strategy_run_memo_bust()  # a new run shows on the next poll
     out = {"ok": True, "updated": row["generated_at"], "run_id": run_id}
     if not run_id:
