@@ -9541,6 +9541,45 @@ def test_monitor_surface_gate_positives_and_uncategorised_only():
           surface("Not Interested") is False, "substring guard")
 
 
+def test_attach_campaign_names():
+    """Identification fix 2026-08-11: queue rows carry campaign_name resolved
+    CROSS-WORKSPACE from the campaigns mirror, so the UI never depends on the
+    separately-fetched (navreo-scoped, silently-failable) picker list to name
+    a row. Unresolvable ids stay untouched — the client keeps its fallback."""
+    real_sb = setter._SB
+    real_cache = dict(setter._CAMP_NAME_CACHE)
+    setter._CAMP_NAME_CACHE.clear()
+
+    def fake_sb(method, path, body=None, prefer=None):
+        # cross-workspace read: the query must NOT be workspace-filtered
+        check("campaign-name lookup is cross-workspace",
+              "workspace=eq." not in path, path)
+        return [{"smartlead_campaign_id": 3765590,
+                 "name": "Amplifyy - Skincare brands on Amazon"},
+                {"smartlead_campaign_id": 111, "name": "Asteri - Client WS campaign"}]
+    try:
+        setter._SB = fake_sb
+        rows = [{"id": 1, "smartlead_campaign_id": "3765590", "workspace": "navreo"},
+                {"id": 2, "smartlead_campaign_id": 111, "workspace": "asteri"},
+                {"id": 3, "smartlead_campaign_id": "999", "workspace": "navreo"},
+                {"id": 4, "smartlead_campaign_id": None}]
+        setter._attach_campaign_names(rows)
+        check("navreo row named", rows[0].get("campaign_name") == "Amplifyy - Skincare brands on Amazon", rows[0])
+        check("federated row named", rows[1].get("campaign_name") == "Asteri - Client WS campaign", rows[1])
+        check("unresolvable row untouched", "campaign_name" not in rows[2], rows[2])
+        check("campaign-less row untouched", "campaign_name" not in rows[3], rows[3])
+        # cached: a second attach must not need Supabase at all
+        setter._SB = None
+        rows2 = [{"id": 5, "smartlead_campaign_id": 3765590}]
+        setter._attach_campaign_names(rows2)
+        check("second attach served from cache",
+              rows2[0].get("campaign_name") == "Amplifyy - Skincare brands on Amazon", rows2[0])
+    finally:
+        setter._SB = real_sb
+        setter._CAMP_NAME_CACHE.clear()
+        setter._CAMP_NAME_CACHE.update(real_cache)
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_guess_timezone()
@@ -9826,6 +9865,7 @@ if __name__ == "__main__":
     test_agent_adoption_busts_the_read_caches()
     test_redraft_async_job_returns_immediately_and_reports_its_result()
     test_monitor_surface_gate_positives_and_uncategorised_only()
+    test_attach_campaign_names()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

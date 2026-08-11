@@ -6732,6 +6732,7 @@ def route_subsequence_unresolved(_params):
             candidates = kept
         out = _reconcile_unresolved_against_smartlead(candidates)
         out.sort(key=lambda r: r.get("sent_at") or "", reverse=True)
+        _attach_campaign_names(out)
         return 200, {"rows": out}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -7159,6 +7160,83 @@ def _compute_kpis_sync() -> dict:
         # mark stale so the SWR path serves it but re-kicks a refresh.
         _KPI_CACHE["at"] = now if _CACHE_GEN[0] == _kpi_gen0 else 0.0
     return kpis
+
+
+# ── Row-level campaign identity (identification fix 2026-08-11) ────────────
+# The list used to rely ENTIRELY on the client joining /api/setter/campaigns
+# (navreo-scoped, fetched in parallel, silently [] on a failed load) to name
+# each row's campaign — any race, transient fetch failure, or federated
+# (non-navreo) row rendered as "Campaign <id>" for the whole session, and the
+# sidebar then read as "can't identify this campaign" so the agent couldn't
+# sensibly be assigned. The name now travels WITH the row: one batched
+# CROSS-WORKSPACE mirror read (cached), with the live Smartlead listing as the
+# mirror-lag fallback for brand-new campaigns. Pure read — never written back.
+_CAMP_NAME_TTL = 600.0
+_CAMP_NAME_CACHE = {}   # str(campaign_id) -> (name, fetched_at)
+_CAMP_NAME_LOCK = threading.Lock()
+
+
+def _campaign_names_for(ids) -> dict:
+    """{str(campaign_id): display name} for every resolvable id, across ALL
+    workspaces (the queue federates; the mirror holds every workspace's
+    campaigns). Unresolvable ids are simply absent — the client keeps its
+    "Campaign <id>" fallback for those. Never raises."""
+    want = sorted({str(i) for i in ids if i})
+    if not want:
+        return {}
+    now = _time.time()
+    out, missing = {}, []
+    with _CAMP_NAME_LOCK:
+        for cid in want:
+            ent = _CAMP_NAME_CACHE.get(cid)
+            if ent and (now - ent[1]) < _CAMP_NAME_TTL:
+                out[cid] = ent[0]
+            else:
+                missing.append(cid)
+    if missing and _SB:
+        try:
+            rows = _SB("GET", "campaigns?smartlead_campaign_id=in.(" + ",".join(missing) + ")"
+                              "&select=smartlead_campaign_id,name")
+            if isinstance(rows, list):
+                for r in rows:
+                    if isinstance(r, dict) and str(r.get("name") or "").strip():
+                        out[str(r.get("smartlead_campaign_id"))] = str(r["name"]).strip()
+        except Exception:  # noqa: BLE001 - a mirror blip degrades to the fallbacks below
+            pass
+        still = [c for c in missing if c not in out]
+        if still:
+            # Mirror-lag fallback: the (cached) Smartlead listing knows a
+            # brand-new campaign minutes before the register cron lands its
+            # mirror row. _parent_map is TTL-cached, so this is usually free.
+            try:
+                _parent_map()
+                names = _PARENT_CACHE.get("names") or {}
+                for cid in still:
+                    if names.get(cid):
+                        out[cid] = names[cid]
+            except Exception:  # noqa: BLE001
+                pass
+        with _CAMP_NAME_LOCK:
+            for cid in missing:
+                if cid in out:
+                    _CAMP_NAME_CACHE[cid] = (out[cid], now)
+    return out
+
+
+def _attach_campaign_names(rows) -> None:
+    """Stamp `campaign_name` onto queue/tray row dicts IN PLACE (read-time
+    annotation, same never-written-back class as _annotate_queue_row's).
+    Best-effort: a resolution failure leaves rows untouched, never raises."""
+    try:
+        names = _campaign_names_for({(r or {}).get("smartlead_campaign_id")
+                                     for r in rows if isinstance(r, dict)})
+        for r in rows:
+            if isinstance(r, dict):
+                n = names.get(str(r.get("smartlead_campaign_id") or ""))
+                if n:
+                    r["campaign_name"] = n
+    except Exception:  # noqa: BLE001 - identity annotation must never break the queue
+        pass
 
 
 # decide()'s exact master-switch hold reason — the read-time ground for
@@ -7600,7 +7678,9 @@ def _fetch_queue_rows(status: str, limit: int):
         if status in ("needs_review", "sent", "auto_sent"):
             rows = _reclassify_queue(rows, status)
         rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
-    return [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
+    out = [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
+    _attach_campaign_names(out)
+    return out
 
 
 # Mutation generation counter (panel fix 2026-07-30, H1). Stale-marking means
@@ -8175,7 +8255,9 @@ def route_queue_locate_get(params):
             row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Conversation not found."}
-        return 200, {"row": _annotate_queue_row(row), "matched": matched}
+        out = _annotate_queue_row(row)
+        _attach_campaign_names([out])
+        return 200, {"row": out, "matched": matched}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 

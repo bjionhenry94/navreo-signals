@@ -1170,6 +1170,12 @@ let _queueLoading = false;   // a queue fetch is in flight - empty list shows a 
 let KPIS = {};
 let currentStatus = "needs_review";
 let campaignMap = {};
+/* Picker self-heal state (identification fix 2026-08-11): _campLoadedOnce
+   arms the queue loader's unknown-campaign check only after the first
+   campaigns load has actually finished (before that, "unknown" is just the
+   boot race); _campRefetchAt floors the repair refetch at one per minute. */
+let _campLoadedOnce = false;
+let _campRefetchAt = 0;
 /* "" = All clients. Selected client display name (see clientForRow) for the
    queue header's client filter dropdown. */
 let currentClient = "";
@@ -1440,7 +1446,13 @@ function truncate(s, n) {
   return s.length > n ? s.slice(0, Math.max(0, n - 1)) + "…" : s;
 }
 function campaignNameFor(row) {
-  return campaignMap[row.smartlead_campaign_id] || (row.smartlead_campaign_id ? `Campaign ${row.smartlead_campaign_id}` : "Unknown campaign");
+  // campaignMap first (it carries the picker's subsequence/union semantics),
+  // then the row's own server-stamped campaign_name (identification fix
+  // 2026-08-11: the queue now resolves names cross-workspace server-side, so
+  // a picker race, a failed /api/setter/campaigns load, or a federated
+  // client-workspace row no longer strands the UI on "Campaign <id>").
+  return campaignMap[row.smartlead_campaign_id] || row.campaign_name
+      || (row.smartlead_campaign_id ? `Campaign ${row.smartlead_campaign_id}` : "Unknown campaign");
 }
 /* Client is derived live from the campaign name - there is no stored client
    field anywhere. The client is the text before the FIRST "-", en dash "–",
@@ -1639,6 +1651,7 @@ async function loadAgentsAndCampaigns() {
     }
     renderQueue();
     if (listEl) listEl.scrollTop = keepScroll;
+    refreshOpenDetail();
   }).catch(() => { /* labels are cosmetic; the list stands without them */ });
   const [agentsRes, campaignsRes] = await Promise.all([
     fetchJson("/api/setter/agents", _ro),
@@ -1668,7 +1681,8 @@ async function loadAgentsAndCampaigns() {
   // The queue may have painted BEFORE these names landed (both fetches run in
   // parallel) — without this repaint every row showed "Campaign <id>" clients
   // bucketed under "Other" until the next timer tick (owner report 2026-08-09).
-  if (QUEUE_ROWS.length) { renderClientFilter(); renderQueue(); }
+  if (QUEUE_ROWS.length) { renderClientFilter(); renderQueue(); refreshOpenDetail(); }
+  _campLoadedOnce = true;
   // labelsP is deliberately NOT returned: `await` flattens thenables, so
   // returning it would re-couple the first paint to the label reads.
   void labelsP;
@@ -1823,6 +1837,20 @@ async function _loadQueueInner(prefetch) {
     // (e.g. "Couldn't load setter agents") hid real failures.
     const eb = document.getElementById("errBanner");
     if (eb && /^Couldn't refresh the queue/.test(eb.textContent || "")) clearError();
+    // Picker self-heal (identification fix 2026-08-11): a navreo row whose
+    // campaign the picker list doesn't know — brand-new campaign, or this
+    // session's /api/setter/campaigns load failed silently — leaves the
+    // assign-agent dialog unable to show that campaign at all. One bounded
+    // refetch per minute repairs the picker (the server unions queue-derived
+    // ids into it) instead of stranding the session until a manual action.
+    if (_campLoadedOnce && Date.now() - _campRefetchAt > 60000
+        && QUEUE_ROWS.some((r) => r.smartlead_campaign_id
+             && (r.workspace || "navreo") === "navreo"
+             && !campaignMap[r.smartlead_campaign_id]
+             && !campaignParentMap[String(r.smartlead_campaign_id)])) {
+      _campRefetchAt = Date.now();
+      loadAgentsAndCampaigns();
+    }
   } else {
     // KEEP the last good rows (owner report 2026-07-28: a 502 window used to
     // blank every conversation - the error reload wiped QUEUE_ROWS and
@@ -1878,9 +1906,14 @@ async function _loadQueueInner(prefetch) {
      3-minute reload is still a no-op. */
 function detailSignature(r) {
   if (!r) return "";
+  // campaignNameFor is in the signature so a late-landing campaigns list
+  // repaints an OPEN pane that first rendered as "Campaign <id>"
+  // (identification fix 2026-08-11) — refreshOpenDetail's isTypingIn guard
+  // still protects the composer.
   return [r.agent_id, r.status, r.decision, r.decision_reason, r.category,
           r.subsequence_decision, r.added_to_subsequence, r.draft_subject,
-          (r.draft_body || "").length, (r.sent_body || "").length].join("|");
+          (r.draft_body || "").length, (r.sent_body || "").length,
+          campaignNameFor(r)].join("|");
 }
 function isTypingIn(rowId) {
   const el = document.activeElement;
