@@ -2239,8 +2239,8 @@ def strategy_focus_post(p: dict) -> dict:
     doc = {"ideaId": p.get("ideaId"), "view": p["view"], "note": str(p.get("note") or "")[:120]}
     now = _dtmod.datetime.utcnow().isoformat() + "Z"
     fp = hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:32]
-    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{fkey}&status=eq.live",
-       {"status": "superseded", "superseded_at": now})
+    # insert-then-supersede (same reasoning as strategy_run_post): never leave a
+    # gap with zero live focus rows for a poll to read.
     ins = sb("POST", "campaign_insights", {
         "scope": "strategy", "insight_key": fkey, "payload": doc,
         "data_fingerprint": fp, "expires_at": "2036-01-01T00:00:00Z",
@@ -2250,6 +2250,9 @@ def strategy_focus_post(p: dict) -> dict:
     if not row or not row.get("generated_at"):
         msg = ins.get("message") if isinstance(ins, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
+    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{fkey}"
+                f"&status=eq.live&generated_at=lt.{row['generated_at']}",
+       {"status": "superseded", "superseded_at": now})
     # the run payload carries focus too — bust the 20s memo so the open board
     # follows the chat's focus move on its very next poll
     _strategy_run_memo_bust()
@@ -2269,8 +2272,13 @@ def strategy_run_post(p: dict) -> dict:
     import hashlib
     now = _dtmod.datetime.utcnow().isoformat() + "Z"
     fp = hashlib.sha256(json.dumps(p, sort_keys=True, default=str).encode()).hexdigest()[:32]
-    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{key}&status=eq.live",
-       {"status": "superseded", "superseded_at": now})
+    # INSERT-then-supersede (NOT supersede-then-insert). A save busts the 20s
+    # read-memo, so the board's 5s poll reads live from the DB. If we superseded
+    # the old row first, a poll landing in the gap before the new row is inserted
+    # would find ZERO live rows -> strategy_run_get returns run=null -> the board
+    # wipes to "0 CAMPAIGN IDEAS / Pick an idea on the left" (intermittent clobber
+    # on save). Inserting first guarantees a reader always sees >=1 live row, and
+    # strategy_run_get's order=generated_at.desc&limit=1 returns the new one.
     ins = sb("POST", "campaign_insights", {
         "scope": "strategy", "insight_key": key, "payload": p,
         "data_fingerprint": fp,  # NOT NULL on this table
@@ -2285,6 +2293,11 @@ def strategy_run_post(p: dict) -> dict:
     if not row or not row.get("generated_at"):
         msg = ins.get("message") if isinstance(ins, dict) else None
         return {"ok": False, "message": "storage write failed" + (f": {msg}" if msg else "")}
+    # now retire every OLDER live row for this key (leaves the row we just wrote
+    # untouched). A read that briefly saw two live rows already picked the newest.
+    sb("PATCH", f"campaign_insights?scope=eq.strategy&insight_key=eq.{key}"
+                f"&status=eq.live&generated_at=lt.{row['generated_at']}",
+       {"status": "superseded", "superseded_at": now})
     _strategy_run_memo_bust()  # a new run shows on the next poll
     out = {"ok": True, "updated": row["generated_at"], "run_id": run_id}
     if not run_id:
@@ -16545,6 +16558,8 @@ _SHARED_WS_CLIENTS = (
     ("arnic", "Arnic"),
     ("qwintiq", "Qwintiq"),
     ("thunderbird", "ThunderBird"),   # ThunderBird is its own client (Bjion 2026-07-28)
+    ("altius", "Altius Reach"),       # in-workspace client (Bjion 2026-08-11)
+    ("touchpoint", "TouchPoint"),     # in-workspace client (Bjion 2026-08-11)
     ("acme", "Acme"),                 # DEMO client (Bjion 2026-07-29) — see _DEMO_CLIENT_LABELS
     ("navreo", "Navreo"),             # Navreo is now name-gated like every other client
 )
@@ -17457,6 +17472,7 @@ _RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags
     ("thunderbird", "ThunderBird"),
     ("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
     ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang"),
+    ("altius", "Altius Reach"), ("touchpoint", "TouchPoint"),
     ("acme", "Acme"),  # DEMO client — kept in sync with _SHARED_WS_CLIENTS
     ("navreo", "Navreo"),
 )
