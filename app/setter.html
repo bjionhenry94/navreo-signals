@@ -3454,32 +3454,29 @@ function categoryControlInner(row, compact) {
           + oneClickBtn(NI_CATEGORY_NAME, "lp-cat-ni", "Not interested");
         return `<div class="lp-cat-edit">
         <select class="lp-cat-sel" aria-label="Change lead category"><option value="">Loading…</option></select>
-        <button type="button" class="btn primary sm lp-cat-btn" disabled>Update</button>
       </div>
       ${actionsHtml ? `<div class="lp-cat-actions">${actionsHtml}</div>` : ""}
       <div class="lp-cat-hint">${hint}</div>`;
       })() : ""}`;
 }
-/* Lead-info sidebar, top to bottom: an identity header (avatar + name +
-   email), quick links (Website / LinkedIn), the editable Lead category
-   control, Campaign, an always-open "The decision", and the subsequence
-   toggle at the foot. Rendered into #leadPanel by renderDetail, which hides
-   the whole panel when nothing is selected. */
+/* Lead-info sidebar, top to bottom: the editable Lead category control, an
+   assign-agent prompt when the campaign has no agent, and the decision facts
+   (auto-send verdict + timezone/slots table). Rendered into #leadPanel by
+   renderDetail, which hides the whole panel when nothing is selected. */
 function leadPanelHtml(row) {
-  const showSubChk = row.status === "needs_review" || row.status === "auto_sent" || row.status === "sent";
-  const subChkHtml = showSubChk
-    ? `<label class="lp-subseq"><input type="checkbox" class="qc-sub" data-id="${esc(row.id)}" ${row.added_to_subsequence ? "checked" : ""}> Added to subsequence</label>`
-    : "";
-
   // Owner ruling 2026-07-14: same "no agent" fact as the list row's pill.
   // Owner ask 2026-07-25: it must PROMPT you to assign one, not just state
   // the fact - so the line now carries a button that opens the Agents drawer
-  // with this campaign's id in hand (see wireAssignAgentPrompt).
+  // with this campaign's id in hand (see wireAssignAgentPrompt). The Campaign
+  // name section itself was dropped (owner ask 2026-08-11), so this prompt is
+  // the only thing that still renders a campaign-scoped section.
   const noAgentHtml = row.agent_id ? "" : `
-    <div class="lp-line muted lp-noagent">No agent is assigned to this campaign, so nothing is drafted for it automatically.</div>
-    <button class="btn sm lp-assign-agent" type="button"
-      data-campaign-id="${esc(row.smartlead_campaign_id || "")}"
-      data-campaign-name="${esc(campaignNameFor(row))}">Assign an agent</button>`;
+    <div class="lp-section">
+      <div class="lp-line muted lp-noagent">No agent is assigned to this campaign, so nothing is drafted for it automatically.</div>
+      <button class="btn sm lp-assign-agent" type="button"
+        data-campaign-id="${esc(row.smartlead_campaign_id || "")}"
+        data-campaign-name="${esc(campaignNameFor(row))}">Assign an agent</button>
+    </div>`;
 
   // Lead category: the shared control (tone pill + live Smartlead dropdown),
   // wrapped here in the sidebar's sunken card section.
@@ -3489,16 +3486,10 @@ function leadPanelHtml(row) {
   // sticky top bar, so the sidebar leads straight with the category control.
   return `
     ${catSectionHtml}
+    ${noAgentHtml}
     <div class="lp-section">
-      <div class="lp-label">Campaign</div>
-      <div class="lp-line">${esc(campaignNameFor(row))}</div>
-      ${noAgentHtml}
-    </div>
-    <div class="lp-section">
-      <div class="lp-label">The decision</div>
       ${leadDecisionHtml(row)}
     </div>
-    ${subChkHtml}
   `;
 }
 /* The sidebar's decision block - the same facts as the Try-it drawer's
@@ -3506,14 +3497,13 @@ function leadPanelHtml(row) {
    guardrail rows hidden, so the panel scans fast. */
 function leadDecisionHtml(row) {
   const parts = [];
-  if (row.decision_reason) {
-    parts.push(`<div class="lp-decision"><span class="lp-decision-head">${esc(decisionLabel(row))}</span><span class="lp-decision-reason">${esc(row.decision_reason)}</span></div>`);
-  }
+  // The "Held for review" head + reason and the Intent row were dropped from
+  // the sidebar (owner ask 2026-08-11); the Try-it drawer keeps the full set.
   const verdict = autoSendVerdictHtml(row, true);
   if (verdict) {
     parts.push(`<div class="lp-verdict"><b>Would this have auto-sent?</b> ${verdict}</div>`);
   }
-  const facts = decisionFacts(row, { hideEmpty: true });
+  const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent");
   if (facts.length) {
     parts.push(`<dl class="lp-facts">` + facts.map((f) =>
       `<div class="lp-fact"><dt>${esc(f.label)}</dt><dd>${esc(f.value)}</dd></div>`).join("") + `</dl>`);
@@ -3589,43 +3579,20 @@ function currentDetailRow() {
   return (QUEUE_ROWS || []).find((r) => String(r.id) === String(selectedRowId))
       || (ALL_ROWS || []).find((r) => String(r.id) === String(selectedRowId)) || null;
 }
-/* Keep a category control's Update button + hint honest about the current
-   pick: disabled until a genuinely different category is chosen, red for a
-   disqualifying (negative) pick, amber for any other removal, and a consequence
-   line naming the lead + outcome BEFORE the click. Scoped to the passed .lp-cat
-   block so the sidebar and sticky-bar controls stay independent; the compact
-   (sticky-bar) control keeps its hint empty at rest to stay slim. */
-function updateCatBtn(block, row) {
+/* Picking a category in the dropdown applies it IMMEDIATELY (owner ask
+   2026-08-11: the Update button is gone). Guards: an empty/placeholder pick
+   and a re-pick of the current category are no-ops; the select locks while
+   the Smartlead write is in flight so a second pick can't double-fire. */
+function onCategoryPicked(block, row) {
   if (!block) return;
   const sel = block.querySelector(".lp-cat-sel");
-  const btn = block.querySelector(".lp-cat-btn");
-  if (!sel || !btn) return;
+  if (!sel || !sel.value || sel.disabled) return;
   const r = currentDetailRow() || row;
   const cur = String((r && r.category) || "").trim().toLowerCase();
-  const opt = sel.value ? sel.options[sel.selectedIndex] : null;
+  const opt = sel.options[sel.selectedIndex];
   const chosen = opt ? String(opt.getAttribute("data-name") || "").trim() : "";
-  const enable = !!chosen && chosen.toLowerCase() !== cur;
-  btn.disabled = !enable;
-  // Colour by consequence: positive keeps them (orange commit); a hard negative
-  // rejects them (red); anything else still REMOVES them from the queue (amber
-  // caution) - so a benign-looking "Out of Office" never wears the safe orange.
-  const positive = enable && CORE_FOUR_JS.some((c) => c.toLowerCase() === chosen.toLowerCase());
-  const negative = enable && categoryTone(chosen) === "r";
-  const caution = enable && !positive && !negative;
-  btn.classList.toggle("primary", !enable || positive);
-  btn.classList.toggle("danger", negative);
-  btn.classList.toggle("caution", caution);
-  const hint = block.querySelector(".lp-cat-hint");
-  if (hint) {
-    hint.classList.remove("lp-hint-err");
-    // At rest the hint is blank (owner ask 2026-08-04) - no standing paragraph
-    // under the buttons; a consequence line appears only once a change stages.
-    if (!enable) { hint.textContent = ""; return; }
-    const nm = leadFirstNameOr(r, "this lead");
-    hint.textContent = positive
-      ? `Keeps ${nm} in the flow.`
-      : `Files ${nm} as '${chosen}' in Smartlead and clears them from the queue.`;
-  }
+  if (!chosen || chosen.toLowerCase() === cur) return;
+  applyCategory(block);
 }
 /* Write the chosen Smartlead category from a given control. Reuses the
    recategorise route (system-of-record write): a positive keeps/rescues the
@@ -3648,6 +3615,7 @@ async function applyCategory(block, override) {
     name = sel.options[sel.selectedIndex].getAttribute("data-name") || "";
   }
   if (btn) { btn.disabled = true; btn.classList.add("busy"); }
+  if (sel) sel.disabled = true;   // dropdown applies on pick - block a double-fire
   if (hint) { hint.textContent = "Updating Smartlead…"; hint.classList.remove("lp-hint-err"); }
   // Captured BEFORE the await (panel fix 2026-08-01): the server acts on
   // THIS id; re-reading selectedRowId after a multi-second Smartlead write
@@ -3662,6 +3630,7 @@ async function applyCategory(block, override) {
   if (!res.ok) {
     if (hint) { hint.textContent = res.error || "Couldn't update the category - nothing changed."; hint.classList.add("lp-hint-err"); }
     if (btn) btn.disabled = false;
+    if (sel) { sel.disabled = false; sel.value = ""; }
     return;
   }
   const act = res.data && res.data.action;
@@ -3749,18 +3718,16 @@ async function applyCategory(block, override) {
   await loadQueue();   // its tail refreshes the tray — no separate GET needed
 }
 /* Wire every category control (.lp-cat) found under `root`: hydrate its
-   dropdown, wire change -> updateCatBtn, and its button -> applyCategory. Runs
-   for both the sidebar and the sticky bar; a data-flag guards double-wiring. */
+   dropdown and wire change -> applyCategory directly (picking an option IS
+   the action - no Update button). A data-flag guards double-wiring. */
 function wireCategoryControls(root, row) {
   if (!root) return;
   root.querySelectorAll(".lp-cat").forEach((block) => {
     const sel = block.querySelector(".lp-cat-sel");
     if (!sel || block.dataset.catWired === "1") return;
     block.dataset.catWired = "1";
-    hydrateCategoryOptions(sel, row).then(() => updateCatBtn(block, row));
-    sel.addEventListener("change", () => updateCatBtn(block, row));
-    const btn = block.querySelector(".lp-cat-btn");
-    if (btn) btn.addEventListener("click", () => applyCategory(block));
+    hydrateCategoryOptions(sel, row);
+    sel.addEventListener("change", () => onCategoryPicked(block, row));
     wireOneClickCat(block, ".lp-cat-nq", NQ_CATEGORY_NAME);
     wireOneClickCat(block, ".lp-cat-ni", NI_CATEGORY_NAME);
   });
