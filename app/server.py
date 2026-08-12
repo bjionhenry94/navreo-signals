@@ -17040,6 +17040,23 @@ def _client_win_build():
     return data
 
 
+def _client_win_persist(data: dict) -> None:
+    """Best-effort persistence of a COMPLETE (never gated) build: Supabase for
+    cross-instance survival, local file as the same-disk fallback."""
+    try:
+        sb("POST", "deliverability_audit_cache?on_conflict=id",
+           {"id": "client_windows", "blob": data,
+            "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception as e:  # noqa: BLE001 — persistence is best-effort
+        print(f"[client-win] supabase persist failed: {e}", file=sys.stderr)
+    try:
+        _CLIENT_WIN_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _CLIENT_WIN_FILE.write_text(json.dumps(data))
+    except Exception as e:  # noqa: BLE001 — disk snapshot is best-effort
+        print(f"[client-win] snapshot write failed: {e}", file=sys.stderr)
+
+
 def _client_win_run_bg():
     try:
         data = _client_win_build()
@@ -17060,31 +17077,81 @@ def _client_win_run_bg():
         print("[client-win] gated build: served with 10-min retry clock, not persisted",
               file=sys.stderr)
         return
+    _client_win_persist(data)
+
+
+def client_windows_cron_refresh() -> dict:
+    """run_daily's 3-hourly step: the ~7-min 589-call sweep, built on the cron
+    instance and persisted for the web to adopt. The sweep OOM-killed the
+    512MB web box mid-build (seen live 2026-08-12: the Analytics page served a
+    29h-stale blob — every client's "yesterday" read 0 sent — and each page
+    visit crash-looped the instance). Gated builds are not persisted; the next
+    tick retries."""
+    data = _client_win_build()
+    gated = bool(data.get("_series_gated"))
+    if not gated:
+        _client_win_persist(data)
+    dbg = data.get("_debug") or {}
+    return {"ok": not gated, "gated": gated, "secs": dbg.get("secs"),
+            "errors": (dbg.get("daywise_errors") or [])[:4]}
+
+
+_CLIENT_WIN_STALL_S = 4 * 3600  # cron cadence 3h + build time + headroom
+
+
+def _client_win_asof_age_s(ent: dict | None) -> float:
     try:
-        sb("POST", "deliverability_audit_cache?on_conflict=id",
-           {"id": "client_windows", "blob": data,
-            "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
-           prefer="resolution=merge-duplicates,return=minimal")
-    except Exception as e:  # noqa: BLE001 — persistence is best-effort
-        print(f"[client-win] supabase persist failed: {e}", file=sys.stderr)
+        asof = _dtmod.datetime.fromisoformat(str((ent or {}).get("asof", "")).replace("Z", "+00:00"))
+        return (_dtmod.datetime.now(_dtmod.timezone.utc) - asof).total_seconds()
+    except (ValueError, TypeError):
+        return float("inf")
+
+
+def _client_win_adopt_persisted() -> bool:
+    """TTL-expiry refresh: adopt the cron-built blob from Supabase when it is
+    fresher than what's in memory, so the web instance never has to run the
+    sweep itself in the steady state."""
     try:
-        _CLIENT_WIN_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _CLIENT_WIN_FILE.write_text(json.dumps(data))
-    except Exception as e:  # noqa: BLE001 — disk snapshot is best-effort
-        print(f"[client-win] snapshot write failed: {e}", file=sys.stderr)
+        rows = sb("GET", "deliverability_audit_cache?id=eq.client_windows&select=blob")
+        blob = rows[0].get("blob") if rows else None
+        if not (isinstance(blob, dict) and blob.get("windows")):
+            return False
+    except Exception as e:  # noqa: BLE001 — a failed re-read just falls through
+        print(f"[client-win] persisted re-read failed: {e}", file=sys.stderr)
+        return False
+    with _CLIENT_WIN_LOCK:
+        cur = _CLIENT_WIN["data"]
+        if str(blob.get("asof") or "") <= str((cur or {}).get("asof") or ""):
+            return False
+        _CLIENT_WIN.update(data=blob, ts=time.time(), error=None)
+    return True
 
 
 def client_windows_get(force: bool = False) -> tuple[dict, int]:
-    """Serve the cache (stale allowed — the page shows asof), kicking a
-    background rebuild whenever it's past TTL (or ?refresh=1 forces one).
-    First-ever call returns {building:true} and the page polls."""
+    """Serve the cache (stale allowed — the page shows asof). On TTL expiry,
+    first adopt the cron-persisted blob if it's newer; the in-process sweep
+    only runs as a fallback when the cron's blob has itself gone stale
+    (> _CLIENT_WIN_STALL_S), or on ?refresh=1. First-ever call returns
+    {building:true} and the page polls."""
     _client_win_restore()
+    with _CLIENT_WIN_LOCK:
+        ent, ts = _CLIENT_WIN["data"], _CLIENT_WIN["ts"]
+    expired = ent is None or (time.time() - ts) >= _CLIENT_WIN_TTL_S
+    if expired and not force and ent is not None:
+        if _client_win_adopt_persisted():
+            expired = False
+        elif _client_win_asof_age_s(ent) <= _CLIENT_WIN_STALL_S:
+            # nothing newer persisted but the cron isn't presumed dead yet —
+            # keep serving, re-check the persisted blob again in ~15 min
+            expired = False
+            with _CLIENT_WIN_LOCK:
+                _CLIENT_WIN["ts"] = time.time() - _CLIENT_WIN_TTL_S + 900
     kick = False
     with _CLIENT_WIN_LOCK:
-        ent, ts, running = _CLIENT_WIN["data"], _CLIENT_WIN["ts"], _CLIENT_WIN["running"]
-        if not running and (force or ent is None or (time.time() - ts) >= _CLIENT_WIN_TTL_S):
+        if (force or expired) and not _CLIENT_WIN["running"]:
             _CLIENT_WIN["running"] = True
             kick = True
+        ent = _CLIENT_WIN["data"]
     if kick:
         threading.Thread(target=_client_win_run_bg, daemon=True).start()
     if ent is None:

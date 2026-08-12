@@ -171,6 +171,20 @@ def main():
     except Exception as e:  # noqa: BLE001 — the audit must never kill the run
         print(f"subsequence audit · FAILED: {str(e)[:200]}")
 
+    # Analytics client-windows blob (the Analytics page's day-by-day + window
+    # source): built HERE, on the cron's own instance, and persisted to
+    # Supabase for the web to adopt. The ~7-min 500+-call sweep OOM-killed the
+    # 512MB web box mid-build (2026-08-12: every client's "yesterday" read 0
+    # sent off a 29h-stale blob, and each Analytics visit crash-looped the
+    # instance). Every tick, no gate — freshness IS the point.
+    try:
+        r = server.client_windows_cron_refresh()
+        print("client windows · " + ("ok" if r["ok"] else "GATED (not persisted)")
+              + f" in {r.get('secs')}s"
+              + (f" · errors: {r['errors']}" if r.get("errors") else ""))
+    except Exception as e:  # noqa: BLE001 — the sweep must never kill the run
+        print(f"client windows · FAILED: {str(e)[:200]}")
+
 
 if __name__ == "__main__":
     main()
