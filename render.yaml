@@ -31,7 +31,7 @@ services:
   - type: web
     name: navreo-signals
     runtime: python
-    plan: starter
+    plan: standard  # 2GB/1CPU — starter's 512MB OOM-killed in-process sweeps (2026-08-12)
     buildCommand: pip install -r requirements.txt
     startCommand: python app/server.py
     healthCheckPath: /healthz
