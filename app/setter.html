@@ -105,6 +105,11 @@
 }
 .il-search input:focus { outline: none; box-shadow: var(--focus); }
 .il-search-notes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
+/* "From Smartlead" search-escalation section (global-search ship 2026-08-15) */
+.sl-section { border-top: 2px solid var(--line); }
+.sl-section-head { padding: 8px 14px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
+.sl-section-head span { font-weight: 400; text-transform: none; letter-spacing: 0; }
+.sl-pill { background: hsl(28 80% 90%); color: hsl(28 70% 28%); }
 .il-client-filter { margin-top: 8px; width: 100%; }
 /* Uncategorised handling (ship 2026-07-20) */
 .uncat-pill { background: rgba(217,164,32,.14); color: #9a7515; border: 1px solid rgba(217,164,32,.45); }
@@ -1277,6 +1282,14 @@ let _lastScrolledRowId = null;
    didn't. See refreshOpenDetail. */
 let _lastDetailSignature = null;
 let inboxSearchQuery = "";
+/* Smartlead-wide search state (global-search ship 2026-08-15): results from
+   /api/setter/search-smartlead for the CURRENT query, rendered as a badged
+   "From Smartlead" section under the local matches. SL_OPEN holds the key of
+   a read-only Smartlead conversation open in the right pane, so queue
+   reloads (renderQueue's no-selection branch) don't blank it. */
+let SL_SEARCH = { q: "", loading: false, results: [], error: "" };
+let SL_OPEN = null;
+let _slSearchTimer = null, _slSearchSeq = 0;
 /* rowId -> last edited (unsent) draft HTML, so a background refresh never
    clobbers text the user is mid-way through editing */
 const EDITED_DRAFTS = {};
@@ -2522,7 +2535,9 @@ function pagedInboxRows() {
 
 function renderQueue() {
   renderInboxList();
-  if (selectedRowId == null) { renderDetail(null); return; }
+  // A read-only Smartlead conversation is open with NO selected queue row —
+  // blanking the pane here (60s reload path) would clobber it mid-read.
+  if (selectedRowId == null) { if (!SL_OPEN) renderDetail(null); return; }
   const stillThere = QUEUE_ROWS.find((r) => String(r.id) === String(selectedRowId))
                   || ALL_ROWS.find((r) => String(r.id) === String(selectedRowId));
   if (stillThere) {
@@ -2545,6 +2560,141 @@ function renderQueue() {
   renderDetail(null);
 }
 
+/* ── Smartlead-wide search (global-search ship 2026-08-15) ─────────────────
+   The local corpus only holds rows the setter INGESTED — a prospect whose
+   conversation never entered the queue (pre-setter campaigns, long-dismissed,
+   other pills after the 2026-07-29 corpus trim) was unfindable from here.
+   After a 450ms typing pause the query also goes to
+   /api/setter/search-smartlead (Smartlead's own master-inbox search, every
+   enabled workspace); hits render in the badged "From Smartlead" section
+   under the local matches. Local results stay instant — the escalation never
+   blocks or reorders them. Hits that ALSO live in the setter open through
+   the NORMAL row path (full controls); never-ingested ones open READ-ONLY. */
+function scheduleSmartleadSearch() {
+  const q = inboxSearchQuery.trim();
+  if (_slSearchTimer) clearTimeout(_slSearchTimer);
+  if (q.length < 3) { SL_SEARCH = { q: "", loading: false, results: [], error: "" }; return; }
+  SL_SEARCH = { q, loading: true, results: SL_SEARCH.q === q ? SL_SEARCH.results : [], error: "" };
+  _slSearchTimer = setTimeout(async () => {
+    const seq = ++_slSearchSeq;
+    const res = await fetchJson(`/api/setter/search-smartlead?q=${encodeURIComponent(q)}`);
+    // Stale guard: a slower earlier response must never overwrite a newer
+    // query's results (same seq pattern as the redraft poller).
+    if (seq !== _slSearchSeq || inboxSearchQuery.trim() !== q) return;
+    SL_SEARCH = res.ok
+      ? { q, loading: false, results: (res.data && res.data.results) || [], error: "" }
+      : { q, loading: false, results: [], error: res.error || "Couldn't search Smartlead." };
+    renderInboxList();
+  }, 450);
+}
+function slHitKey(h) { return `${h.workspace}|${h.smartlead_campaign_id}|${h.lead_email}`; }
+function slHitName(h) {
+  const n = [h.lead_first_name, h.lead_last_name].filter(Boolean).join(" ").trim();
+  return n || h.lead_name || emailLocalPart(h.lead_email) || h.lead_email || "Unknown lead";
+}
+function smartleadSectionHtml() {
+  const q = inboxSearchQuery.trim();
+  if (!q || q.length < 3 || SL_SEARCH.q !== q) return "";
+  // The section carries what the list ABOVE can't show — a hit whose queue
+  // row is already in the visible local matches would be a duplicate.
+  const visIds = new Set(visibleInboxRows().map((r) => String(r.id)));
+  const hits = (SL_SEARCH.results || []).filter((h) => !(h.queue_id && visIds.has(String(h.queue_id))));
+  let body;
+  if (SL_SEARCH.loading) body = `<div class="empty"><span class="btnspin"></span> Searching all of Smartlead…</div>`;
+  else if (SL_SEARCH.error) body = `<div class="empty">${esc(SL_SEARCH.error)}</div>`;
+  else if (!hits.length) body = `<div class="empty">No further matches in Smartlead.</div>`;
+  else body = hits.map(slHitHtml).join("");
+  return `<div class="sl-section">
+    <div class="sl-section-head">From Smartlead <span>· whole account</span></div>
+    ${body}
+  </div>`;
+}
+function slHitHtml(h) {
+  const badge = h.queue_id
+    ? `<span class="pill ${statusPillClass(h.queue_status)}">${statusLabel(h.queue_status)}</span>`
+    : `<span class="pill sl-pill">Not in setter</span>`;
+  const camp = h.campaign_name || (h.smartlead_campaign_id ? `Campaign ${h.smartlead_campaign_id}` : "");
+  const selected = SL_OPEN === slHitKey(h) ? "selected" : "";
+  return `<div class="inbox-item sl-item ${selected}" data-slkey="${esc(slHitKey(h))}">
+    <div class="ii-line1">${esc(slHitName(h))}</div>
+    <div class="ii-snippet">${esc(truncate(h.subject || h.lead_email, 70))}</div>
+    <div class="ii-line3">${badge}${camp ? `<span class="pill n">${esc(truncate(camp, 34))}</span>` : ""}</div>
+  </div>`;
+}
+async function openSmartleadHit(key) {
+  const h = (SL_SEARCH.results || []).find((x) => slHitKey(x) === key);
+  if (!h) return;
+  if (h.queue_id) {
+    // It lives in the setter (another pill, or beyond the fetch cap): load
+    // the full row and open it through the NORMAL path — full controls,
+    // exactly as if it had been clicked in its own pill.
+    const res = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(h.queue_id)}`);
+    if (res.ok && res.data && res.data.row) {
+      const row = res.data.row;
+      if (!ALL_ROWS.some((r) => String(r.id) === String(row.id))) ALL_ROWS.push(row);
+      if (!QUEUE_ROWS.some((r) => String(r.id) === String(row.id))) QUEUE_ROWS.push(row);
+      selectRow(row.id);
+      return;
+    }
+    // Row vanished under us (re-intake) — fall through to the read-only view.
+  }
+  renderSmartleadDetail(h, null);   // paint shell + loader immediately
+  const t = await fetchJson(`/api/setter/smartlead-thread?campaign_id=${encodeURIComponent(h.smartlead_campaign_id)}&email=${encodeURIComponent(h.lead_email)}`);
+  if (SL_OPEN !== slHitKey(h)) return;   // user moved on while the thread loaded
+  renderSmartleadDetail(h, t.ok ? ((t.data && t.data.thread) || []) : { error: t.error || "Couldn't load the conversation." });
+}
+function renderSmartleadDetail(h, thread) {
+  // READ-ONLY by design: these conversations are outside the setter queue, so
+  // the pane renders the thread and NOTHING actionable — no approve, no
+  // dismiss, no composer (never-send rail). Selecting a real row clears
+  // SL_OPEN (selectRow) and normal behaviour resumes.
+  SL_OPEN = slHitKey(h);
+  selectedRowId = null;
+  _DETAIL_ROW = null;
+  const shell = document.getElementById("inboxShell");
+  if (shell) shell.classList.add("mobile-detail");
+  if (window.matchMedia("(max-width: 900px)").matches) window.scrollTo(0, 0);
+  document.querySelectorAll(".inbox-item").forEach((item) => {
+    item.classList.toggle("selected", item.getAttribute("data-slkey") === SL_OPEN);
+  });
+  const panelEl = document.getElementById("leadPanel");
+  if (panelEl) panelEl.innerHTML = "";
+  const el = document.getElementById("inboxRight");
+  let convo;
+  if (thread === null) {
+    convo = `<div class="muted small" style="padding:8px 0"><span class="btnspin"></span> Loading the Smartlead conversation…</div>`;
+  } else if (thread && thread.error) {
+    convo = `<div class="empty">${esc(thread.error)}</div>`;
+  } else if (!Array.isArray(thread) || !thread.length) {
+    convo = `<div class="empty">Smartlead returned no messages for this conversation.</div>`;
+  } else {
+    const items = thread.map((m) => convoMsgHtml(m.type === "SENT" ? "You" : "Them", m.time, m.body, false, m.type !== "SENT"));
+    convo = `<div class="msg-card"><div class="msg-card-lab">Conversation</div><div class="convo">${items.join("")}</div></div>`;
+  }
+  const camp = h.campaign_name || (h.smartlead_campaign_id ? `Campaign ${h.smartlead_campaign_id}` : "");
+  el.innerHTML = `
+    <div class="detail-topbar">
+      <a class="back-link mobile-back" href="#" id="slBackLink">&larr; Back to inbox</a>
+      <div class="detail-head">
+        <div class="dh-row1">
+          <div class="dh-id">
+            <div class="dh-nameline"><h2 class="dh-name">${esc(slHitName(h))}</h2></div>
+            <span class="dh-emailgrp"><span class="dh-email">${esc(h.lead_email || "")}</span></span>
+          </div>
+          <span class="pill sl-pill">From Smartlead — read-only</span>
+        </div>
+        <div class="dh-band">
+          <div class="dh-campaign" title="${esc(camp)}"><span class="dh-campaign-name">${esc(camp)}</span></div>
+        </div>
+      </div>
+    </div>
+    ${convo}
+    <div class="muted small" style="margin:10px 0 4px">This conversation isn't in the setter queue — it's shown straight from Smartlead, and any reply is managed in Smartlead itself.</div>
+  `;
+  const back = document.getElementById("slBackLink");
+  if (back) back.addEventListener("click", (e) => { e.preventDefault(); backToInbox(); });
+}
+
 function renderInboxList() {
   const el = document.getElementById("inboxList");
   const paged = pagedInboxRows();
@@ -2558,15 +2708,20 @@ function renderInboxList() {
     // While a fetch is in flight an empty list means "still loading", not
     // "nothing here" - never show the misleading empty state during a load
     // (loader ruling 2026-07-16).
-    el.innerHTML = _queueLoading
+    el.innerHTML = (_queueLoading
       ? `<div class="empty"><span class="btnspin"></span> Loading replies…</div>`
-      : `<div class="empty">No replies here. New ones will show up after the next check.</div>`;
+      : `<div class="empty">No replies here. New ones will show up after the next check.</div>`)
+      + smartleadSectionHtml();
   } else {
-    el.innerHTML = paged.rows.map(inboxItemHtml).join("");
-    el.querySelectorAll(".inbox-item").forEach((item) => {
-      item.addEventListener("click", () => selectRow(item.getAttribute("data-id")));
-    });
+    el.innerHTML = paged.rows.map(inboxItemHtml).join("") + smartleadSectionHtml();
   }
+  // One wiring pass for BOTH kinds of row: local queue rows open via
+  // selectRow, Smartlead-section hits via openSmartleadHit (which routes
+  // in-setter hits back through selectRow itself).
+  el.querySelectorAll(".inbox-item").forEach((item) => {
+    const slk = item.getAttribute("data-slkey");
+    item.addEventListener("click", () => slk ? openSmartleadHit(slk) : selectRow(item.getAttribute("data-id")));
+  });
   renderInboxPager(paged.total, paged.totalPages);
 }
 
@@ -2791,6 +2946,7 @@ function inboxItemHtml(row) {
 
 let _mobileListScrollY = 0;
 function selectRow(id) {
+  SL_OPEN = null;   // a real row takes the pane back from any read-only Smartlead view
   selectedRowId = id;
   const _shell = document.getElementById("inboxShell");
   // Stash the LIST position only on a genuine list→detail transition (panel
@@ -5263,12 +5419,12 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   const note = document.getElementById("searchAllNote");
   const searching = !!inboxSearchQuery.trim();
   if (note) note.style.display = searching ? "inline" : "none";
-  // Honest copy (panel fix 2026-08-01): the all-statuses corpus was trimmed
-  // away 2026-07-29, so search only ever covers the LOADED pill — the old
-  // "searching all replies" note (and the pill-row dim that reinforced it)
-  // taught the reviewer the opposite and made missing conversations read as
-  // non-existent.
-  if (note && searching) note.textContent = "searching this filter only";
+  // Honest copy, updated for the global-search ship 2026-08-15: local rows
+  // answer instantly and Smartlead itself is asked after a typing pause, so
+  // the note now promises exactly what happens ("searching this filter only"
+  // predates the Smartlead escalation and taught the opposite).
+  if (note && searching) note.textContent = "+ searching all of Smartlead";
+  scheduleSmartleadSearch();
   renderInboxList();
   renderKpis();
 });

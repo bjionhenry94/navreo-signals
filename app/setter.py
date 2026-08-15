@@ -1753,17 +1753,43 @@ def _sl_post(path: str, body: dict, params: dict = None, campaign_id=None, api_k
         return None
     qs = dict(params or {})
     qs["api_key"] = key
-    try:
-        return _HTTP("POST", f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}", {}, body)
-    except ValueError:
-        # Smartlead sometimes answers a successful POST (e.g. reply-email-thread)
-        # with a non-JSON 2xx body such as a bare "OK". http_json's json.loads then
-        # raises JSONDecodeError (a ValueError) even though the HTTP call SUCCEEDED,
-        # which used to land the reply as needs_review + "Expecting value: line 1
-        # column 1 (char 0)" while the email had actually gone out - risking a
-        # double-send on the next click. A 2xx IS success, so treat it as an
-        # accepted, empty-JSON response. (4xx/5xx still raise HTTPError, unchanged.)
-        return {}
+    url = f"{SMARTLEAD_BASE}{path}?{urlencode(qs)}"
+    # Retry-on-429 (owner report 2026-08-10: "Couldn't send the reply: HTTP
+    # Error 429: Too Many Requests" on Approve, then it works on a manual retry
+    # 15s later). A 429 is Smartlead RATE-LIMITING — it REJECTED the request, so
+    # nothing was sent and a retry is double-send-SAFE (unlike a timeout, which
+    # might have gone out — those still raise, unchanged). Without this a single
+    # transient 429 landed the reply in needs_review with the raw error and made
+    # the reviewer re-click by hand. Retry inline with backoff so the click just
+    # succeeds; honour a Retry-After header when Smartlead sends one (capped so a
+    # worker never pins the 512MB box). ~21s total worst case across 3 retries.
+    _SL_429_BACKOFFS = (3.0, 6.0, 12.0)
+    for _attempt in range(len(_SL_429_BACKOFFS) + 1):
+        try:
+            return _HTTP("POST", url, {}, body)
+        except ValueError:
+            # Smartlead sometimes answers a successful POST (e.g. reply-email-thread)
+            # with a non-JSON 2xx body such as a bare "OK". http_json's json.loads then
+            # raises JSONDecodeError (a ValueError) even though the HTTP call SUCCEEDED,
+            # which used to land the reply as needs_review + "Expecting value: line 1
+            # column 1 (char 0)" while the email had actually gone out - risking a
+            # double-send on the next click. A 2xx IS success, so treat it as an
+            # accepted, empty-JSON response. (4xx/5xx still raise HTTPError, unchanged.)
+            return {}
+        except Exception as e:  # noqa: BLE001
+            # Only a 429 is retryable here; every other status/error propagates
+            # to the caller exactly as before. Give up (re-raise) once retries
+            # are exhausted so _send_reply lands it as needs_review as usual.
+            if getattr(e, "code", None) != 429 or _attempt >= len(_SL_429_BACKOFFS):
+                raise
+            wait = _SL_429_BACKOFFS[_attempt]
+            try:
+                ra = e.headers.get("Retry-After") if getattr(e, "headers", None) else None
+                if ra is not None:
+                    wait = min(max(float(ra), 1.0), 15.0)  # honour Smartlead, cap 15s
+            except Exception:  # noqa: BLE001 - a garbled header just uses our backoff
+                pass
+            _time.sleep(wait)
 
 
 # from-email -> from_name for a campaign's sending accounts, cached. The
@@ -3322,8 +3348,16 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
                 pass
         return {"ok": True, "row": patch}
     except Exception as e:  # noqa: BLE001 - a send crash must land as needs_review, never raise
-        patch = ({"status": cur, "error": str(e)[:300]} if followup
-                 else {"status": "needs_review", "error": str(e)[:300]})
+        # A 429 only reaches here after _sl_post exhausted its inline retries —
+        # Smartlead is sustaining a rate-limit. Nothing was sent (a 429 = request
+        # rejected), so say so in plain English the reviewer can act on rather
+        # than relaying "HTTP Error 429: Too Many Requests".
+        msg = str(e)[:300]
+        if getattr(e, "code", None) == 429 or "429" in msg:
+            msg = ("Smartlead is rate-limiting sends right now, so this reply "
+                   "wasn't sent. Nothing went out — wait a minute and try again.")
+        patch = ({"status": cur, "error": msg} if followup
+                 else {"status": "needs_review", "error": msg})
         _apply_patch(row, patch)
         return {"ok": False, "row": patch}
 
@@ -3335,6 +3369,18 @@ def _finalize_row(row: dict) -> dict:
     if not _SB:
         row.setdefault("id", None)
         return row
+    # Enrich-on-reply (owner ask 2026-08-15): every real reply landing in the
+    # queue kicks a ONE-TIME background enrichment (phone + company facts) for
+    # the warm-call sideboard. The setter_lead_enrichment cache row is the
+    # never-pay-twice guard, so re-intakes and redrives are free no-ops.
+    if not row.get("is_test") and row.get("lead_email"):
+        try:
+            threading.Thread(target=_enrich_on_reply,
+                             args=(row["lead_email"], row.get("company_domain") or "",
+                                   row.get("workspace") or WORKSPACE),
+                             daemon=True).start()
+        except Exception:  # noqa: BLE001 - enrichment must never block intake
+            pass
     try:
         if row.get("id") is not None:
             # The pipeline claimed this row at intake - finish it in place.
@@ -8296,6 +8342,155 @@ def route_queue_locate_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+# ── Smartlead-wide search (global-search ship 2026-08-15) ───────────────────
+# The queue tables only hold conversations the setter INGESTED — a prospect
+# who replied before the setter existed (or whose row was pruned) is
+# unfindable from the search bar. These routes ask Smartlead ITSELF: one
+# master-inbox page per enabled workspace (filters.search is Smartlead's own
+# server-side match), each hit cross-referenced against setter_queue so the
+# client can badge in-setter hits vs never-ingested ones. Read paths only.
+_SL_SEARCH_CACHE = {}            # q(lower) -> (fetched_at, payload)
+_SL_SEARCH_TTL = 120.0
+_SL_SEARCH_CACHE_MAX = 50        # bound the map; queries are tiny but unbounded
+_SL_SEARCH_WS_CACHE = {"at": 0.0, "keys": None}
+
+
+def _sl_search_keys():
+    """[(workspace_id, api_key)] for every enabled workspace, navreo first.
+    Mirrors _enabled_workspace_ids but carries the KEY (that helper strips
+    it); same 5-min cache + degrade-to-navreo-only failure shape."""
+    now = _time.time()
+    c = _SL_SEARCH_WS_CACHE
+    if c["keys"] is not None and now - c["at"] < 300:
+        return list(c["keys"])
+    keys = []
+    nav = _sl_key()
+    if nav:
+        keys.append(("navreo", nav))
+    if SETTER_MONITOR_ALL_WS and _SB:
+        try:
+            rows = _SB("GET", "workspaces?select=id,api_key,status&order=added_at")
+            for r in rows if isinstance(rows, list) else []:
+                if not isinstance(r, dict):
+                    continue
+                wid = r.get("id")
+                k = (r.get("api_key") or "").strip()
+                if (wid and wid != "navreo" and wid not in _WS_MONITOR_SKIP and k
+                        and (r.get("status") or "enabled") == "enabled"):
+                    keys.append((wid, k))
+        except Exception:  # noqa: BLE001 - a workspaces outage degrades to navreo-only search
+            pass
+    c.update(at=now, keys=keys)
+    return list(keys)
+
+
+def route_search_smartlead_get(params):
+    """GET /api/setter/search-smartlead?q=… — search ALL of Smartlead for
+    conversations matching q (name / email / company, matched by Smartlead's
+    own master-inbox `search` filter), across every enabled workspace.
+    Returns hits newest-reply-first, each carrying queue_id/queue_status when
+    the conversation ALSO lives in the setter (any pill), so the client can
+    route those opens through the normal full-control path and badge the rest
+    "Not in setter". 120s cache per query; one 20-row page per workspace per
+    miss — never an unbounded sweep (512MB box)."""
+    try:
+        q = _qp(params, "q", "").strip()
+        if len(q) < 2:
+            return 400, {"error": "q must be at least 2 characters"}
+        ck = q.lower()
+        now = _time.time()
+        hit = _SL_SEARCH_CACHE.get(ck)
+        if hit and now - hit[0] < _SL_SEARCH_TTL:
+            return 200, dict(hit[1], cached=True)
+        results, errors, seen = [], 0, set()
+        for ws, key in _sl_search_keys():
+            try:
+                resp = _sl_post("/master-inbox/inbox-replies", {
+                    "limit": 20, "offset": 0, "sortBy": "REPLY_TIME_DESC",
+                    "filters": {"emailStatus": "Replied", "search": q},
+                }, api_key=key)
+                data = resp.get("data") if isinstance(resp, dict) else None
+                for r in data if isinstance(data, list) else []:
+                    if not isinstance(r, dict):
+                        continue
+                    email = (r.get("lead_email") or "").strip().lower()
+                    cid = r.get("email_campaign_id")
+                    if not email or not cid:
+                        continue
+                    k2 = (ws, str(cid), email)
+                    if k2 in seen:
+                        continue
+                    seen.add(k2)
+                    results.append({
+                        "workspace": ws,
+                        "lead_email": email,
+                        "lead_first_name": r.get("lead_first_name") or r.get("first_name") or "",
+                        "lead_last_name": r.get("lead_last_name") or r.get("last_name") or "",
+                        "lead_name": r.get("lead_name") or "",
+                        "smartlead_campaign_id": cid,
+                        "campaign_name": r.get("campaign_name") or r.get("email_campaign_name") or "",
+                        "smartlead_lead_id": r.get("email_lead_id"),
+                        "last_reply_time": r.get("last_reply_time"),
+                        "subject": r.get("email_subject") or r.get("subject") or "",
+                        "queue_id": None, "queue_status": None,
+                    })
+            except Exception:  # noqa: BLE001 - one workspace failing must not kill the search
+                errors += 1
+        results.sort(key=lambda r: str(r.get("last_reply_time") or ""), reverse=True)
+        results = results[:40]
+        # Cross-ref the setter queue in ONE indexed select: newest row per
+        # (campaign, email) wins, bare-email fallback mirrors /queue/locate.
+        if results and _SB:
+            try:
+                emails = sorted({r["lead_email"] for r in results})
+                inlist = ",".join(quote(e, safe="") for e in emails)
+                qrows = _SB("GET", f"{QUEUE_TABLE}?lead_email=in.({inlist})"
+                                   f"&{_list_ws_filter()}"
+                                   f"&select=id,lead_email,status,smartlead_campaign_id,replied_at"
+                                   f"&order=replied_at.desc.nullslast&limit=200")
+                by_convo, by_email = {}, {}
+                for qr in qrows if isinstance(qrows, list) else []:
+                    if not isinstance(qr, dict):
+                        continue
+                    em = (qr.get("lead_email") or "").strip().lower()
+                    by_convo.setdefault(f"{qr.get('smartlead_campaign_id')}|{em}", qr)
+                    by_email.setdefault(em, qr)
+                for r in results:
+                    qr = (by_convo.get(f"{r['smartlead_campaign_id']}|{r['lead_email']}")
+                          or by_email.get(r["lead_email"]))
+                    if qr:
+                        r["queue_id"] = qr.get("id")
+                        r["queue_status"] = qr.get("status")
+            except Exception:  # noqa: BLE001 - cross-ref is best-effort; hits still render un-badged
+                pass
+        payload = {"q": q, "results": results, "errors": errors}
+        if len(_SL_SEARCH_CACHE) >= _SL_SEARCH_CACHE_MAX:
+            _SL_SEARCH_CACHE.clear()
+        _SL_SEARCH_CACHE[ck] = (now, payload)
+        return 200, payload
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_smartlead_thread_get(params):
+    """GET /api/setter/smartlead-thread?campaign_id=X&email=Y — full Smartlead
+    conversation for a search hit with NO queue row. Read-only by design: the
+    client renders these with zero send/approve controls (never-send rail),
+    and nothing here writes anywhere. hydrate_lead resolves the OWNING
+    workspace's key via campaign_id, same as every queue-row hydrate."""
+    try:
+        cid = _qp(params, "campaign_id", "").strip()
+        email = _qp(params, "email", "").strip()
+        if not cid or not email:
+            return 400, {"error": "campaign_id and email are required"}
+        ok, hyd, herr = hydrate_lead(cid, email, "")
+        if not ok:
+            return 502, {"error": herr or "Couldn't load the Smartlead conversation."}
+        return 200, {"thread": hyd.get("thread") or []}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 def _kick_thread_rehydrate(row: dict):
     """Live-refresh one row's thread OFF the request path (cache-first open,
     2026-07-30). Per-row single-flight; the refreshed thread persists via the
@@ -8396,6 +8591,209 @@ def route_thread_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+# ---- Warm-call sideboard enrichment (owner ask 2026-08-15) -----------------
+# A fresh reply is enriched ONCE (phone + company facts), cached forever in
+# setter_lead_enrichment so a lead is never paid for twice. Provider order:
+# GetLeads when a server key exists (none today - GetLeads is OAuth-MCP only,
+# the adapter is dormant until GETLEADS_API_URL/KEY land in the env), then
+# Prospeo /enrich-person - the exact call the Make positive-reply scenario
+# already pays for on this same event, so server-side is cost-neutral.
+_ENRICH_INFLIGHT: set = set()     # emails currently enriching (thread guard)
+
+
+def _enrichment_row(email: str):
+    """The lead's cached enrichment row, or None. A row EXISTing (even with
+    an empty phone) means we already tried - never re-spend on that lead."""
+    try:
+        rows = _SB("GET", "setter_lead_enrichment"
+                          f"?lead_email=eq.{quote((email or '').lower(), safe='')}&limit=1") if _SB else None
+        return rows[0] if isinstance(rows, list) and rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _company_row(domain: str) -> dict:
+    try:
+        if not domain:
+            return {}
+        rows = _SB("GET", f"companies?domain=eq.{quote(domain.lower(), safe='')}"
+                          "&select=domain,name,description,employee_count,employee_range,"
+                          "city,state,country,industry,linkedin_url&limit=1") if _SB else None
+        return rows[0] if isinstance(rows, list) and rows else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+_CLIENT_CTX_CACHE: dict = {}      # workspace -> (fetched_at, row)
+_CLIENT_CTX_TTL = 300.0
+
+
+def _client_context(workspace: str) -> dict:
+    ws = (workspace or WORKSPACE or "navreo").lower()
+    now = _time.time()
+    hit = _CLIENT_CTX_CACHE.get(ws)
+    if hit and (now - hit[0]) < _CLIENT_CTX_TTL:
+        return hit[1]
+    row = {}
+    try:
+        rows = _SB("GET", f"setter_client_context?workspace=eq.{quote(ws, safe='')}&limit=1") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else {}
+    except Exception:  # noqa: BLE001
+        row = {}
+    _CLIENT_CTX_CACHE[ws] = (now, row)
+    return row
+
+
+def _headcount_number(comp: dict):
+    """Best headcount as an int: employee_count, else the employee_range
+    midpoint ('11-50' -> 30). None when the company holds neither."""
+    try:
+        if comp.get("employee_count"):
+            return int(comp["employee_count"])
+        rng = str(comp.get("employee_range") or "")
+        nums = [int(n) for n in re.findall(r"\d+", rng.replace(",", ""))]
+        if len(nums) >= 2:
+            return (nums[0] + nums[1]) // 2
+        if nums:
+            return nums[0]
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def _qualify(comp: dict, icp: dict):
+    """(verdict, reason) for the sidebar chip: likely / unlikely / unknown.
+    Plain-English reason, always - the chip must say WHY (owner brief)."""
+    if not isinstance(icp, dict) or not icp:
+        return "unknown", "No qualification rules saved for this client yet."
+    hc = _headcount_number(comp or {})
+    country = str((comp or {}).get("country") or "").strip()
+    industry = str((comp or {}).get("industry") or "").strip()
+    knew_anything = False
+    lo, hi = icp.get("headcount_min"), icp.get("headcount_max")
+    if hc is not None and (lo or hi):
+        knew_anything = True
+        if (lo and hc < int(lo)) or (hi and hc > int(hi)):
+            return "unlikely", f"~{hc} staff - outside this client's {lo or 1}-{hi or 'any'} range."
+    countries = [str(c).lower() for c in (icp.get("countries") or [])]
+    if countries and country:
+        knew_anything = True
+        if country.lower() not in countries:
+            return "unlikely", f"Based in {country} - not a target market for this client."
+    industries = [str(i).lower() for i in (icp.get("industries") or [])]
+    if industries and industry:
+        knew_anything = True
+        if not any(t in industry.lower() for t in industries):
+            return "unlikely", f"{industry} - not a target industry for this client."
+    if not knew_anything:
+        return "unknown", "Not enough company data yet to judge fit."
+    bits = []
+    if hc is not None:
+        bits.append(f"~{hc} staff fits the {lo or 1}-{hi or 'any'} range")
+    if country:
+        bits.append(f"based in {country}")
+    return "likely", (" and ".join(bits) or "Matches this client's saved rules") + "."
+
+
+def _prospeo_enrich(email: str) -> dict:
+    """One Prospeo /enrich-person call (mobile on) -> normalised
+    {phone, phone_source, company{...}, payload}. Empty dict on any miss -
+    the caller banks even a miss so the lead is never re-paid."""
+    key = _KEYS.get("PROSPEO_API_KEY") or ""
+    if not (key and email and _HTTP):
+        return {}
+    try:
+        j = _HTTP("POST", "https://api.prospeo.io/enrich-person", {"KEY": key},
+                  {"enrich_mobile": True, "data": {"email": email}}, timeout=45)
+    except Exception:  # noqa: BLE001
+        return {}
+    if not isinstance(j, dict):
+        return {}
+    body = j.get("response") if isinstance(j.get("response"), dict) else j
+    person = body.get("person") if isinstance(body.get("person"), dict) else {}
+    comp = body.get("company") if isinstance(body.get("company"), dict) else {}
+    mob = person.get("mobile")
+    phone = ""
+    if isinstance(mob, dict):
+        phone = str(mob.get("mobile") or mob.get("number") or "").strip()
+    elif mob:
+        phone = str(mob).strip()
+    loc = comp.get("location") if isinstance(comp.get("location"), dict) else {}
+    company = {
+        "name": comp.get("name") or "",
+        "description": comp.get("description") or comp.get("summary") or "",
+        "employee_count": comp.get("employee_count") or comp.get("size") or None,
+        "employee_range": comp.get("employee_range") or comp.get("size_range") or "",
+        "city": comp.get("city") or loc.get("city") or "",
+        "state": comp.get("state") or loc.get("state") or "",
+        "country": comp.get("country") or loc.get("country") or "",
+        "industry": comp.get("industry") or "",
+        "linkedin_url": comp.get("linkedin_url") or comp.get("linkedin") or "",
+    }
+    return {"phone": phone, "phone_source": "prospeo" if phone else "",
+            "company": company, "payload": body}
+
+
+def _getleads_enrich(email: str) -> dict:
+    """GetLeads adapter - DORMANT: GetLeads has no public HTTP API today
+    (OAuth MCP only). The moment GETLEADS_API_URL + GETLEADS_API_KEY appear
+    in the env this slot goes first in the waterfall; shape mirrors
+    _prospeo_enrich's return."""
+    base = (_KEYS.get("GETLEADS_API_URL") or "").rstrip("/")
+    key = _KEYS.get("GETLEADS_API_KEY") or ""
+    if not (base and key and email and _HTTP):
+        return {}
+    try:
+        j = _HTTP("POST", f"{base}/enrich-person", {"Authorization": f"Bearer {key}"},
+                  {"email": email, "include_phone": True}, timeout=45)
+        if not isinstance(j, dict):
+            return {}
+        person = j.get("person") if isinstance(j.get("person"), dict) else j
+        comp = j.get("company") if isinstance(j.get("company"), dict) else {}
+        phone = str(person.get("phone") or person.get("mobile") or "").strip()
+        return {"phone": phone, "phone_source": "getleads" if phone else "",
+                "company": {k: comp.get(k) for k in ("name", "description", "employee_count",
+                                                     "employee_range", "city", "state",
+                                                     "country", "industry", "linkedin_url")},
+                "payload": j}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _enrich_on_reply(email: str, domain: str, workspace: str) -> None:
+    """Daemon-thread body: enrich ONE fresh replier, once ever. Writes the
+    setter_lead_enrichment cache row (even on a miss - tried = never re-pay),
+    fills the companies row's empty facts, and pops the lead-contact cache so
+    the sidebar's next open sees the new data. Never raises."""
+    try:
+        email = (email or "").strip().lower()
+        if not (email and _SB) or email in _ENRICH_INFLIGHT:
+            return
+        _ENRICH_INFLIGHT.add(email)
+        try:
+            if _enrichment_row(email):
+                return
+            res = _getleads_enrich(email) or _prospeo_enrich(email)
+            comp = res.get("company") or {}
+            _SB("POST", "setter_lead_enrichment?on_conflict=lead_email", {
+                "lead_email": email, "phone": res.get("phone") or "",
+                "phone_source": res.get("phone_source") or "",
+                "company_domain": (domain or "").lower(),
+                "payload": res.get("payload"),
+            }, prefer="resolution=merge-duplicates,return=minimal")
+            if domain and any(v for v in comp.values()):
+                _SB("POST", "companies?on_conflict=domain", {
+                    "domain": domain.lower(),
+                    **{k: v for k, v in comp.items() if v},
+                }, prefer="resolution=merge-duplicates,return=minimal")
+            for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
+                _LEAD_CONTACT_CACHE.pop(k, None)
+        finally:
+            _ENRICH_INFLIGHT.discard(email)
+    except Exception:  # noqa: BLE001 - enrichment is a nice-to-have, never a crash
+        pass
+
+
 _LEAD_CONTACT_CACHE = {}          # email(lower) -> (fetched_at, {linkedin, website, ...})
 _LEAD_CONTACT_TTL = 3600.0        # a lead's profile/website changes ~never; 1h cache
 
@@ -8420,13 +8818,16 @@ def route_lead_contact_get(params):
             return 400, {"error": "id is required"}
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(str(qid), safe='')}"
                           f"&{_list_ws_filter()}"
-                          "&select=lead_email,is_test,smartlead_campaign_id") if _SB else None
+                          "&select=lead_email,is_test,smartlead_campaign_id,company_domain,workspace") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
         email = (row.get("lead_email") or "").strip()
         campaign_id = row.get("smartlead_campaign_id")
-        empty = {"linkedin": "", "website": "", "company_name": "", "phone": "", "lead_map": ""}
+        domain = (row.get("company_domain") or "").strip().lower()
+        workspace = (row.get("workspace") or WORKSPACE or "navreo").lower()
+        empty = {"linkedin": "", "website": "", "company_name": "", "phone": "", "lead_map": "",
+                 "company": {}, "qualified": {}, "client": {}}
         if not email or row.get("is_test"):
             return 200, empty
         now = _time.time()
@@ -8465,6 +8866,42 @@ def route_lead_contact_get(params):
                         out["lead_map"] = str(m.get("campaign_lead_map_id") or "")
                         break
         except Exception:  # noqa: BLE001 - a missing lookup just means no quick link
+            pass
+        # Warm-call facts (owner ask 2026-08-15): phone + company breakdown +
+        # a Likely-qualified verdict + the client's own context, all from the
+        # Supabase side. The enrichment cache outranks Smartlead's phone (the
+        # Make pipeline's phones historically died in Folk, so Smartlead is
+        # almost always blank); a lead with NO cache row yet gets a one-time
+        # background enrichment kicked off right here, so rows that landed
+        # before this shipped still fill in on first open.
+        try:
+            enr = _enrichment_row(email)
+            if enr and (enr.get("phone") or "").strip():
+                out["phone"] = str(enr["phone"]).strip()
+            if enr is None:
+                threading.Thread(target=_enrich_on_reply,
+                                 args=(email, domain or (out.get("website") or ""), workspace),
+                                 daemon=True).start()
+            comp = _company_row(domain or (out.get("website") or ""))
+            if comp:
+                out["company"] = {
+                    "name": comp.get("name") or out.get("company_name") or "",
+                    "description": comp.get("description") or "",
+                    "employee_count": comp.get("employee_count"),
+                    "employee_range": comp.get("employee_range") or "",
+                    "city": comp.get("city") or "", "state": comp.get("state") or "",
+                    "country": comp.get("country") or "",
+                    "industry": comp.get("industry") or "",
+                    "linkedin_url": comp.get("linkedin_url") or "",
+                }
+            ctx = _client_context(workspace)
+            icp = ctx.get("icp") if isinstance(ctx.get("icp"), dict) else {}
+            verdict, reason = _qualify(comp or {}, icp)
+            out["qualified"] = {"verdict": verdict, "reason": reason}
+            out["client"] = {"label": ctx.get("client_label") or workspace.title(),
+                             "about": ctx.get("about") or "",
+                             "offer": ctx.get("offer") or ""}
+        except Exception:  # noqa: BLE001 - warm-call extras never break quick links
             pass
         _LEAD_CONTACT_CACHE[cache_key] = (now, out)
         return 200, out
@@ -11461,6 +11898,8 @@ GET_ROUTES = {
     "/api/setter/queue": route_queue_get,
     "/api/setter/queue/row": route_queue_row_get,
     "/api/setter/queue/locate": route_queue_locate_get,
+    "/api/setter/search-smartlead": route_search_smartlead_get,
+    "/api/setter/smartlead-thread": route_smartlead_thread_get,
     "/api/setter/categories": route_categories_get,
     "/api/setter/thread": route_thread_get,
     "/api/setter/lead-contact": route_lead_contact_get,
