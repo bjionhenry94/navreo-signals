@@ -2115,7 +2115,17 @@ async function openUnresolvedRow(id) {
       lead_last_name: t.lead_last_name || "",
       company_domain: t.company_domain, smartlead_campaign_id: t.smartlead_campaign_id,
       status: "sent", sent_at: t.sent_at, reply_body: t.reply_snippet || "",
-      subsequence_decision: t.subsequence_decision, thread: null,
+      // No `thread: null` here (latest-email fix 2026-08-15): null looked
+      // like "thread loaded, nothing in it", which suppressed the loader AND
+      // painted the old reply snippet as the whole conversation — reading as
+      // "I never replied". Leave `thread` absent so the loader shows, and
+      // mark the row pending until a confirmed-fresh thread lands: the
+      // stored snapshot for these sent rows is often itself stale (missing
+      // our own follow-up), so the loader must outlive the first cache hit.
+      // Test rows never hydrate (refreshThreadFor skips them) — no pending
+      // flag or the loader would sit forever.
+      _thread_pending: !t.is_test,
+      subsequence_decision: t.subsequence_decision,
       // Full identity so an action survives a re-intake id swap, and the
       // sidebar stops falsely saying "no agent assigned" (owner bug
       // 2026-07-28: Buthaina's follow-up didn't send from a tray-opened row).
@@ -4064,8 +4074,16 @@ function convoHtml(row) {
   // Slim rows (fields=list) haven't got their stored thread yet - the graft /
   // live refresh fills it in seconds. Say so instead of silently showing a
   // one-message "history" (loader ruling 2026-07-16).
-  const historyLoading = row.thread === undefined
+  const historyLoading = row.thread === undefined && !row._thread_pending
     ? `<div class="muted small" style="padding:2px 0 8px"><span class="btnspin"></span> Loading earlier messages…</div>` : "";
+  // Tray-opened rows (latest-email fix 2026-08-15): until a confirmed-fresh
+  // thread has landed, the newest message on screen may not be the newest
+  // message that exists (the stored snapshot often predates our own sent
+  // follow-up). Say so AT THE BOTTOM, where the latest email will appear —
+  // a thread that looks complete while the latest email is missing is the
+  // exact "I never replied" bug. refreshThreadFor clears the flag.
+  const latestLoading = row._thread_pending
+    ? `<div class="muted small" style="padding:8px 0 2px"><span class="btnspin"></span> Loading the latest emails…</div>` : "";
   return `
     <div class="msg-card">
       <div class="msg-card-lab">Conversation</div>
@@ -4073,6 +4091,7 @@ function convoHtml(row) {
         ${fadeHtml}
         ${historyLoading}
         ${items.map((i) => i.html).join("")}
+        ${latestLoading}
       </div>
     </div>`;
 }
@@ -6151,21 +6170,61 @@ async function refreshThreadFor(row, isRepoll) {
   // "Loading earlier messages…" forever) - cached snapshots are exactly what
   // we want to paint now.
   const res = await fetchJson(`/api/setter/thread?id=${encodeURIComponent(row.id)}`, { _retries: 1 });
-  if (!res.ok || !res.data || !Array.isArray(res.data.thread)) return;
+  // "Loading the latest emails…" lifecycle (latest-email fix 2026-08-15):
+  // tray-opened rows carry _thread_pending until a CONFIRMED-fresh thread
+  // (stale !== true) has landed — the stored snapshot alone may predate our
+  // own sent follow-up. Clearing repaints once so the loader leaves even
+  // when the thread content didn't change. Never clears mid-typing repaint
+  // safety: the repaint below already honours isTypingIn.
+  const clearPending = () => {
+    let had = false;
+    [row, currentDetailRowObj(),
+     ...[QUEUE_ROWS, ALL_ROWS].map((l) => (l || []).find((x) => x && String(x.id) === String(row.id)))]
+      .forEach((r) => { if (r && String(r.id) === String(row.id) && r._thread_pending) { r._thread_pending = false; had = true; } });
+    return had;
+  };
+  if (!res.ok || !res.data || !Array.isArray(res.data.thread)) {
+    // Fetch failed: give up honestly rather than spin forever — show what we
+    // have, loader off.
+    if (clearPending() && String(selectedRowId) === String(row.id) && !isTypingIn(row.id)) {
+      const live = currentDetailRowObj();
+      renderDetail(live && String(live.id) === String(row.id) ? live : row);
+    }
+    return;
+  }
   const fresh = res.data.thread;
   // A stale cached answer means a live re-hydrate is running server-side:
-  // poll once more shortly to pick up whatever it wrote. One re-poll only.
+  // poll once more shortly to pick up whatever it wrote. One re-poll only —
+  // EXCEPT while a tray-opened row is still _thread_pending: the observed
+  // rehydrate can outlive a single 4s re-poll (11s seen live 2026-08-15), so
+  // pending rows keep polling the CACHE-FIRST endpoint (one indexed read, no
+  // Smartlead call from here; the server self-throttles its own rehydrate)
+  // up to 5 extra polls, then give up and clear the loader.
   // Re-resolve the row by id AT FIRE TIME (regen fix 2026-08-01): this
   // closure used to hold the pre-regen object, and the 4s re-poll then
   // repainted draft #1 over the fresh regeneration.
-  if (res.data.stale && !isRepoll) {
+  const polls = (row._thread_polls || 0);
+  if (res.data.stale && (!isRepoll || (row._thread_pending && polls < 5))) {
+    row._thread_polls = polls + 1;
     setTimeout(() => {
       const live = QUEUE_ROWS.find((x) => String(x.id) === String(row.id))
                 || ALL_ROWS.find((x) => String(x.id) === String(row.id))
                 || (currentDetailRowObj() && String(currentDetailRowObj().id) === String(row.id)
                     ? currentDetailRowObj() : row);
+      if (live && live !== row) live._thread_polls = row._thread_polls;
       refreshThreadFor(live, true);
     }, 4000);
+  } else if (!res.data.stale || isRepoll) {
+    // Confirmed fresh — or out of re-polls: the loader must not outlive its
+    // usefulness. Repaint (below, or here when the content didn't change) so
+    // it disappears.
+    row._thread_polls = 0;
+    if (clearPending()
+        && !(fresh.length && threadKey(fresh) !== threadKey(row.thread))
+        && String(selectedRowId) === String(row.id) && !isTypingIn(row.id)) {
+      const live = currentDetailRowObj();
+      renderDetail(live && String(live.id) === String(row.id) ? live : row);
+    }
   }
   if (fresh.length && threadKey(fresh) !== threadKey(row.thread)) {
     row.thread = fresh;
