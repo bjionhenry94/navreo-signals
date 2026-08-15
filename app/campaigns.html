@@ -558,6 +558,16 @@
   .filters-btn:hover, .filters-btn[aria-expanded="true"] { border-color: var(--nav-ink-3); }
   .filters-btn svg { width: 14px; height: 14px; color: var(--fg-subtle); }
   .filters-tag { background: var(--sunken); border-radius: 999px; padding: 1px 8px; font-size: 0.74rem; font-weight: 600; color: var(--fg-muted); }
+  /* one-tap reset, always in the bar while any control is non-default —
+     quiet text button so it never competes with the Filters pill */
+  .clearall-btn {
+    background: none; border: none; cursor: pointer; font-family: inherit;
+    font-size: 0.8rem; font-weight: 600; color: var(--fg-subtle);
+    padding: 9px 6px; white-space: nowrap; text-decoration: underline;
+    text-underline-offset: 3px; border-radius: 8px;
+  }
+  .clearall-btn:hover { color: var(--fg); }
+  .clearall-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
   .filters-pop {
     position: absolute; top: calc(100% + 8px); right: 0; z-index: 40;
     background: var(--bg-elevated); border: 1px solid var(--border-strong);
@@ -2578,6 +2588,34 @@
        the coverage line states every bucket's count out loud. */
     view: { tier: "all", status: "active", sort: "default", preset: "all", client: "all", q: "" }  // current list controls
   };
+  /* Sticky list controls (2026-08-15): the fleet filters survive the bounce
+     into a campaign view and back — including full reloads and detours to
+     other pages — so skipping between #/ and #/c/<id> never re-filters from
+     scratch (house precedent: the deliverability page's sticky filters).
+     One versioned key; every field is validated on the way back in so a
+     stale or corrupted store can never wedge first paint (a client label
+     that left the book is re-checked against the live clientList in
+     renderList). Clearing filters wipes the key. */
+  var VIEW_STORE_KEY = "nvz_campaigns_view_v1";
+  function viewSave() {
+    try { localStorage.setItem(VIEW_STORE_KEY, JSON.stringify(STATE.view)); }
+    catch (e) { /* storage unavailable (private mode/quota): filters stay session-only */ }
+  }
+  function viewWipe() {
+    try { localStorage.removeItem(VIEW_STORE_KEY); } catch (e) { }
+  }
+  function viewRestore() {
+    var saved = null;
+    try { saved = JSON.parse(localStorage.getItem(VIEW_STORE_KEY) || "null"); }
+    catch (e) { saved = null; }
+    if (!saved || typeof saved !== "object") return;
+    var v = STATE.view;
+    if (typeof saved.q === "string") v.q = saved.q;
+    if (["all", "active", "paused", "completed", "drafted", "archived"].indexOf(saved.status) !== -1) v.status = saved.status;
+    if (typeof saved.client === "string" && saved.client) v.client = saved.client;
+    if (Object.prototype.hasOwnProperty.call(PRESETS, saved.preset)) v.preset = saved.preset;
+    if (["all", "decision", "watch", "fine"].indexOf(saved.tier) !== -1) v.tier = saved.tier;
+  }
   /* -- certified insight-card grammar (23 Jul 2026, panel 8.4): every card =
         hero number + its OWN chart + one insight line + one act line + why?
         expander. The chart is picked by the shape of the data; when no shape
@@ -2730,6 +2768,7 @@
 
   /* ---------- boot ---------- */
   function boot() {
+    viewRestore(); /* sticky filters back before the first fleet render */
     document.getElementById("lw-error").hidden = true;
     /* Graphs first, and off the critical path: replay the last good payload so
        they are on screen immediately, and start their live read NOW rather
@@ -2982,6 +3021,13 @@
         if (b === CLIENT_OTHER) return -1;
         return a.localeCompare(b);
       });
+    /* sticky-restore guard: a stored client that no longer exists in the book
+       falls back to All — otherwise the rows would filter to nothing while
+       the select silently sat on "All clients" */
+    if (STATE.view.client !== "all" && clientList.indexOf(STATE.view.client) === -1) {
+      STATE.view.client = "all";
+      viewSave();
+    }
     var nDecide = cs.filter(function (c) { return c.tier === "decision"; }).length;
     var nWatch = cs.filter(function (c) { return c.tier === "watch"; }).length;
     var nFine = cs.filter(function (c) { return c.tier === "fine"; }).length;
@@ -3016,6 +3062,7 @@
       '<button type="button" class="filters-btn" id="filters-btn" aria-expanded="false" aria-controls="filters-pop">' +
       '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="4" y1="7" x2="20" y2="7"/><line x1="7" y1="12" x2="17" y2="12"/><line x1="10" y1="17" x2="14" y2="17"/></svg>' +
       'Filters<span class="filters-tag" id="filters-tag" hidden></span></button>' +
+      '<button type="button" class="clearall-btn" id="clearall-btn" hidden>Clear filters</button>' +
       '<div class="filters-pop" id="filters-pop" hidden>' +
       '<div class="filters-field"><span class="status-picker-label">Client</span>' +
       '<select class="status-select" id="client-select" aria-label="Filter by client">' +
@@ -6506,6 +6553,8 @@
     if (viewSel) viewSel.addEventListener("change", function () {
       STATE.view.preset = viewSel.value;
       if (viewNote) viewNote.textContent = (PRESETS[viewSel.value] || {}).note || "";
+      viewSave();
+      syncFiltersTag();
       renderRows();
     });
     /* Filters button tag: a non-default Client/Status must stay visible while collapsed */
@@ -6518,6 +6567,11 @@
       if (STATE.view.status !== "all") parts.push(LBL[STATE.view.status] || STATE.view.status);
       tag.textContent = parts.join(" · ");
       tag.hidden = !parts.length;
+      /* the inline Clear-filters button shows whenever ANY control is
+         non-default — the tag's client/status test plus search/sort/tier */
+      var clearAll = document.getElementById("clearall-btn");
+      if (clearAll) clearAll.hidden = !(parts.length || STATE.view.q ||
+        STATE.view.preset !== "all" || STATE.view.tier !== "all");
     }
     /* Filters popover: one tap open, any outside click closes */
     var filtersBtn = document.getElementById("filters-btn");
@@ -6544,6 +6598,7 @@
     var clientSel = document.getElementById("client-select");
     if (clientSel) clientSel.addEventListener("change", function () {
       STATE.view.client = clientSel.value;
+      viewSave();
       syncFiltersTag();
       renderRows();
     });
@@ -6551,6 +6606,7 @@
     var statusSel = document.getElementById("status-select");
     if (statusSel) statusSel.addEventListener("change", function () {
       STATE.view.status = statusSel.value;
+      viewSave();
       syncFiltersTag();
       renderRows();
     });
@@ -6563,8 +6619,13 @@
     /* search — debounced: each renderRows is a full innerHTML rebuild of the
        whole inventory, far too heavy to run per keystroke at 500+ rows */
     var searchT = null;
-    document.getElementById("cockpit-search").addEventListener("input", function () {
-      STATE.view.q = document.getElementById("cockpit-search").value || "";
+    var searchEl = document.getElementById("cockpit-search");
+    /* sticky restore: the input renders empty markup, so refill it from state */
+    if (searchEl && STATE.view.q) searchEl.value = STATE.view.q;
+    searchEl.addEventListener("input", function () {
+      STATE.view.q = searchEl.value || "";
+      viewSave();
+      syncFiltersTag();
       clearTimeout(searchT);
       searchT = setTimeout(renderRows, 120);
     });
@@ -6575,6 +6636,7 @@
     function widenToAllStatuses() {
       STATE.view.status = "all";
       var sel = document.getElementById("status-select"); if (sel) sel.value = "all";
+      viewSave();
       syncFiltersTag();
       renderRows();
     }
@@ -6582,17 +6644,24 @@
     if (showAllBtn2) showAllBtn2.addEventListener("click", widenToAllStatuses);
     var xNoteBtn = document.getElementById("rows-crossstatus-btn");
     if (xNoteBtn) xNoteBtn.addEventListener("click", widenToAllStatuses);
-    var clearBtn = document.getElementById("clear-filters-btn");
-    if (clearBtn) clearBtn.addEventListener("click", function () {
-      document.getElementById("cockpit-search").value = "";
+    /* ONE reset path shared by the empty-state button and the always-visible
+       bar button: controls back to defaults AND the sticky store wiped, so a
+       reload after clearing never resurrects the old filters */
+    function clearAllFilters() {
+      if (searchEl) searchEl.value = "";
       STATE.view.q = ""; STATE.view.tier = "all"; STATE.view.status = "all"; STATE.view.preset = "all"; STATE.view.client = "all";
       var sel = document.getElementById("status-select"); if (sel) sel.value = "all";
       var csel = document.getElementById("client-select"); if (csel) csel.value = "all";
       if (viewSel) viewSel.value = "all";
       if (viewNote) viewNote.textContent = (PRESETS.all || {}).note || "";
+      viewWipe();
       syncFiltersTag();
       renderRows();
-    });
+    }
+    var clearBtn = document.getElementById("clear-filters-btn");
+    if (clearBtn) clearBtn.addEventListener("click", clearAllFilters);
+    var clearAllBtn = document.getElementById("clearall-btn");
+    if (clearAllBtn) clearAllBtn.addEventListener("click", clearAllFilters);
     /* Inline "Review N" optimiser panels. Delegated on the rows container (which
        is rebuilt via innerHTML on every filter/search change) so one binding
        survives all rebuilds. The badge lives inside the row link, so we swallow
