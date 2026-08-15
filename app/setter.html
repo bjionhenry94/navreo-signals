@@ -3436,7 +3436,12 @@ function categoryControlInner(row, compact) {
   const catPill = catUncat
     ? `<span class="pill a">Uncategorised</span>`
     : `<span class="pill ${categoryTone(curCat)}">${esc(curCat)}</span>`;
-  const editable = !["sent", "auto_sent"].includes(row.status);
+  // A SENT row keeps the control (owner ask 2026-08-15) - the server's
+  // recategorise route already relabels sent threads in place
+  // (action="relabelled_sent", label-only: never the status, the draft or
+  // the send path), so hiding the control here was the only thing stopping
+  // a post-send category fix. `sent` only steers the tooltip wording below.
+  const sent = ["sent", "auto_sent"].includes(row.status);
   // Resting hint is empty (owner ask 2026-08-04: "delete the text underneath
   // the buttons"). The element stays so live status/consequence/error lines
   // still have a home; it just carries no standing explanatory paragraph.
@@ -3444,10 +3449,12 @@ function categoryControlInner(row, compact) {
   return `
       <div class="lp-label">Lead category</div>
       <div class="lp-cat-now">${catPill}</div>
-      ${editable ? (() => {
+      ${(() => {
         const monitor = (row.workspace || "navreo") !== "navreo";
         const oneClickBtn = (catName, cls, label) => curCat.toLowerCase() === catName.toLowerCase() ? "" :
-          `<button type="button" class="btn danger sm ${cls}" title="${monitor
+          `<button type="button" class="btn danger sm ${cls}" title="${sent
+            ? `Relabels this sent lead as '${esc(catName)}'${monitor ? " in the tool" : " in Smartlead"} - the sent reply is untouched, and a non-positive label removes it from the follow-up reminder.`
+            : monitor
             ? `Files this lead as '${esc(catName)}' in the tool and clears it from the queue - monitor workspaces are never written to the client's Smartlead.`
             : `Files this lead as '${esc(catName)}' in Smartlead and clears it from the queue - one click, no dropdown.`}">${label}</button>`;
         const actionsHtml = oneClickBtn(NQ_CATEGORY_NAME, "lp-cat-nq", "Not qualified")
@@ -3457,7 +3464,7 @@ function categoryControlInner(row, compact) {
       </div>
       ${actionsHtml ? `<div class="lp-cat-actions">${actionsHtml}</div>` : ""}
       <div class="lp-cat-hint">${hint}</div>`;
-      })() : ""}`;
+      })()}`;
 }
 /* Lead-info sidebar, top to bottom: the editable Lead category control, an
    assign-agent prompt when the campaign has no agent, and the decision facts
