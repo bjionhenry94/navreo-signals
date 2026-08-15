@@ -9263,14 +9263,42 @@ def _subseq_stats_sync_all():
             _SUBSEQ_CLIENT_MAP.update(smap)
             _SUBSEQ_TS = time.time()
         _blob_snapshot_save("subseq_client_map", {"map": smap})
+        # stats too — a restart of the 512MB web instance used to blank the
+        # follow-ups card for the sweep's full duration (~an hour); the boot
+        # seed below restores the last sweep instead
+        _blob_snapshot_save("subseq_stats_v1", {"stats": out, "ts": _SUBSEQ_TS})
         print(f"[subseq-sync] refreshed {len(out) - 1} clients", flush=True)
     finally:
         _SUBSEQ_SYNC_LOCK.release()
 
 
+def _subseq_seed_from_snapshot():
+    """Boot seed: restore the previous sweep's stats from the blob snapshot so
+    a restart never blanks the follow-ups card while the first sweep crawls
+    ~540 subs. The live sweep always wins — the seed only fills an empty dict,
+    and any failure leaves today's behaviour (blank until sync), never breaks
+    boot."""
+    global _SUBSEQ_TS
+    try:
+        snap = _blob_snapshot_load_aged("subseq_stats_v1", _SNAP_SEED_MAX_AGE_S)
+        stats = (snap or {}).get("stats")
+        if not isinstance(stats, dict) or not stats:
+            return
+        with _SUBSEQ_LOCK:
+            if not _SUBSEQ_STATS:
+                _SUBSEQ_STATS.update(stats)
+                _SUBSEQ_TS = float(snap.get("ts") or 0.0)
+        print(f"[subseq-sync] seeded {len(stats) - 1} clients from snapshot",
+              flush=True)
+    except Exception as e:  # noqa: BLE001
+        print(f"[subseq-sync] snapshot seed failed: {e}", file=sys.stderr)
+
+
 def _subseq_stats_loop():
-    """Background: prime ~90s after boot (after the scorecard sweep's burst so
-    the Smartlead load is spread), then refresh hourly. Must never die."""
+    """Background: seed from the last sweep's snapshot immediately, then prime
+    ~90s after boot (after the scorecard sweep's burst so the Smartlead load
+    is spread), then refresh hourly. Must never die."""
+    _subseq_seed_from_snapshot()
     time.sleep(90)
     while True:
         try:
@@ -17351,6 +17379,11 @@ def _who_replies_compute(client: str, days: int) -> dict:
         with _SUBSEQ_LOCK:
             s = _SUBSEQ_STATS.get(client)
             s = dict(s) if s else None
+            _sub_ts = _SUBSEQ_TS
+        # the stats' OWN age (sweep or snapshot-seed time) — so a seeded,
+        # pre-restart payload is stamped honestly instead of passing as fresh
+        _sub_asof = (_dtmod.datetime.utcfromtimestamp(_sub_ts).isoformat() + "Z"
+                     if _sub_ts else None)
         wv = (s.get("win") or {}).get(str(days)) if s else None
         if wv is not None:
             # windowed stats exist for this exact 7/14/30 window — serve them
@@ -17358,10 +17391,11 @@ def _who_replies_compute(client: str, days: int) -> dict:
             # the lifetime numbers dressed up as the window's)
             subseq = {"enrolled": s.get("enrolled", 0), "sent": wv.get("sent", 0),
                       "positives": wv.get("positives", 0), "booked": wv.get("booked", 0),
-                      "windowed": True, "days": days}
+                      "windowed": True, "days": days, "asof": _sub_asof}
         elif s and s.get("sent"):
             subseq = {"enrolled": s.get("enrolled", 0), "sent": s["sent"],
-                      "positives": s.get("positives", 0), "booked": s.get("booked", 0)}
+                      "positives": s.get("positives", 0), "booked": s.get("booked", 0),
+                      "asof": _sub_asof}
     except Exception:  # noqa: BLE001
         subseq = None
     return {"client": client, "days": days, "n": n_pos, "named": named,

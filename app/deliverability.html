@@ -795,8 +795,9 @@ function bookRowTs(kind) {  // the row's OWN generated_at — feeds its stamp
 
 /* ── hero trend graph ── */
 var COL = { sent: "#1971C2", replies: "#7048E8", interested: "#2F9E44", meetings: "#E8590C", bounces: "#E03131", rate: "#0B7285" };
-var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounces", rate: "Reply rate" };
+var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounce-Rate", rate: "Reply rate" };
 var ORDER = ["sent", "replies", "interested", "meetings", "bounces", "rate"];
+var RAXIS = { rate: 1, bounces: 1 };   // % series that ride the right-hand axis
 // sent/bounces/rate totals are real for EVERY client via /api/client-windows;
 // a day-by-day LINE additionally exists when cwSeries() has one (All, Asteri,
 // KRG — clients that map to a whole Smartlead workspace).
@@ -806,8 +807,8 @@ var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 
-function fleetSeries() {  // {sent[], bounces[], rate[]} aligned to HUB.days, from trends
-  var out = { sent: [], bounces: [], rate: [] };
+function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} aligned to HUB.days, from trends
+  var out = { sent: [], bounces: [], bounceN: [], rate: [] };
   if (!HUB) return out;
   var map = {};
   if (TRENDS && TRENDS.series && TRENDS.series.days) {
@@ -816,14 +817,17 @@ function fleetSeries() {  // {sent[], bounces[], rate[]} aligned to HUB.days, fr
       var bp = TRENDS.series.bounce_pct[i];
       var rp = TRENDS.series.reply_pct[i];
       // same rule as perf_daily's RATE_MIN_SENT: a 16-send day at 3 replies is
-      // not a 19% reply rate — suppress the rate on days under 1,000 sends
-      map[d] = { s: s, b: (bp == null ? 0 : Math.round(s * bp / 100)), r: (rp == null || s < 1000 ? null : rp) };
+      // not a 19% reply rate — suppress both rates on days under 1,000 sends
+      map[d] = { s: s, b: (bp == null || s < 1000 ? null : bp),
+                 bn: (bp == null ? 0 : Math.round(s * bp / 100)),
+                 r: (rp == null || s < 1000 ? null : rp) };
     });
   }
   HUB.days.forEach(function (d) {
     var m = map[d];
     out.sent.push(m ? m.s : 0);
-    out.bounces.push(m ? m.b : 0);
+    out.bounces.push(m ? m.b : null);   // bounce-rate %, right axis — gap on quiet days
+    out.bounceN.push(m ? m.bn : 0);     // raw bounce count — footnote total only
     out.rate.push(m ? m.r : null);   // null = no sends that day → gap, not zero
   });
   return out;
@@ -928,7 +932,13 @@ function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none 
   if (!s) return null;
   var all = state.client === "All";
   if (k === "sent") return alignDaily(s.sent, CW.days, 0, all ? fleetSeries().sent : null);
-  if (k === "bounces") return alignDaily(s.bounced, CW.days, 0, all ? fleetSeries().bounces : null);
+  if (k === "bounces") {   // bounce-rate % per day, same low-send suppression as rate
+    var bmin = rateMinSent();
+    var bpc = s.sent.map(function (v, i) {
+      return (v >= bmin && s.bounced[i] != null) ? Math.round(s.bounced[i] * 10000 / v) / 100 : null;
+    });
+    return alignDaily(bpc, CW.days, null, all ? fleetSeries().bounces : null);
+  }
   if (k === "rate") {
     var min = rateMinSent();
     var rate = s.sent.map(function (v, i) {
@@ -1012,6 +1022,14 @@ function rateAvg() {      // ONE reply rate: repliesShown ÷ sentShown — the s
   if (!S) return null;    // the chip and "X in 100 reply" can never disagree
   return Math.round(repliesShown() / S * 1000) / 10;
 }
+function bounceAvg() {    // ONE bounce rate for this view: bounced ÷ sent
+  var cw = cwFor(state.client);
+  if (cw) return cw.sent ? Math.round(cw.bounced / cw.sent * 1000) / 10 : null;
+  var fs = fleetSeries();
+  var S = slice(fs.sent).reduce(function (a, b) { return a + b; }, 0);
+  if (!S) return null;
+  return Math.round(slice(fs.bounceN).reduce(function (a, b) { return a + b; }, 0) / S * 1000) / 10;
+}
 function slice(a) { return a.slice(Math.max(0, a.length - state.range)); }
 function rangeLabel() { return "last " + state.range + " days"; }
 function priorComparison() {
@@ -1094,8 +1112,8 @@ function renderLegend() {
     if (k === "sent") hasLine = sentDailyFull() != null;
     var val = null;
     if (k === "rate") { var ra = rateAvg(); val = ra == null ? "–" : ra + "%"; }
+    else if (k === "bounces") { var ba = bounceAvg(); val = ba == null ? "–" : ba + "%"; }
     else if (k === "sent") val = cw ? fmtN(cw.sent) : "–";
-    else if (k === "bounces" && cw) val = fmtN(cw.bounced);
     else if (k === "replies") val = fmtN(repliesShown());   // the ONE reply count — chip can never disagree with the funnel
     else if (hasLine) val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
     else val = "–";
@@ -1153,18 +1171,21 @@ function renderTrend() {
   lineVis.forEach(function (k) { data[k] = pick(slice(seriesFor(k))); });
   var sentFull = state.on.sent ? sentDailyFull() : null;
   var sentBars = sentFull ? pick(slice(sentFull)) : null;
-  var hasRate = lineVis.indexOf("rate") >= 0;
+  var hasRate = lineVis.some(function (k) { return RAXIS[k]; });
   var L = 40, R = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
   var max = 1;
-  lineVis.forEach(function (k) { if (k === "rate") return; data[k].forEach(function (v) { if (v > max) max = v; }); });
+  lineVis.forEach(function (k) { if (RAXIS[k]) return; data[k].forEach(function (v) { if (v > max) max = v; }); });
   var ladder = [12, 20, 30, 40, 60, 80, 120, 160, 240, 320, 480, 640, 900, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800, 19200, 25600, 40000];
   var ymax = ladder[ladder.length - 1];
   for (var i = 0; i < ladder.length; i++) { if (ladder[i] >= max) { ymax = ladder[i]; break; } }
-  // reply-rate rides its own right-hand % axis
+  // reply-rate and bounce-rate share the right-hand % axis
   var rmax = 1;
   if (hasRate) {
     var rladder = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20], rmx = 0;
-    data.rate.forEach(function (v) { if (v != null && v > rmx) rmx = v; });
+    lineVis.forEach(function (k) {
+      if (!RAXIS[k]) return;
+      data[k].forEach(function (v) { if (v != null && v > rmx) rmx = v; });
+    });
     rmax = rladder[rladder.length - 1];
     for (i = 0; i < rladder.length; i++) { if (rladder[i] >= rmx) { rmax = rladder[i]; break; } }
   }
@@ -1202,18 +1223,20 @@ function renderTrend() {
   });
   var ends = [];
   lineVis.forEach(function (k) {
-    if (k === "rate") {
-      // dashed, right-axis, with gaps on no-send days
+    if (RAXIS[k]) {
+      // right-axis % lines with gaps on quiet days; rate stays the only dashed
+      // line so it and bounce-rate never read as one series
+      var dash = k === "rate" ? ' stroke-dasharray="5 4"' : "";
       var seg = "", lastY = null;
-      data.rate.forEach(function (v, ii) {
+      data[k].forEach(function (v, ii) {
         if (v == null) {
-          if (seg) { s += '<polyline points="' + seg + '" fill="none" stroke="' + COL.rate + '" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>'; seg = ""; }
+          if (seg) { s += '<polyline points="' + seg + '" fill="none" stroke="' + COL[k] + '" stroke-width="2"' + dash + ' stroke-linejoin="round" stroke-linecap="round"/>'; seg = ""; }
           return;
         }
         lastY = YR(v);
         seg += (seg ? " " : "") + X(ii).toFixed(1) + "," + lastY.toFixed(1);
       });
-      if (seg) s += '<polyline points="' + seg + '" fill="none" stroke="' + COL.rate + '" stroke-width="2" stroke-dasharray="5 4" stroke-linejoin="round" stroke-linecap="round"/>';
+      if (seg) s += '<polyline points="' + seg + '" fill="none" stroke="' + COL[k] + '" stroke-width="2"' + dash + ' stroke-linejoin="round" stroke-linecap="round"/>';
       if (lastY != null) ends.push({ k: k, x: X(n - 1), y: lastY });
       return;
     }
@@ -1237,7 +1260,7 @@ function renderTrend() {
   $("trend-svg").innerHTML = s;
   var cw = cwFor(state.client);
   var sentTot = cw ? cw.sent : slice(fleetSeries().sent).reduce(function (a, b) { return a + b; }, 0);
-  var bTot = cw ? cw.bounced : slice(fleetSeries().bounces).reduce(function (a, b) { return a + b; }, 0);
+  var bTot = cw ? cw.bounced : slice(fleetSeries().bounceN).reduce(function (a, b) { return a + b; }, 0);
   var sub = (state.on.sent && sentFull ? "Faint bars are emails sent each day; lines are counts per day"
                                        : "Every line is a count per day") +
     (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
@@ -1329,7 +1352,7 @@ function trendMove(ev) {
     if (k === "sent") return;   // shown above (bars)
     if (!state.on[k] || seriesFor(k) == null) return;
     var v = slice(seriesFor(k))[oi];
-    if (k === "rate") {
+    if (RAXIS[k]) {
       if (v == null) return;   // no sends that day — the line has a gap here
       var Yr = T + (1 - v / (GEO.rmax || 1)) * ph;
       html += '<circle cx="' + X.toFixed(1) + '" cy="' + Yr.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
@@ -2159,6 +2182,9 @@ function renderSubseq(s) {
   var scope = $("subseq-scope"), body = $("subseq-body"),
       takeRow = $("subseq-take-row"), take = $("subseq-take");
   if (!scope || !body) return;
+  // stamp = the stats' own sweep/seed age (not the page's), so numbers seeded
+  // from before a restart read "updated N h ago" instead of passing as fresh
+  setStamp("subseq-stamp", (s && s.asof) || null, 2);
   if (!s || !s.sent) {
     if (s && s.windowed) {
       // windowed stats exist and the answer is a real zero — say so instead
