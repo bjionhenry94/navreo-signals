@@ -8403,12 +8403,34 @@ def route_search_smartlead_get(params):
         if hit and now - hit[0] < _SL_SEARCH_TTL:
             return 200, dict(hit[1], cached=True)
         results, errors, seen = [], 0, set()
-        for ws, key in _sl_search_keys():
+        # One short-lived thread per workspace (live measure 2026-08-15: the
+        # serial loop cost 19.5s cold across the enabled workspaces — each
+        # master-inbox search is ~5s on Smartlead's side). Bounded at the
+        # workspace count (single digits), joined with a hard deadline so a
+        # hung workspace can't pin the request thread on the 512MB box.
+        ws_keys = _sl_search_keys()
+        pages = {}
+        def _one(ws, key):
             try:
-                resp = _sl_post("/master-inbox/inbox-replies", {
+                pages[ws] = _sl_post("/master-inbox/inbox-replies", {
                     "limit": 20, "offset": 0, "sortBy": "REPLY_TIME_DESC",
                     "filters": {"emailStatus": "Replied", "search": q},
                 }, api_key=key)
+            except Exception:  # noqa: BLE001 - one workspace failing must not kill the search
+                pages[ws] = None
+        threads = [threading.Thread(target=_one, args=(ws, key), daemon=True,
+                                    name=f"sl-search-{ws}") for ws, key in ws_keys]
+        for t in threads:
+            t.start()
+        deadline = _time.time() + 25
+        for t in threads:
+            t.join(timeout=max(0.1, deadline - _time.time()))
+        for ws, _key in ws_keys:
+            try:
+                resp = pages.get(ws)
+                if resp is None:
+                    errors += 1
+                    continue
                 data = resp.get("data") if isinstance(resp, dict) else None
                 for r in data if isinstance(data, list) else []:
                     if not isinstance(r, dict):
