@@ -383,7 +383,8 @@ const CID = qp.get("c"); const NID = qp.get("nid");
 const getJSON = (u)=>fetch(u,{cache:"no-store"}).then(r=>{ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); });
 /* one-page cockpit: tiny caches so tab flips don't refetch */
 const CACHE = { messaging:null, seqcopy:null, detail:null, live:null,
-                messagingBusy:false, seqcopyBusy:false };
+                messagingBusy:false, seqcopyBusy:false,
+                seqcopySig:null, pollBusy:false };
 
 function pickPrimary(rows){
   if(NID){ const m=rows.find(r=>String(r.id)===String(NID)); if(m) return m; }
@@ -840,6 +841,55 @@ function vawRefreshCampaign(){
   if(ROW){ hydrateMessaging(ROW); hydrateSequenceCopy(ROW); }
 }
 
+/* ── Live variant watch ──────────────────────────────────────────────────────
+   The cockpit is a window onto Smartlead, so a variant change made ANYWHERE —
+   here, by a skill, by Claude via the API, by a cron, or in another tab —
+   should show up without a manual reload, so the user can see their work was
+   actioned. We watch the live sequence mirror and repaint ONLY when the variant
+   set / on-off / split / copy actually changes. Idle polls never touch the DOM,
+   so a reader mid-scroll is never disrupted. */
+function variantSig(sc){
+  if(!sc||!sc.steps) return "";
+  const parts=[];
+  sc.steps.forEach(st=>{
+    (st.variants||[]).forEach(v=>{
+      parts.push((st.step==null?"?":st.step)+":"+(v.label||"?")
+        +":"+(v.deleted?"d":"")+":"+(v.split==null?"":v.split)
+        +":"+String(v.subject||"").length+":"+String(v.body||"").length);
+    });
+  });
+  return parts.join("|");
+}
+let VARIANT_WATCH_ON=false;
+function variantWatchTick(reason){
+  if(!ROW) return;
+  /* only watch once the user has actually opened Messaging (baseline set) */
+  if(CACHE.seqcopySig==null && !CACHE.seqcopy) return;
+  if(CACHE.pollBusy) return;
+  if(reason==="interval" && document.visibilityState==="hidden") return;
+  CACHE.pollBusy=true;
+  getJSON("/api/cockpit/sequence-copy?id="+encodeURIComponent(ROW.campaign_id)).then(sc=>{
+    CACHE.pollBusy=false;
+    const healthy=sc&&!sc.degraded&&((sc.steps||[]).length||sc.empty);
+    if(!healthy) return;
+    const sig=variantSig(sc);
+    if(CACHE.seqcopySig==null){ CACHE.seqcopy=sc; CACHE.seqcopySig=sig; return; } /* baseline */
+    if(sig===CACHE.seqcopySig) return;                       /* unchanged — leave DOM alone */
+    /* a real variant change landed: refresh everything + tell the user */
+    CACHE.seqcopy=sc; CACHE.seqcopySig=sig;
+    CACHE.messaging=null; CACHE.messagingBusy=false; CACHE.seqcopyBusy=false;
+    if(ROW){ hydrateMessaging(ROW); hydrateSequenceCopy(ROW); }
+    toast("↻ Variants changed — cockpit refreshed");
+  }).catch(()=>{ CACHE.pollBusy=false; });
+}
+function startVariantWatch(){
+  if(VARIANT_WATCH_ON) return;
+  VARIANT_WATCH_ON=true;
+  setInterval(()=>variantWatchTick("interval"), 20000);
+  document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") variantWatchTick("visible"); });
+  window.addEventListener("focus",()=>variantWatchTick("focus"));
+}
+
 function vawWireMessaging(root, c){
   root.querySelectorAll("[data-vaw-toggle]").forEach(t=>{
     t.addEventListener("click",()=>{
@@ -1067,7 +1117,7 @@ function hydrateSequenceCopy(r){
   const attempt=(i)=>{
     getJSON("/api/cockpit/sequence-copy?id="+encodeURIComponent(id)).then(sc=>{
       const healthy=sc&&!sc.degraded&&((sc.steps||[]).length||sc.empty);
-      if(healthy){ CACHE.seqcopy=sc; apply(sc); return; }
+      if(healthy){ CACHE.seqcopy=sc; CACHE.seqcopySig=variantSig(sc); apply(sc); return; }
       if(i<2) setTimeout(()=>attempt(i+1), i===0?3000:7000);
       else fail();
     }).catch(()=>{
@@ -1890,6 +1940,7 @@ async function boot(){
        fetch on the first click of their tab — their Smartlead-proxied pulls
        were queueing behind each other at boot and dragging first load. */
     hydrateAudience(row.campaign_id);
+    startVariantWatch();
   }catch(e){ $("app").innerHTML=emptyState("Couldn't load this optimisation ("+esc(e.message||e)+")."); }
 }
 boot();
