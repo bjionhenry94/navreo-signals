@@ -8889,7 +8889,7 @@ def route_lead_contact_get(params):
         domain = (row.get("company_domain") or "").strip().lower()
         workspace = (row.get("workspace") or WORKSPACE or "navreo").lower()
         empty = {"linkedin": "", "website": "", "company_name": "", "phone": "", "lead_map": "",
-                 "company": {}, "qualified": {}, "client": {}}
+                 "phone_kind": "", "person": {}, "company": {}, "qualified": {}, "client": {}}
         if not email or row.get("is_test"):
             return 200, empty
         now = _time.time()
@@ -8902,8 +8902,11 @@ def route_lead_contact_get(params):
         # personal profile, and its company_domain is the enriched REAL domain.
         try:
             ppl = _SB("GET", f"people?email=eq.{quote(email.lower())}"
-                             "&select=linkedin_slug,company_domain&limit=1") if _SB else None
+                             "&select=linkedin_slug,company_domain,title&limit=1") if _SB else None
             if isinstance(ppl, list) and ppl:
+                title = (ppl[0].get("title") or "").strip()
+                if title:
+                    out["person"] = {"title": title}
                 slug = (ppl[0].get("linkedin_slug") or "").strip().strip("/")
                 if slug:
                     out["linkedin"] = slug if slug.startswith("http") \
@@ -8940,6 +8943,19 @@ def route_lead_contact_get(params):
             enr = _enrichment_row(email)
             if enr and (enr.get("phone") or "").strip():
                 out["phone"] = str(enr["phone"]).strip()
+                # Number type for the dial decision (SDR panel 2026-08-15):
+                # prospeo/getleads numbers are provider-verified MOBILES; the
+                # backfill sources are numbers on file, type unknown.
+                out["phone_kind"] = "mobile" if (enr.get("phone_source") or "") in ("prospeo", "getleads") else "listed"
+            elif out.get("phone"):
+                out["phone_kind"] = "listed"
+            # The replier's role: the people table first, else whatever the
+            # enrichment payload knows (Prospeo current_job_title/headline).
+            if not (out.get("person") or {}).get("title") and isinstance((enr or {}).get("payload"), dict):
+                pp = enr["payload"].get("person") if isinstance(enr["payload"].get("person"), dict) else {}
+                ptitle = str(pp.get("current_job_title") or pp.get("headline") or "").strip()
+                if ptitle:
+                    out["person"] = {"title": ptitle[:120]}
             if enr is None:
                 threading.Thread(target=_enrich_on_reply,
                                  args=(email, domain or (out.get("website") or ""), workspace),

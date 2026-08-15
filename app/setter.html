@@ -684,6 +684,13 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-qual-reason { margin-top: 6px; }
 .lp-client summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--ink-3); }
 .lp-client .lp-client-line { font-size: 12px; margin-top: 8px; line-height: 1.45; color: var(--ink-2, inherit); }
+.lp-phone-wrap { display: inline-flex; align-items: center; gap: 6px; }
+.lp-phone-kind { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 4px; background: var(--bg-2, #eee); color: var(--ink-3); }
+.lp-phone-copy { font-size: 10px; letter-spacing: 0; text-transform: none; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 5px; padding: 1px 6px; cursor: pointer; color: var(--ink-3); }
+.lp-phone-copy:hover { color: var(--ink-1, inherit); }
+.lp-person-role { margin-bottom: 8px; }
+.lp-person-role dd { font-weight: 600; }
+.lp-call-btn span { white-space: nowrap; }
 .dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -3451,7 +3458,19 @@ function decisionFacts(row, opts) {
   const tz = row.timezone || cls.timezone_guess || "";
   const facts = [];
   facts.push({ label: "Intent", value: `${intentLabel(cls.primary_intent)}${cls.confidence != null ? ` (${Math.round(cls.confidence * 100)}% sure)` : ""}` });
-  facts.push({ label: "Timezone", value: tz || "unknown" });
+  // Do the clock math for the caller (SDR panel 2026-08-15): the raw IANA
+  // name made every rep compute "is it dinner time there?" in their head.
+  let tzShown = tz || "unknown";
+  if (tz) {
+    try {
+      const now = new Date();
+      const t = new Intl.DateTimeFormat([], { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(now);
+      const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
+      const hint = (h >= 9 && h < 18) ? "good time to call" : (h >= 18 && h < 21 ? "evening for them" : "outside work hours");
+      tzShown = `${t} for them — ${hint}`;
+    } catch { /* bad tz name - keep the raw value */ }
+  }
+  facts.push({ label: "Timezone", value: tzShown });
   if (!opts.hideEmpty || lexHits.length) facts.push({ label: "Opt-out hits", value: lexHits.length ? lexHits.join(", ") : "none" });
   if (!opts.hideEmpty || redFlags.length) facts.push({ label: "AI flags", value: redFlags.length ? redFlags.join(", ") : "none" });
   facts.push({ label: "Call slots", value: slotSituationText(row) });
@@ -3483,7 +3502,13 @@ function howDecidedContentHtml(row, opts) {
 }
 function slotSituationText(row) {
   const slots = row.slots || [];
-  if (slots.length) return `${slots.length} time${slots.length === 1 ? "" : "s"} proposed`;
+  // Print the actual proposed times, not a count (SDR panel 2026-08-15) -
+  // the labels are already human-formatted at draft time.
+  if (slots.length) {
+    const labels = slots.map((sl) => (sl && sl.label) ? String(sl.label).replace(/^\w+, /, "") : "").filter(Boolean);
+    if (labels.length) return labels.slice(0, 2).join(" · ") + (labels.length > 2 ? ` (+${labels.length - 2} more)` : "");
+    return `${slots.length} time${slots.length === 1 ? "" : "s"} proposed`;
+  }
   /* Structured slot_status stamped into guardrails at draft time (2026-08-09)
      — the exact WHY, no reverse-engineering. Older rows fall through to the
      decision_reason text guess below. */
@@ -3593,7 +3618,12 @@ function leadQuickLinksHtml(row) {
     : `https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email || "")}`;
   const smartleadBtn = row.lead_email
     ? `<a class="lp-qbtn" href="${slHref}" target="_blank" rel="noopener" title="${row.lead_map_id ? "Open this exact conversation in Smartlead" : "Open this lead's conversation in Smartlead's master inbox"}">${ICON_EXTERNAL}<span>Smartlead</span></a>` : "";
-  return websiteBtn + linkedinBtn + smartleadBtn;
+  // One-tap dial from the always-visible bar (SDR panel gripe 2026-08-15:
+  // on phones the sidebar phone was toggle-then-tap - two taps).
+  const wcPh = String(warmcallFor(row).phone || "").trim();
+  const callBtn = wcPh
+    ? `<a class="lp-qbtn lp-call-btn" href="tel:${esc(wcPh.replace(/[^+\d]/g, ""))}" title="Call ${esc(wcPh)}"><span>📞 ${esc(wcPh)}</span></a>` : "";
+  return callBtn + websiteBtn + linkedinBtn + smartleadBtn;
 }
 /* Colour tone for the current-category pill: green for a positive, red for a
    clear negative, amber for uncategorised, neutral grey for everything else
@@ -3703,7 +3733,12 @@ function leadPhoneHtml(row) {
   const wc = warmcallFor(row);
   const ph = String(wc.phone || row.lead_phone || "").trim();
   if (!ph) return `<span class="lp-phone muted" id="lpPhone">${wc.done ? "no number" : "…"}</span>`;
-  return `<a class="lp-phone" id="lpPhone" href="tel:${esc(ph.replace(/[^+\d]/g, ""))}" title="Tap to call ${esc(ph)}">${esc(ph)}</a>`;
+  // Number type + provenance (SDR panel 2026-08-15): a verified MOBILE is a
+  // different dial decision than a listed office line - say which this is,
+  // and let desktop reps copy it into a softphone in one click.
+  const kind = wc.phone_kind === "mobile" ? "mobile" : "listed";
+  const prov = wc.phone_kind === "mobile" ? "Provider-verified mobile" : "Number on file (type unverified)";
+  return `<span class="lp-phone-wrap" id="lpPhone"><a class="lp-phone" href="tel:${esc(ph.replace(/[^+\d]/g, ""))}" title="${prov} - tap to call">${esc(ph)}</a><span class="lp-phone-kind">${kind}</span><button type="button" class="lp-phone-copy" title="Copy the number" onclick="navigator.clipboard && navigator.clipboard.writeText('${esc(ph)}'); this.textContent='✓'; setTimeout(() => { this.textContent='copy'; }, 1200)">copy</button></span>`;
 }
 function companySectionHtml(row) {
   const wc = warmcallFor(row);
@@ -3720,7 +3755,9 @@ function companySectionHtml(row) {
   const site = (row.company_website || "").replace(/^https?:\/\//, "");
   const desc = c.description ? String(c.description) : "";
   const descShown = desc.length > 260 ? desc.slice(0, 257).replace(/\s+\S*$/, "") + "…" : desc;
+  const role = String(wc.person_title || "").trim();
   return `<div class="lp-section lp-company" id="lpCompany">
+    ${role ? `<div class="lp-fact lp-person-role"><dt>Their role</dt><dd>${esc(role)}</dd></div>` : ""}
     <div class="lp-label">Company${chip}</div>
     ${name ? `<div class="lp-company-name">${esc(name)}${site ? ` <span class="muted small">· ${esc(site)}</span>` : ""}</div>` : ""}
     ${descShown ? `<div class="lp-company-desc">${esc(descShown)}</div>` : ""}
@@ -3838,6 +3875,8 @@ async function hydrateLeadContact(row) {
   const wcPrev = WARMCALL[wcKey] || {};
   WARMCALL[wcKey] = { ...wcPrev, done: true,
     phone: String(res.data.phone || ""),
+    phone_kind: String(res.data.phone_kind || ""),
+    person_title: String((res.data.person || {}).title || ""),
     company: res.data.company || {},
     qualified: res.data.qualified || {},
     client: res.data.client || {} };
@@ -3850,8 +3889,9 @@ async function hydrateLeadContact(row) {
     }
   });
   if (String(selectedRowId) === String(row.id)) {
-    if (changed) {
-      // Re-render every quick-links row on the page (sidebar + sticky bar).
+    if (changed || WARMCALL[wcKey].phone) {
+      // Re-render every quick-links row on the page (sidebar + sticky bar) -
+      // the phone chip in the bar appears with hydration, not just links.
       document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
     }
     const phEl = document.getElementById("lpPhone");
