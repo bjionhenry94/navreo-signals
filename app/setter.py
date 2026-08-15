@@ -8488,7 +8488,12 @@ def route_search_smartlead_get(params):
         payload = {"q": q, "results": results, "errors": errors}
         if len(_SL_SEARCH_CACHE) >= _SL_SEARCH_CACHE_MAX:
             _SL_SEARCH_CACHE.clear()
-        _SL_SEARCH_CACHE[ck] = (now, payload)
+        # A partial answer (a workspace call failed/timed out) must never be
+        # cached — live find 2026-08-15: a transient one-workspace failure got
+        # served as "0 results" for the full TTL, which reads as "this person
+        # was never contacted". Serve it once, let the next keystroke retry.
+        if not errors:
+            _SL_SEARCH_CACHE[ck] = (now, payload)
         return 200, payload
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -8717,16 +8722,20 @@ def _qualify(comp: dict, icp: dict):
     return "likely", (" and ".join(bits) or "Matches this client's saved rules") + "."
 
 
-def _prospeo_enrich(email: str) -> dict:
+def _prospeo_enrich(email: str, linkedin: str = "") -> dict:
     """One Prospeo /enrich-person call (mobile on) -> normalised
     {phone, phone_source, company{...}, payload}. Empty dict on any miss -
-    the caller banks even a miss so the lead is never re-paid."""
+    the caller banks even a miss so the lead is never re-paid. Auth header is
+    X-KEY (verified live 2026-08-15 - the docs' KEY name 400s INVALID_API_KEY).
+    A linkedin_url matches far more reliably than a bare email, so pass the
+    people table's slug whenever we hold one - mirrors the Make scenario."""
     key = _KEYS.get("PROSPEO_API_KEY") or ""
-    if not (key and email and _HTTP):
+    if not (key and (email or linkedin) and _HTTP):
         return {}
+    data = {"linkedin_url": linkedin} if linkedin else {"email": email}
     try:
-        j = _HTTP("POST", "https://api.prospeo.io/enrich-person", {"KEY": key},
-                  {"enrich_mobile": True, "data": {"email": email}}, timeout=45)
+        j = _HTTP("POST", "https://api.prospeo.io/enrich-person", {"X-KEY": key},
+                  {"enrich_mobile": True, "data": data}, timeout=45)
     except Exception:  # noqa: BLE001
         return {}
     if not isinstance(j, dict):
@@ -8740,15 +8749,25 @@ def _prospeo_enrich(email: str) -> dict:
         phone = str(mob.get("mobile") or mob.get("number") or "").strip()
     elif mob:
         phone = str(mob).strip()
+    # Live shape (verified 2026-08-15): company.location is an OBJECT, the
+    # richest description is description > description_ai > description_seo,
+    # and the person carries their own location - used as the fallback so the
+    # Location line still answers "where would I be calling?".
     loc = comp.get("location") if isinstance(comp.get("location"), dict) else {}
+    ploc = person.get("location") if isinstance(person.get("location"), dict) else {}
+    if isinstance(comp.get("location"), str) and comp["location"].strip():
+        loc = {"city": comp["location"].strip()}
+    if isinstance(person.get("location"), str) and person["location"].strip():
+        ploc = {"city": person["location"].strip()}
     company = {
         "name": comp.get("name") or "",
-        "description": comp.get("description") or comp.get("summary") or "",
-        "employee_count": comp.get("employee_count") or comp.get("size") or None,
-        "employee_range": comp.get("employee_range") or comp.get("size_range") or "",
-        "city": comp.get("city") or loc.get("city") or "",
-        "state": comp.get("state") or loc.get("state") or "",
-        "country": comp.get("country") or loc.get("country") or "",
+        "description": comp.get("description") or comp.get("description_ai")
+                       or comp.get("description_seo") or "",
+        "employee_count": comp.get("employee_count") or comp.get("employee_count_on_prospeo") or None,
+        "employee_range": comp.get("employee_range") or "",
+        "city": loc.get("city") or loc.get("locality") or ploc.get("city") or "",
+        "state": loc.get("state") or loc.get("region") or ploc.get("state") or ploc.get("region") or "",
+        "country": loc.get("country") or ploc.get("country") or "",
         "industry": comp.get("industry") or "",
         "linkedin_url": comp.get("linkedin_url") or comp.get("linkedin") or "",
     }
@@ -8795,8 +8814,29 @@ def _enrich_on_reply(email: str, domain: str, workspace: str) -> None:
         try:
             if _enrichment_row(email):
                 return
-            res = _getleads_enrich(email) or _prospeo_enrich(email)
+            # A LinkedIn profile matches far more reliably than a bare email
+            # (a bare contact@ NO_MATCHes) - use the people table's slug when
+            # we hold one, exactly like the Make scenario does.
+            linkedin = ""
+            try:
+                ppl = _SB("GET", f"people?email=eq.{quote(email, safe='')}"
+                                 "&select=linkedin_slug&limit=1")
+                slug = (ppl[0].get("linkedin_slug") or "").strip().strip("/") \
+                    if isinstance(ppl, list) and ppl else ""
+                if slug:
+                    linkedin = slug if slug.startswith("http") \
+                        else f"https://www.linkedin.com/in/{slug}"
+            except Exception:  # noqa: BLE001
+                pass
+            res = _getleads_enrich(email) or _prospeo_enrich(email, linkedin)
             comp = res.get("company") or {}
+            # Bank real attempts only: a NO_MATCH is a real miss (never re-pay),
+            # but an auth/credit/network failure must NOT poison the cache -
+            # the next open retries once the infrastructure is fixed.
+            payload = res.get("payload") if isinstance(res.get("payload"), dict) else {}
+            err = str(payload.get("error_code") or "") if payload.get("error") else ""
+            if not res or (err and err != "NO_MATCH"):
+                return
             _SB("POST", "setter_lead_enrichment?on_conflict=lead_email", {
                 "lead_email": email, "phone": res.get("phone") or "",
                 "phone_source": res.get("phone_source") or "",
