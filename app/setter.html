@@ -689,7 +689,6 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 /* Send-state banner: persistent in-pane confirmation (2026-08-01) */
 .send-confirm { font-size: 13px; font-weight: 600; padding: 10px 14px; border-radius: 8px; margin: 10px 0; }
 .send-confirm.inflight { background: var(--accent-soft, #eef4ff); color: var(--accent, #2b62d9); }
-.send-confirm.ok { background: #e8f7ee; color: #1d7a43; }
 /* Copy-email affordance in the sticky top bar (2026-08-01) */
 .dh-copy { display: inline-flex; align-items: center; border: none; background: none; padding: 2px;
   cursor: pointer; color: var(--ink-3, #9aa3b2); border-radius: 5px; flex-shrink: 0; }
@@ -3172,15 +3171,14 @@ function renderDetail(row) {
     setTimeout(hydrateUncatBanner, 0);
   }
 
-  // Send-state banner (owner ask 2026-08-01: "confirmation the email sent
-  // would be useful"): a persistent state right in the pane, not just a
-  // 2.6s toast. 'inflight' while the job runs, 'sent' on confirmation —
-  // both survive queue repaints because the shield keeps this row object.
+  // Send-state banner: only the in-flight state lives in the pane ("Sending
+  // reply to…" while the job runs). The green "Reply sent" box that used to
+  // replace it was dropped (owner report 2026-08-15): the floating "Reply
+  // sent" toast at the bottom already confirms the send, so the box was
+  // duplicate noise stacked in the pane.
   let sendStateHtml = "";
   if (row._sendState === "inflight") {
     sendStateHtml = `<div class="send-confirm inflight">Sending reply to ${esc(row.lead_email || "the lead")}&hellip;</div>`;
-  } else if (row._sendState === "sent") {
-    sendStateHtml = `<div class="send-confirm ok">&#10003; Reply sent to ${esc(row.lead_email || "the lead")} &middot; ${pulledAgo(row.sent_at)}</div>`;
   }
 
   // Auto-sent rows keep one calm signal line (proof autopilot fired, and how
@@ -4850,9 +4848,10 @@ async function doSend(btn) {
   }
   clearError();
   if (row) {
-    // Confirmed: the persistent green state replaces the in-flight one, and
-    // the override keeps any stale queue payload from undoing the sent row.
-    row._sendState = "sent";
+    // Confirmed: the in-flight banner clears (the floating toast below is the
+    // send confirmation — owner report 2026-08-15), and the override keeps any
+    // stale queue payload from undoing the sent row.
+    delete row._sendState;
     if (res.data && res.data.row && res.data.row.sent_at) row.sent_at = res.data.row.sent_at;
     overrideRow(row);
     if (String(selectedRowId) === String(id)) renderDetail(row);
