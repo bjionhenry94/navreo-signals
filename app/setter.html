@@ -668,7 +668,22 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
    from the top bar's panel button; shown by default on desktop, hidden on
    phones. */
 .inbox-shell.lead-hidden .lead-panel { display: none; }
-.lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; }
+.lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Warm-call additions (owner ask 2026-08-15): the phone sits top-right of the
+   LEAD DETAILS title as a tap-to-call link; the company block + qualified
+   chip + collapsed client context fill the "should I call this person?" gap. */
+.lp-phone { font-size: 13px; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--ink-1, inherit); text-decoration: none; white-space: nowrap; }
+.lp-phone:hover { text-decoration: underline; }
+.lp-phone.muted { color: var(--ink-3); font-weight: 400; font-size: 11px; }
+.lp-qual { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; vertical-align: 1px; }
+.lp-qual-likely { background: #e7f3ec; color: #1e6b43; }
+.lp-qual-unlikely { background: #f7e8e4; color: #a33b25; }
+.lp-qual-unknown { background: var(--bg-2, #eee); color: var(--ink-3); }
+.lp-company-name { font-weight: 600; margin: 2px 0 2px; }
+.lp-company-desc { font-size: 12px; color: var(--ink-2, inherit); margin: 2px 0 8px; line-height: 1.45; }
+.lp-qual-reason { margin-top: 6px; }
+.lp-client summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.lp-client .lp-client-line { font-size: 12px; margin-top: 8px; line-height: 1.45; color: var(--ink-2, inherit); }
 .dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -689,7 +704,6 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 /* Send-state banner: persistent in-pane confirmation (2026-08-01) */
 .send-confirm { font-size: 13px; font-weight: 600; padding: 10px 14px; border-radius: 8px; margin: 10px 0; }
 .send-confirm.inflight { background: var(--accent-soft, #eef4ff); color: var(--accent, #2b62d9); }
-.send-confirm.ok { background: #e8f7ee; color: #1d7a43; }
 /* Copy-email affordance in the sticky top bar (2026-08-01) */
 .dh-copy { display: inline-flex; align-items: center; border: none; background: none; padding: 2px;
   cursor: pointer; color: var(--ink-3, #9aa3b2); border-radius: 5px; flex-shrink: 0; }
@@ -3162,15 +3176,14 @@ function renderDetail(row) {
     setTimeout(hydrateUncatBanner, 0);
   }
 
-  // Send-state banner (owner ask 2026-08-01: "confirmation the email sent
-  // would be useful"): a persistent state right in the pane, not just a
-  // 2.6s toast. 'inflight' while the job runs, 'sent' on confirmation —
-  // both survive queue repaints because the shield keeps this row object.
+  // Send-state banner: only the in-flight state lives in the pane ("Sending
+  // reply to…" while the job runs). The green "Reply sent" box that used to
+  // replace it was dropped (owner report 2026-08-15): the floating "Reply
+  // sent" toast at the bottom already confirms the send, so the box was
+  // duplicate noise stacked in the pane.
   let sendStateHtml = "";
   if (row._sendState === "inflight") {
     sendStateHtml = `<div class="send-confirm inflight">Sending reply to ${esc(row.lead_email || "the lead")}&hellip;</div>`;
-  } else if (row._sendState === "sent") {
-    sendStateHtml = `<div class="send-confirm ok">&#10003; Reply sent to ${esc(row.lead_email || "the lead")} &middot; ${pulledAgo(row.sent_at)}</div>`;
   }
 
   // Auto-sent rows keep one calm signal line (proof autopilot fired, and how
@@ -3279,7 +3292,8 @@ function renderDetail(row) {
     // The whole lead-details column is shown/hidden as one (see
     // applyLeadPanelHidden + the top-bar #panelToggleBtn); the panel itself is
     // just a titled stack of sections.
-    panelEl.innerHTML = '<div class="lp-panel-head">Lead details</div>' + leadPanelHtml(row);
+    panelEl.innerHTML = `<div class="lp-panel-head"><span>Lead details</span>${leadPhoneHtml(row)}</div>` + leadPanelHtml(row);
+    wireClientToggle(panelEl);
   }
   // Wire the top-bar button that hides/shows the entire lead-details column,
   // and apply the remembered state (default shown on desktop, hidden on phones).
@@ -3657,13 +3671,74 @@ function leadPanelHtml(row) {
 
   // Identity (name / email) and the Website/LinkedIn links now live in the
   // sticky top bar, so the sidebar leads straight with the category control.
+  // Warm-call order (owner ask 2026-08-15): category -> company breakdown with
+  // the qualified chip (the "should I call?" facts) -> decision block -> the
+  // client's own context, collapsed at the bottom.
   return `
     ${catSectionHtml}
     ${noAgentHtml}
+    ${companySectionHtml(row)}
     <div class="lp-section">
       ${leadDecisionHtml(row)}
     </div>
+    ${clientSectionHtml(row)}
   `;
+}
+/* Warm-call sideboard blocks (owner ask 2026-08-15). All three render from
+   fields hydrateLeadContact stashes on the row (lead_phone / company_info /
+   qualified_info / client_info); before hydration they show quiet dashes, and
+   hydrateLeadContact swaps each block in place by id so a category pick in
+   progress is never clobbered. */
+function leadPhoneHtml(row) {
+  const ph = String(row.lead_phone || "").trim();
+  if (!ph) return `<span class="lp-phone muted" id="lpPhone">${row._warmcall_done ? "no number" : "…"}</span>`;
+  return `<a class="lp-phone" id="lpPhone" href="tel:${esc(ph.replace(/[^+\d]/g, ""))}" title="Tap to call ${esc(ph)}">${esc(ph)}</a>`;
+}
+function companySectionHtml(row) {
+  const c = row.company_info || {};
+  const q = row.qualified_info || {};
+  const dash = `<span class="muted">—</span>`;
+  const loc = [c.city, c.state, c.country].filter(Boolean).join(", ");
+  const hc = c.employee_count ? `~${c.employee_count} staff` : (c.employee_range ? `${c.employee_range} staff` : "");
+  const chipLabel = q.verdict === "likely" ? "Likely qualified"
+    : q.verdict === "unlikely" ? "Unlikely fit"
+    : row._warmcall_done ? "Fit unknown" : "";
+  const chip = chipLabel ? `<span class="lp-qual lp-qual-${esc(q.verdict || "unknown")}" title="${esc(q.reason || "")}">${chipLabel}</span>` : "";
+  const name = c.name || row.company_name || "";
+  const site = (row.company_website || "").replace(/^https?:\/\//, "");
+  const desc = c.description ? String(c.description) : "";
+  const descShown = desc.length > 260 ? desc.slice(0, 257).replace(/\s+\S*$/, "") + "…" : desc;
+  return `<div class="lp-section lp-company" id="lpCompany">
+    <div class="lp-label">Company${chip}</div>
+    ${name ? `<div class="lp-company-name">${esc(name)}${site ? ` <span class="muted small">· ${esc(site)}</span>` : ""}</div>` : ""}
+    ${descShown ? `<div class="lp-company-desc">${esc(descShown)}</div>` : ""}
+    <dl class="lp-facts">
+      <div class="lp-fact"><dt>Headcount</dt><dd>${hc ? esc(hc) : dash}</dd></div>
+      <div class="lp-fact"><dt>Location</dt><dd>${loc ? esc(loc) : dash}</dd></div>
+      <div class="lp-fact"><dt>Industry</dt><dd>${c.industry ? esc(c.industry) : dash}</dd></div>
+    </dl>
+    ${q.reason ? `<div class="lp-note lp-qual-reason">${esc(q.reason)}</div>` : ""}
+  </div>`;
+}
+function clientSectionHtml(row) {
+  const cl = row.client_info || {};
+  const label = cl.label || clientForRow(row) || "the client";
+  const key = `setterClientOpen:${(row.workspace || "navreo")}`;
+  let open = false; try { open = localStorage.getItem(key) === "1"; } catch { /* ignore */ }
+  return `<details class="lp-section lp-client" id="lpClient" data-open-key="${esc(key)}"${open ? " open" : ""}>
+    <summary>About ${esc(label)} (the client)</summary>
+    ${cl.about ? `<div class="lp-client-line">${esc(cl.about)}</div>` : `<div class="lp-client-line muted">No client notes saved yet.</div>`}
+    ${cl.offer ? `<div class="lp-client-line"><b>Offer:</b> ${esc(cl.offer)}</div>` : ""}
+  </details>`;
+}
+/* Remember the About-the-client fold per workspace (hide/show, owner ask
+   2026-08-15) - delegated per render because the block is swapped wholesale. */
+function wireClientToggle(scope) {
+  (scope || document).querySelectorAll(".lp-client").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      try { localStorage.setItem(d.getAttribute("data-open-key") || "setterClientOpen", d.open ? "1" : "0"); } catch { /* ignore */ }
+    });
+  });
 }
 /* The sidebar's decision block - the same facts as the Try-it drawer's
    howDecidedContentHtml, laid out as a clean two-column list with the "none"
@@ -3719,7 +3794,10 @@ async function hydrateLeadContact(row) {
   // enrichment layer's real domain (or Smartlead's stored website) arrives.
   const haveSite = (row.company_domain && !FREEMAIL_RE.test(row.company_domain)) || row.company_website;
   const haveMap = row.lead_map_id;
-  if (haveLi && haveSite && haveMap) return;
+  // Warm-call fields ride the same fetch (owner ask 2026-08-15): even when
+  // every quick link is already known, one fetch still runs per row so the
+  // phone / company / qualified / client blocks fill in.
+  if (haveLi && haveSite && haveMap && row._warmcall_done) return;
   // Negative cache (panel fix 2026-08-01): a lead with NO LinkedIn re-fired
   // this on every repaint forever — once per row per page-life is enough
   // (the server caches per email+campaign for an hour anyway). A TRANSIENT
@@ -3733,18 +3811,49 @@ async function hydrateLeadContact(row) {
   if (res.data.linkedin && !haveLi) { row.lead_linkedin = res.data.linkedin; changed = true; }
   if (res.data.website && !haveSite) { row.company_website = res.data.website; changed = true; }
   if (res.data.lead_map && !haveMap) { row.lead_map_id = res.data.lead_map; changed = true; }
-  if (!changed) return;
+  // Warm-call payload: stash whatever came back and swap ONLY the sideboard
+  // blocks that render it - never the whole panel (a category pick in
+  // progress must survive, same contract as the quick-links swap below).
+  row.lead_phone = String(res.data.phone || "");
+  row.company_info = res.data.company || {};
+  row.qualified_info = res.data.qualified || {};
+  row.client_info = res.data.client || {};
+  row._warmcall_done = true;
   [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
     const r = (list || []).find((x) => String(x.id) === String(row.id));
     if (r) {
       if (res.data.linkedin) r.lead_linkedin = res.data.linkedin;
       if (res.data.website) r.company_website = res.data.website;
       if (res.data.lead_map) r.lead_map_id = res.data.lead_map;
+      r.lead_phone = row.lead_phone; r.company_info = row.company_info;
+      r.qualified_info = row.qualified_info; r.client_info = row.client_info;
+      r._warmcall_done = true;
     }
   });
   if (String(selectedRowId) === String(row.id)) {
-    // Re-render every quick-links row on the page (sidebar + sticky bar).
-    document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
+    if (changed) {
+      // Re-render every quick-links row on the page (sidebar + sticky bar).
+      document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
+    }
+    const phEl = document.getElementById("lpPhone");
+    if (phEl) phEl.outerHTML = leadPhoneHtml(row);
+    const coEl = document.getElementById("lpCompany");
+    if (coEl) coEl.outerHTML = companySectionHtml(row);
+    const clEl = document.getElementById("lpClient");
+    if (clEl) { clEl.outerHTML = clientSectionHtml(row); wireClientToggle(document); }
+  }
+  // First-ever open of a pre-enrichment row: the server kicks its one-time
+  // enrichment ON this fetch, so the data lands seconds AFTER this response.
+  // Re-ask twice (5s / 15s) and swap the blocks in late - only while the
+  // answer is still empty, so steady-state rows cost nothing extra.
+  const gotData = row.lead_phone || (row.company_info && row.company_info.name);
+  if (!gotData && (row._warmcall_retries || 0) < 2) {
+    row._warmcall_retries = (row._warmcall_retries || 0) + 1;
+    setTimeout(() => {
+      LEAD_CONTACT_TRIED.delete(String(row.id));
+      row._warmcall_done = false;
+      hydrateLeadContact(row);
+    }, row._warmcall_retries === 1 ? 5000 : 15000);
   }
 }
 function currentDetailRow() {
@@ -4426,11 +4535,12 @@ function composerHtml(row) {
     // email has been sent, you should still be able to send more emails").
     // NO echo of the sent body here - the Conversation thread above already
     // shows it, and repeating it in the reply box read as a confusing duplicate
-    // (owner report 2026-08-10: "why is the same message duplicated?"). Straight
-    // to the compose affordance so sending another email is the one obvious act.
+    // (owner report 2026-08-10: "why is the same message duplicated?"). The
+    // compose box is OPEN by default - the same text box the needs-review view
+    // uses - so a follow-up is one step, not a button-then-box detour
+    // (owner ask 2026-08-15: no "Write another email" gate).
     return `<div class="qc-followup" data-id="${esc(row.id)}">
-        <button class="btn qc-followup-open" type="button" data-id="${esc(row.id)}">Write another email</button>
-        <div class="qc-followup-box" style="display:none">
+        <div class="qc-followup-box">
           <div class="qc-draft qc-followup-draft" contenteditable="true" data-id="${esc(row.id)}"></div>
           <div class="qc-actions">
             <button class="btn primary qc-followup-send" type="button" data-id="${esc(row.id)}">Send follow-up</button>
@@ -4527,16 +4637,10 @@ function wireDetailEvents(root, row) {
     if (btn) btn.click();
   }));
   root.querySelectorAll(".qc-dismiss").forEach((btn) => btn.addEventListener("click", () => doDismiss(btn)));
-  const fuOpen = root.querySelector(".qc-followup-open");
-  if (fuOpen) fuOpen.addEventListener("click", () => {
-    const box = root.querySelector(".qc-followup-box");
-    if (box) {
-      box.style.display = "";
-      fuOpen.style.display = "none";
-      const d = box.querySelector(".qc-followup-draft");
-      if (d) d.focus();
-    }
-  });
+  // The follow-up compose box is open by default (owner ask 2026-08-15) -
+  // there is no opener button any more. No auto-focus here: renderDetail
+  // re-runs on background refreshes, and focusing on every repaint would
+  // steal the cursor mid-read.
   const fuSend = root.querySelector(".qc-followup-send");
   if (fuSend) fuSend.addEventListener("click", () => doSendFollowup(fuSend));
   root.querySelectorAll(".qc-draft-anyway").forEach((btn) => btn.addEventListener("click", () => doDraftAnyway(btn)));
@@ -4836,9 +4940,10 @@ async function doSend(btn) {
   }
   clearError();
   if (row) {
-    // Confirmed: the persistent green state replaces the in-flight one, and
-    // the override keeps any stale queue payload from undoing the sent row.
-    row._sendState = "sent";
+    // Confirmed: the in-flight banner clears (the floating toast below is the
+    // send confirmation — owner report 2026-08-15), and the override keeps any
+    // stale queue payload from undoing the sent row.
+    delete row._sendState;
     if (res.data && res.data.row && res.data.row.sent_at) row.sent_at = res.data.row.sent_at;
     overrideRow(row);
     if (String(selectedRowId) === String(id)) renderDetail(row);
@@ -4900,15 +5005,12 @@ async function doSendFollowup(btn) {
       row.thread = (row.thread || []).filter((m) => m !== grafted);
       if (String(selectedRowId) === String(id)) {
         renderDetail(row);
-        // The repaint collapsed the composer - reopen it with the typed
-        // follow-up intact, so a failure never costs the writing.
+        // The repaint emptied the composer - refill it with the typed
+        // follow-up, so a failure never costs the writing. (The box is
+        // always open now, so only the text needs restoring.)
         const wrap = document.querySelector(`.qc-followup[data-id="${CSS.escape(String(id))}"]`);
         if (wrap) {
-          const openBtn = wrap.querySelector(".qc-followup-open");
-          const nbox = wrap.querySelector(".qc-followup-box");
           const nd = wrap.querySelector(".qc-followup-draft");
-          if (openBtn) openBtn.style.display = "none";
-          if (nbox) nbox.style.display = "";
           if (nd) nd.innerHTML = body;
         }
       }
