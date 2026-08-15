@@ -706,9 +706,9 @@ function jShared(url) {
 }
 
 var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null, CW = null, COLL = null;
-// Sent and Bounces default OFF: their scale flattens Replies/Interested/
-// Meetings (the lines a founder reads); the landing card owns the bounce
-// story and both stay one chip-tap away.
+// Bounce-Rate defaults OFF: it's a % on the right axis now (it no longer
+// flattens anything), but the landing card owns the bounce story and the
+// line stays one chip-tap away.
 // TWO page dimensions and only two: state.client + state.range (7/14/30 —
 // never all-time). Every widget below reads both. The pair survives a reload
 // via localStorage (losing your filters on refresh was round-1 friction).
