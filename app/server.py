@@ -4083,6 +4083,9 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
     if action == "shift_share" and not to_label:
         return 400, {"ok": False, "message": "to_label is required for shift_share"}
 
+    if _va_test_force_429():
+        return 429, {"ok": False, "message": "Smartlead is rate-limiting right now — wait a few seconds and try again (synthetic test 429)"}
+
     receipt = {"pcts_before": {}, "pcts_after": {}, "labels": {}}
 
     # A disable folds the freed share into the winning sibling (best performer)
@@ -4263,6 +4266,10 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
     except SequenceSaveDriftError:
         return 500, {"ok": False,
                       "message": "save verification failed - variant history may be affected, check Smartlead"}
+    except SequenceRateLimited as e:
+        # 429, not the generic 502: the background worker requeues rate-limited
+        # jobs, and the status code is what it keys on
+        return 429, {"ok": False, "message": str(e)}
     except Exception as e:  # noqa: BLE001 — clean JSON, never a bare 500 page
         return 502, {"ok": False, "message": f"Smartlead call failed: {str(e)[:200]}"}
 
@@ -4281,6 +4288,40 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
 _VA_JOBS: dict = {}
 _VA_JOBS_LOCK = threading.Lock()
 _VA_JOB_TTL = 3600  # done/failed jobs readable for an hour, then pruned
+_VA_MAX_ATTEMPTS = 3  # total tries per job — the Nth rate-limited failure is final
+_VA_RETRY_DELAYS_S = (15, 45, 90)  # wait before attempt 2, 3, … (last repeats if the cap is ever raised)
+
+_VA_TEST_429_LEFT: int | None = None
+
+
+def _va_test_force_429() -> bool:
+    """Dev-only fault injection: VA_TEST_FORCE_429=N makes the first N
+    variant-action saves in this process fail with a synthetic Smartlead 429
+    before any Smartlead call. The env var is the only way to arm it — absent
+    (production) this is inert."""
+    global _VA_TEST_429_LEFT
+    raw = os.environ.get("VA_TEST_FORCE_429")
+    if not raw:
+        return False
+    if _VA_TEST_429_LEFT is None:
+        try:
+            _VA_TEST_429_LEFT = max(0, int(raw))
+        except ValueError:
+            _VA_TEST_429_LEFT = 0
+    if _VA_TEST_429_LEFT <= 0:
+        return False
+    _VA_TEST_429_LEFT -= 1
+    return True
+
+
+def _va_is_rate_limited(status: int, body: dict) -> bool:
+    """Same vocabulary as _looks_rate_limited, but for a (status, body) result
+    that has already been folded to JSON — the worker keys on this to requeue."""
+    if status == 429:
+        return True
+    msg = str((body or {}).get("message") or "").lower()
+    return ("rate limit" in msg or "rate-limit" in msg or "rate limiting" in msg
+            or "rate-limiting" in msg or "too many requests" in msg)
 
 
 def _va_label(payload: dict) -> str:
@@ -4308,6 +4349,34 @@ def _va_worker(q):
         except Exception as e:  # noqa: BLE001 — job must always resolve
             status, body = 500, {"ok": False, "message": f"variant action crashed: {str(e)[:200]}"}
         ok = 200 <= status < 300 and body.get("ok")
+        if not ok and _va_is_rate_limited(status, body):
+            with _VA_JOBS_LOCK:
+                job = _VA_JOBS.get(job_id)
+                attempts = ((job.get("attempts") or 0) if job else _VA_MAX_ATTEMPTS) + 1
+                if job is not None:
+                    job["attempts"] = attempts
+            if attempts < _VA_MAX_ATTEMPTS:
+                # transient 429: requeue the SAME job_id (one sidebar card, not
+                # three) after a pause. Never sleep here — that would stall every
+                # queued write behind this one; a short-lived daemon Timer re-puts
+                # instead. A restart mid-wait loses the Timer, which the orphan
+                # sweep already covers (shell job → interrupted).
+                delay = _VA_RETRY_DELAYS_S[min(attempts - 1, len(_VA_RETRY_DELAYS_S) - 1)]
+                if shell_job:
+                    with JOBS_LOCK:
+                        shell_job["status"] = "queued"
+                        shell_job["counts"] = {"detail": (
+                            f"Smartlead rate-limited — retrying in ~{delay}s "
+                            f"(attempt {attempts + 1} of {_VA_MAX_ATTEMPTS})")}
+                    _job_persist(shell_job)
+                t = threading.Timer(delay, q.put, args=((job_id, cid, payload),))
+                t.daemon = True
+                t.start()
+                q.task_done()
+                continue
+            body = dict(body or {})
+            body["message"] = (f"Smartlead rate-limited this {_VA_MAX_ATTEMPTS} times — "
+                               "please run it again manually in a couple of minutes.")
         with _VA_JOBS_LOCK:
             job = _VA_JOBS.get(job_id)
             if job is not None:
