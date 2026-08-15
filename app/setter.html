@@ -668,7 +668,22 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
    from the top bar's panel button; shown by default on desktop, hidden on
    phones. */
 .inbox-shell.lead-hidden .lead-panel { display: none; }
-.lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; }
+.lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+/* Warm-call additions (owner ask 2026-08-15): the phone sits top-right of the
+   LEAD DETAILS title as a tap-to-call link; the company block + qualified
+   chip + collapsed client context fill the "should I call this person?" gap. */
+.lp-phone { font-size: 13px; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--ink-1, inherit); text-decoration: none; white-space: nowrap; }
+.lp-phone:hover { text-decoration: underline; }
+.lp-phone.muted { color: var(--ink-3); font-weight: 400; font-size: 11px; }
+.lp-qual { display: inline-block; margin-left: 8px; padding: 1px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: 0.02em; vertical-align: 1px; }
+.lp-qual-likely { background: #e7f3ec; color: #1e6b43; }
+.lp-qual-unlikely { background: #f7e8e4; color: #a33b25; }
+.lp-qual-unknown { background: var(--bg-2, #eee); color: var(--ink-3); }
+.lp-company-name { font-weight: 600; margin: 2px 0 2px; }
+.lp-company-desc { font-size: 12px; color: var(--ink-2, inherit); margin: 2px 0 8px; line-height: 1.45; }
+.lp-qual-reason { margin-top: 6px; }
+.lp-client summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--ink-3); }
+.lp-client .lp-client-line { font-size: 12px; margin-top: 8px; line-height: 1.45; color: var(--ink-2, inherit); }
 .dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -3287,7 +3302,8 @@ function renderDetail(row) {
     // The whole lead-details column is shown/hidden as one (see
     // applyLeadPanelHidden + the top-bar #panelToggleBtn); the panel itself is
     // just a titled stack of sections.
-    panelEl.innerHTML = '<div class="lp-panel-head">Lead details</div>' + leadPanelHtml(row);
+    panelEl.innerHTML = `<div class="lp-panel-head"><span>Lead details</span>${leadPhoneHtml(row)}</div>` + leadPanelHtml(row);
+    wireClientToggle(panelEl);
   }
   // Wire the top-bar button that hides/shows the entire lead-details column,
   // and apply the remembered state (default shown on desktop, hidden on phones).
@@ -3665,13 +3681,76 @@ function leadPanelHtml(row) {
 
   // Identity (name / email) and the Website/LinkedIn links now live in the
   // sticky top bar, so the sidebar leads straight with the category control.
+  // Warm-call order (owner ask 2026-08-15): category -> company breakdown with
+  // the qualified chip (the "should I call?" facts) -> decision block -> the
+  // client's own context, collapsed at the bottom.
   return `
     ${catSectionHtml}
     ${noAgentHtml}
+    ${companySectionHtml(row)}
     <div class="lp-section">
       ${leadDecisionHtml(row)}
     </div>
+    ${clientSectionHtml(row)}
   `;
+}
+/* Warm-call sideboard blocks (owner ask 2026-08-15). All three render from
+   fields hydrateLeadContact stashes on the row (lead_phone / company_info /
+   qualified_info / client_info); before hydration they show quiet dashes, and
+   hydrateLeadContact swaps each block in place by id so a category pick in
+   progress is never clobbered. */
+function leadPhoneHtml(row) {
+  const wc = warmcallFor(row);
+  const ph = String(wc.phone || row.lead_phone || "").trim();
+  if (!ph) return `<span class="lp-phone muted" id="lpPhone">${wc.done ? "no number" : "…"}</span>`;
+  return `<a class="lp-phone" id="lpPhone" href="tel:${esc(ph.replace(/[^+\d]/g, ""))}" title="Tap to call ${esc(ph)}">${esc(ph)}</a>`;
+}
+function companySectionHtml(row) {
+  const wc = warmcallFor(row);
+  const c = wc.company || row.company_info || {};
+  const q = wc.qualified || row.qualified_info || {};
+  const dash = `<span class="muted">—</span>`;
+  const loc = [c.city, c.state, c.country].filter(Boolean).join(", ");
+  const hc = c.employee_count ? `~${c.employee_count} staff` : (c.employee_range ? `${c.employee_range} staff` : "");
+  const chipLabel = q.verdict === "likely" ? "Likely qualified"
+    : q.verdict === "unlikely" ? "Unlikely fit"
+    : wc.done ? "Fit unknown" : "";
+  const chip = chipLabel ? `<span class="lp-qual lp-qual-${esc(q.verdict || "unknown")}" title="${esc(q.reason || "")}">${chipLabel}</span>` : "";
+  const name = c.name || row.company_name || "";
+  const site = (row.company_website || "").replace(/^https?:\/\//, "");
+  const desc = c.description ? String(c.description) : "";
+  const descShown = desc.length > 260 ? desc.slice(0, 257).replace(/\s+\S*$/, "") + "…" : desc;
+  return `<div class="lp-section lp-company" id="lpCompany">
+    <div class="lp-label">Company${chip}</div>
+    ${name ? `<div class="lp-company-name">${esc(name)}${site ? ` <span class="muted small">· ${esc(site)}</span>` : ""}</div>` : ""}
+    ${descShown ? `<div class="lp-company-desc">${esc(descShown)}</div>` : ""}
+    <dl class="lp-facts">
+      <div class="lp-fact"><dt>Headcount</dt><dd>${hc ? esc(hc) : dash}</dd></div>
+      <div class="lp-fact"><dt>Location</dt><dd>${loc ? esc(loc) : dash}</dd></div>
+      <div class="lp-fact"><dt>Industry</dt><dd>${c.industry ? esc(c.industry) : dash}</dd></div>
+    </dl>
+    ${q.reason ? `<div class="lp-note lp-qual-reason">${esc(q.reason)}</div>` : ""}
+  </div>`;
+}
+function clientSectionHtml(row) {
+  const cl = warmcallFor(row).client || row.client_info || {};
+  const label = cl.label || clientForRow(row) || "the client";
+  const key = `setterClientOpen:${(row.workspace || "navreo")}`;
+  let open = false; try { open = localStorage.getItem(key) === "1"; } catch { /* ignore */ }
+  return `<details class="lp-section lp-client" id="lpClient" data-open-key="${esc(key)}"${open ? " open" : ""}>
+    <summary>About ${esc(label)} (the client)</summary>
+    ${cl.about ? `<div class="lp-client-line">${esc(cl.about)}</div>` : `<div class="lp-client-line muted">No client notes saved yet.</div>`}
+    ${cl.offer ? `<div class="lp-client-line"><b>Offer:</b> ${esc(cl.offer)}</div>` : ""}
+  </details>`;
+}
+/* Remember the About-the-client fold per workspace (hide/show, owner ask
+   2026-08-15) - delegated per render because the block is swapped wholesale. */
+function wireClientToggle(scope) {
+  (scope || document).querySelectorAll(".lp-client").forEach((d) => {
+    d.addEventListener("toggle", () => {
+      try { localStorage.setItem(d.getAttribute("data-open-key") || "setterClientOpen", d.open ? "1" : "0"); } catch { /* ignore */ }
+    });
+  });
 }
 /* The sidebar's decision block - the same facts as the Try-it drawer's
    howDecidedContentHtml, laid out as a clean two-column list with the "none"
@@ -3720,6 +3799,14 @@ async function hydrateCategoryOptions(sel, row) {
    row so it links the stored profile - a category pick in progress is never
    lost. */
 const LEAD_CONTACT_TRIED = new Set();
+/* Warm-call data keyed by EMAIL, not row object: queue refreshes rebuild the
+   row objects (and row ids are unstable by design), so per-row stashes were
+   wiped by the first background reload (live bug 2026-08-15). The email is
+   the stable key; every render resolves through this map. */
+const WARMCALL = {};
+function warmcallFor(row) {
+  return WARMCALL[String((row && row.lead_email) || "").toLowerCase()] || {};
+}
 async function hydrateLeadContact(row) {
   if (!row || row.is_test) return;
   const haveLi = row.lead_linkedin || row.linkedin_url || row.linkedin;
@@ -3727,7 +3814,10 @@ async function hydrateLeadContact(row) {
   // enrichment layer's real domain (or Smartlead's stored website) arrives.
   const haveSite = (row.company_domain && !FREEMAIL_RE.test(row.company_domain)) || row.company_website;
   const haveMap = row.lead_map_id;
-  if (haveLi && haveSite && haveMap) return;
+  // Warm-call fields ride the same fetch (owner ask 2026-08-15): even when
+  // every quick link is already known, one fetch still runs per row so the
+  // phone / company / qualified / client blocks fill in.
+  if (haveLi && haveSite && haveMap && warmcallFor(row).done) return;
   // Negative cache (panel fix 2026-08-01): a lead with NO LinkedIn re-fired
   // this on every repaint forever — once per row per page-life is enough
   // (the server caches per email+campaign for an hour anyway). A TRANSIENT
@@ -3741,7 +3831,16 @@ async function hydrateLeadContact(row) {
   if (res.data.linkedin && !haveLi) { row.lead_linkedin = res.data.linkedin; changed = true; }
   if (res.data.website && !haveSite) { row.company_website = res.data.website; changed = true; }
   if (res.data.lead_map && !haveMap) { row.lead_map_id = res.data.lead_map; changed = true; }
-  if (!changed) return;
+  // Warm-call payload: stash by EMAIL (refresh-proof) and swap ONLY the
+  // sideboard blocks that render it - never the whole panel (a category pick
+  // in progress must survive, same contract as the quick-links swap below).
+  const wcKey = String(row.lead_email || "").toLowerCase();
+  const wcPrev = WARMCALL[wcKey] || {};
+  WARMCALL[wcKey] = { ...wcPrev, done: true,
+    phone: String(res.data.phone || ""),
+    company: res.data.company || {},
+    qualified: res.data.qualified || {},
+    client: res.data.client || {} };
   [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
     const r = (list || []).find((x) => String(x.id) === String(row.id));
     if (r) {
@@ -3751,8 +3850,33 @@ async function hydrateLeadContact(row) {
     }
   });
   if (String(selectedRowId) === String(row.id)) {
-    // Re-render every quick-links row on the page (sidebar + sticky bar).
-    document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
+    if (changed) {
+      // Re-render every quick-links row on the page (sidebar + sticky bar).
+      document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
+    }
+    const phEl = document.getElementById("lpPhone");
+    if (phEl) phEl.outerHTML = leadPhoneHtml(row);
+    const coEl = document.getElementById("lpCompany");
+    if (coEl) coEl.outerHTML = companySectionHtml(row);
+    const clEl = document.getElementById("lpClient");
+    if (clEl) { clEl.outerHTML = clientSectionHtml(row); wireClientToggle(document); }
+  }
+  // First-ever open of a pre-enrichment row: the server kicks its one-time
+  // enrichment ON this fetch, so the data lands seconds AFTER this response.
+  // Re-ask twice (5s / 15s) and swap the blocks in late - only while the
+  // answer is still empty, so steady-state rows cost nothing extra. "Got
+  // data" must mean ENRICHMENT data: Smartlead hands us the bare company
+  // name for free, so name alone can't cancel the retry (live bug 2026-08-15).
+  const wcNow = WARMCALL[wcKey];
+  const ci = wcNow.company || {};
+  const gotData = wcNow.phone || ci.description || ci.employee_count || ci.employee_range;
+  if (!gotData && (wcNow.retries || 0) < 2) {
+    wcNow.retries = (wcNow.retries || 0) + 1;
+    setTimeout(() => {
+      LEAD_CONTACT_TRIED.delete(String(row.id));
+      wcNow.done = false;
+      hydrateLeadContact(currentDetailRow() || row);
+    }, wcNow.retries === 1 ? 5000 : 15000);
   }
 }
 function currentDetailRow() {
