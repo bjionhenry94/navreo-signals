@@ -360,7 +360,7 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
     # attribution + reverse evidence: this client's replies with their categories
     reply_rows = server.sb_get_all(
         f"replies?smartlead_campaign_id=in.({','.join(map(str, sorted(camp_ids)))})"
-        "&select=email,smartlead_campaign_id,category") or []
+        "&select=email,smartlead_campaign_id,category,replied_at") or []
     reply_camps: dict[str, set[int]] = {}
     for r in reply_rows:
         if r.get("email"):
@@ -437,19 +437,22 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
     # -- REVERSE: Smartlead categories / Calendly meetings -> Notion status
     sl_targets: dict[str, tuple] = {}  # email -> (target status, has_positive)
     auto_create = set(cfg.get("auto_create_categories") or [])
+    newest_evidence: dict[str, str] = {}  # email -> latest replied_at seen
 
-    def offer(email: str, category_name: str):
+    def offer(email: str, category_name: str, seen_at: str | None = None):
         target = cfg["reverse_map"].get(category_name)
         if not target:
             return
         email = email.strip().lower()
+        if seen_at and seen_at > newest_evidence.get(email, ""):
+            newest_evidence[email] = seen_at
         prev_target, prev_pos = sl_targets.get(email, (None, False))
         best = target if rank_of(target, cfg) > rank_of(prev_target, cfg) else prev_target
         sl_targets[email] = (best, prev_pos or category_name in auto_create)
 
     for r in reply_rows:
         if r.get("email") and r.get("category"):
-            offer(r["email"], r["category"])
+            offer(r["email"], r["category"], r.get("replied_at"))
     for r in server.sb_get_all(
             f"meetings?client_id=eq.{cfg['supabase_client_id']}"
             "&select=raw_attendee_email") or []:
@@ -483,9 +486,23 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
             counts["errors"] += 1
             rec("error_reverse", email, "smartlead->notion", detail={"error": str(e)[:300]})
             log(f"[{client}] ERROR reverse {email}: {e}")
+    # Make scenario 8946472 ("Amplifyy → portal DB") creates portal rows the
+    # instant a positive reply lands — it has first right of creation. We only
+    # backstop leads it MISSED: no creation while the newest evidence is fresh.
+    grace_cutoff = datetime.now(timezone.utc).timestamp() - 2 * 3600
+    deferred = 0
     for email, target in creates:
         if (state.get(email) or {}).get("source") == "smartlead_created":
             continue  # created on an earlier pass (row hidden/deleted since) — once only
+        seen = newest_evidence.get(email)
+        try:
+            fresh = seen and datetime.fromisoformat(
+                seen.replace("Z", "+00:00")).timestamp() > grace_cutoff
+        except ValueError:
+            fresh = False
+        if fresh:
+            deferred += 1  # Make's webhook is likely still in flight — next run
+            continue
         try:
             meta = {}
             detail_rows = server.sb(
@@ -532,8 +549,10 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
             "source": "smartlead_unmatched",
             "booked_at": datetime.now(timezone.utc).isoformat(),
             "campaigns_paused": {}})
-    log(f"[{client}] reverse: {len(updates)} updates, {len(creates)} creates, "
-        f"{noops} noops, {unmatched_lower} lower-tier no-row")
+    counts["creates_deferred"] = deferred
+    log(f"[{client}] reverse: {len(updates)} updates, {len(creates)} creates "
+        f"({deferred} deferred to Make's grace window), {noops} noops, "
+        f"{unmatched_lower} lower-tier no-row")
 
     rec("run_summary", detail={**counts, "full_verify": full_verify,
                                "notion_rows": len(notion_by_email),
