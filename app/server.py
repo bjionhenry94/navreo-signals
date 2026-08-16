@@ -6233,6 +6233,9 @@ def _jobs_recover_orphans():
     vice-versa. Rows with no owner (legacy) are only reclaimed by the render
     instance, never by a local box."""
     _sweep_orphan_jobs(grace_s=180)
+    # Reconnect watchers are short (~12 min) but this service deploys many
+    # times a day — revive any watch a restart just killed (render-only).
+    _revive_reconnect_watchers()
 
 
 _JOB_STALE_S = 600  # a live worker heartbeats app_jobs every chunk (~35s); 10min silent = dead
@@ -6285,6 +6288,11 @@ def _sweep_orphan_jobs(grace_s: int):
                 _int_msg = ("Interrupted by a server restart — it retries "
                             "automatically; if the row still shows held, click "
                             "the button again.")
+            elif str(r.get("kind") or "") == "reconnect-watch":
+                # No Resume button exists for this kind — the verify wording
+                # ("click Resume / cached emails") read as a dead end here.
+                _int_msg = ("Interrupted by a redeploy — the re-check restarts "
+                            "automatically on the new server.")
             else:
                 _int_msg = ("Interrupted by a server restart — click Resume to continue "
                             "(already-checked emails are cached, so it picks up where it left off).")
@@ -16324,10 +16332,18 @@ def _reconnect_watch_run(job: dict, targets: list):
     def tkey(t):
         return t.get("email") or t.get("key")
 
+    # Durable copy of the watch list rides in counts so a redeploy-killed
+    # watcher can be revived from its app_jobs row (see
+    # _revive_reconnect_watchers). Dropped from the final counts — a finished
+    # watch is never revived, and the tray's counts line must stay clean.
+    tpersist = [{"email": t.get("email"), "workspace": t.get("workspace"),
+                 "key": t.get("key")} for t in targets]
+
     def paint():
         with JOBS_LOCK:
             job["progress"] = {"done": len(back), "total": n}
-            job["counts"] = {"back_online": len(back), "still_failing": n - len(back)}
+            job["counts"] = {"back_online": len(back), "still_failing": n - len(back),
+                             "targets": tpersist}
         _job_persist(job)
 
     paint()
@@ -16371,6 +16387,8 @@ def _reconnect_watch_run(job: dict, targets: list):
     msg = (("%d back online · " % len(back)) if back else "") \
         + "%d of %d still failing after the retry window (%s). " % (len(failing), n, ex) \
         + "Smartlead could not reconnect them — fix the login in Smartlead, then Reconnect again."
+    with JOBS_LOCK:  # final counts drop the durable targets copy (never revived once finished)
+        job["counts"] = {"back_online": len(back), "still_failing": len(failing)}
     _job_finished(job, "failed", msg[:400])
 
 
@@ -16409,13 +16427,79 @@ def _reconnect_watch_start(raw_ids):
         if not targets:
             return
         n = len(targets)
-        label = ("Reconnect: " + targets[0]["email"]) if n == 1 and targets[0]["email"] \
-            else "Reconnect: %d mailbox(es)" % n
-        job = _new_job("reconnect-watch", label, None, mock=_deliv_mock_on())
+        # One watcher per box-set: a re-click while a watcher is already
+        # covering every clicked box must NOT stack a second identical card
+        # (seen live 2026-08-17 — the tray showed two "Reconnect: 10" jobs
+        # because the first card took a poll cycle to appear). _watch_keys is
+        # memory-only (not in _JOB_DB_FIELDS) — good enough, since a restart
+        # marks running watchers interrupted anyway. _JOB_CREATE_LOCK spans
+        # check + create so two rapid clicks can't both pass the check.
+        keys = sorted({(t["email"] or t["key"]).lower() for t in targets})
+        with _JOB_CREATE_LOCK:
+            with JOBS_LOCK:
+                for j in JOBS.values():
+                    if j.get("kind") == "reconnect-watch" \
+                            and j.get("status") in ("queued", "running") \
+                            and set(keys) <= set(j.get("_watch_keys") or ()):
+                        return
+            label = ("Reconnect: " + targets[0]["email"]) if n == 1 and targets[0]["email"] \
+                else "Reconnect: %d mailbox(es)" % n
+            job = _new_job("reconnect-watch", label, None, mock=_deliv_mock_on())
+            job["_watch_keys"] = keys
         threading.Thread(target=_reconnect_watch_run, args=(job, targets),
                          daemon=True).start()
     except Exception as e:  # noqa: BLE001 — watcher is best-effort
         print("[reconnect-watch] failed to start:", e)
+
+
+def _revive_reconnect_watchers():
+    """Pick freshly-interrupted reconnect watches back up after a redeploy.
+
+    This service deploys many times a day, so an ~12-minute watcher dying
+    mid-run is the COMMON case, not an edge (seen live 2026-08-17: both of the
+    operator's "Reconnect: 10" cards ended 'interrupted' with no outcome).
+    Same job id → the SAME tray card flips back to Running; checks restart
+    from scratch (they are cheap reads — already-recovered boxes re-verify on
+    the first pass). Storm guards mirror _maybe_auto_resume: render instance
+    only, recent rows only, resume_count-capped, and a compare-and-set PATCH
+    so overlapping incarnations can't both revive one row."""
+    if not _ON_RENDER or _deliv_mock_on():
+        return
+    from datetime import datetime, timedelta, timezone
+    cutoff = (datetime.now(timezone.utc) - timedelta(minutes=25)).isoformat()
+    try:
+        rows = sb("GET", "app_jobs?kind=eq.reconnect-watch&status=eq.interrupted"
+                         "&updated_at=gte.%s" % urllib.parse.quote(cutoff, safe="")) or []
+    except Exception:  # noqa: BLE001 — best-effort; never block boot
+        return
+    for r in rows:
+        targets = ((r.get("counts") or {}).get("targets")) or []
+        targets = [t for t in targets
+                   if isinstance(t, dict) and (t.get("email") or t.get("key"))]
+        if not targets or int(r.get("resume_count") or 0) >= 3:
+            continue  # nothing durable to watch, or churning across rapid deploys
+        try:
+            won = sb("PATCH", "app_jobs?id=eq.%s&status=eq.interrupted" % r["id"],
+                     {"status": "running", "owner": _SERVER_INSTANCE,
+                      "resume_count": int(r.get("resume_count") or 0) + 1,
+                      "error": None, "finished_at": None},
+                     prefer="return=representation")
+        except Exception:  # noqa: BLE001 — one bad row must not stop the rest
+            continue
+        if not won:
+            continue  # another incarnation revived it first
+        job = {k: r.get(k) for k in _JOB_DB_FIELDS}
+        job.update(status="running", error=None, finished_at=None,
+                   owner=_SERVER_INSTANCE, cancel_requested=False, mock=False,
+                   resume_count=int(r.get("resume_count") or 0) + 1,
+                   progress=r.get("progress") or {"done": 0, "total": len(targets)},
+                   counts=r.get("counts") or {})
+        job["_watch_keys"] = sorted({str(t.get("email") or t.get("key")).lower()
+                                     for t in targets})
+        with JOBS_LOCK:
+            JOBS[job["id"]] = job
+        threading.Thread(target=_reconnect_watch_run, args=(job, targets),
+                         daemon=True).start()
 
 
 def _deliv_bundle_run_bg_inner():

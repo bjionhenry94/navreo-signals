@@ -7142,6 +7142,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       });
       logAction({ action: "warmup_resume", mailboxes: 0, domains: domains.length, scope: "due restore" });
       saveState();
+      if (window.NavreoJobs) NavreoJobs.ping();
       toast(domains.length + " domain(s) queued for restore — track it in the Tasks panel", "ok");
       paintPage();
       pollDlvJob(jobId).then((job) => {
@@ -7253,6 +7254,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       catch (e) { toast("Reconnect failed", "err"); return; }
       if (!j || j.ok === false) { toast("Failed: " + ((j && j.message) || "error"), "err"); return; }
       invalidateMgrDh();
+      // The watcher job exists as soon as the POST returns — pull the Tasks
+      // widget off its 45s idle poll so the card shows NOW, not half a minute
+      // later (reported live 2026-08-17: "nothing appeared, so I clicked again").
+      if (window.NavreoJobs) NavreoJobs.ping();
     } else if (!r) return;
     if (r) { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; r.reason = ""; r.reason_category = ""; }
     UI.mgr.sel.delete(key);
@@ -7353,7 +7358,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       try { j = await liveAction(paths[kind] + ids.join(","), btn, btn ? '<span class="dlv-spinner" style="width:14px;height:14px"></span> ' + busy[kind] : null, { timeout: 120000 }); }
       catch (e) { toast("Request failed", "err"); return; }
       if (j && j.error) { toast(j.error, "err"); return; }
-      if (kind === "reconnect") { n = j.count || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect — the result lands in the Tasks panel", "ok"); }
+      // Reconnect toast counts what was REQUESTED, never Smartlead's queue
+      // count: the Navreo-side retry is a workspace-wide bulk call whose count
+      // can come back 0/partial while client-ws boxes count per box — quoting
+      // it produced "Queued 3" beside a "Reconnect: 10" Tasks card (mixed
+      // messages, 2026-08-17). The watcher job reports the real outcome per box.
+      if (kind === "reconnect") { n = ids.length; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; }); logAction({action: "reconnect", count: n }); if (window.NavreoJobs) NavreoJobs.ping(); toast("Reconnect requested for " + n + " mailbox(es) — the result lands in the Tasks panel", "ok"); }
       else if (kind === "reenable") { n = j.ok || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !selEmails.has(x.email)); logAction({action: "reenable", count: n, failed: j.failed || 0 }); toast("Re-enabled " + n + (j.failed ? " · " + j.failed + " failed" : ""), "ok"); }
       else if (kind === "warmup") { n = j.paused || 0; rows.forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; } }); logAction({action: "warmup_pause", mailboxes: n, domains: new Set(rows.map((r) => r.domain)).size }); toast("Put " + n + " into warmup" + (j.skipped ? " (" + j.skipped + " already 0)" : ""), "ok"); }
       else if (kind === "restore") { n = j.resumed || 0; rows.forEach((r) => { if (r.rested || r._savedCap != null) { r.cap = r._savedCap != null ? r._savedCap : 20; delete r._savedCap; r.rested = false; r.restedAt = null; } }); logAction({action: "warmup_resume", mailboxes: n }); toast("Restored " + n + (j.skipped ? " · " + j.skipped + " skipped (not dashboard-rested)" : ""), "ok"); }
