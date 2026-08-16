@@ -130,16 +130,13 @@
       <h1 id="rp-title">Outbound report</h1>
       <div class="verdict" id="rp-verdict">&nbsp;</div>
     </div>
-    <div class="pagehead-right">
-      <div class="dateline" id="rp-dates">&nbsp;</div>
-    </div>
   </div>
 
   <!-- ══ HERO — day by day ══ -->
   <section class="hero" aria-label="Day by day">
     <div class="card-head">
       <span class="kicker" id="hero-kick">Day by day</span> <span class="stamp" id="hero-stamp"></span>
-      <button class="wkndtog" id="rp-weekend" type="button" aria-pressed="false" title="Weekends are near-zero sending days">Hide weekends</button>
+      <button class="wkndtog on" id="rp-weekend" type="button" aria-pressed="true" title="Weekends are near-zero sending days">Hide weekends</button>
     </div>
     <div class="lchips" id="rp-lchips" role="group" aria-label="Show or hide lines"></div>
     <div class="trendwrap">
@@ -156,7 +153,7 @@
     <section class="lane" aria-label="Winning campaigns lane">
       <span class="node num">1</span>
       <div class="lane-head">
-        <h2 class="lane-q">Which campaigns — and which messages — are winning?</h2>
+        <h2 class="lane-q">Which campaigns, and which messages, are winning?</h2>
       </div>
       <div class="cards c32">
 
@@ -248,7 +245,8 @@ var GEO = { ymax: 60, rmax: 1, n: 0, sentMax: 1 };
 
 var R = null;      // the one payload
 var I0 = 0, I1 = -1;  // axis index bounds for [start..end]
-var state = { hideWeekends: false,
+// weekends hidden by default (Bjion 2026-08-16) — the toggle can bring them back
+var state = { hideWeekends: true,
               on: { sent: true, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 
 function seriesFor(k) { return (R && R.series && R.series[k]) || null; }
@@ -652,8 +650,7 @@ function renderWho() {
 
 function renderAll() {
   $("rp-title").textContent = R.client + " · outbound report";
-  $("rp-verdict").textContent = "Your outbound, day by day — prepared by Navreo.";
-  $("rp-dates").innerHTML = "<b>" + dfull(R.start) + " – " + dfull(R.end) + "</b><br>Campaign + reply tables cover the " + winLabel() + ".";
+  $("rp-verdict").textContent = dfull(R.start) + " – " + dfull(R.end);
   renderTrend();
   renderRank();
   renderOffer();
