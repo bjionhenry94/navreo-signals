@@ -668,6 +668,8 @@ def _domain_health(q: dict):
             # Two domains over the high-bounce tab's 3% line so DELIV_MOCK
             # exercises its list + Pause/Resume; the rest stay quiet at 1.5.
             "bounce_rate": {"acme-mock-2.test": 4.8, "arnic-mock-1.test": 3.6}.get(d, 1.5),
+            # Raw count parity with the real rows (both backends ship it).
+            "bounced": round({"acme-mock-2.test": 4.8, "arnic-mock-1.test": 3.6}.get(d, 1.5) * sent / 100),
             "batches": sorted({r["batch"] for r in dr}),
         })
     return 200, {"rows": rows, "resting": resting, "restingDue": resting_due,

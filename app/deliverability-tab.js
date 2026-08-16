@@ -4237,7 +4237,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       notwarming: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Domain / mailbox</th><th>Batch</th><th>Warmup</th><th style="text-align:right">Action</th>`,
       inwarmup: `<th>Domain / mailbox</th><th style="text-align:right">Mailboxes</th><th style="text-align:right">Due back</th><th>Status</th><th style="text-align:right">Action</th>`,
       reconnect: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>`,
-      highbounce: `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Bounce rate</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Action</th>`,
+      highbounce: `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Bounces</th><th style="text-align:right">Bounce rate</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Action</th>`,
     };
     const foot = flow === "floor"
       ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health">View full table</a></div>`
@@ -4349,7 +4349,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const cnt = $id("dlv-mgr-count");
     const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
     if (rows == null) {
-      body.innerHTML = `<tr><td colspan="5" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading the ${UI.mgr.windowDays}-day window…</td></tr>`;
+      body.innerHTML = `<tr><td colspan="6" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading the ${UI.mgr.windowDays}-day window…</td></tr>`;
       if (cnt) cnt.textContent = "loading…";
       return;
     }
@@ -4370,13 +4370,20 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         action = `<button class="btn sm" data-act="bounce-pause" data-domain="${esc(dom)}"${boxN ? ` title="Sets all ${boxN} mailbox(es) on ${esc(dom)} to 0/day — the previous caps are saved for Resume"` : ""}>Pause</button>`;
       }
       if (isClientRow(d)) action = `<span class="dlv-tag md">${esc(d.workspace)}</span> ` + action;
+      // Raw bounce count straight off the domain-health row; derived from
+      // the rate only for a legacy row that doesn't carry it. A count larger
+      // than sent is real, not a bug: bounces recorded in the window can come
+      // from sends BEFORE it (late bounces / rolling-counter windows), which
+      // is also how a rate tops 100% on a nearly-idle domain.
+      const bn = (typeof d.bounced === "number") ? d.bounced : Math.round((d.bounce_rate || 0) * (d.sent || 0) / 100);
       return `<tr><td><div class="dlv-mb-email">${esc(dom)}${boxN ? ` <span class="dlv-mb-dom">· ${boxN} mbx</span>` : ""}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
         <td style="text-align:right">${d.sent}</td>
-        <td style="text-align:right;color:var(--red);font-weight:700">${d.bounce_rate.toFixed(2)}%</td>
+        <td style="text-align:right;font-weight:700">${bn}</td>
+        <td style="text-align:right;color:var(--red);font-weight:700">${d.bounce_rate.toFixed(2)}%${bn > d.sent ? ` <span class="dlv-mb-dom" title="More bounces landed in this window than sends went out — late bounces from earlier sends. The domain is bouncing hard; the % just can't be read as a share of this window's sends.">⚠</span>` : ""}</td>
         <td style="text-align:right">${d.reply_rate.toFixed(2)}% <span class="dlv-mb-dom">(${d.replied})</span></td>
         <td style="text-align:right">${action}</td>
       </tr>`;
-    }).join("") || `<tr><td colspan="5" class="dlv-empty">✓ No domains over ${BOUNCE_HOT_PCT}% bounce in the last ${UI.mgr.windowDays} days</td></tr>`;
+    }).join("") || `<tr><td colspan="6" class="dlv-empty">✓ No domains over ${BOUNCE_HOT_PCT}% bounce in the last ${UI.mgr.windowDays} days</td></tr>`;
   }
 
   // Shared painter for the three mailbox-backed flows — rows grouped by

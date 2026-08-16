@@ -268,6 +268,9 @@ def test_bounce_pause_resume():
     hot = sorted(r["domain"] for r in dh["rows"] if r["bounce_rate"] > 3)
     check("E1 domain-health flags exactly the >3% mock domains",
           hot == ["acme-mock-2.test", "arnic-mock-1.test"], str(hot))
+    check("E1b rows carry a raw bounced count (Bounces column)",
+          all(isinstance(r.get("bounced"), int) for r in dh["rows"]),
+          str([(r["domain"], r.get("bounced")) for r in dh["rows"][:3]]))
 
     def dom_caps():
         j = call("GET", "/api/deliverability/inboxes?view=all&batch=")
