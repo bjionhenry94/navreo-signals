@@ -136,4 +136,4 @@ services:
     envVars:
       - fromGroup: navreo-secrets
       - key: BOOKED_SYNC_DRY
-        value: "1"
+        value: "0"  # dry diff reviewed + applied 2026-08-16; live since
