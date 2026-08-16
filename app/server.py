@@ -6366,6 +6366,12 @@ def _job_zombie_sweeper():
         time.sleep(300)
         try:
             _sweep_orphan_jobs(grace_s=_JOB_STALE_S)
+            # A watcher killed JUST before a deploy is younger than boot
+            # recovery's 180s grace, so it's THIS sweep (minutes later) that
+            # first marks it interrupted — revival must follow the sweep, not
+            # just the boot pass (gap seen live 2026-08-17: row stayed
+            # interrupted, resume_count 0, through two further deploys).
+            _revive_reconnect_watchers()
         except Exception:  # noqa: BLE001 — the sweeper must never die
             pass
 
