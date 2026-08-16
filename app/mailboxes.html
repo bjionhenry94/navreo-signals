@@ -26,6 +26,8 @@
     <div class="mbx-head">
       <h1>Mailboxes</h1>
       <div class="sub">Engine room — mailbox &amp; domain health for the ops team (whole fleet).</div>
+      <div class="chips" id="mbx-chips" role="group" aria-label="Client filter" style="margin-top:14px"></div>
+      <div class="small muted" id="mbx-lens-note" style="margin-top:6px;display:none"></div>
     </div>
     <div id="dlv-embed-slot"></div>
   </main>
@@ -37,6 +39,67 @@
 <script src="deliverability-tab.js"></script>
 <script>
   document.getElementById("rail").outerHTML = renderRail("mailboxes");
+
+  /* Client filter — the same chips + lens as the Analytics page: publishes
+     window.DLV_CLIENT_LENS + the "dlv-client-lens" event; deliverability-tab.js
+     does all the filtering. Asteri/KRG map 1:1 to a workspace so their rows
+     filter exactly; every other client sends from the shared Navreo fleet and
+     the note says so instead of pretending to split it. The label map is
+     server-supplied (client-windows ws_labels) — the literal is only the
+     pre-payload fallback. Sticky per browser via localStorage. */
+  var MBX_LS = "mbx.client";
+  var MBX = { client: "All", labels: { Asteri: "asteri", KRG: "krg" }, vol: {} };
+  try { var _v = localStorage.getItem(MBX_LS); if (_v) MBX.client = _v; } catch (e) {}
+  function mbxPublishLens() {
+    window.DLV_CLIENT_LENS = { client: MBX.client, ws: MBX.labels[MBX.client] || null };
+    try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) {}
+    var note = document.getElementById("mbx-lens-note");
+    if (!note) return;
+    if (MBX.client === "All") { note.style.display = "none"; note.textContent = ""; }
+    else if (MBX.labels[MBX.client]) { note.style.display = ""; note.textContent = "Showing only " + MBX.client + "’s connected workspace — its own mailboxes, domains and alerts."; }
+    else { note.style.display = ""; note.textContent = MBX.client + " sends from the shared Navreo fleet — showing the shared fleet (its health is " + MBX.client + "’s health)."; }
+  }
+  function mbxRenderChips() {
+    var seen = {}, names = [];
+    function add(c) { if (c && c !== "All" && c !== "__all" && c !== "__unassigned" && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
+    Object.keys(MBX.labels || {}).forEach(add);
+    Object.keys(MBX.vol || {}).forEach(add);
+    add(MBX.client); // the restored sticky client always has a chip, even pre-payload
+    // biggest 30-day sender first (same order as the Analytics chips), else A→Z
+    names.sort(function (a, b) {
+      var va = (MBX.vol[a] && MBX.vol[a].sent) || 0, vb = (MBX.vol[b] && MBX.vol[b].sent) || 0;
+      if (va !== vb) return vb - va;
+      return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+    });
+    names = ["All"].concat(names);
+    document.getElementById("mbx-chips").innerHTML = names.map(function (c) {
+      var esc = c.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+      return '<button class="chip' + (MBX.client === c ? " on" : "") + '" data-client="' + esc + '" aria-pressed="' + (MBX.client === c) + '">' + (c === "All" ? "All clients" : esc) + "</button>";
+    }).join("");
+  }
+  document.getElementById("mbx-chips").addEventListener("click", function (e) {
+    var b = e.target.closest(".chip");
+    if (!b) return;
+    var c = b.getAttribute("data-client");
+    if (c === MBX.client) return;
+    MBX.client = c;
+    try { localStorage.setItem(MBX_LS, c); } catch (e2) {}
+    mbxRenderChips();
+    mbxPublishLens();
+  });
+  mbxPublishLens();   // BEFORE the mount, so the manager's first paint is already filtered
+  mbxRenderChips();
+  fetch("/api/client-windows", { credentials: "same-origin" })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (cw) {
+      if (!cw) return;
+      if (cw.ws_labels && typeof cw.ws_labels === "object") MBX.labels = cw.ws_labels;
+      if (cw.windows && cw.windows["30"]) MBX.vol = cw.windows["30"];
+      mbxRenderChips();
+      mbxPublishLens(); // the ws mapping for the restored client may have just arrived
+    })
+    .catch(function () {});
+
   // The manager IS this page — mount immediately, no idle deferral and no
   // fold (both existed on the Analytics page only to keep the hub's numbers
   // from contending with the engine's ~8 boot endpoints).

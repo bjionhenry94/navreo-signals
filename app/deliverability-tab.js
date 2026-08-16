@@ -1034,7 +1034,10 @@
     const A = S.A;
     const today = todayISO();
     const { minSent, cutoff } = dhCutoffMin();
-    const dhRows = A.domainHealth.rows.map((d) => Object.assign({}, d, { flag: dhFlag(d, minSent, cutoff) }));
+    // Client lens: domain-health rows are federated (client-ws rows carry
+    // r.workspace), so the lens slices them here — every downstream count
+    // (flagged, warmup-rotation, keep) then matches the rows on screen.
+    const dhRows = dlvApplyClientLens(A.domainHealth.rows).map((d) => Object.assign({}, d, { flag: dhFlag(d, minSent, cutoff) }));
     const resting = Object.assign({}, A.domainHealth.resting || {});
     // Backend blobs have shipped resting={} while restingDue carried the real
     // rested-domain list — heal by union so rested domains can't disappear.
@@ -2442,8 +2445,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         const n = rows.length;
         if (!n) return { key: "dormant-noreminder", level: "red", count: 0, resolved: true, text: "Every warmup-off mailbox is either Maildoso-managed or covered by a restore reminder." };
         const doms = [...new Set(rows.map((r) => r.domain))];
-        const wcN = liveMissing("warmupConfig") ? 0 : S.A.warmupConfig.notWarming.length;
-        const wcW = liveMissing("warmupConfig") ? 0 : S.A.warmupConfig.wrongSettings.length;
+        // Fleet-wide warmup-config tallies are audit-sourced (shared fleet
+        // only) — under a workspace client lens they'd be noise inside a
+        // client-scoped card, so they stay off the text there.
+        const wcN = (liveMissing("warmupConfig") || dlvLensWs()) ? 0 : S.A.warmupConfig.notWarming.length;
+        const wcW = (liveMissing("warmupConfig") || dlvLensWs()) ? 0 : S.A.warmupConfig.wrongSettings.length;
         return { key: "dormant-noreminder", level: "red", count: n, short: "dormant mailboxes — warmup off, no reminder",
           text: n + " mailbox(es) on " + doms.length + " domain(s) have warmup OFF and no restore reminder — sitting dormant: not sending, not warming, just losing time. Domains: " + doms.slice(0, 6).join(", ") + (doms.length > 6 ? " +" + (doms.length - 6) + " more" : "") + "."
             + ((wcN || wcW) ? " Fleet-wide: " + wcN + " mailbox(es) with warmup off · " + wcW + " with wrong settings." : ""),
@@ -2481,7 +2487,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (!DORMANT.rows) return null;
     const covered = new Set();
     (S.A.reminders || []).forEach((r) => { if (!r.done) (r.domains || []).forEach((d) => covered.add(String(d).toLowerCase())); });
-    return DORMANT.rows.filter((r) => !r.maildoso && !covered.has(String(r.domain || "").toLowerCase()));
+    // Lens-aware: the bundle's warmupoff rows are federated, so a client chip
+    // scopes the dormant card to that client's own boxes.
+    return dlvApplyClientLens(DORMANT.rows.filter((r) => !r.maildoso && !covered.has(String(r.domain || "").toLowerCase())));
   }
 
   function recomputeTodos(D) {
@@ -2509,9 +2517,11 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const _rec = restoreReconcileNow(D);
     const _bd = bundleRestDue();
     const _dueMs = (dom) => (_bd && _bd[dom] != null) ? _bd[dom] : ((D.restingDue || {})[dom] != null ? D.restingDue[dom] : null);
-    const dueDoms = _rec.dueDomains;         // ledger-due — all of them (blacklist flags, never blocks)
-    const upcoming = _rec.upcomingDomains;   // still inside the warm-up window
-    const blDue = _rec.blacklistedDue;       // subset of dueDoms that is blacklisted — restorable, just noted
+    // Lens-aware: a client chip scopes the rest-ledger card to that client's
+    // own domains (ownership read off the federated domain-health rows).
+    const dueDoms = dlvLensDomainNames(_rec.dueDomains);         // ledger-due — all of them (blacklist flags, never blocks)
+    const upcoming = dlvLensDomainNames(_rec.upcomingDomains);   // still inside the warm-up window
+    const blDue = dlvLensDomainNames(_rec.blacklistedDue);       // subset of dueDoms that is blacklisted — restorable, just noted
     // One card for everything resting in warm-up: due-now domains lead, the
     // still-waiting ones ride along. Owner ruling 2026-07-15 — a blocklist hit
     // FLAGS, never blocks — so blacklisted domains are restorable like any other
@@ -2566,6 +2576,26 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         short: "inbox issues on the fleet",
         text: issuesN + " inbox issue(s) on the fleet" + (bits.length ? " — " + bits.join(" · ") : "") + ".",
         action: "Items were marked done but the numbers haven't dropped — undo them below, or check Fleet details." });
+    }
+
+    // Workspace client lens (KRG/Asteri): the nightly audit only ever sees the
+    // shared Navreo fleet ("the audit backend never learns about them"), so its
+    // fleet-only checks can't be attributed to a client workspace — under a
+    // workspace chip they HIDE behind one explicit scope note instead of
+    // masquerading as that client's alerts. Row-backed cards (dormant,
+    // warmup-rotation, restore-due) are federated and stay, filtered. Shared-
+    // fleet chips keep everything: the shared fleet IS that client's truth.
+    const _lensWs = dlvLensWs();
+    if (_lensWs) {
+      const FLEET_ONLY = new Set(["blacklist", "blocked-real", "verify-campaigns", "signatures", "new-unprocessed", "warmup-notwarming", "retired-domains", "smtp-imap", "auth-records", "trend-drift", "provider-settings", "inbox-issues"]);
+      const hiddenN = raw.filter((it) => FLEET_ONLY.has(it.key) && !it.resolved).length;
+      raw = raw.filter((it) => !FLEET_ONLY.has(it.key));
+      if (hiddenN) {
+        raw.push({ key: "lens-fleet-note", level: "note", count: hiddenN, _lensNote: true,
+          short: "fleet-wide checks hidden by the client filter",
+          text: hiddenN + " fleet-wide check(s) hidden — they audit the shared Navreo fleet, not " + ((window.DLV_CLIENT_LENS || {}).client || "this client") + "'s own workspace. Switch to All clients to see them.",
+          action: "" });
+      }
     }
 
     const ord = { red: 0, yellow: 1, note: 2 };
@@ -3884,6 +3914,23 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     if (L.ws) return rows.filter((r) => (r.workspace || "") === L.ws);
     return rows.filter((r) => !isClientRow(r));
   }
+  // The active WORKSPACE lens slug ("asteri"/"krg"), or null when the lens is
+  // off, "All", or a shared-fleet client (whose truth IS the Navreo fleet).
+  function dlvLensWs() {
+    const L = window.DLV_CLIENT_LENS;
+    return (L && L.client && L.client !== "All" && L.ws) ? L.ws : null;
+  }
+  // Lens for a bare domain-name list (the restore-due card): workspace
+  // ownership comes from the federated domain-health rows; a domain the sweep
+  // doesn't know stays with the shared Navreo fleet.
+  function dlvLensDomainNames(doms) {
+    const L = window.DLV_CLIENT_LENS;
+    if (!L || !L.client || L.client === "All" || !Array.isArray(doms)) return doms;
+    const map = {};
+    (((S.A || {}).domainHealth || {}).rows || []).forEach((d) => { if (d && d.domain) map[String(d.domain).toLowerCase()] = d.workspace || ""; });
+    if (L.ws) return doms.filter((d) => map[String(d).toLowerCase()] === L.ws);
+    return doms.filter((d) => { const w = map[String(d).toLowerCase()]; return !w || w === "navreo"; });
+  }
 
   // Mailbox rows for a mailbox-backed flow. Live rows come from the server's
   // bundle cache (null while it's still loading — the painter shows a
@@ -4103,10 +4150,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
 
   // Chip counts for the five flows (null = still loading).
   function mgrFlowCounts(D) {
-    const fl = floorRows(D);
-    const nw = rowsForFlow("notwarming");
-    const iw = rowsForFlow("inwarmup");
-    const rc = rowsForFlow("reconnect");
+    // Lensed HERE so the flow-chip badges and the "N domain(s) need warm-up"
+    // header always agree with the (lensed) tables below them — one count
+    // source. dlvApplyClientLens passes null through, so the loading spinner
+    // logic is untouched.
+    const fl = dlvApplyClientLens(floorRows(D));
+    const nw = dlvApplyClientLens(rowsForFlow("notwarming"));
+    const iw = dlvApplyClientLens(rowsForFlow("inwarmup"));
+    const rc = dlvApplyClientLens(rowsForFlow("reconnect"));
     const doms = (rows) => rows == null ? null : new Set(rows.map((r) => r.domain)).size;
     return {
       floor: fl == null ? null : fl.length,
