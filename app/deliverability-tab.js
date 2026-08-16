@@ -4112,7 +4112,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       floor: fl == null ? null : fl.length,
       notwarming: doms(nw),
       inwarmup: doms(iw),
-      reconnect: doms(rc),
+      // Reconnect is a MAILBOX-level action, so its chip counts mailboxes —
+      // the domain-scoped flows keep counting domains.
+      reconnect: rc == null ? null : rc.length,
       reminders: reminderEntries().length,
     };
   }
@@ -4155,7 +4157,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       floor: `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Leads</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Positive</th><th style="text-align:right">Bounce</th><th style="text-align:right">Action</th>`,
       notwarming: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Domain / mailbox</th><th>Batch</th><th>Warmup</th><th style="text-align:right">Action</th>`,
       inwarmup: `<th>Domain / mailbox</th><th style="text-align:right">Mailboxes</th><th style="text-align:right">Due back</th><th>Status</th><th style="text-align:right">Action</th>`,
-      reconnect: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Domain / mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>`,
+      reconnect: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>`,
     };
     const foot = flow === "floor"
       ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health">View full table</a></div>`
@@ -4276,6 +4278,30 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // search never drops what's already ticked).
     const inView = new Set((mgrVisibleMailboxRows({ ignoreSearch: true }) || []).map(mgrRowKey));
     if (UI.mgr.sel.size) UI.mgr.sel = new Set([...UI.mgr.sel].filter((k) => inView.has(k)));
+    // ── Needs reconnect: FLAT mailbox rows (2026-08-16) ─────────────────────
+    // Reconnect is a mailbox-level action and the email already names its
+    // domain, so the domain grouping (caret, "Reconnect all", "· N mbx") was
+    // pure overhead here — one row per mailbox, one Reconnect per row.
+    if (flow === "reconnect") {
+      const rows = all.slice().sort((a, b) => String(a.domain || "").localeCompare(String(b.domain || "")) || String(a.email || "").localeCompare(String(b.email || "")));
+      const truncNote = flowTruncated(flow) ? " · limited to the first 2,000" : "";
+      if (cnt) cnt.textContent = rows.length + " mailbox(es) · " + UI.mgr.sel.size + " selected" + truncNote + mgrFreshNote();
+      const bw = $id("dlv-mgr-bulk");
+      if (bw) { const n = UI.mgr.sel.size; bw.innerHTML = `<button class="btn sm" ${n ? "" : "disabled"} data-act="bulk-reconnect">Reconnect (${n})</button>`; }
+      body.innerHTML = rows.map((r) => {
+        const key = mgrRowKey(r);
+        const cliWs = isClientRow(r) ? r.workspace : "";
+        const tags = (r.maildoso ? ` <span class="dlv-tag md">Maildoso</span>` : "")
+          + (cliWs ? ` <span class="dlv-tag md" title="Client workspace — synced nightly from its own Smartlead">${esc(cliWs)}</span>` : "");
+        return `<tr id="dlv-mb-${esc(key)}"><td class="ck"><input type="checkbox" ${UI.mgr.sel.has(key) ? "checked" : ""} data-act="mgr-row-select" data-id="${esc(key)}"></td>
+          <td><div class="dlv-mb-email">${esc(r.email)}${tags}</div></td>
+          <td><span class="dlv-tag blocked">${esc(r.reason_category || "conn fail")}</span>${r.reason && r.reason !== r.reason_category ? ` <span class="dlv-mb-reason" style="display:inline-block;vertical-align:middle" title="${esc(r.reason)}">${glossify(r.reason)}</span>` : ""}</td>
+          <td style="text-align:right"><button class="btn sm" data-act="reconnect-one" data-id="${esc(key)}">Reconnect</button></td></tr>`;
+      }).join("") || `<tr><td colspan="4" class="dlv-empty">✓ Nothing needs attention in this view</td></tr>`;
+      const selAll = document.querySelector('[data-act="mgr-select-all"]');
+      if (selAll) { const keys = rows.map(mgrRowKey); selAll.checked = keys.length > 0 && keys.every((k) => UI.mgr.sel.has(k)); selAll.style.visibility = "visible"; }
+      return;
+    }
     const D = fullDerive();
     const resting = D.resting, restingDue = D.restingDue;
     // Group by domain.
