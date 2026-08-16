@@ -17565,6 +17565,18 @@ def _report_message_label(vp) -> str:
         return ""
 
 
+def _resolve_spintax(t: str, cap: int = 40) -> str:
+    """First option of every flat {a|b|c} group — client-facing copy renders
+    resolved, never raw spintax. {{merge_tags}} pass through verbatim."""
+    t = str(t or "")
+    for _ in range(cap):
+        m = re.search(r"\{([^{}|]*(?:\|[^{}|]*)+)\}", t)
+        if not m:
+            break
+        t = t[:m.start()] + m.group(1).split("|")[0] + t[m.end():]
+    return t
+
+
 _REPORT_REPLIED_CACHE: dict = {}
 _REPORT_REPLIED_LOCK = threading.Lock()
 _REPORT_REPLIED_TTL_S = 600
@@ -17598,7 +17610,7 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
     report range, plus the campaigns that launched (started sending) in it.
     Cheap PostgREST reads, 10-min cached per client|range; reply text is
     cleaned server-side so raw HTML never reaches a client."""
-    key = f"{client}|{start_iso}|{end_iso}"
+    key = f"v2|{client}|{start_iso}|{end_iso}"   # v2: first-reply-per-prospect + first_email
     with _REPORT_REPLIED_LOCK:
         ent = _REPORT_REPLIED_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _REPORT_REPLIED_TTL_S:
@@ -17611,14 +17623,16 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
         f"&category=in.({pos})&smartlead_campaign_id=in.({ids})"
         f"&replied_at=gte.{start_iso}&replied_at=lt.{end_iso}T23:59:59"
         "&order=replied_at.desc&limit=200") or []
+    # only the FIRST new message from each prospect in the window (Bjion
+    # 2026-08-16) — walk oldest-first and keep each email's earliest reply
     seen, leads = set(), []
-    for r in raw:
+    for r in sorted(raw, key=lambda x: str(x.get("replied_at") or "")):
         em = (r.get("email") or "").strip().lower()
         if not em or em in seen:
             continue
         seen.add(em)
         leads.append(r)
-    leads = leads[:60]
+    leads = leads[-60:]
     info: dict = {}
     emails = [r["email"].strip().lower() for r in leads]
     for i in range(0, len(emails), 50):
@@ -17636,6 +17650,35 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
                 for k, v in row.items():
                     if v and not cur.get(k):
                         cur[k] = v
+    # Email-1 copy per campaign (cached sequences read): "what the first email
+    # was" shows above each reply. Spintax renders resolved; merge tags stay
+    # verbatim; the variant follows the lead's own vpath3 step-1 label.
+    seq_by_cid: dict = {}
+    for cid in {str(r.get("smartlead_campaign_id")) for r in leads}:
+        try:
+            sq = _COCKPIT_SEQCOPY_SWR.get(cid)
+        except Exception:  # noqa: BLE001
+            sq = None
+        steps = (sq or {}).get("steps") or []
+        st1 = next((s for s in steps if s.get("step") == 1), steps[0] if steps else None)
+        if st1 and st1.get("variants"):
+            seq_by_cid[cid] = st1["variants"]
+
+    def _first_email(cid, vp):
+        variants = seq_by_cid.get(str(cid))
+        if not variants:
+            return None
+        lab = None
+        try:
+            p = json.loads(vp) if isinstance(vp, str) else (vp or {})
+            lab = str(p.get("1") or "") or None
+        except Exception:  # noqa: BLE001
+            lab = None
+        v = (next((v for v in variants if lab and v.get("label") == lab), None)
+             or next((v for v in variants if not v.get("deleted")), variants[0]))
+        return {"subject": _resolve_spintax(v.get("subject") or "").strip(),
+                "body": _resolve_spintax(v.get("body") or "").strip()[:1200]}
+
     rows = []
     for r in leads:
         em = r["email"].strip().lower()
@@ -17657,6 +17700,7 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
             "campaign": camp_names.get(str(r.get("smartlead_campaign_id"))) or "",
             "date": (r.get("replied_at") or "")[:10],
             "message": _report_message_label(r.get("vp")),
+            "first_email": _first_email(r.get("smartlead_campaign_id"), r.get("vp")),
             "reply": reply[:1500],
         })
     launches = _campaign_launches(launch_ids, camp_names, start_iso, end_iso)
