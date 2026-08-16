@@ -23,6 +23,8 @@
       "Disqualified": 84259
     },
     "pause_values": ["Meeting-Booked", "No-Showed", "Call Attended", "Paid"],
+    "_comment_autocreate": "Bjion ruling 2026-08-16: leads with a POSITIVE Smartlead category and no Notion row are auto-added; non-positive (Not a qualified lead, Contact In Future) are never created.",
+    "auto_create_categories": ["Call Booked", "Meeting Request", "Interested", "Information Request"],
     "status_rank": {
       "Not responded": 0,
       "No response (after 14 days)": 0,

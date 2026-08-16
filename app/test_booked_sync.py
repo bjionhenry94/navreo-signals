@@ -21,7 +21,8 @@ def row(page_id, status):
 
 
 def reverse(targets, notion, last_pushed=None):
-    return plan_reverse(targets, notion, last_pushed or {}, CFG)
+    wrapped = {e: (v if isinstance(v, tuple) else (v, True)) for e, v in targets.items()}
+    return plan_reverse(wrapped, notion, last_pushed or {}, CFG)
 
 
 def test_reverse_moves_up_the_ladder():
@@ -35,7 +36,7 @@ def test_reverse_moves_up_the_ladder():
     targets = {"a@x.com": "Positive Response", "b@x.com": "Meeting-Ready",
                "c@x.com": "Meeting-Booked", "d@x.com": "Disqualified",
                "e@x.com": "Contact in the future"}
-    updates, unmatched, lower, noops = reverse(targets, notion)
+    updates, creates, unmatched, lower, noops = reverse(targets, notion)
     assert [(u[0], u[4]) for u in updates] == [
         ("a@x.com", "Positive Response"), ("b@x.com", "Meeting-Ready"),
         ("c@x.com", "Meeting-Booked"), ("d@x.com", "Disqualified"),
@@ -56,7 +57,7 @@ def test_reverse_never_moves_down_or_touches_human_tier():
     targets = {"a@x.com": "Positive Response", "b@x.com": "Meeting-Ready",
                "c@x.com": "Meeting-Booked", "d@x.com": "Meeting-Booked",
                "e@x.com": "Positive Response"}
-    updates, unmatched, lower, noops = reverse(targets, notion)
+    updates, creates, unmatched, lower, noops = reverse(targets, notion)
     assert updates == [] and noops == 5, (updates, noops)
 
 
@@ -65,10 +66,10 @@ def test_reverse_human_downgrade_sticks():
     Same evidence must NOT re-push — only genuinely higher evidence would."""
     notion = {"a@x.com": row("p1", "Positive Response")}
     last = {"a@x.com": "Meeting-Booked"}
-    updates, _, _, noops = reverse({"a@x.com": "Meeting-Booked"}, notion, last)
+    updates, _, _, _, noops = reverse({"a@x.com": "Meeting-Booked"}, notion, last)
     assert updates == [] and noops == 1
     # lower prior push + higher new evidence -> fires
-    updates2, _, _, _ = reverse({"a@x.com": "Meeting-Booked"}, notion,
+    updates2, _, _, _, _ = reverse({"a@x.com": "Meeting-Booked"}, notion,
                                 {"a@x.com": "Meeting-Ready"})
     assert [(updates2[0][0], updates2[0][4])] == [("a@x.com", "Meeting-Booked")]
 
@@ -81,25 +82,30 @@ def test_reverse_parked_states_need_a_real_booking():
               "c@x.com": row("p3", "Disqualified")}
     targets = {"a@x.com": "Meeting-Ready", "b@x.com": "Positive Response",
                "c@x.com": "Meeting-Booked"}
-    updates, _, _, noops = reverse(targets, notion)
+    updates, _, _, _, noops = reverse(targets, notion)
     assert [(u[0], u[4]) for u in updates] == [("c@x.com", "Meeting-Booked")]
     assert noops == 2
 
 
-def test_reverse_unmatched_split_by_tier():
-    """Booked-tier evidence with no Notion row is named; lower-tier only counted."""
-    targets = {"ghost@x.com": "Meeting-Booked", "quiet@x.com": "Positive Response"}
-    updates, unmatched, lower, noops = reverse(targets, {})
+def test_reverse_no_row_leads_split_by_positivity():
+    """Positive evidence with no Notion row auto-creates (Bjion ruling); a
+    non-positive booked-tier no-row is named unmatched; non-positive lower-tier
+    is only counted."""
+    targets = {"pos@x.com": ("Meeting-Ready", True),
+               "ghost@x.com": ("Meeting-Booked", False),
+               "dq@x.com": ("Disqualified", False)}
+    updates, creates, unmatched, lower, noops = reverse(targets, {})
+    assert creates == [("pos@x.com", "Meeting-Ready")], creates
     assert updates == [] and unmatched == ["ghost@x.com"] and lower == 1
 
 
 def test_reverse_idempotent_second_pass():
     notion = {"a@x.com": row("p1", "Positive Response")}
-    updates, _, _, _ = reverse({"a@x.com": "Meeting-Ready"}, notion)
+    updates, _, _, _, _ = reverse({"a@x.com": "Meeting-Ready"}, notion)
     assert len(updates) == 1
     notion["a@x.com"]["status"] = "Meeting-Ready"      # state after first pass
     last = {"a@x.com": "Meeting-Ready"}
-    updates2, _, _, noops2 = reverse({"a@x.com": "Meeting-Ready"}, notion, last)
+    updates2, _, _, _, noops2 = reverse({"a@x.com": "Meeting-Ready"}, notion, last)
     assert updates2 == [] and noops2 == 1
 
 

@@ -26,8 +26,11 @@ Hard rules (do not relax):
     sticks unless genuinely new evidence arrives.
   * Pause, never delete. Pausing happens only for pause_values (booked tier).
     No emails are ever composed or sent.
-  * Leads with booked-tier evidence but no Notion row are LOGGED as unmatched,
-    never auto-created; lower-tier no-row leads are just counted.
+  * No-Notion-row leads (Bjion ruling 2026-08-16): a lead with a POSITIVE
+    Smartlead category (auto_create_categories) and no row is AUTO-CREATED at
+    its mapped status, with name/company/reply metadata filled. Non-positive
+    evidence never creates a row: booked-tier gets ledgered as unmatched,
+    lower tiers are just counted.
 
 State: Supabase `booked_leads` (one row per client+email; jsonb
 `campaigns_paused` holds {"paused": [...], "cat_map": {cid: category_id},
@@ -115,6 +118,49 @@ def prop_status(page: dict, prop_name: str) -> tuple[str, str]:
     ptype = p.get("type") or ""
     val = p.get(ptype) if ptype in ("select", "status") else None
     return ((val or {}).get("name") or "", ptype)
+
+
+def strip_html(text: str) -> str:
+    """Reply bodies arrive as raw HTML — Notion's Full-Reply wants readable text."""
+    import html as _html
+    import re as _re
+    if not text:
+        return ""
+    text = _re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", text)
+    text = _re.sub(r"(?i)<br\s*/?>|</p>|</div>", "\n", text)
+    text = _re.sub(r"<[^>]+>", " ", text)
+    text = _html.unescape(text)
+    return _re.sub(r"[ \t]+", " ", _re.sub(r"\n\s*\n+", "\n\n", text)).strip()
+
+
+def notion_create_row(cfg: dict, email: str, status: str, meta: dict) -> str:
+    """Create a pipeline row for an auto-added positive lead. Fills what we
+    know; every field except Email/Status is best-effort. Returns page id."""
+    def rt(text):
+        return {"rich_text": [{"text": {"content": (text or "")[:1900]}}]}
+    props = {
+        cfg["email_prop"]: {"email": email},
+        cfg["status_prop"]: {"select": {"name": status}},
+        "Lead-Name": {"title": [{"text": {"content": meta.get("name") or email}}]},
+    }
+    if meta.get("company"):
+        props["Company Name"] = rt(meta["company"])
+    if meta.get("campaign_name"):
+        props["Campaign Name"] = rt(meta["campaign_name"])
+    if meta.get("reply_body"):
+        props["Full-Reply"] = rt(strip_html(meta["reply_body"]))
+    if meta.get("replied_at"):
+        props["Time of Reply"] = {"date": {"start": meta["replied_at"]}}
+    if meta.get("linkedin"):
+        props["LinkedIn URL"] = {"url": meta["linkedin"]}
+    if meta.get("website"):
+        props["Website"] = {"url": meta["website"]}
+    data = server.http_json("POST", f"{NOTION_BASE}/pages", _notion_headers(),
+                            {"parent": {"database_id": cfg["notion_database_id"]},
+                             "properties": props})
+    if not isinstance(data, dict) or data.get("object") == "error":
+        raise RuntimeError(f"Notion page create failed: {str(data)[:300]}")
+    return data.get("id", "")
 
 
 def notion_set_status(page_id: str, prop_name: str, prop_type: str, value: str):
@@ -212,25 +258,30 @@ def plan_categories(memberships: list[dict], reply_campaigns: set[int],
 
 def plan_reverse(sl_targets: dict, notion_by_email: dict, last_pushed: dict,
                  cfg: dict):
-    """sl_targets: email -> best mapped Notion status derived from Smartlead.
+    """sl_targets: email -> (best mapped Notion status, has_positive_category).
     -> (updates [(email, page_id, prop_type, current, target)],
-        unmatched_booked [email], unmatched_lower_count, noops)
+        creates [(email, target)], unmatched_booked [email],
+        unmatched_lower_count, noops)
 
     A row is updated only when the target outranks BOTH the row's current
     status (ladder is one-way up; human tier is unreachable — targets top out
     at Meeting-Booked) and whatever we last pushed for that email (so a human
-    downgrade in Notion sticks unless genuinely new evidence arrives)."""
-    updates, unmatched_booked, unmatched_lower, noops = [], [], 0, 0
+    downgrade in Notion sticks unless genuinely new evidence arrives).
+    No-row leads with positive evidence are planned as creates (Bjion ruling);
+    non-positive no-row leads never create anything."""
+    updates, creates, unmatched_booked, unmatched_lower, noops = [], [], [], 0, 0
     booked_rank = rank_of("Meeting-Booked", cfg)
     # Human-parked terminal states: only an actual booking may lift these —
     # a mere reply category must never overturn a Disqualified / Contact-later.
     parked = {"Disqualified", "Contact in the future"}
     for email in sorted(sl_targets):
-        target = sl_targets[email]
+        target, positive = sl_targets[email]
         t_rank = rank_of(target, cfg)
         row = notion_by_email.get(email)
         if row is None:
-            if t_rank >= booked_rank:
+            if positive:
+                creates.append((email, target))
+            elif t_rank >= booked_rank:
                 unmatched_booked.append(email)
             else:
                 unmatched_lower += 1
@@ -244,7 +295,7 @@ def plan_reverse(sl_targets: dict, notion_by_email: dict, last_pushed: dict,
                             row["status"], target))
         else:
             noops += 1
-    return updates, unmatched_booked, unmatched_lower, noops
+    return updates, creates, unmatched_booked, unmatched_lower, noops
 
 
 # ---------- state + ledger ----------
@@ -280,7 +331,7 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
     if not sl_key:
         raise RuntimeError(f"missing {cfg['smartlead_key_env']}")
     counts = {"paused": 0, "categorised": 0, "notion_updated": 0,
-              "unmatched_notion": 0, "unmatched_lower": 0,
+              "notion_created": 0, "unmatched_notion": 0, "unmatched_lower": 0,
               "unmatched_smartlead": 0, "errors": 0}
     entries: list[dict] = []
 
@@ -384,15 +435,17 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
             log(f"[{client}] ERROR forward {email}: {e}")
 
     # -- REVERSE: Smartlead categories / Calendly meetings -> Notion status
-    sl_targets: dict[str, str] = {}
+    sl_targets: dict[str, tuple] = {}  # email -> (target status, has_positive)
+    auto_create = set(cfg.get("auto_create_categories") or [])
 
     def offer(email: str, category_name: str):
         target = cfg["reverse_map"].get(category_name)
         if not target:
             return
         email = email.strip().lower()
-        if rank_of(target, cfg) > rank_of(sl_targets.get(email), cfg):
-            sl_targets[email] = target
+        prev_target, prev_pos = sl_targets.get(email, (None, False))
+        best = target if rank_of(target, cfg) > rank_of(prev_target, cfg) else prev_target
+        sl_targets[email] = (best, prev_pos or category_name in auto_create)
 
     for r in reply_rows:
         if r.get("email") and r.get("category"):
@@ -410,7 +463,7 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
         # legacy rows predate last_pushed — they were booked-tier pushes
         last_pushed[email] = marks.get("last_pushed") or "Meeting-Booked"
 
-    updates, unmatched_booked, unmatched_lower, noops = plan_reverse(
+    updates, creates, unmatched_booked, unmatched_lower, noops = plan_reverse(
         sl_targets, notion_by_email, last_pushed, cfg)
     counts["unmatched_lower"] = unmatched_lower
     for email, page_id, ptype, current, target in updates:
@@ -430,6 +483,46 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
             counts["errors"] += 1
             rec("error_reverse", email, "smartlead->notion", detail={"error": str(e)[:300]})
             log(f"[{client}] ERROR reverse {email}: {e}")
+    for email, target in creates:
+        if (state.get(email) or {}).get("source") == "smartlead_created":
+            continue  # created on an earlier pass (row hidden/deleted since) — once only
+        try:
+            meta = {}
+            detail_rows = server.sb(
+                "GET",
+                f"replies?email=eq.{urllib.parse.quote(email)}"
+                f"&smartlead_campaign_id=in.({','.join(map(str, sorted(camp_ids)))})"
+                "&select=reply_body,replied_at,smartlead_campaign_id"
+                "&order=replied_at.desc&limit=1") or []
+            if detail_rows:
+                d = detail_rows[0]
+                meta["reply_body"] = d.get("reply_body")
+                meta["replied_at"] = d.get("replied_at")
+                name_rows = server.sb(
+                    "GET", "campaign_scorecard?smartlead_campaign_id="
+                    f"eq.{d['smartlead_campaign_id']}&select=name&limit=1") or []
+                if name_rows:
+                    meta["campaign_name"] = name_rows[0].get("name")
+            lead = sl_json("GET", f"/leads/?email={urllib.parse.quote(email)}", sl_key)
+            if isinstance(lead, dict) and lead.get("id"):
+                meta["name"] = " ".join(x for x in (lead.get("first_name"),
+                                                    lead.get("last_name")) if x)
+                meta["company"] = lead.get("company_name")
+                meta["linkedin"] = lead.get("linkedin_profile") or None
+                meta["website"] = lead.get("website") or None
+            page_id = "" if DRY else notion_create_row(cfg, email, target, meta)
+            counts["notion_created"] += 1
+            rec("notion_row_created", email, "smartlead->notion", after=target,
+                detail={"page_id": page_id, "campaign": meta.get("campaign_name")})
+            upsert_state(client, email, {
+                "source": "smartlead_created", "notion_page_id": page_id,
+                "booked_at": meta.get("replied_at")
+                or datetime.now(timezone.utc).isoformat(),
+                "campaigns_paused": {"last_pushed": target}})
+        except Exception as e:  # noqa: BLE001
+            counts["errors"] += 1
+            rec("error_create", email, "smartlead->notion", detail={"error": str(e)[:300]})
+            log(f"[{client}] ERROR create {email}: {e}")
     for email in unmatched_booked:
         if (state.get(email) or {}).get("source") == "smartlead_unmatched":
             continue  # already on record — don't re-ledger every run
@@ -439,8 +532,8 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
             "source": "smartlead_unmatched",
             "booked_at": datetime.now(timezone.utc).isoformat(),
             "campaigns_paused": {}})
-    log(f"[{client}] reverse: {len(updates)} updates, {noops} noops, "
-        f"{unmatched_lower} lower-tier no-row")
+    log(f"[{client}] reverse: {len(updates)} updates, {len(creates)} creates, "
+        f"{noops} noops, {unmatched_lower} lower-tier no-row")
 
     rec("run_summary", detail={**counts, "full_verify": full_verify,
                                "notion_rows": len(notion_by_email),
