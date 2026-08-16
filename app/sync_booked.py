@@ -133,9 +133,111 @@ def strip_html(text: str) -> str:
     return _re.sub(r"[ \t]+", " ", _re.sub(r"\n\s*\n+", "\n\n", text)).strip()
 
 
+def _rt(content, link=None, bold=False):
+    o = {"type": "text", "text": {"content": content}}
+    if link:
+        o["text"]["link"] = {"url": link}
+    if bold:
+        o["annotations"] = {"bold": True}
+    return o
+
+
+def template_blocks(email: str, meta: dict) -> list[dict]:
+    """The approved lead-page body (Bjion 2026-08-17): Snapshot table of the
+    property-less trio, the sent email + their reply as quotes, then the
+    Smartlead/setter conversation links. Sections without data are omitted."""
+    def heading(t):
+        return {"type": "heading_3", "heading_3": {"rich_text": [_rt(t)]}}
+    def trow(label, val):
+        return {"type": "table_row",
+                "table_row": {"cells": [[_rt(label, bold=True)], [_rt(val or "—")]]}}
+    children = [
+        heading("📋 Lead Snapshot"),
+        {"type": "table", "table": {"table_width": 2, "has_column_header": False,
+                                    "has_row_header": False, "children": [
+            trow("Title", meta.get("title")),
+            trow("Company Size", meta.get("company_size")),
+            trow("Geography", meta.get("geography")),
+        ]}},
+    ]
+    if meta.get("sent_body"):
+        children += [
+            heading(f"📤 First email we sent — {str(meta.get('sent_at') or '')[:10] or '—'}"),
+            {"type": "quote", "quote": {"rich_text": [
+                _rt("Subject: " + (meta.get("sent_subject") or "—") + "\n\n", bold=True),
+                _rt(strip_html(meta["sent_body"])[:1900])]}},
+        ]
+    if meta.get("reply_body"):
+        children += [
+            heading(f"📥 Their reply — {str(meta.get('replied_at') or '')[:10] or '—'}"),
+            {"type": "quote", "quote": {"rich_text": [
+                _rt(strip_html(meta["reply_body"])[:1900])]}},
+        ]
+    children.append(heading("🔗 Open the conversation"))
+    if meta.get("lead_map_id"):
+        children.append({"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [
+            _rt("Smartlead inbox", link="https://app.smartlead.ai/app/master-inbox?"
+                                        f"action=INBOX&leadMap={meta['lead_map_id']}"),
+            _rt("  — the live thread in Smartlead")]}})
+    children.append({"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [
+        _rt("Setter", link="https://navreo-signals.onrender.com/app/setter.html#/r/"
+                           + urllib.parse.quote(email, safe="")),
+        _rt("  — the conversation in our reply tool")]}})
+    return children
+
+
+def enrich_meta(meta: dict, cfg: dict, email: str, sl_key: str,
+                camp_ids: set[int], reply_campaign_id=None) -> dict:
+    """Best-effort fill of Title/Geography/Company Size/lead_map/sent-email for
+    the body template, from the Smartlead lead record + our Supabase caches."""
+    import re as _re
+    lead = sl_json("GET", f"/leads/?email={urllib.parse.quote(email)}", sl_key)
+    if not (isinstance(lead, dict) and lead.get("id")):
+        return meta
+    meta.setdefault("name", " ".join(x for x in (lead.get("first_name"),
+                                                 lead.get("last_name")) if x))
+    meta.setdefault("company", lead.get("company_name"))
+    meta.setdefault("linkedin", lead.get("linkedin_profile") or None)
+    meta.setdefault("website", lead.get("website") or None)
+    cf = lead.get("custom_fields") or {}
+    meta["title"] = _re.split(r"\s*(?:--|\||–|—)\s*",
+                              cf.get("Title") or "")[0].strip(" ,;")[:120]
+    meta["geography"] = lead.get("location") or ""
+    dom = _re.sub(r"^https?://(www\.)?", "",
+                  meta.get("website") or "").split("/")[0].lower()
+    if dom:
+        comp = server.sb("GET", f"companies?domain=eq.{urllib.parse.quote(dom)}"
+                                "&select=employee_range,employee_count&limit=1") or []
+        if comp:
+            meta["company_size"] = comp[0].get("employee_range") or (
+                str(comp[0]["employee_count"]) if comp[0].get("employee_count") else None)
+    member = None
+    if reply_campaign_id is not None:
+        member = next((m for m in lead.get("lead_campaign_data") or []
+                       if m.get("campaign_id") == int(reply_campaign_id)), None)
+    member = member or next((m for m in lead.get("lead_campaign_data") or []
+                             if _is_client_membership(
+                                 m, cfg["smartlead_client_id"], camp_ids)), None)
+    if member:
+        meta["lead_map_id"] = member.get("campaign_lead_map_id")
+        try:
+            hist = sl_json("GET", f"/campaigns/{member['campaign_id']}"
+                                  f"/leads/{lead['id']}/message-history", sl_key)
+            sent = next((h for h in (hist or {}).get("history", [])
+                         if h.get("type") == "SENT"), None)
+            if sent:
+                meta["sent_subject"] = sent.get("subject")
+                meta["sent_body"] = sent.get("email_body")
+                meta["sent_at"] = sent.get("time")
+        except Exception as e:  # noqa: BLE001 — sent email is best-effort
+            log(f"WARN sent-email fetch {email}: {e}")
+    return meta
+
+
 def notion_create_row(cfg: dict, email: str, status: str, meta: dict) -> str:
-    """Create a pipeline row for an auto-added positive lead. Fills what we
-    know; every field except Email/Status is best-effort. Returns page id."""
+    """Create a pipeline row for an auto-added positive lead: lean properties
+    (email texts live in the BODY template, never in properties — Bjion ruling
+    2026-08-17), then the body blocks. Returns page id."""
     def rt(text):
         return {"rich_text": [{"text": {"content": (text or "")[:1900]}}]}
     props = {
@@ -147,8 +249,6 @@ def notion_create_row(cfg: dict, email: str, status: str, meta: dict) -> str:
         props["Company Name"] = rt(meta["company"])
     if meta.get("campaign_name"):
         props["Campaign Name"] = rt(meta["campaign_name"])
-    if meta.get("reply_body"):
-        props["Full-Reply"] = rt(strip_html(meta["reply_body"]))
     if meta.get("replied_at"):
         props["Time of Reply"] = {"date": {"start": meta["replied_at"]}}
     if meta.get("linkedin"):
@@ -160,7 +260,13 @@ def notion_create_row(cfg: dict, email: str, status: str, meta: dict) -> str:
                              "properties": props})
     if not isinstance(data, dict) or data.get("object") == "error":
         raise RuntimeError(f"Notion page create failed: {str(data)[:300]}")
-    return data.get("id", "")
+    page_id = data.get("id", "")
+    try:
+        server.http_json("PATCH", f"{NOTION_BASE}/blocks/{page_id}/children",
+                         _notion_headers(), {"children": template_blocks(email, meta)})
+    except Exception as e:  # noqa: BLE001 — body is decoration; the row exists
+        log(f"WARNING body template failed for {email}: {e}")
+    return page_id
 
 
 def notion_set_status(page_id: str, prop_name: str, prop_type: str, value: str):
@@ -350,7 +456,9 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
         status, ptype = prop_status(pg, cfg["status_prop"])
         notion_by_email[email] = {"page_id": pg["id"], "status": status,
                                   "status_type": ptype or "select",
-                                  "edited": pg.get("last_edited_time")}
+                                  "edited": pg.get("last_edited_time"),
+                                  "created": pg.get("created_time") or "",
+                                  "has_frp": "Full-Reply" in (pg.get("properties") or {})}
     log(f"[{client}] notion rows with email: {len(notion_by_email)}")
     camp_ids, camp_status = client_campaigns(cfg, sl_key)
     log(f"[{client}] client campaigns known: {len(camp_ids)}")
@@ -520,13 +628,8 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
                     f"eq.{d['smartlead_campaign_id']}&select=name&limit=1") or []
                 if name_rows:
                     meta["campaign_name"] = name_rows[0].get("name")
-            lead = sl_json("GET", f"/leads/?email={urllib.parse.quote(email)}", sl_key)
-            if isinstance(lead, dict) and lead.get("id"):
-                meta["name"] = " ".join(x for x in (lead.get("first_name"),
-                                                    lead.get("last_name")) if x)
-                meta["company"] = lead.get("company_name")
-                meta["linkedin"] = lead.get("linkedin_profile") or None
-                meta["website"] = lead.get("website") or None
+            enrich_meta(meta, cfg, email, sl_key, camp_ids,
+                        detail_rows[0]["smartlead_campaign_id"] if detail_rows else None)
             page_id = "" if DRY else notion_create_row(cfg, email, target, meta)
             counts["notion_created"] += 1
             rec("notion_row_created", email, "smartlead->notion", after=target,
@@ -553,6 +656,62 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
     log(f"[{client}] reverse: {len(updates)} updates, {len(creates)} creates "
         f"({deferred} deferred to Make's grace window), {noops} noops, "
         f"{unmatched_lower} lower-tier no-row")
+
+    # -- TEMPLATE BACKSTOP: rows created by Make's webhook arrive with properties
+    # only — give recent untemplated rows the body template (capped per run).
+    from datetime import timedelta
+    recent_cutoff = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat()
+    swept = 0
+    for email, row in sorted(notion_by_email.items()):
+        if swept >= 15:
+            break
+        if (row.get("created") or "") < recent_cutoff:
+            continue
+        marks = state_marks(state.get(email) or {})
+        if marks.get("templated"):
+            continue
+        try:
+            kids = server.http_json(
+                "GET", f"{NOTION_BASE}/blocks/{row['page_id']}/children?page_size=8",
+                _notion_headers())
+            texts = " ".join(
+                "".join(t.get("plain_text", "") for t in
+                        (b.get(b.get("type", ""), {}) or {}).get("rich_text", []))
+                for b in (kids or {}).get("results", []))
+            if "Lead Snapshot" in texts:
+                pass  # already templated (e.g. by the backfill or a create)
+            else:
+                detail = server.sb(
+                    "GET", f"replies?email=eq.{urllib.parse.quote(email)}"
+                    f"&smartlead_campaign_id=in.({','.join(map(str, sorted(camp_ids)))})"
+                    "&select=reply_body,replied_at,smartlead_campaign_id"
+                    "&order=replied_at.desc&limit=1") or []
+                meta = {}
+                if detail:
+                    meta["reply_body"] = detail[0].get("reply_body")
+                    meta["replied_at"] = detail[0].get("replied_at")
+                enrich_meta(meta, cfg, email, sl_key, camp_ids,
+                            detail[0]["smartlead_campaign_id"] if detail else None)
+                if not DRY:
+                    server.http_json("PATCH",
+                                     f"{NOTION_BASE}/blocks/{row['page_id']}/children",
+                                     _notion_headers(),
+                                     {"children": template_blocks(email, meta)})
+                    if row.get("has_frp"):  # keep email text out of properties
+                        server.http_json("PATCH", f"{NOTION_BASE}/pages/{row['page_id']}",
+                                         _notion_headers(),
+                                         {"properties": {"Full-Reply": {"rich_text": []}}})
+                counts["templated"] = counts.get("templated", 0) + 1
+                rec("body_templated", email, "smartlead->notion",
+                    detail={"page_id": row["page_id"]})
+            swept += 1
+            upsert_state(client, email, {
+                "source": (state.get(email) or {}).get("source") or "notion",
+                "notion_page_id": row["page_id"],
+                "campaigns_paused": {**marks, "templated": True}})
+        except Exception as e:  # noqa: BLE001 — one bad page must not kill the run
+            counts["errors"] += 1
+            log(f"[{client}] ERROR template-backstop {email}: {e}")
 
     rec("run_summary", detail={**counts, "full_verify": full_verify,
                                "notion_rows": len(notion_by_email),
