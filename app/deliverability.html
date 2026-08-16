@@ -306,10 +306,36 @@
 
   <div class="databar" id="ah-databar"><span id="ah-databar-msg">Live data unavailable.</span><button class="btn sm" id="ah-retry">Retry</button></div>
 
-  <!-- ══ page header — title only (Bjion 2026-07-29) ══ -->
+  <!-- ══ page header — title only (Bjion 2026-07-29); the client-report share
+       button rides on the right (client-report-share, 2026-08-16) ══ -->
   <header class="pagehead">
     <div>
       <h1>Analytics</h1>
+    </div>
+    <div class="pagehead-right" style="position:relative">
+      <button class="chip" id="rs-open" type="button">Share with client</button>
+      <!-- plain positioned popover, never <dialog>: native dialogs die in
+           embedded/headless views (lilly-strategy-fidelity) -->
+      <div id="rs-pop" style="display:none;position:absolute;right:0;top:40px;z-index:60;width:300px;background:var(--card);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 10px 30px rgba(20,17,14,.12);padding:16px;text-align:left">
+        <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px">Share a client report</div>
+        <label style="display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px">Client</label>
+        <select id="rs-client" style="width:100%;font:500 13px var(--font-sans);padding:7px 9px;border:1px solid var(--line-2);border-radius:8px;background:var(--card);color:var(--ink);margin-bottom:10px"></select>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <div style="flex:1"><label style="display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px">From</label>
+            <input type="date" id="rs-start" style="width:100%;font:500 12.5px var(--font-sans);padding:6px 8px;border:1px solid var(--line-2);border-radius:8px;color:var(--ink)"></div>
+          <div style="flex:1"><label style="display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px">To</label>
+            <input type="date" id="rs-end" style="width:100%;font:500 12.5px var(--font-sans);padding:6px 8px;border:1px solid var(--line-2);border-radius:8px;color:var(--ink)"></div>
+        </div>
+        <button class="chip on" id="rs-create" type="button" style="width:100%;justify-content:center;display:inline-flex">Create link</button>
+        <div id="rs-out" style="display:none;margin-top:10px">
+          <input id="rs-url" readonly style="width:100%;font:500 11px var(--font-mono);padding:7px 8px;border:1px solid var(--line-2);border-radius:8px;color:var(--ink-2);background:var(--bg-sunken)">
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="chip" id="rs-copy" type="button" style="flex:1;justify-content:center;display:inline-flex">Copy link</button>
+            <a class="chip" id="rs-openlink" target="_blank" rel="noopener" style="flex:1;justify-content:center;display:inline-flex;text-decoration:none">Open</a>
+          </div>
+        </div>
+        <div class="subline" id="rs-msg" style="margin-top:8px">The link shows only this client, over these dates (inside the last 30 days). It works without a login.</div>
+      </div>
     </div>
   </header>
 
@@ -3045,6 +3071,77 @@ boot();
   // whenever the client chips change. Data is fetched once; filtering is local.
   window.addEventListener("dlv-client-lens", function () { if (CAND.length) paint(); });
   boot4();
+})();
+</script>
+<script>
+/* ══ Share with client (client-report-share, 2026-08-16) — mints the token
+   link to /app/report.html. Self-contained: reads the client list from its
+   own /api/client-windows fetch (the window keys ARE the canonical labels,
+   written server-side from the one label authority). ══ */
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var open = $("rs-open"), pop = $("rs-pop");
+  if (!open || !pop) return;
+  var loaded = false;
+  function iso(d) { return d.toISOString().slice(0, 10); }
+  function loadClients() {
+    if (loaded) return;
+    loaded = true;
+    fetch("/api/client-windows", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var names = Object.keys((d && d.windows && d.windows["30"]) || {})
+          .filter(function (k) { return k !== "__all" && k !== "__unassigned"; }).sort();
+        $("rs-client").innerHTML = names.length
+          ? names.map(function (n) { return "<option>" + n.replace(/[&<>"]/g, "") + "</option>"; }).join("")
+          : '<option value="">No clients yet</option>';
+      })
+      .catch(function () { loaded = false; });
+  }
+  open.addEventListener("click", function () {
+    var show = pop.style.display === "none";
+    pop.style.display = show ? "" : "none";
+    if (show) {
+      loadClients();
+      var today = new Date(), from = new Date(today.getTime() - 6 * 864e5);
+      var lo = new Date(today.getTime() - 29 * 864e5);
+      ["rs-start", "rs-end"].forEach(function (id) {
+        $(id).min = iso(lo); $(id).max = iso(today);
+      });
+      if (!$("rs-start").value) $("rs-start").value = iso(from);
+      if (!$("rs-end").value) $("rs-end").value = iso(today);
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (pop.style.display !== "none" && !pop.contains(ev.target) && ev.target !== open) {
+      pop.style.display = "none";
+    }
+  });
+  $("rs-create").addEventListener("click", function () {
+    var client = $("rs-client").value;
+    if (!client) { $("rs-msg").textContent = "Pick a client first."; return; }
+    $("rs-msg").textContent = "Creating…";
+    fetch("/api/report/share", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client: client, start: $("rs-start").value, end: $("rs-end").value })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok) { $("rs-msg").textContent = (d && d.message) || "Could not create the link."; return; }
+      var url = location.origin + d.url;
+      $("rs-url").value = url;
+      $("rs-openlink").href = url;
+      $("rs-out").style.display = "";
+      $("rs-msg").textContent = "Link ready — " + d.client + ", " + d.start + " to " + d.end + ". Valid 90 days, no login needed.";
+    }).catch(function () { $("rs-msg").textContent = "Could not create the link."; });
+  });
+  $("rs-copy").addEventListener("click", function () {
+    var inp = $("rs-url");
+    inp.select();
+    var done = function () { $("rs-copy").textContent = "Copied ✓"; setTimeout(function () { $("rs-copy").textContent = "Copy link"; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(inp.value).then(done, done);
+    else { document.execCommand("copy"); done(); }
+  });
 })();
 </script>
 </body>

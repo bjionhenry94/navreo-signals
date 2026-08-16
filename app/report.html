@@ -1,0 +1,698 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>Outbound report · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+
+<!-- ── Client report share (client-report-share, 2026-08-16) — the shareable,
+     client-scoped strip-down of deliverability.html. Styles are the analytics
+     hub's own (same .ah scope) minus the widgets this page doesn't carry; the
+     page is standalone: no rail, no tabs, no links back into the app. ── -->
+<style>
+.ah{max-width:1160px;margin:0 auto;padding:34px 32px 72px}
+.ah .num{font-variant-numeric:tabular-nums}
+.ah .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:8px 0 24px}
+.ah h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
+.ah .verdict{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
+.ah .pagehead-right{display:flex;flex-direction:column;align-items:flex-end;gap:11px}
+.ah .dateline{text-align:right;font-size:13px;color:var(--ink-3);line-height:1.6}
+.ah .dateline b{font-weight:600;color:var(--ink-2)}
+
+.ah .hero{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 28px 18px}
+.ah .hero .subline{margin-top:4px}
+.ah .hero .take{margin-top:12px}
+.ah .card-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.ah .kicker{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+.ah .wkndtog{font:600 11.5px/1 var(--font-sans);color:var(--ink-3);background:var(--bg-sunken);border:1px solid transparent;padding:6px 12px;border-radius:999px;cursor:pointer;white-space:nowrap}
+.ah .wkndtog:hover{color:var(--ink)}
+.ah .wkndtog.on{background:var(--ink);color:#fff}
+
+.ah .lchips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 6px}
+.ah .lchip{display:inline-flex;align-items:center;gap:7px;font:500 12px var(--font-sans);color:var(--ink);background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:6px 12px;cursor:pointer}
+.ah .lchip:hover{border-color:var(--ink-3)}
+.ah .lchip .sw{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.ah .lchip b{font-weight:700}
+.ah .lchip:not(.on){color:var(--ink-3)}
+.ah .lchip:not(.on) .sw{filter:grayscale(1);opacity:.45}
+.ah .lchip.tot{cursor:default;opacity:1}
+.ah .lchip.tot .sw{filter:none;opacity:1}
+.ah .totpill{margin-left:6px;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);background:var(--bg-sunken);border-radius:4px;padding:1px 4px;vertical-align:middle}
+.ah .lchip.off{opacity:.38;cursor:default;pointer-events:none}
+.ah svg.trend{display:block;width:100%;height:auto;cursor:crosshair}
+.ah .trend text{font-family:var(--font-sans)}
+.ah .trendwrap{position:relative}
+.ah .charttip{position:absolute;top:0;left:0;pointer-events:none;background:var(--card);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;font-size:11.5px;line-height:1.6;color:var(--ink-2);white-space:nowrap;z-index:5}
+.ah .charttip b{display:block;font-size:11px;color:var(--ink);margin-bottom:2px}
+.ah .charttip .row{display:flex;align-items:center;gap:6px}
+.ah .charttip .row i{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.ah .charttip .row .v{margin-left:auto;font-weight:600;color:var(--ink);padding-left:12px;font-variant-numeric:tabular-nums}
+
+.ah .lanes{position:relative;margin-top:34px;display:flex;flex-direction:column;gap:36px}
+.ah .lane{position:relative;padding-left:58px;scroll-margin-top:24px}
+.ah .lane::before{content:"";position:absolute;left:14px;top:32px;bottom:-36px;width:1px;background:var(--line-2)}
+.ah .lane:last-child::before{display:none}
+.ah .node{position:absolute;left:1px;top:0;width:27px;height:27px;border-radius:50%;background:var(--card);border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:var(--ink-2)}
+.ah .lane-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px}
+.ah .lane-q{font-size:19px;font-weight:600;letter-spacing:-0.01em}
+.ah .lane-tag{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+
+.ah .cards{display:grid;gap:14px}
+.ah .c32{grid-template-columns:3fr 2fr}
+.ah .acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.ah .card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+.ah .subline{font-size:12.5px;color:var(--ink-3)}
+.ah .take{margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:13px;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:baseline}
+.ah .take .arr{color:var(--brown-400);font-weight:400;flex-shrink:0}
+.ah .apill{display:inline-flex;align-items:center;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;letter-spacing:.02em}
+.ah .apill.green{background:var(--green-bg);color:var(--green)}
+.ah .apill.mute{background:var(--bg-sunken);color:var(--ink-3)}
+
+.ah .brows{display:flex;flex-direction:column;gap:9px}
+.ah .brow{display:grid;grid-template-columns:118px 1fr 42px;align-items:center;gap:10px;font-size:12.5px}
+.ah .brow .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .brow .lbl.strong{font-weight:600;color:var(--ink)}
+.ah .brow .val{text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.ah .fill.orange{background:var(--orange)}
+
+.ah .ocol{display:grid;grid-template-columns:1fr 92px 92px;align-items:center;gap:10px;font-size:12.5px;padding:4px 0}
+.ah .ocol + .ocol{border-top:1px solid var(--line)}
+.ah .ocol .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .ocol .lbl.strong{font-weight:600;color:var(--ink)}
+.ah .ocol .val{text-align:right;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .ocol .val.win{color:var(--orange)}
+.ah .ocol.ohead{font-size:10.5px;letter-spacing:.02em;text-transform:uppercase;color:var(--ink-3);border:0;padding-bottom:2px}
+.ah .ocol.ohead span{text-align:right;font-weight:500}
+
+.ah .rank{display:flex;flex-direction:column}
+.ah .rrow{display:grid;grid-template-columns:20px minmax(180px,1fr) 62px 62px 70px 70px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.ah .rcost{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.ah .rcost.mute{color:var(--ink-3)}
+.ah .rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.ah .rrow .idx{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.ah .rname{font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;min-width:0}
+.ah .rname .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .rsub{font-size:11px;color:var(--ink-3);font-weight:400;margin-top:1px}
+.ah .rint,.ah .rmtg{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+
+.ah .stamp{font:500 10.5px/1.5 var(--font-sans);color:var(--ink-3);letter-spacing:0;text-transform:none;white-space:nowrap}
+.ah .stamp.stale{color:var(--amber);font-weight:600}
+.ah .footnote{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
+.ah .gone{max-width:520px;margin:120px auto;text-align:center}
+.ah .gone h1{margin-bottom:14px}
+
+@media (max-width:1280px){
+  .ah .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 58px 54px}
+  .ah .brow{grid-template-columns:104px 1fr 42px}
+  .ah .ocol{grid-template-columns:1fr 74px 74px;gap:8px}
+}
+@media (max-width:980px){
+  .ah .c32{grid-template-columns:1fr}
+  .ah{padding:24px 18px 56px}
+  .ah .pagehead{flex-direction:column;align-items:flex-start}
+  .ah .pagehead-right{align-items:flex-start}
+  .ah .dateline{text-align:left}
+}
+</style>
+</head>
+<body>
+<div class="ah" id="page" style="display:none">
+
+  <!-- ══ page header — who this report is for + the exact window ══ -->
+  <div class="pagehead">
+    <div>
+      <h1 id="rp-title">Outbound report</h1>
+      <div class="verdict" id="rp-verdict">&nbsp;</div>
+    </div>
+    <div class="pagehead-right">
+      <div class="dateline" id="rp-dates">&nbsp;</div>
+    </div>
+  </div>
+
+  <!-- ══ HERO — day by day ══ -->
+  <section class="hero" aria-label="Day by day">
+    <div class="card-head">
+      <span class="kicker" id="hero-kick">Day by day</span> <span class="stamp" id="hero-stamp"></span>
+      <button class="wkndtog" id="rp-weekend" type="button" aria-pressed="false" title="Weekends are near-zero sending days">Hide weekends</button>
+    </div>
+    <div class="lchips" id="rp-lchips" role="group" aria-label="Show or hide lines"></div>
+    <div class="trendwrap">
+      <svg class="trend" id="trend-svg" viewBox="0 0 1120 264" role="img" aria-label="Daily counts"></svg>
+      <div class="charttip" id="trend-tip" hidden></div>
+    </div>
+    <div class="subline" id="trend-sub">Every line is a count per day.</div>
+    <div class="take"><span class="arr">→</span><span id="trend-take">&nbsp;</span></div>
+  </section>
+
+  <div class="lanes">
+
+    <!-- ── 1 · Which campaigns — and which messages — are winning? ── -->
+    <section class="lane" aria-label="Winning campaigns lane">
+      <span class="node num">1</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Which campaigns — and which messages — are winning?</h2>
+      </div>
+      <div class="cards c32">
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">Campaigns, best to worst <span style="text-transform:none;letter-spacing:0;font-weight:500" id="rank-scope"></span> <span class="stamp" id="rank-stamp"></span></div>
+          </div>
+          <div class="rank num"><div id="rank-rows"><div class="subline">Loading…</div></div></div>
+          <div class="take"><span class="arr">→</span><span id="rank-take">&nbsp;</span></div>
+        </div>
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">What is the offer? <span id="offer-scope" style="text-transform:none;letter-spacing:0;font-weight:500"></span> <span class="stamp" id="offer-stamp"></span></div>
+          </div>
+          <div id="offer-rows"><div class="subline">Loading…</div></div>
+          <div class="subline" id="offer-sub">&nbsp;</div>
+          <div class="take" id="offer-take-row" style="display:none"><span class="arr">→</span><span id="offer-take">&nbsp;</span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── 2 · Who actually replies? ── -->
+    <section class="lane" aria-label="Who replies lane">
+      <span class="node num">2</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Who actually replies?</h2>
+      </div>
+      <div class="cards">
+        <div class="acard" style="max-width:560px">
+          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title · <span id="who-scope"></span></span> <span class="stamp" id="who-stamp"></span></div>
+          <div class="brows num" id="who-rows"><div class="subline">Loading…</div></div>
+          <div class="subline" id="who-size" style="margin-top:8px">&nbsp;</div>
+          <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+
+  <div class="footnote" id="rp-foot">Prepared by Navreo · live campaign data.</div>
+</div>
+
+<div class="ah gone" id="gone" style="display:none">
+  <h1>This link isn't valid</h1>
+  <div class="subline">The report link is malformed or has expired. Ask your Navreo contact for a fresh one.</div>
+</div>
+
+<script>
+(function () {
+"use strict";
+/* ── Client report — ONE payload (/api/report/data?share=…), one client.
+   The share token is the only source of client + range: this page sends it
+   verbatim and renders exactly what the server scoped. All interactivity
+   (line chips, weekend toggle, hover) is client-side over that payload. ── */
+var $ = function (id) { return document.getElementById(id); };
+var escq = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+var fmtN = function (n) { return (n == null || isNaN(n)) ? "–" : Math.round(n).toLocaleString("en-GB"); };
+function ageH(iso) {
+  if (!iso) return null;
+  var t = Date.parse(iso);
+  return isNaN(t) ? null : (Date.now() - t) / 36e5;
+}
+function setStamp(id, iso, budgetH) {
+  var el = $(id);
+  if (!el) return;
+  var h = ageH(iso);
+  var txt = "";
+  if (h != null) {
+    h = Math.max(0, h);
+    txt = h < 1 ? "updated " + Math.max(1, Math.round(h * 60)) + " min ago"
+        : h < 48 ? "updated " + Math.round(h) + " h ago"
+                 : "updated " + Math.round(h / 24) + " days ago";
+  }
+  el.textContent = txt;
+  el.classList.toggle("stale", h != null && h > (budgetH || 6));
+}
+var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
+function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
+
+var COL = { sent: "#1971C2", replies: "#7048E8", interested: "#2F9E44", meetings: "#E8590C", bounces: "#E03131", rate: "#0B7285" };
+var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounce-Rate", rate: "Reply rate" };
+var ORDER = ["sent", "replies", "interested", "meetings", "bounces", "rate"];
+var RAXIS = { rate: 1, bounces: 1 };
+var GEO = { ymax: 60, rmax: 1, n: 0, sentMax: 1 };
+
+var R = null;      // the one payload
+var I0 = 0, I1 = -1;  // axis index bounds for [start..end]
+var state = { hideWeekends: false,
+              on: { sent: true, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
+
+function seriesFor(k) { return (R && R.series && R.series[k]) || null; }
+function slice(a) { return a.slice(I0, I1 + 1); }
+function sliceDays() { return slice(R.days); }
+function rangeLabel() { return dlabel(R.start) + " – " + dlabel(R.end); }
+function winLabel() { return "last " + R.window_days + " days"; }
+function sumSlice(k) {
+  var s = seriesFor(k);
+  if (!s) return null;
+  return slice(s).reduce(function (a, b) { return a + (b || 0); }, 0);
+}
+function chartKeep(windowDays) {
+  if (!state.hideWeekends) return windowDays.map(function (_, i) { return i; });
+  var keep = [];
+  windowDays.forEach(function (d, i) {
+    var dow = new Date(d + "T12:00:00Z").getUTCDay();
+    if (dow !== 0 && dow !== 6) keep.push(i);
+  });
+  return keep;
+}
+
+/* ── hero legend chips ── */
+function renderLegend() {
+  var sentTot = sumSlice("sent");
+  var repTot = sumSlice("replies");
+  $("rp-lchips").innerHTML = ORDER.map(function (k) {
+    var hasLine = seriesFor(k) != null;
+    var val = null;
+    if (k === "rate") {
+      val = (sentTot && repTot != null) ? (Math.round(repTot / sentTot * 1000) / 10) + "%" : "–";
+    } else if (k === "bounces") {
+      var w = R.window || {};
+      val = (w.sent && w.bounced != null) ? (Math.round(w.bounced / w.sent * 1000) / 10) + "%" : "–";
+      if (!hasLine && val !== "–") {
+        return '<span class="lchip tot"><i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] +
+          ' <b class="num">' + val + '</b><span class="totpill">' + winLabel() + "</span></span>";
+      }
+    } else {
+      val = hasLine ? fmtN(sumSlice(k)) : null;
+      if (val == null && k === "sent" && R.window && R.window.sent != null) {
+        return '<span class="lchip tot"><i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] +
+          ' <b class="num">' + fmtN(R.window.sent) + '</b><span class="totpill">' + winLabel() + "</span></span>";
+      }
+      if (val == null && k === "replies" && R.window && R.window.replied != null) {
+        return '<span class="lchip tot"><i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] +
+          ' <b class="num">' + fmtN(R.window.replied) + '</b><span class="totpill">' + winLabel() + "</span></span>";
+      }
+      if (val == null) val = "–";
+    }
+    var off = !hasLine;
+    return '<button class="lchip' + (state.on[k] && !off ? " on" : (off ? " off" : "")) +
+      '" data-s="' + k + '" aria-pressed="' + (state.on[k] && !off) + '">' +
+      '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">' + val + "</b></button>";
+  }).join("");
+}
+
+/* ── hero trend graph — same geometry as the analytics hub's ── */
+function renderTrend() {
+  renderLegend();
+  $("hero-kick").textContent = "Day by day · " + rangeLabel() + " · " + R.client;
+  setStamp("hero-stamp", R.asof && (R.asof.cw || R.asof.hub), 6);
+  var allDays = sliceDays();
+  var keep = chartKeep(allDays);
+  var days = keep.map(function (i) { return allDays[i]; });
+  var n = days.length;
+  if (!n) { $("trend-svg").innerHTML = ""; $("trend-sub").textContent = "No days in this window."; return; }
+  function pick(full) { return keep.map(function (i) { return full[i]; }); }
+  var lineVis = ORDER.filter(function (k) { return k !== "sent" && state.on[k] && seriesFor(k) != null; });
+  var data = {};
+  lineVis.forEach(function (k) { data[k] = pick(slice(seriesFor(k))); });
+  var sentFull = state.on.sent ? seriesFor("sent") : null;
+  var sentBars = sentFull ? pick(slice(sentFull)) : null;
+  var hasRate = lineVis.some(function (k) { return RAXIS[k]; });
+  var L = 40, Rt = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - Rt, ph = H - T - B;
+  var max = 1;
+  lineVis.forEach(function (k) { if (RAXIS[k]) return; data[k].forEach(function (v) { if (v > max) max = v; }); });
+  var ladder = [12, 20, 30, 40, 60, 80, 120, 160, 240, 320, 480, 640, 900, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800, 19200, 25600, 40000];
+  var ymax = ladder[ladder.length - 1];
+  for (var i = 0; i < ladder.length; i++) { if (ladder[i] >= max) { ymax = ladder[i]; break; } }
+  var rmax = 1;
+  if (hasRate) {
+    var rladder = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20], rmx = 0;
+    lineVis.forEach(function (k) {
+      if (!RAXIS[k]) return;
+      data[k].forEach(function (v) { if (v != null && v > rmx) rmx = v; });
+    });
+    rmax = rladder[rladder.length - 1];
+    for (i = 0; i < rladder.length; i++) { if (rladder[i] >= rmx) { rmax = rladder[i]; break; } }
+  }
+  var sentMax = 1;
+  if (sentBars) sentBars.forEach(function (v) { if (v > sentMax) sentMax = v; });
+  GEO = { ymax: ymax, rmax: rmax, n: n, keep: keep, sentMax: sentMax };
+  function X(ii) { return n === 1 ? L : L + ii * pw / (n - 1); }
+  function Y(v) { return T + (1 - v / ymax) * ph; }
+  function YR(v) { return T + (1 - v / rmax) * ph; }
+  var s = "";
+  if (sentBars) {
+    var bw = n > 1 ? Math.max(3, Math.min(24, pw / (n - 1) * 0.55)) : 40;
+    sentBars.forEach(function (v, ii) {
+      if (!v) return;
+      var bh = (v / sentMax) * ph, bx = X(ii) - bw / 2, by = T + ph - bh;
+      s += '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) +
+        '" height="' + bh.toFixed(1) + '" fill="' + COL.sent + '" opacity="0.13" rx="1.5"/>';
+    });
+    s += '<text x="' + (L + 2) + '" y="' + (T + 10) + '" font-size="10" fill="' + COL.sent + '" opacity="0.75">bars: emails sent/day · peak ' + fmtN(sentMax) + '</text>';
+  }
+  for (i = 0; i <= 4; i++) {
+    var gv = ymax * i / 4, gy = Y(gv);
+    s += '<line x1="' + L + '" y1="' + gy.toFixed(1) + '" x2="' + (W - Rt) + '" y2="' + gy.toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
+    s += '<text x="' + (L - 7) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">' + fmtN(gv) + "</text>";
+    if (hasRate) {
+      var rv = rmax * i / 4;
+      s += '<text x="' + (W - 8) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="' + COL.rate + '" text-anchor="end" class="num">' + (rmax < 4 ? rv.toFixed(1) : Math.round(rv)) + "%</text>";
+    }
+  }
+  var ticks = (n <= 7) ? [0, Math.min(2, n - 1), Math.min(4, n - 1), n - 1]
+            : (n <= 14 ? [0, 4, 9, n - 1] : [0, 10, 17, 24, n - 1]);
+  ticks.filter(function (t, ti, arr) { return t >= 0 && t < n && arr.indexOf(t) === ti; }).forEach(function (t) {
+    s += '<text x="' + X(t).toFixed(1) + '" y="' + (H - 8) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">' + dlabel(days[t]) + "</text>";
+  });
+  var ends = [];
+  lineVis.forEach(function (k) {
+    if (RAXIS[k]) {
+      var dash = k === "rate" ? ' stroke-dasharray="5 4"' : "";
+      var seg = "", lastY = null;
+      data[k].forEach(function (v, ii) {
+        if (v == null) {
+          if (seg) { s += '<polyline points="' + seg + '" fill="none" stroke="' + COL[k] + '" stroke-width="2"' + dash + ' stroke-linejoin="round" stroke-linecap="round"/>'; seg = ""; }
+          return;
+        }
+        lastY = YR(v);
+        seg += (seg ? " " : "") + X(ii).toFixed(1) + "," + lastY.toFixed(1);
+      });
+      if (seg) s += '<polyline points="' + seg + '" fill="none" stroke="' + COL[k] + '" stroke-width="2"' + dash + ' stroke-linejoin="round" stroke-linecap="round"/>';
+      if (lastY != null) ends.push({ k: k, x: X(n - 1), y: lastY });
+      return;
+    }
+    var pts = "";
+    data[k].forEach(function (v, ii) { pts += (ii ? " " : "") + X(ii).toFixed(1) + "," + Y(v || 0).toFixed(1); });
+    s += '<polyline points="' + pts + '" fill="none" stroke="' + COL[k] + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    ends.push({ k: k, x: X(n - 1), y: Y(data[k][n - 1] || 0) });
+  });
+  ends.sort(function (a, b) { return a.y - b.y; });
+  var pos = ends.map(function (e) { return e.y; });
+  for (i = 1; i < pos.length; i++) { if (pos[i] < pos[i - 1] + 13) pos[i] = pos[i - 1] + 13; }
+  var over = (pos.length ? pos[pos.length - 1] : 0) - (H - B - 2);
+  if (over > 0) {
+    for (i = 0; i < pos.length; i++) pos[i] -= over;
+    for (i = pos.length - 2; i >= 0; i--) { if (pos[i] > pos[i + 1] - 13) pos[i] = pos[i + 1] - 13; }
+  }
+  ends.forEach(function (e, ii) {
+    s += '<circle cx="' + e.x.toFixed(1) + '" cy="' + e.y.toFixed(1) + '" r="3" fill="' + COL[e.k] + '"/>';
+    s += '<text x="' + (e.x + 8).toFixed(1) + '" y="' + (pos[ii] + 3.5).toFixed(1) + '" font-size="10.5" font-weight="600" fill="' + COL[e.k] + '">' + NAME[e.k] + "</text>";
+  });
+  $("trend-svg").innerHTML = s;
+  var sentTot = sumSlice("sent");
+  if (sentTot == null && R.window) sentTot = R.window.sent;
+  var sub = (state.on.sent && sentFull ? "Faint bars are emails sent each day; lines are counts per day"
+                                       : "Every line is a count per day");
+  if (R.window && R.window.sent && R.window.bounced != null) {
+    sub += " — about " + Math.max(1, Math.round(R.window.bounced / R.window.sent * 1000) / 10) + " in 100 bounce.";
+  } else sub += ".";
+  if (state.on.sent && sentFull && R.sent_estimated) {
+    sub += " " + escq(R.client) + " shares the Navreo fleet, so its daily bars are an estimated split of the fleet's daily sending (window totals are exact).";
+  }
+  if (state.hideWeekends) sub += " Weekends hidden.";
+  $("trend-sub").textContent = sub;
+  $("trend-take").textContent = takeLine();
+  hideTip();
+}
+function takeLine() {
+  var rep = seriesFor("replies"), mtg = seriesFor("meetings");
+  var rWin = rep ? sumSlice("replies") : (R.window && R.window.replied);
+  var mWin = mtg ? sumSlice("meetings") : null;
+  if (rWin == null || rWin < 10) return "Small numbers in this view — read the counts, not the trend.";
+  var lab = rangeLabel() + ": ";
+  var span = I1 - I0 + 1, half = Math.floor(span / 2);
+  if (rep && span >= 4) {
+    var sl = slice(rep);
+    var recent = sl.slice(sl.length - half).reduce(function (a, b) { return a + (b || 0); }, 0);
+    var earlier = rWin - recent;
+    var ph = recent > earlier * 1.15 ? "picking up" : (recent < earlier * 0.85 ? "slowing" : "holding steady");
+    return lab + (mWin != null ? fmtN(mWin) + " meeting" + (mWin === 1 ? "" : "s") + " · " : "") +
+      fmtN(rWin) + " replies, " + ph + " in the recent half.";
+  }
+  return lab + (mWin != null ? fmtN(mWin) + " meeting" + (mWin === 1 ? "" : "s") + " · " : "") + fmtN(rWin) + " replies.";
+}
+function hideTip() {
+  var g = document.getElementById("tr-hov");
+  if (g) g.parentNode.removeChild(g);
+  $("trend-tip").hidden = true;
+}
+function trendMove(ev) {
+  var svg = $("trend-svg"), r = svg.getBoundingClientRect();
+  if (!r.width || !R) return;
+  var allD = sliceDays();
+  var keep = chartKeep(allD);
+  var days = keep.map(function (i) { return allD[i]; });
+  var n = days.length;
+  if (!n) return;
+  var L = 40, Rp = 132, T = 12, B = 26, pw = 1120 - L - Rp, ph = 264 - T - B;
+  var sx = (ev.clientX - r.left) * 1120 / r.width;
+  var idx = Math.round((sx - L) / pw * (n - 1));
+  if (idx < 0) idx = 0; if (idx > n - 1) idx = n - 1;
+  var oi = keep[idx];
+  var X = n === 1 ? L : L + idx * pw / (n - 1);
+  var html = '<line x1="' + X.toFixed(1) + '" y1="' + T + '" x2="' + X.toFixed(1) + '" y2="' + (T + ph) + '" stroke="var(--line-2)" stroke-width="1"/>';
+  var rows = "";
+  if (state.on.sent && seriesFor("sent")) {
+    var sv = slice(seriesFor("sent"))[oi] || 0;
+    var sby = T + ph - (sv / (GEO.sentMax || 1)) * ph;
+    html += '<circle cx="' + X.toFixed(1) + '" cy="' + sby.toFixed(1) + '" r="3" fill="' + COL.sent + '" stroke="#fff" stroke-width="1.5"/>';
+    rows += '<div class="row"><i style="background:' + COL.sent + '"></i>Sent<span class="v num">' + fmtN(sv) + "</span></div>";
+  }
+  ORDER.forEach(function (k) {
+    if (k === "sent") return;
+    if (!state.on[k] || seriesFor(k) == null) return;
+    var v = slice(seriesFor(k))[oi];
+    if (RAXIS[k]) {
+      if (v == null) return;
+      var Yr = T + (1 - v / (GEO.rmax || 1)) * ph;
+      html += '<circle cx="' + X.toFixed(1) + '" cy="' + Yr.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
+      rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] + '<span class="v num">' + v + "%</span></div>";
+      return;
+    }
+    v = v || 0;
+    var Y = T + (1 - v / GEO.ymax) * ph;
+    html += '<circle cx="' + X.toFixed(1) + '" cy="' + Y.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
+    rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] + '<span class="v num">' + fmtN(v) + "</span></div>";
+  });
+  var old = document.getElementById("tr-hov");
+  if (old) old.parentNode.removeChild(old);
+  svg.insertAdjacentHTML("beforeend", '<g id="tr-hov">' + html + "</g>");
+  var tip = $("trend-tip");
+  tip.innerHTML = "<b>" + dfull(days[idx]) + "</b>" + rows;
+  tip.hidden = false;
+  var wrap = svg.parentNode, ww = wrap.offsetWidth, px = X * r.width / 1120;
+  var left = px + 16;
+  if (left + tip.offsetWidth > ww - 4) left = px - 16 - tip.offsetWidth;
+  if (left < 4) left = 4;
+  var top = (ev.clientY - r.top) - tip.offsetHeight / 2;
+  if (top < 0) top = 0;
+  var maxTop = r.height - tip.offsetHeight;
+  if (maxTop > 0 && top > maxTop) top = maxTop;
+  tip.style.left = left.toFixed(0) + "px";
+  tip.style.top = top.toFixed(0) + "px";
+}
+
+/* ── campaigns, best to worst — same ranking law as the analytics hub
+   (meetings first, then positives, then reply rate) ── */
+function renderRank() {
+  var windowed = R.campaigns_scope === "window";
+  var N = R.window_days;
+  var minSent = windowed ? Math.max(100, N * 15) : 500;
+  setStamp("rank-stamp", R.asof && R.asof.cw, 6);
+  var sc = R.scorecard || {};
+  var rows;
+  if (windowed) {
+    rows = (R.campaigns || []).filter(function (r) { return (r.sent || 0) >= minSent; }).map(function (r) {
+      var c = sc[String(r.id)];
+      return { id: r.id, name: r.name || (c && c.name) || ("Campaign " + r.id),
+               sent: r.sent || 0, replied: r.replied || 0,
+               pos: r.pos != null ? r.pos : ((c && c.positives) || 0),
+               mtg: r.mtg != null ? r.mtg : ((c && c.meetings) || 0),
+               active: !!(c && String(c.status || "").toUpperCase() === "ACTIVE") };
+    });
+  } else {
+    rows = Object.keys(sc).map(function (id) {
+      var c = sc[id];
+      return { id: id, name: c.name || ("Campaign " + id), sent: c.sent || 0, replied: c.replied || 0,
+               pos: c.positives || 0, mtg: c.meetings || 0,
+               active: String(c.status || "").toUpperCase() === "ACTIVE" };
+    }).filter(function (c) { return c.sent >= minSent; });
+  }
+  rows.sort(function (a, b) {
+    return (b.mtg - a.mtg) || (b.pos - a.pos) ||
+           ((b.sent ? b.replied / b.sent : 0) - (a.sent ? a.replied / a.sent : 0));
+  });
+  var top = rows.slice(0, 8);
+  $("rank-scope").textContent = windowed ? "· " + winLabel() : "· all time";
+  if (!top.length) {
+    $("rank-rows").innerHTML = '<div class="subline">No campaign sent ' + fmtN(minSent) + "+ emails in this window yet.</div>";
+    $("rank-take").textContent = "";
+    return;
+  }
+  var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+  top.forEach(function (c, i) {
+    var perPos = c.pos > 0 ? Math.round(c.sent / c.pos) : null;
+    var perMtg = c.mtg > 0 ? Math.round(c.sent / c.mtg) : null;
+    s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
+      '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
+      (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
+      (!c.active ? '<span class="apill mute">finished</span>' : "") +
+      '</div><div class="rsub">' + (windowed ? winLabel() : "all time") + "</div></div>" +
+      '<span class="rint">' + fmtN(c.pos) + '</span><span class="rmtg">' + fmtN(c.mtg) + "</span>" +
+      '<span class="rcost' + (perPos == null ? " mute" : "") + '">' + (perPos == null ? "–" : fmtN(perPos)) + "</span>" +
+      '<span class="rcost' + (perMtg == null ? " mute" : "") + '">' + (perMtg == null ? "–" : fmtN(perMtg)) + "</span></div>";
+  });
+  $("rank-rows").innerHTML = s;
+  var pick = top.filter(function (c) { return c.mtg > 0 || c.pos > 0; })[0];
+  $("rank-take").textContent = pick ? "“" + escq(pick.name.length > 64 ? pick.name.slice(0, 62) + "…" : pick.name) + "” is working best right now." : "";
+}
+
+/* ── what is the offer — this client's offers, re-priced over the window
+   whenever the windowed campaign rows carry positives (same engine as the
+   analytics hub's card; lifetime numbers only as the labelled fallback) ── */
+function renderOffer() {
+  var p = R.offer;
+  setStamp("offer-stamp", p && p.generated_at, 24);
+  var box = $("offer-rows");
+  var baseList = (p && p.rows) || [];
+  var byId = {};
+  (R.campaigns || []).forEach(function (r) { if (r.pos != null) byId[String(r.id)] = r; });
+  var windowable = !!(baseList.length &&
+                      baseList.some(function (o) { return o[8] && o[8].length; }) &&
+                      Object.keys(byId).length);
+  var offerList = baseList, windowed = false;
+  if (windowable) {
+    var N = R.window_days;
+    var minSentO = Math.max(500, Math.round(2000 * N / 30));
+    var rows2 = [];
+    baseList.forEach(function (o) {
+      var ids = o[8] || [];
+      var sent = 0, pos = 0, mtg = 0, camps2 = 0;
+      ids.forEach(function (id) {
+        var r = byId[String(id)];
+        if (!r) return;
+        sent += r.sent || 0; pos += r.pos || 0; mtg += r.mtg || 0; camps2++;
+      });
+      if (sent < minSentO) return;
+      rows2.push([o[0], sent ? Math.round(pos / sent * 1000) / 10 : null, sent, camps2,
+                  pos > 0 ? Math.round(sent / pos) : null,
+                  mtg > 0 ? Math.round(sent / mtg) : null, pos, mtg]);
+    });
+    rows2.sort(function (a, b) { return ((a[4] == null) - (b[4] == null)) || ((a[4] || 0) - (b[4] || 0)); });
+    offerList = rows2; windowed = true;
+  }
+  var scopeTxt = "· " + R.client + " · " + (windowed ? winLabel() : "all-time");
+  $("offer-scope").textContent = scopeTxt;
+  if (!offerList || offerList.length < 2) {
+    box.innerHTML = '<div class="subline">Not enough sending behind any one offer for ' + escq(R.client) +
+      (windowed ? " in the " + winLabel() : "") + " yet.</div>";
+    $("offer-sub").textContent = "";
+    $("offer-take-row").style.display = "none";
+    return;
+  }
+  var offers = offerList.slice(0, 5);
+  var s = '<div class="ocol ohead"><span></span><span>Per positive</span><span>Per meeting</span></div>';
+  s += offers.map(function (o, i) {
+    var pos = o[4], mt = o[5];
+    return '<div class="ocol"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(o[0]) + "</span>" +
+      '<span class="val num' + (i === 0 ? " win" : "") + '">' + (pos ? fmtN(pos) : "–") + "</span>" +
+      '<span class="val num' + (i === 0 && mt ? " win" : "") + '">' + (mt ? fmtN(mt) : "–") + "</span></div>";
+  }).join("");
+  box.innerHTML = s;
+  var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
+  var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
+  var nomeet = offers.filter(function (o) { return !o[5]; }).length;
+  $("offer-sub").textContent = R.client + " — emails it costs to buy one" + (windowed ? " · " + winLabel() : "") +
+    ". Across " + fmtN(camps) + " campaigns and " + fmtN(sends) + " emails." +
+    (nomeet ? " “–” means no meetings booked off that offer yet." : "");
+  if (windowed && offers.length && offers[0][4] != null) {
+    $("offer-take").textContent = "The " + String(offers[0][0]).toLowerCase() +
+      " ask is the cheapest way to a positive reply right now.";
+    $("offer-take-row").style.display = "";
+  } else $("offer-take-row").style.display = "none";
+}
+
+/* ── who's replying — role mix + company size ── */
+function renderWho() {
+  var p = R.who;
+  $("who-scope").textContent = R.client + " · " + winLabel();
+  setStamp("who-stamp", p && p.asof, 6);
+  var named = (p && p.named) || 0;
+  var roleRows = (p && p.buckets) || [];
+  if (named >= 3 && roleRows.length) {
+    var b = roleRows.slice(0, 6);
+    var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
+    $("who-n").textContent = fmtN(named);
+    $("who-rows").innerHTML = b.map(function (x, i) {
+      return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
+        '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
+        '<span class="val num">' + fmtN(x[1]) + "</span></div>";
+    }).join("");
+    var sizes = p.sizes || [];
+    if (sizes.length) {
+      var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
+      $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
+        sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
+    } else $("who-size").textContent = "Company size: not enough on file yet.";
+    $("who-take").textContent = "Most of " + escq(R.client) + "'s real yeses come from " + b[0][0].toLowerCase() + ".";
+    $("who-take-row").style.display = "";
+  } else {
+    $("who-n").textContent = fmtN((p && p.n) || 0);
+    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data in this window yet.</div>';
+    $("who-size").textContent = "";
+    $("who-take-row").style.display = "none";
+  }
+}
+
+function renderAll() {
+  $("rp-title").textContent = R.client + " · outbound report";
+  $("rp-verdict").textContent = "Your outbound, day by day — prepared by Navreo.";
+  $("rp-dates").innerHTML = "<b>" + dfull(R.start) + " – " + dfull(R.end) + "</b><br>Campaign + reply tables cover the " + winLabel() + ".";
+  renderTrend();
+  renderRank();
+  renderOffer();
+  renderWho();
+}
+
+/* ── boot: ONE fetch, token verbatim from the URL ── */
+var tok = new URLSearchParams(location.search).get("share") || "";
+fetch("/api/report/data?share=" + encodeURIComponent(tok), { credentials: "same-origin" })
+  .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+  .then(function (d) {
+    if (!d || d.error || !d.days || !d.days.length) throw new Error("bad payload");
+    R = d;
+    I0 = R.days.indexOf(R.start);
+    I1 = R.days.lastIndexOf(R.end);
+    // start/end can sit outside the served axis (e.g. axis ends yesterday) —
+    // fall to the nearest covered day instead of an empty chart
+    if (I0 < 0) { I0 = 0; for (var i = 0; i < R.days.length; i++) { if (R.days[i] >= R.start) { I0 = i; break; } } }
+    if (I1 < 0) { I1 = R.days.length - 1; for (var j = R.days.length - 1; j >= 0; j--) { if (R.days[j] <= R.end) { I1 = j; break; } } }
+    if (I1 < I0) I1 = I0;
+    $("page").style.display = "";
+    renderAll();
+    $("trend-svg").addEventListener("mousemove", trendMove);
+    $("trend-svg").addEventListener("mouseleave", hideTip);
+    $("rp-lchips").addEventListener("click", function (ev) {
+      var b = ev.target.closest(".lchip[data-s]");
+      if (!b || b.classList.contains("off")) return;
+      state.on[b.dataset.s] = !state.on[b.dataset.s];
+      renderTrend();
+    });
+    $("rp-weekend").addEventListener("click", function () {
+      state.hideWeekends = !state.hideWeekends;
+      this.classList.toggle("on", state.hideWeekends);
+      this.setAttribute("aria-pressed", String(state.hideWeekends));
+      renderTrend();
+    });
+  })
+  .catch(function () { $("gone").style.display = ""; });
+})();
+</script>
+</body>
+</html>

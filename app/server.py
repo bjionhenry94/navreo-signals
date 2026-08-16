@@ -17502,6 +17502,192 @@ def who_replies_get(client: str, days: int) -> tuple[dict, int]:
     return data, 200
 
 
+# ── Client report share (client-report-share, 2026-08-16) ───────────────────
+# /app/report.html is the shareable, client-scoped strip-down of the analytics
+# page: Day-by-day hero + winning campaigns + offer + who's-replying, for ONE
+# client over a sharer-chosen window inside the last 30 days. The HMAC token
+# (same shape as mint_strategy_share / the setter training share) is the ONLY
+# source of client + range on the shared view — /api/report/data ignores every
+# other query param, so a viewer can never read another client's rows by
+# editing the URL.
+
+def mint_report_share(client: str, start: str, end: str, days: int = 90) -> str:
+    """Client permalink token. JSON payload (labels may hold any character)
+    signed with the app auth secret, url-safe b64."""
+    import base64
+    import hashlib
+    import hmac
+    exp = int(time.time()) + max(1, int(days or 90)) * 86400
+    payload = json.dumps({"t": "report", "c": str(client), "s": str(start)[:10],
+                          "e": str(end)[:10], "x": exp}, separators=(",", ":")).encode()
+    sig = hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+def verify_report_share(token: str):
+    """{'client','start','end'} the token is valid for, or None. Never raises —
+    a malformed/tampered/expired token is just 'not valid'."""
+    import base64
+    import hashlib
+    import hmac
+    try:
+        token = str(token or "")
+        if not token or "." not in token:
+            return None
+        b64, _sep, sig = token.rpartition(".")
+        payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        expect = hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expect, sig):
+            return None
+        p = json.loads(payload.decode(errors="replace"))
+        if p.get("t") != "report" or not p.get("c"):
+            return None
+        if int(p.get("x") or 0) < time.time():
+            return None
+        return {"client": str(p["c"]), "start": str(p.get("s") or "")[:10],
+                "end": str(p.get("e") or "")[:10]}
+    except Exception:  # noqa: BLE001 - a bad token is just "not valid"
+        return None
+
+
+def _report_align(src, src_days, axis, cutoff, fill=None, fb=None):
+    """Port of the analytics page's alignDaily: re-key a client-windows series
+    onto the chart axis by DATE. Days on/after the CW asof date (a partial
+    mid-day capture) prefer the fresher axis-aligned `fb` series when given."""
+    if not src or not src_days or not axis:
+        return None
+    m = {d: src[i] for i, d in enumerate(src_days) if i < len(src)}
+    out = []
+    for j, d in enumerate(axis):
+        settled = d in m and not (cutoff and d >= cutoff)
+        if settled:
+            out.append(m[d])
+        elif fb is not None and j < len(fb) and fb[j] is not None:
+            out.append(fb[j])
+        elif d in m:
+            out.append(m[d])
+        else:
+            out.append(fill)
+    return out
+
+
+def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
+    """Everything /app/report.html renders, assembled from the SAME cached
+    reads the analytics page uses (client-windows / analytics-hub / insights /
+    who-replies / scorecard — no new compute on the web instance) and stripped
+    hard to ONE client. The hero series cover the exact [start,end] days; the
+    campaign / offer / who aggregates cover the smallest 7–30-day window
+    ending today that contains the range (only precomputed windows exist), and
+    the page labels that scope on every card."""
+    from datetime import date as _date, timedelta as _td
+    today = _date.today()
+    try:
+        s_d = _date.fromisoformat(str(start)[:10])
+        e_d = _date.fromisoformat(str(end)[:10])
+    except ValueError:
+        return {"error": "bad range"}, 400
+    # clamp to the last 30 days server-side, whatever the caller sent
+    s_d = max(s_d, today - _td(days=29))
+    e_d = min(e_d, today)
+    if e_d < s_d:
+        return {"error": "bad range"}, 400
+    n_win = max(7, min(30, (today - s_d).days + 1))
+    cw, _st = client_windows_get()
+    if not isinstance(cw, dict) or cw.get("building"):
+        cw = {}
+    hub = _inject_demo_analytics_hub(_strip_demo_analytics_hub(_ANALYTICS_HUB_SWR.get("30")))
+    if not isinstance(hub, dict):
+        hub = {}
+    known = set((cw.get("windows") or {}).get("30") or {}) | set(hub.get("clients") or [])
+    known -= {"__all", "__unassigned", "All"}
+    if client not in known:
+        # unknown label (renamed/removed since minting, or never real) —
+        # refuse rather than serve an empty page that reads as "no activity"
+        return {"error": "unknown client"}, 404
+    axis = hub.get("days") or cw.get("days") or []
+    if not axis:
+        return {"error": "data still building"}, 503
+    cwd = cw.get("days") or []
+    cutoff = str(cw.get("asof") or "")[:10] or None
+    ser = (cw.get("series") or {}).get(client) or {}
+    hser = (hub.get("series") or {}).get(client) or {}
+    win = ((cw.get("windows") or {}).get(str(n_win)) or {}).get(client) or {}
+    win30 = ((cw.get("windows") or {}).get("30") or {}).get(client) or {}
+    # same trust gate the page applies: a series whose own 30d sum is
+    # materially short of the verified window total never plots
+    trusted = bool(ser.get("sent"))
+    if trusted and win30.get("sent"):
+        trusted = sum(v or 0 for v in ser["sent"]) >= 0.8 * win30["sent"]
+    sent = _report_align(ser.get("sent"), cwd, axis, cutoff, 0) if trusted else None
+    estimated = False
+    if sent is None and client not in (cw.get("ws_labels") or {}):
+        # shared-Navreo-workspace client: split the workspace's daily sent by
+        # this client's share of the window total (window total stays exact,
+        # only the daily SHAPE is estimated — same split the page draws)
+        ws = (cw.get("series") or {}).get("__navreo_ws") or {}
+        if ws.get("sent") and win.get("sent"):
+            ws_win = sum(v or 0 for v in ws["sent"][-n_win:])
+            if ws_win > 0:
+                share = win["sent"] / float(ws_win)
+                sent = _report_align([round((v or 0) * share) for v in ws["sent"]],
+                                     cwd, axis, cutoff, 0)
+                estimated = True
+    replies = (_report_align(ser.get("replied"), cwd, axis, cutoff, 0)
+               if trusted and ser.get("replied") else (hser.get("replies") or None))
+    bounced = _report_align(ser.get("bounced"), cwd, axis, cutoff, 0) if trusted else None
+
+    def _pct(numer, denom, min_sent=100):
+        if not numer or not denom:
+            return None
+        out = []
+        for i, s_v in enumerate(denom):
+            r_v = numer[i] if i < len(numer) else None
+            ok = (s_v or 0) >= min_sent and r_v is not None
+            out.append(round(r_v * 1000.0 / s_v) / 10 if ok else None)
+        return out
+    camps = [{"id": r.get("id"), "name": r.get("name"), "sent": r.get("sent"),
+              "replied": r.get("replied"), "pos": r.get("pos"), "mtg": r.get("mtg")}
+             for r in ((cw.get("campaigns") or {}).get(str(n_win)) or [])
+             if r.get("client") == client]
+    _scorecard_seed_from_snapshot()
+    score = _inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get())
+    sc = {}
+    camp_ids = {str(r["id"]) for r in camps}
+    for cid, c in (((score or {}).get("campaigns")) or {}).items():
+        if (c.get("client") or "") == client or str(cid) in camp_ids:
+            sc[str(cid)] = {"name": c.get("name"), "status": c.get("status"),
+                            "sent": c.get("sent"), "replied": c.get("replied"),
+                            "positives": c.get("positives"), "meetings": c.get("meetings")}
+    ins = _COCKPIT_INSIGHTS_SWR.get()
+    offer = None
+    for r in (((ins or {}).get("insights")) or []):
+        pl = r.get("payload") or {}
+        if r.get("scope") == "book" and (r.get("insight_key") == "offer" or pl.get("kind") == "offer"):
+            offer = {"rows": (pl.get("by_client") or {}).get(client) or [],
+                     "generated_at": r.get("generated_at")}
+            break
+    if show_demo_clients() and client == "Acme":
+        who = _demo_who_replies(n_win)
+    else:
+        who, _ws = who_replies_get(client, n_win)
+    if isinstance(who, dict) and not who.get("error"):
+        who = {k: who.get(k) for k in ("n", "named", "buckets", "sizes", "size_named", "asof")}
+    else:
+        who = None
+    return {"ok": True, "client": client, "start": s_d.isoformat(), "end": e_d.isoformat(),
+            "window_days": n_win, "days": axis,
+            "series": {"sent": sent, "replies": replies,
+                       "interested": hser.get("interested") or None,
+                       "meetings": hser.get("meetings") or None,
+                       "rate": _pct(replies, sent), "bounces": _pct(bounced, sent)},
+            "sent_estimated": estimated,
+            "window": {"sent": win.get("sent"), "replied": win.get("replied"),
+                       "bounced": win.get("bounced")},
+            "campaigns": camps, "campaigns_scope": "window" if camps else "lifetime",
+            "scorecard": sc, "offer": offer, "who": who,
+            "asof": {"cw": cw.get("asof"), "hub": hub.get("asof")}}, 200
+
+
 # ── Fleet daily stats: the permanent day-by-day record in Supabase ──────────
 # Sent / replies / reply-rate / positives per calendar day, straight from
 # Smartlead's OWN day-wise analytics (same source as the deliverability tab), so
@@ -19882,7 +20068,13 @@ class Handler(SimpleHTTPRequestHandler):
             # handler (page load with a bad token just shows the boot screen).
             _strat_share = (path in ("/api/strategy/run", "/app/strategy.html")
                             and "share=" in self.path)
-            if not (path in _TRAIN_SHARE_GET and "share=" in self.path) and not _strat_share:
+            # Client report share (client-report-share): the report page + its
+            # one data read load logged-out when a share=<token> rides the URL;
+            # the token itself is verified inside the /api/report/data handler.
+            _report_share = (path in ("/api/report/data", "/app/report.html")
+                             and "share=" in self.path)
+            if not (path in _TRAIN_SHARE_GET and "share=" in self.path) \
+                    and not _strat_share and not _report_share:
                 if not self._gate(path):
                     return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
@@ -20426,6 +20618,17 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json(_demo_who_replies(dd), 200)
             body, status = who_replies_get(cl, dd)
             return self._json(body, status)
+        if path == "/api/report/data":
+            # Client report share: reachable logged-out ONLY with a valid HMAC
+            # token (gate bypass in do_GET requires share= present; validity is
+            # enforced here). Client + range come from the token alone.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            p = verify_report_share((q.get("share") or [""])[0])
+            if not p:
+                return self._json({"error": "invalid share link"}, 403)
+            body, status = report_data_get(p["client"], p["start"], p["end"])
+            return self._json(body, status)
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
             return self._json(body, status)
@@ -20662,6 +20865,29 @@ class Handler(SimpleHTTPRequestHandler):
             tok = mint_strategy_share(rid)
             return self._json({"ok": True, "run_id": rid, "token": tok,
                                "url": f"/app/strategy.html?share={tok}#/r/{rid}"})
+        if path == "/api/report/share":
+            # GTME-only (behind the gate above): mint the client report link.
+            # Runs report_data_get first so a link only ever mints for a real
+            # client + servable range (and the mint warms the caches the
+            # client's first open will read).
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            client = str(p.get("client") or "").strip()
+            if not client or client in ("All", "__all", "__unassigned"):
+                return self._json({"ok": False, "message": "pick a client"}, 400)
+            body, status = report_data_get(client, str(p.get("start") or ""),
+                                           str(p.get("end") or ""))
+            if status != 200:
+                return self._json({"ok": False,
+                                   "message": body.get("error") or "bad request"}, status)
+            tok = mint_report_share(client, body["start"], body["end"])
+            log_activity(path, {"client": client, "start": body["start"], "end": body["end"]},
+                         action="report-share-mint", entity="report", entity_id=client)
+            return self._json({"ok": True, "client": client, "start": body["start"],
+                               "end": body["end"], "token": tok,
+                               "url": f"/app/report.html?share={tok}"})
         if path == "/api/strategy/reorder-icebreaker":
             # GTME-only (behind the gate above): reorder an idea's icebreaker waterfall
             try:
