@@ -18,6 +18,10 @@
 .ah{max-width:1160px;margin:0 auto;padding:34px 32px 72px}
 .ah .num{font-variant-numeric:tabular-nums}
 .ah .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:8px 0 24px}
+/* the house mark (rail .logo), inert here — a shared report never links back
+   into the logged-in app */
+.ah .brandmark{align-self:flex-start;display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-size:19px;letter-spacing:-0.02em;color:var(--ink)}
+.ah .brandmark .bm-n{width:36px;height:36px;border-radius:10px;background:var(--ink);color:var(--cream);display:flex;align-items:center;justify-content:center;font-size:19px}
 .ah h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
 .ah .verdict{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
 .ah .pagehead-right{display:flex;flex-direction:column;align-items:flex-end;gap:11px}
@@ -131,6 +135,7 @@
       <h1 id="rp-title">Outbound report</h1>
       <div class="verdict" id="rp-verdict">&nbsp;</div>
     </div>
+    <div class="brandmark" aria-label="Navreo"><span class="bm-n">n</span>Navreo</div>
   </div>
 
   <!-- ══ HERO — day by day ══ -->
