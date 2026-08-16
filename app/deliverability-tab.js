@@ -7207,7 +7207,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     UI.mgr.sel.delete(key);
     logAction({action: "reconnect", count: 1 });
     saveState();
-    toast("Reconnect queued", "ok");
+    // Live mode spawns a server-side watcher job that reports the OUTCOME
+    // (back online vs still failing) in the Tasks panel — say where to look.
+    toast(isLive() ? "Reconnect queued — the result lands in the Tasks panel" : "Reconnect queued", "ok");
     paintPage();
   }
   // Re-enable warm-up on INSTANTLY boxes (the Maildoso fleet warms there).
@@ -7300,7 +7302,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       try { j = await liveAction(paths[kind] + ids.join(","), btn, btn ? '<span class="dlv-spinner" style="width:14px;height:14px"></span> ' + busy[kind] : null, { timeout: 120000 }); }
       catch (e) { toast("Request failed", "err"); return; }
       if (j && j.error) { toast(j.error, "err"); return; }
-      if (kind === "reconnect") { n = j.count || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect", "ok"); }
+      if (kind === "reconnect") { n = j.count || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 20; }); logAction({action: "reconnect", count: n }); toast("Queued " + n + " mailbox(es) for reconnect — the result lands in the Tasks panel", "ok"); }
       else if (kind === "reenable") { n = j.ok || 0; rows.forEach((r) => { r.kind = "ok"; r.warmup_status = "ACTIVE"; r.cap = 15; }); S.A.warmupConfig.notWarming = S.A.warmupConfig.notWarming.filter((x) => !selEmails.has(x.email)); logAction({action: "reenable", count: n, failed: j.failed || 0 }); toast("Re-enabled " + n + (j.failed ? " · " + j.failed + " failed" : ""), "ok"); }
       else if (kind === "warmup") { n = j.paused || 0; rows.forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; } }); logAction({action: "warmup_pause", mailboxes: n, domains: new Set(rows.map((r) => r.domain)).size }); toast("Put " + n + " into warmup" + (j.skipped ? " (" + j.skipped + " already 0)" : ""), "ok"); }
       else if (kind === "restore") { n = j.resumed || 0; rows.forEach((r) => { if (r.rested || r._savedCap != null) { r.cap = r._savedCap != null ? r._savedCap : 20; delete r._savedCap; r.rested = false; r.restedAt = null; } }); logAction({action: "warmup_resume", mailboxes: n }); toast("Restored " + n + (j.skipped ? " · " + j.skipped + " skipped (not dashboard-rested)" : ""), "ok"); }

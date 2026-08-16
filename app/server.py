@@ -16261,6 +16261,163 @@ def _client_ws_action(action, pairs):
     return ok, skipped, failed, "; ".join(msgs[:5])
 
 
+# ── Reconnect outcome watcher (Tasks panel, 2026-08-17) ─────────────────────
+# A reconnect click only ever reported "queued N" — Smartlead retries the
+# connection asynchronously and nothing said whether the box actually came
+# back. Every reconnect POST now also spawns a Tasks-panel job that re-checks
+# the clicked boxes against Smartlead over the following minutes and finishes
+# green ("back online") or red ("still failing"), so the outcome is visible
+# where the operator already looks for background work.
+
+def _reconnect_watch_verify_one(t: dict):
+    """One box's connection state, straight from Smartlead.
+    True = back online, False = still failing, None = could not verify."""
+    if _deliv_mock_on():
+        # Dev fleet: everything reconnects except boxes named broken1, so the
+        # local flow can demo both the green and the red ending.
+        return "broken1" not in str(t.get("email") or t.get("key") or "")
+    email = (t.get("email") or "").lower()
+    if not email:
+        return None
+    if not t.get("slid"):
+        # email -> (workspace, smartlead_id) via the Supabase mirror; the
+        # mapping is stable even though the mirror's health flags are nightly.
+        try:
+            rows = sb("GET", "mailboxes?email=eq.%s&select=smartlead_id,workspace&limit=5"
+                      % urllib.parse.quote(email)) or []
+        except Exception:  # noqa: BLE001 — transient mirror error: retry next check
+            return None
+        pick = next((r for r in rows if r.get("workspace") == t.get("workspace")),
+                    rows[0] if rows else None)
+        if not pick or not pick.get("smartlead_id"):
+            return None
+        t["slid"] = pick["smartlead_id"]
+        t["workspace"] = pick.get("workspace") or t.get("workspace") or "navreo"
+    try:
+        a = _smartlead_json("GET", "/email-accounts/%s/" % t["slid"],
+                            workspace=t.get("workspace") or "navreo", timeout=30) or {}
+    except Exception:  # noqa: BLE001 — Smartlead hiccup: retry next check
+        return None
+    # Two response shapes exist: is_smtp_success/is_imap_success (account GET,
+    # what sync_mailboxes reads) and is_smtp_failure/is_imap_failure
+    # (fetch_data's analyse shape). Any explicit failure -> still failing;
+    # neither shape present -> unknown, never a false "back online".
+    smtp = a.get("is_smtp_success")
+    imap = a.get("is_imap_success")
+    if smtp is None and imap is None:
+        sf, imf = a.get("is_smtp_failure"), a.get("is_imap_failure")
+        smtp = None if sf is None else (not sf)
+        imap = None if imf is None else (not imf)
+    if smtp is None and imap is None:
+        return None
+    return smtp is not False and imap is not False
+
+
+def _reconnect_watch_run(job: dict, targets: list):
+    _job_started(job)
+    n = len(targets)
+    # Live: first look after 90s, then every 2.5 min (~11.5 min window —
+    # Smartlead's bulk retry usually lands within a few minutes). Mock: fast.
+    delays = (4, 5) if _deliv_mock_on() else (90, 150, 150, 150, 150)
+    back, unknown = set(), set()
+
+    def tkey(t):
+        return t.get("email") or t.get("key")
+
+    def paint():
+        with JOBS_LOCK:
+            job["progress"] = {"done": len(back), "total": n}
+            job["counts"] = {"back_online": len(back), "still_failing": n - len(back)}
+        _job_persist(job)
+
+    paint()
+    for d in delays:
+        for _ in range(int(d)):  # 1s steps so Cancel lands promptly
+            if job.get("cancel_requested"):
+                _job_finished(job, "cancelled")
+                return
+            time.sleep(1)
+        unknown = set()
+        for t in targets:
+            if tkey(t) in back:
+                continue
+            v = _reconnect_watch_verify_one(t)
+            if v is True:
+                back.add(tkey(t))
+            elif v is None:
+                unknown.add(tkey(t))
+        paint()
+        if len(back) == n:
+            break
+    still = [tkey(t) for t in targets if tkey(t) not in back]
+    failing = [s for s in still if s not in unknown]
+    if not still:
+        with JOBS_LOCK:
+            job["counts"] = {"back_online": n, "still_failing": 0,
+                             "detail": "Back online ✓" if n == 1
+                             else "All %d back online ✓" % n}
+        _job_finished(job, "done")
+        return
+    if not failing:
+        # Only unknowns left: never paint red on missing evidence — say so.
+        with JOBS_LOCK:
+            job["counts"] = {"back_online": len(back), "still_failing": 0,
+                             "detail": (("%d back online · " % len(back)) if back else "")
+                             + "%d could not be verified — check the Needs reconnect "
+                               "tab after the next refresh" % len(unknown)}
+        _job_finished(job, "done")
+        return
+    ex = ", ".join(failing[:2]) + ("…" if len(failing) > 2 else "")
+    msg = (("%d back online · " % len(back)) if back else "") \
+        + "%d of %d still failing after the retry window (%s). " % (len(failing), n, ex) \
+        + "Smartlead could not reconnect them — fix the login in Smartlead, then Reconnect again."
+    _job_finished(job, "failed", msg[:400])
+
+
+def _reconnect_watch_start(raw_ids):
+    """Spawn the watcher for one reconnect POST. Never raises into the
+    request path — the reconnect itself must not fail on a watcher bug."""
+    try:
+        raw = [str(s).strip() for s in raw_ids if str(s).strip()]
+        if not raw:
+            return
+        # Resolve the clicked ids to emails via the bundle rows the click came
+        # from (both Navreo backend rows and ws-* client rows live there).
+        rows = (((((_DELIV_BUNDLE.get("data") or {}).get("views") or {})
+                  .get("reconnect") or {}).get("rows")) or [])
+        by_key = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if r.get("id") is not None:
+                by_key[str(r["id"])] = r
+            if r.get("email"):
+                by_key[str(r["email"]).lower()] = r
+        targets, seen = [], set()
+        for s in raw:
+            r = by_key.get(s) or by_key.get(s.lower()) or {}
+            email = r.get("email") or (s if "@" in s else "")
+            ws = r.get("workspace") or "navreo"
+            m = _WS_ROW_ID_RE.match(s)
+            if m:
+                ws = m.group(1)
+            k = (email or s).lower()
+            if k in seen:
+                continue
+            seen.add(k)
+            targets.append({"key": s, "email": email, "workspace": ws})
+        if not targets:
+            return
+        n = len(targets)
+        label = ("Reconnect: " + targets[0]["email"]) if n == 1 and targets[0]["email"] \
+            else "Reconnect: %d mailbox(es)" % n
+        job = _new_job("reconnect-watch", label, None, mock=_deliv_mock_on())
+        threading.Thread(target=_reconnect_watch_run, args=(job, targets),
+                         daemon=True).start()
+    except Exception as e:  # noqa: BLE001 — watcher is best-effort
+        print("[reconnect-watch] failed to start:", e)
+
+
 def _deliv_bundle_run_bg_inner():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
@@ -22000,6 +22157,10 @@ class Handler(SimpleHTTPRequestHandler):
                 one = (q.get("id") or [""])[0]
                 many = [s for s in (q.get("ids") or [""])[0].split(",") if s]
                 raw = [one] if one else many
+                if act == "reconnect" and raw:
+                    # Tasks-panel watcher: the reconnect response only says
+                    # "queued N" — this follows up and reports the outcome.
+                    _reconnect_watch_start(raw)
                 cli = _client_ws_ids(raw)
                 if cli:
                     rest = [s for s in raw if not _WS_ROW_ID_RE.match(s)]
