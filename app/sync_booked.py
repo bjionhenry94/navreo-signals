@@ -13,7 +13,10 @@ One reconcile pass per run, per client in app/data/booked_sync_clients.json:
 
 Hard rules (do not relax):
   * Ratchet only — this job never moves any lead AWAY from booked, anywhere.
-  * Never writes the human-owned billing statuses (Call Attended / Paid).
+  * Notion is the truer source (Bjion ruling 2026-08-16): the reverse ratchet
+    fires at most ONCE per lead — any email already in booked_leads state is
+    never re-pushed, so a deliberate human downgrade in Notion sticks.
+  * Never writes the human-owned statuses (No-Showed / Call Attended / Paid).
   * Pause, never delete. No emails are ever composed or sent.
   * Booked leads with no Notion row are LOGGED as unmatched, never auto-created
     (same person can book under a different email — a human resolves those).
@@ -333,8 +336,12 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
         if r.get("raw_attendee_email"):
             sl_booked.add(r["raw_attendee_email"].strip().lower())
     log(f"[{client}] smartlead/calendly booked emails: {len(sl_booked)}")
+    # Notion is the truer source: once an email has ANY state row we've already
+    # reconciled it once — never re-ratchet, so human downgrades in Notion stick.
+    sl_booked_new = {e for e in sl_booked if e not in state}
+    log(f"[{client}] of those, never reconciled before: {len(sl_booked_new)}")
 
-    updates, unmatched, noops = plan_reverse(sl_booked, notion_by_email, cfg)
+    updates, unmatched, noops = plan_reverse(sl_booked_new, notion_by_email, cfg)
     for email, page_id, ptype, current in updates:
         try:
             if not DRY:
