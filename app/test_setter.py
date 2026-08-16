@@ -1502,6 +1502,16 @@ def test_call_ask_deferral_and_channel_beat_scheduling():
     for body in cases_required:
         got = setter.call_ask_for(sched, body, "", first_touch=False)
         check(f"call_ask required (no constraint): {body[:45]!r}", got == "required", got)
+    # Live-moment replies settle the call even when they classify as
+    # scheduling ("are you coming?") - panel fix 2026-08-16.
+    cases_live = [
+        "Trying to join now but the meeting link isn't working?? Am I in the wrong place?",
+        "Oops, my apologies. Didn't get a reminder. Waiting to enter now.",
+        "Hi - are you coming?",
+    ]
+    for body in cases_live:
+        got = setter.call_ask_for(sched, body, "", first_touch=False)
+        check(f"call_ask avoid (live moment): {body[:45]!r}", got == "avoid", got)
 
 
 def test_draft_payload_carries_constraint_directive():

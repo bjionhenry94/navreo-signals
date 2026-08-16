@@ -829,7 +829,13 @@ def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc,
 _CALL_SETTLED_RE = re.compile(
     r"\b(i(?:'ve| have)? booked|just booked|booked (?:a|the) (?:call|slot|time)|"
     r"invite (?:is )?(?:sent|accepted)|see you (?:then|on|at)|"
-    r"calendar invite|call is (?:booked|set))\b", re.IGNORECASE)
+    r"calendar invite|call is (?:booked|set)|"
+    # The call is happening RIGHT NOW (training panel 2026-08-16: 'waiting to
+    # enter now' still drew a two-slot pitch 1 run in 3) - nothing could be
+    # more settled than a call in progress.
+    r"waiting to (?:enter|join)|joining (?:now|the call)|dial(?:ing|ling) in|"
+    r"(?:trying|about) to join|on the call now|running \d+ ?min(?:ute)?s? late|"
+    r"are you (?:coming|joining)|link isn'?t working|wrong (?:link|place))\b", re.IGNORECASE)
 # SOFT markers only count alongside an actual day or time. "That works" and
 # "does X work" are the give-away here: "does the pricing work for a smaller
 # list?" is a question to answer, not a call being agreed - reading it as
@@ -890,15 +896,18 @@ def call_ask_for(classification: dict, body_text: str, thread_text: str, first_t
     # slot machinery on every draft - it lost roughly 1 in 3).
     if _NO_CALL_CHANNEL_RE.search(body) or _DEFERRAL_RE.search(body):
         return "avoid"
-    # They are asking to book, or asking about times: always ask.
-    if "scheduling" in intents or primary == "scheduling":
-        return "required"
-    # They have settled the call themselves - answering with two fresh times
-    # is the exact "out of touch" reply that was reported.
+    # They have settled the call themselves (or it is happening right now) -
+    # answering with two fresh times is the exact "out of touch" reply that
+    # was reported. Checked BEFORE the scheduling intent: "are you coming?"
+    # and "waiting to enter now" classify as scheduling, and the old order
+    # handed them call_ask="required" (training panel 2026-08-16).
     if _CALL_SETTLED_RE.search(body):
         return "avoid"
     if _CALL_SETTLED_SOFT_RE.search(body) and _TIME_TOKEN_RE.search(body):
         return "avoid"
+    # They are asking to book, or asking about times: always ask.
+    if "scheduling" in intents or primary == "scheduling":
+        return "required"
     if first_touch:
         return "required"
     # Later turn, not about scheduling, and we have already put a call on the
