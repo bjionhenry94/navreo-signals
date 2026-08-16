@@ -25,6 +25,8 @@ envVarGroups:
         sync: false
       - key: LISTMINT_API_KEY
         sync: false
+      - key: NOTION_API_KEY
+        sync: false
 
 services:
   # The web app + /api. Render injects $PORT; server.py binds 0.0.0.0.
@@ -118,3 +120,20 @@ services:
     startCommand: python app/run_collision_census.py
     envVars:
       - fromGroup: navreo-secrets
+
+  # Notion <-> Smartlead <-> Supabase booked-lead sync (booked-sync-orchestrator
+  # skill). Ratchet-only; pauses booked leads in every active campaign so we
+  # never double-message someone we've already booked. Idles harmlessly until
+  # NOTION_API_KEY lands in navreo-secrets. BOOKED_SYNC_DRY=1 keeps the first
+  # live cycles write-free — flip to 0 after the dry diff is verified.
+  - type: cron
+    name: navreo-booked-sync
+    runtime: python
+    plan: starter
+    schedule: "*/30 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/sync_booked.py
+    envVars:
+      - fromGroup: navreo-secrets
+      - key: BOOKED_SYNC_DRY
+        value: "1"
