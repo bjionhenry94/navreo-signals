@@ -5129,8 +5129,10 @@
     return '<span class="old">' + esc(String(from)) + '</span><span class="arr">&rarr;</span>' + esc(String(to));
   }
 
-  /* Typed-token confirm modal (house contract: the typed word IS the
-     approval the server's confirm token encodes). opts:
+  /* Confirm modal (Bjion, 02 Aug 2026: the typed-token double-verification is
+     gone — one glance at the before/after lines, one click on Confirm. The
+     server-side confirm token still rides in every run() payload; it is the
+     API contract, no longer a UI gate.) opts:
      {title, sub, lines:[[k, vHTML]], idnote, token, danger, confirmLabel,
       body?:HTML above lines, run: fn -> Promise<resp>, receipt: fn(resp) ->
       {title, lines:[[k, vHTML]], foot}} */
@@ -5146,24 +5148,19 @@
       (opts.body || "") +
       (linesHTML ? '<div class="vaw-lines">' + linesHTML + "</div>" : "") +
       (opts.idnote ? '<p class="vaw-idnote">&#128274; ' + esc(opts.idnote) + "</p>" : "") +
-      '<div class="vaw-token"><span class="vaw-token-lbl">Type <b>' + esc(opts.token) + "</b> to confirm:</span>" +
-      '<input type="text" autocomplete="off" spellcheck="false" aria-label="confirmation word"></div>' +
       '<div class="vaw-err"></div>' +
       '<div class="vaw-foot"><button type="button" class="vaw-btn" data-x>Cancel</button>' +
       '<button type="button" class="vaw-btn ' + (opts.danger ? "vaw-btn--danger" : "vaw-btn--primary") +
-      '" data-go disabled>' + esc(opts.confirmLabel || "Confirm — write it") + "</button></div></div>";
+      '" data-go>' + esc(opts.confirmLabel || "Confirm — write it") + "</button></div></div>";
     document.body.appendChild(ov);
-    var input = ov.querySelector("input"), go = ov.querySelector("[data-go]"),
+    var go = ov.querySelector("[data-go]"),
         err = ov.querySelector(".vaw-err"), modal = ov.querySelector(".vaw-modal");
     function close() { ov.remove(); document.removeEventListener("keydown", onKey); }
     function onKey(e) { if (e.key === "Escape") close(); }
     document.addEventListener("keydown", onKey);
     ov.addEventListener("mousedown", function (e) { if (e.target === ov) close(); });
     ov.querySelector("[data-x]").addEventListener("click", close);
-    input.addEventListener("input", function () {
-      go.disabled = input.value.trim().toUpperCase() !== opts.token;
-    });
-    input.focus();
+    go.focus();
     go.addEventListener("click", function () {
       if (go.disabled) return;
       go.disabled = true; go.textContent = "Writing…"; err.textContent = "";
@@ -5626,17 +5623,14 @@
           esc((d.plan && d.plan.note) || "") + "</span></div>" +
           '<div class="vaw-line"><span class="k">Existing versions</span><span class="v">every ID kept — history intact</span></div></div>' +
           '<p class="vaw-idnote">&#128274; ' + esc(VAW_IDNOTE) + "</p>" +
-          '<div class="vaw-token"><span class="vaw-token-lbl">Type <b>ADD</b> to confirm:</span>' +
-          '<input type="text" autocomplete="off" spellcheck="false" aria-label="confirmation word"></div>' +
           '<div class="vaw-err"></div>' +
           '<div class="vaw-foot"><button type="button" class="vaw-btn" data-x>Cancel</button>' +
-          '<button type="button" class="vaw-btn vaw-btn--primary" data-add disabled>Approve — add Version ' +
+          '<button type="button" class="vaw-btn vaw-btn--primary" data-add>Approve — add Version ' +
           esc(d.next_label) + "</button></div>";
-        var input = modal.querySelector("input"), add = modal.querySelector("[data-add]"),
+        var add = modal.querySelector("[data-add]"),
             err2 = modal.querySelector(".vaw-err");
         modal.querySelector("[data-x]").addEventListener("click", close);
-        input.addEventListener("input", function () { add.disabled = input.value.trim().toUpperCase() !== "ADD"; });
-        input.focus();
+        add.focus();
         add.addEventListener("click", function () {
           if (add.disabled) return;
           add.disabled = true; add.textContent = "Adding…";
