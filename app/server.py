@@ -19475,6 +19475,7 @@ def api_restore_live(p: dict):
 _AUTO_DOMAIN_FIRST_DELAY_S = 5 * 60
 _AUTO_DOMAIN_INTERVAL_S = 6 * 3600
 _AUTO_DOMAIN_MAILDOSO_FLOOR = 0.5   # mirrors deliverability-tab.js MAILDOSO_FLOOR
+_AUTO_DOMAIN_MAX_PARKS = 6          # per check; worst rates first, rest defer 6h
 _AUTO_DOMAIN = {"running": False, "last": None, "history": []}
 _AUTO_DOMAIN_LOCK = threading.Lock()
 
@@ -19554,6 +19555,33 @@ def _auto_domain_flagged():
                 continue
             flagged[dom] = {"domain": dom, "sent": sent, "reply_rate": rate,
                             "window_days": days, "workspace": d.get("workspace")}
+    # Client workspaces (KRG/Asteri/Grout…): the audit backend only sees
+    # Navreo's Smartlead, so their below-floor domains never appear in the
+    # calls above — they reach the manager's floor view via the same mirror
+    # federation the bundle uses. Run that federation into a scratch skeleton
+    # and score its dh rows with the identical maths. Workspaces in
+    # CAP_EXCLUDED_WORKSPACES (Asteri runs its own caps, owner ruling
+    # 2026-07-28) are never auto-parked.
+    if not _deliv_mock_on():
+        try:
+            fed = {"views": {}, "dh": {}}
+            _deliv_merge_client_ws(fed)
+            for days in (7, 14, 30):
+                for d in (((fed.get("dh") or {}).get(str(days)) or {}).get("rows") or []):
+                    dom = str(d.get("domain") or "").lower()
+                    ws = d.get("workspace")
+                    if not dom or dom in flagged or ws in CAP_EXCLUDED_WORKSPACES:
+                        continue
+                    sent = d.get("sent") or 0
+                    rate = d.get("reply_rate")
+                    if rate is None or sent < min_sent or rate >= cutoff:
+                        continue
+                    if dom in ledger or dom in recent:
+                        continue
+                    flagged[dom] = {"domain": dom, "sent": sent, "reply_rate": rate,
+                                    "window_days": days, "workspace": ws}
+        except Exception as e:  # noqa: BLE001 — stale client mirror: Navreo rows still ship
+            print(f"[domain-auto] client federation unavailable: {e}", flush=True)
     return list(flagged.values()), min_sent, cutoff
 
 
@@ -19573,11 +19601,20 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
         # ── 1. Warm up every domain the floor view flags ────────────────────
         try:
             flagged, min_sent, cutoff = _auto_domain_flagged()
-            w = out["warmup"] = {"flagged": [f["domain"] for f in flagged],
+            # Staged blast radius: worst reply rates first, at most
+            # _AUTO_DOMAIN_MAX_PARKS per check — a fleet-wide bleed (e.g. 10
+            # of KRG's 22 domains below floor at once) rests in 6-hourly
+            # batches instead of losing a client's whole capacity in one shot.
+            flagged.sort(key=lambda f: (f.get("reply_rate") or 0, -(f.get("sent") or 0)))
+            park_now = flagged[:_AUTO_DOMAIN_MAX_PARKS]
+            deferred = flagged[_AUTO_DOMAIN_MAX_PARKS:]
+            w = out["warmup"] = {"flagged": [f["domain"] for f in park_now],
                                  "minSent": min_sent, "cutoff": cutoff}
-            if flagged:
+            if deferred:
+                w["deferred_to_next_check"] = [f["domain"] for f in deferred]
+            if park_now:
                 body, _st = api_warmup_job({"op": "pause",
-                                            "domains": [f["domain"] for f in flagged]})
+                                            "domains": [f["domain"] for f in park_now]})
                 w["job_id"] = (body or {}).get("job_id")
         except Exception as e:  # noqa: BLE001 — one half failing must not kill the other
             out["warmup"] = {"error": str(e)[:200]}
