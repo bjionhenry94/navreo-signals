@@ -176,11 +176,97 @@
    from a client link can ever show up. */
 body.share-mode .rail { display: none; }
 body.share-mode a[href="setter.html"] { display: none !important; }
+/* The shell's Tasks drawer is internal chrome (campaign names, domain jobs) -
+   a client share link must never show it, same treatment as ?chrome=none. */
+body.share-mode #nav-jobs-tab, body.share-mode #nav-jobs-panel { display: none !important; }
+
+/* ── Client training portal (share mode): companion pane ──────────────────
+   Two-pane layout: the guide chat + document intake live in a sticky left
+   aside; the readiness panel and scenario stream keep the right column.
+   Owner mode never shows the aside - everything below is share-mode only. */
+.companion { display: none; }
+body.share-mode .companion {
+  display: flex; flex-direction: column; width: 340px; flex: none;
+  height: 100vh; position: sticky; top: 0; box-sizing: border-box;
+  border-right: 1px solid var(--line); background: var(--bg-sunken, #FAFAF8);
+  padding: 18px 16px 14px;
+}
+.cmp-head { font-family: var(--font-sans); font-weight: 600; font-size: 14px; margin: 0 0 2px; }
+.cmp-sub { font-size: 11.5px; color: var(--ink-3); margin: 0 0 12px; }
+.cmp-msgs { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; padding: 2px 2px 10px; min-height: 0; }
+.cmp-msg { max-width: 92%; border-radius: 12px; padding: 8px 12px; font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.cmp-msg.guide { align-self: flex-start; background: var(--cream, #fff); border: 1px solid var(--line); }
+.cmp-msg.client { align-self: flex-end; background: var(--orange); color: var(--cream, #fff); }
+.cmp-msg.typing { align-self: flex-start; color: var(--ink-3); background: transparent; border: none; font-style: italic; }
+.cmp-input-row { display: flex; gap: 6px; align-items: flex-end; margin-top: 8px; }
+.cmp-input-row textarea {
+  flex: 1; min-height: 38px; max-height: 140px; resize: none; border: 1px solid var(--line-2);
+  border-radius: 10px; padding: 9px 11px; font: 400 12.5px var(--font-sans); color: var(--ink);
+  background: var(--cream, #fff); box-sizing: border-box;
+}
+.cmp-input-row textarea:focus { outline: none; box-shadow: var(--focus); }
+.cmp-send { border: none; border-radius: 10px; background: var(--orange); color: var(--cream, #fff);
+  font: 600 12.5px var(--font-sans); padding: 10px 14px; cursor: pointer; flex: none; }
+.cmp-send:disabled { opacity: 0.5; cursor: default; }
+.cmp-drop {
+  border: 1.5px dashed var(--line-2); border-radius: 10px; padding: 9px 12px; margin-top: 10px;
+  font-size: 11.5px; color: var(--ink-3); text-align: center; cursor: pointer; line-height: 1.45;
+}
+.cmp-drop.over { border-color: var(--orange); color: var(--orange); background: var(--amber-bg); }
+.cmp-drop.busy { border-style: solid; color: var(--ink-2); cursor: default; }
+.cmp-materials { margin-top: 8px; display: flex; flex-direction: column; gap: 4px; max-height: 110px; overflow-y: auto; }
+.cmp-mat { font-size: 11px; color: var(--ink-2); background: var(--cream, #fff); border: 1px solid var(--line);
+  border-radius: 8px; padding: 5px 9px; display: flex; gap: 6px; align-items: baseline; }
+.cmp-mat .cm-name { font-weight: 600; flex: none; max-width: 45%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-mat .cm-sum { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cmp-tutorial-link { margin-top: 8px; font-size: 11.5px; color: var(--ink-3); text-align: center; }
+.cmp-tutorial-link a { color: var(--ink-3); text-decoration: underline; cursor: pointer; }
+@media (max-width: 900px) {
+  body.share-mode .app { flex-direction: column; }
+  body.share-mode .companion { width: auto; height: auto; position: static; max-height: 46vh;
+    border-right: none; border-bottom: 1px solid var(--line); }
+  .cmp-msgs { max-height: 22vh; }
+}
+
+/* ── Round summary + trained banner (share mode) ────────── */
+.round-score { font-family: var(--font-display); font-weight: 400; font-size: 34px; letter-spacing: -0.01em; margin: 4px 0 2px; }
+.done-banner.trained { border-color: var(--green-line); background: var(--green-bg); }
+.done-banner.trained .db-icon { color: var(--green); }
+
+/* ── First-visit tutorial overlay ─────────────────────────
+   A dim layer plus one floating card per step. Spotlit elements get
+   .tut-spot, which lifts them above the dim with position/z-index only -
+   no layout change, so nothing jumps. */
+.tut-dim { position: fixed; inset: 0; background: rgba(20, 18, 14, 0.55); z-index: 500; }
+.tut-spot { position: relative !important; z-index: 501 !important; background: var(--cream, #fff); border-radius: 10px; box-shadow: 0 0 0 6px var(--cream, #fff); }
+.tut-card {
+  position: fixed; z-index: 502; width: min(340px, calc(100vw - 32px));
+  background: var(--cream, #fff); border: 1px solid var(--line); border-radius: 14px;
+  padding: 16px 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+.tut-card .tc-step { font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+.tut-card .tc-title { font-family: var(--font-sans); font-weight: 600; font-size: 15px; margin: 0 0 6px; }
+.tut-card .tc-body { font-size: 13px; color: var(--ink-2); line-height: 1.55; margin: 0 0 12px; }
+.tut-card .tc-row { display: flex; align-items: center; gap: 10px; }
+.tut-card .tc-skip { font-size: 12px; color: var(--ink-3); text-decoration: underline; cursor: pointer; margin-left: auto; }
 </style>
 </head>
 <body>
 <div class="app">
   <div id="rail"></div>
+  <aside class="companion" id="companionPane">
+    <div class="cmp-head">Your guide</div>
+    <div class="cmp-sub" id="cmpSub">Ask anything, or tell me standing rules for your AI.</div>
+    <div class="cmp-msgs" id="cmpMsgs"></div>
+    <div class="cmp-input-row">
+      <textarea id="cmpInput" rows="1" placeholder="Ask a question, or paste text to teach your AI…"></textarea>
+      <button class="cmp-send" id="cmpSend" type="button">Send</button>
+    </div>
+    <div class="cmp-drop" id="cmpDrop">Drop a PDF here (pricing, FAQs, case studies) — or click to choose a file</div>
+    <input type="file" id="cmpFile" accept="application/pdf" style="display:none">
+    <div class="cmp-materials" id="cmpMaterials"></div>
+    <div class="cmp-tutorial-link"><a id="cmpTutorialLink" role="button">Show me how this works</a></div>
+  </aside>
   <main class="main train-main">
     <div class="setter-head-row">
       <h1 class="sh-title">Training</h1>
@@ -252,6 +338,22 @@ const REVIEW_TEACH = {};
 let view = "loading"; // loading | no_agents | empty | stream | done | review
 let idx = 0;
 let generating = false; // guards the POST /training/generate and /training/recheck calls
+
+/* ── Client training portal state (share mode only) ───────────────────────
+   CHAT_LOG/MATERIALS restore the companion pane across refreshes (persisted
+   in the training doc, see setter.py route_training_chat/material). ROUND_IDS
+   is the case-id set of the round currently being rated - a "round" is one
+   batch of up to ROUND_SIZE cards; the summary screen scores exactly these
+   ids so a long-lived agent doc never bleeds old batches into the round
+   score. Round number + count-per-sitting live in sessionStorage so a
+   refresh mid-sitting keeps its place but a fresh visit starts clean. */
+let CHAT_LOG = [];
+let MATERIALS = [];
+let ROUND_IDS = null;
+const ROUND_SIZE = 10;
+const ROUND_CAP = 12;           // rounds per sitting - then "we'll take it from here"
+const PASTE_THRESHOLD = 1500;   // chars - a chat message longer than this is treated as training material
+let chatBusy = false;
 
 /* ── Background-generation polling state ──────────────────────────────────
    Scenario generation runs on the server in a background thread (see
@@ -409,22 +511,27 @@ async function bootShare() {
   shareAgentName = (infoRes.data && infoRes.data.agent_name) || "your agent";
   selectedAgentId = (infoRes.data && infoRes.data.agent_id) || null;
   renderShareHeader();
+  initCompanion();
   await loadTraining();
+  renderChatLog();
+  maybeStartTutorial();
 }
 
 function renderShareHeader() {
   const title = document.querySelector(".sh-title");
   if (title) title.textContent = `Train ${shareAgentName}`;
   const sub = document.querySelector(".train-sub");
-  if (sub) sub.textContent = "Help train your AI appointment setter. Rate scenarios drawn from real "
-    + "replies your campaigns have received, topped up with practice scenarios when real ones run low - "
-    + "your answers teach it when to answer on its own and when to leave it to a person. "
+  if (sub) sub.textContent = "Train your AI appointment setter in rounds of "
+    + ROUND_SIZE + " simulated conversations - rate each draft, and it learns your voice. "
+    + "Your guide on the left can answer questions and take documents or standing rules. "
     + "Nothing here ever emails anyone.";
 }
 
 /* Full-page friendly state for an expired/invalid/tampered token - never
    the raw 401 JSON, and nothing scenario-shaped stays on screen underneath. */
 function renderShareExpired() {
+  const pane = document.getElementById("companionPane");
+  if (pane) pane.style.display = "none";
   const title = document.querySelector(".sh-title");
   if (title) title.textContent = "Training link expired";
   const sub = document.querySelector(".train-sub");
@@ -503,6 +610,11 @@ function applyCasesSnapshot(data) {
   AGENT_MEMORY = (data && data.agent_memory) || [];
   INSTRUCTION_EDITS = (data && data.instruction_edits) || [];
   GENERATING = (data && data.generating) || GENERATING;
+  // Companion pane data: materials re-render freely (a list of chips), but
+  // the chat DOM is only painted once at boot (renderChatLog) - later polls
+  // must never wipe locally-appended messages still in flight to the server.
+  if (Array.isArray(data && data.chat_log)) CHAT_LOG = data.chat_log;
+  if (Array.isArray(data && data.materials)) { MATERIALS = data.materials; renderMaterials(); }
   applyReadiness((data && data.readiness) || READINESS, { animate: false });
 }
 
@@ -510,9 +622,63 @@ function renderCasesOrEmpty() {
   if (!CASES.length) { view = "empty"; render(); return; }
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; render(); return; }
+  beginRoundIfNeeded();
   idx = 0;
   view = "stream";
   render();
+}
+
+/* A round begins whenever the stream starts with no round in progress: at
+   boot (whatever is unanswered = the round), and right after a fresh batch
+   lands (generateMore nulls ROUND_IDS first). Owner mode never rounds. */
+function beginRoundIfNeeded() {
+  if (!SHARE_MODE) return;
+  if (ROUND_IDS && ROUND_IDS.some((id) => !isAnswered(id))) return; // round still going
+  // A refresh mid-round restores the same round instead of starting (and
+  // counting) a new one - the id set is persisted per sitting.
+  if (!ROUND_IDS) {
+    let saved = null;
+    try { saved = JSON.parse(sessionStorage.getItem("trainRoundIds") || "null"); } catch { /* ignore */ }
+    if (Array.isArray(saved) && saved.length) {
+      const live = new Set(CASES.map((c) => String(c.id)));
+      const restored = saved.filter((id) => live.has(String(id)));
+      if (restored.some((id) => !isAnswered(id))) { ROUND_IDS = restored; return; }
+    }
+  }
+  ROUND_IDS = currentUnanswered().map((c) => c.id);
+  let n = 0, sitting = 0;
+  try {
+    n = Number(sessionStorage.getItem("trainRoundNum") || "0");
+    sitting = Number(sessionStorage.getItem("trainRoundsSitting") || "0");
+  } catch { /* ignore */ }
+  try {
+    sessionStorage.setItem("trainRoundNum", String(n + 1));
+    sessionStorage.setItem("trainRoundsSitting", String(sitting + 1));
+    sessionStorage.setItem("trainRoundIds", JSON.stringify(ROUND_IDS));
+  } catch { /* ignore */ }
+}
+
+function currentRoundNum() {
+  try { return Math.max(1, Number(sessionStorage.getItem("trainRoundNum") || "1")); }
+  catch { return 1; }
+}
+function roundsThisSitting() {
+  try { return Number(sessionStorage.getItem("trainRoundsSitting") || "0"); }
+  catch { return 0; }
+}
+
+/* Round score over exactly the current round's ids: a card counts as
+   "right" when the trainer agreed with the call AND didn't mark the draft
+   bad (skipped draft = benefit of the doubt, same spirit as the readiness
+   formula ignoring skips). */
+function roundScore() {
+  const ids = (ROUND_IDS && ROUND_IDS.length) ? ROUND_IDS : CASES.map((c) => c.id);
+  const graded = ids.filter((id) => isAnswered(id));
+  const right = graded.filter((id) => {
+    const a = ANSWERS[id] || {};
+    return a.decision_ok === true && a.reply_ok !== false;
+  }).length;
+  return { right, total: graded.length };
 }
 
 function markGenerateButtonsBusy(label) {
@@ -701,8 +867,14 @@ function pendingFor(caseId) {
 /* ── Readiness panel ───────────────────────────────────── */
 function applyReadiness(r, opts) {
   opts = opts || {};
+  const prevScore = Number(READINESS.score) || 0;
   READINESS = r || READINESS;
   renderReadinessPanel(opts.animate !== false);
+  // Share mode's round banner quotes the score and gates on 90 - answers
+  // save optimistically, so the banner can render before the last few
+  // responses land. Re-render it whenever a landed response moves the score
+  // so the number (and the trained/keep-going state) is never stale.
+  if (SHARE_MODE && view === "done" && (Number(READINESS.score) || 0) !== prevScore) renderRoundDone();
 }
 
 function animateNumber(el, from, to, duration) {
@@ -843,6 +1015,7 @@ function renderEmpty() {
 }
 
 function renderDone() {
+  if (SHARE_MODE) { renderRoundDone(); return; }
   const el = document.getElementById("trainApp");
   const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
   el.innerHTML = `
@@ -855,6 +1028,54 @@ function renderDone() {
     </div>
   `;
   document.getElementById("doneGenerateBtn").addEventListener("click", () => generateMore());
+  const reviewBtn = document.getElementById("doneReviewBtn");
+  if (reviewBtn) reviewBtn.addEventListener("click", () => startReview());
+}
+
+/* ── Round summary + 90% gate (share mode) ────────────────────────────────
+   At >= 90 readiness the page STOPS asking for more rounds: the banner
+   celebrates, says clearly they can stop, and leaves continuing as a quiet
+   optional button - never a push. Below 90 the next round is the primary
+   action. At ROUND_CAP rounds in one sitting, no more rounds are offered at
+   all - "we'll take it from here". */
+function renderRoundDone() {
+  const el = document.getElementById("trainApp");
+  const { right, total } = roundScore();
+  const roundNum = currentRoundNum();
+  const score = Number(READINESS.score) || 0;
+  const trained = score >= 90;
+  const capped = roundsThisSitting() >= ROUND_CAP;
+  const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
+  const scoreLine = total
+    ? `<div class="round-score">${right} of ${total} right</div>
+       <div class="db-msg">Round ${roundNum} done - your AI got ${right} of ${total} right this round.</div>`
+    : "";
+
+  let msg, buttons;
+  if (trained) {
+    msg = `Your AI has reached ${score}/100 - it's trained and ready. Everything you've taught it is saved. `
+        + `You can stop here${capped ? "." : " - or keep going if you'd like to sharpen it further."}`;
+    buttons = capped ? "" : `<button class="btn" id="doneGenerateBtn" type="button">Keep training (optional)</button>`;
+  } else if (capped) {
+    msg = `That's a lot for one sitting - thank you! Your AI is at ${score}/100 (it's fully trained at 90). `
+        + `We'll take it from here; come back any time with this same link to keep going.`;
+    buttons = "";
+  } else {
+    msg = `Your AI is at ${score}/100 - it's fully trained at 90. Another round will get it closer.`;
+    buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
+  }
+
+  el.innerHTML = `
+    <div class="done-banner ${trained ? "trained" : ""}">
+      <div class="db-icon">${trained ? "🎉" : "✓"}</div>
+      ${scoreLine}
+      <div class="db-msg">${msg}</div>
+      ${buttons}
+      ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what it's learned</button>` : ""}
+    </div>
+  `;
+  const genBtn = document.getElementById("doneGenerateBtn");
+  if (genBtn) genBtn.addEventListener("click", () => generateMore());
   const reviewBtn = document.getElementById("doneReviewBtn");
   if (reviewBtn) reviewBtn.addEventListener("click", () => startReview());
 }
@@ -1006,8 +1227,10 @@ async function generateMore() {
   const restores = markGenerateButtonsBusy("Building new scenarios and running the agent on them - under a minute…");
   generating = true;
   const baselineCount = CASES.length;
-  const genBody = { agent_id: selectedAgentId, batch_size: 8 };
-  if (SHARE_MODE) genBody.share = SHARE_TOKEN;
+  // Share mode trains in rounds of ROUND_SIZE; a fresh batch = a fresh round
+  // (ROUND_IDS re-snapshots when the stream re-enters, see beginRoundIfNeeded).
+  const genBody = { agent_id: selectedAgentId, batch_size: SHARE_MODE ? ROUND_SIZE : 8 };
+  if (SHARE_MODE) { genBody.share = SHARE_TOKEN; ROUND_IDS = null; }
   const res = await fetchJson("/api/setter/training/generate", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(genBody),
@@ -1074,8 +1297,15 @@ function renderCase(unanswered, i) {
   const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
   const indicator = indicatorState();
 
+  const progressLine = SHARE_MODE
+    ? (() => {
+        const ids = ROUND_IDS || [];
+        const ratedInRound = ids.filter((id) => isAnswered(id)).length;
+        return `Round ${currentRoundNum()} &middot; rated ${ratedInRound} of ${ids.length || total} &middot; shortcuts: <b>C</b> correct, <b>N</b> needs work, <b>Enter</b> save`;
+      })()
+    : `Rated ${answeredCount} of ${CASES.length} in this batch &middot; shortcuts: <b>Y</b>/<b>N</b> answer, <b>S</b> skip draft, <b>Enter</b> save`;
   el.innerHTML = `
-    <div class="train-progress">Rated ${answeredCount} of ${CASES.length} in this batch &middot; shortcuts: <b>Y</b>/<b>N</b> answer, <b>S</b> skip draft, <b>Enter</b> save</div>
+    <div class="train-progress">${progressLine}</div>
     <div class="retrain-notice" id="trRetrainNotice" style="display:${indicator.visible ? "" : "none"}">${esc(indicator.text)}</div>
     <div class="train-card">
       <div class="tr-chips">
@@ -1104,6 +1334,26 @@ function renderCase(unanswered, i) {
       </div>` : ""}
     </div>
 
+    ${SHARE_MODE ? `
+    <div class="train-verdict">
+      <div class="grade-q">
+        <div class="grade-q-label">Is this how you'd handle it? <span class="grade-q-hint">The call and draft above, together.</span></div>
+        <div class="grade-btns" id="clientVerdictBtns">
+          <button type="button" class="btn big-yes ${p.verdict === "correct" ? "sel" : ""}" data-v="correct">✓ Correct</button>
+          <button type="button" class="btn big-no ${p.verdict === "needs_work" ? "sel" : ""}" data-v="needs_work">✍️ Needs work</button>
+        </div>
+      </div>
+      <div class="field" id="clientReasonField" style="display:${p.verdict === "needs_work" ? "" : "none"}">
+        <label>What should it have said or done instead?</label>
+        <textarea id="trNote" placeholder="Tell it what you'd say - your AI remembers this and replies that way from now on">${esc(p.note || "")}</textarea>
+      </div>
+      <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
+      <div class="grade-nav">
+        <button type="button" class="btn" id="trPrevBtn" ${i === 0 ? "disabled" : ""}>&lsaquo; Previous</button>
+        <button type="button" class="btn" id="midGenerateBtn" style="display:none">Get more scenarios</button>
+        <button type="button" class="btn primary" id="trNextBtn" style="display:${p.verdict === "needs_work" ? "" : "none"}">Save & continue &rsaquo;</button>
+      </div>
+    </div>` : `
     <div class="train-verdict">
       <div class="grade-q">
         <div class="grade-q-label">Right call? <span class="grade-q-hint">Its decision above - answer on its own vs leave it to a human. Was that the right decision?</span></div>
@@ -1141,13 +1391,61 @@ function renderCase(unanswered, i) {
         <button type="button" class="btn" id="midGenerateBtn" style="display:none">Get more scenarios</button>
         <button type="button" class="btn primary" id="trNextBtn">Save & continue &rsaquo;</button>
       </div>
-    </div>
+    </div>`}
   `;
   wireCaseEvents(c, unanswered, i);
 }
 
 function wireCaseEvents(c, unanswered, i) {
   const p = pendingFor(c.id);
+
+  // Share mode (owner ruling 2026-08-16): exactly two options - "Correct"
+  // saves and advances immediately; "Needs work" requires a reason, which
+  // ALWAYS teaches (scope remember - the reason is the training). The
+  // owner-mode two-question flow below stays untouched.
+  const clientWrap = document.getElementById("clientVerdictBtns");
+  if (clientWrap) {
+    const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
+    clientWrap.querySelectorAll("button[data-v]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const v = btn.getAttribute("data-v");
+        clientWrap.querySelectorAll("button").forEach((b) => b.classList.remove("sel"));
+        btn.classList.add("sel");
+        hideNudge();
+        if (v === "correct") {
+          p.verdict = "correct";
+          p.decision_ok = true;
+          p.reply_ok = hasDraft ? true : null;
+          p.note = "";
+          p.scope = "one_off";
+          submitAndAdvance(c);
+          return;
+        }
+        p.verdict = "needs_work";
+        p.decision_ok = false;
+        p.reply_ok = hasDraft ? false : null;
+        p.scope = "remember";
+        const field = document.getElementById("clientReasonField");
+        if (field) field.style.display = "";
+        const saveBtn = document.getElementById("trNextBtn");
+        if (saveBtn) saveBtn.style.display = "";
+        const noteEl2 = document.getElementById("trNote");
+        if (noteEl2) noteEl2.focus();
+      });
+    });
+    const noteEl = document.getElementById("trNote");
+    if (noteEl) noteEl.addEventListener("input", () => { p.note = noteEl.value; });
+    const prevBtn = document.getElementById("trPrevBtn");
+    if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
+    const midGenBtn = document.getElementById("midGenerateBtn");
+    if (midGenBtn && i === unanswered.length - 1) {
+      midGenBtn.style.display = "";
+      midGenBtn.addEventListener("click", () => generateMore());
+    }
+    const nextBtn = document.getElementById("trNextBtn");
+    if (nextBtn) nextBtn.addEventListener("click", () => submitAndAdvance(c));
+    return;
+  }
 
   const decisionWrap = document.getElementById("decisionBtns");
   if (decisionWrap) {
@@ -1246,10 +1544,20 @@ const IN_FLIGHT_ANSWERS = new Set();
        retrain poll already relies on). */
 function submitAndAdvance(c) {
   const p = pendingFor(c.id);
+  if (SHARE_MODE) {
+    if (!p.verdict) { showNudge("Pick Correct or Needs work first."); return; }
+    if (p.verdict === "needs_work") {
+      const nEl = document.getElementById("trNote");
+      if (nEl) p.note = nEl.value.trim();
+      if (!p.note) { showNudge("Tell it what you'd say instead - that's how it learns."); return; }
+    }
+  }
   if (p.decision_ok === undefined) { showNudge("Answer \"Right call?\" first."); return; }
   if (IN_FLIGHT_ANSWERS.has(c.id)) return; // already saving this case - ignore the repeat click/Enter
   const noteEl = document.getElementById("trNote");
-  if (noteEl) p.note = noteEl.value.trim();
+  // A share-mode "Correct" never carries a note, even if text was typed and
+  // then abandoned in the (now hidden) Needs-work box.
+  if (noteEl && !(SHARE_MODE && p.verdict === "correct")) p.note = noteEl.value.trim();
   const effectiveScope = p.note ? (p.scope || "one_off") : "one_off";
 
   const answerBody = {
@@ -1318,6 +1626,18 @@ document.addEventListener("keydown", (e) => {
     if (btn) { btn.click(); return true; }
     return false;
   };
+  // Share mode's two-option card: C = Correct (saves instantly), N = Needs
+  // work (opens the reason box), Enter = save.
+  if (SHARE_MODE) {
+    if (k === "c" || k === "y") { e.preventDefault(); clickIn("clientVerdictBtns", "correct"); }
+    else if (k === "n") { e.preventDefault(); clickIn("clientVerdictBtns", "needs_work"); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      const save = document.getElementById("trNextBtn");
+      if (save) save.click();
+    }
+    return;
+  }
   const decisionUnset = !document.querySelector("#decisionBtns .sel");
   if (k === "y" || k === "n") {
     e.preventDefault();
@@ -1333,6 +1653,306 @@ document.addEventListener("keydown", (e) => {
     if (save) save.click();
   }
 });
+
+/* ══ Client training portal: companion pane (share mode only) ═════════════
+   The guide chat, PDF/paste intake, and materials list. Never rendered in
+   owner mode (the aside stays display:none and initCompanion is only called
+   from bootShare). Chat history is painted ONCE at boot from the persisted
+   chat_log; after that the local DOM is authoritative for the sitting. */
+
+function initCompanion() {
+  const sub = document.getElementById("cmpSub");
+  if (sub) sub.textContent = `I'll walk you through training ${shareAgentName}. Ask anything, or tell me standing rules.`;
+  const input = document.getElementById("cmpInput");
+  const send = document.getElementById("cmpSend");
+  const drop = document.getElementById("cmpDrop");
+  const file = document.getElementById("cmpFile");
+  if (send) send.addEventListener("click", () => cmpSendMsg());
+  if (input) input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); cmpSendMsg(); }
+  });
+  if (drop) {
+    drop.addEventListener("click", () => { if (!drop.classList.contains("busy") && file) file.click(); });
+    drop.addEventListener("dragover", (e) => { e.preventDefault(); drop.classList.add("over"); });
+    drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+    drop.addEventListener("drop", (e) => {
+      e.preventDefault(); drop.classList.remove("over");
+      const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (f) cmpUploadPdf(f);
+    });
+  }
+  if (file) file.addEventListener("change", () => { if (file.files[0]) { cmpUploadPdf(file.files[0]); file.value = ""; } });
+  const tutLink = document.getElementById("cmpTutorialLink");
+  if (tutLink) tutLink.addEventListener("click", () => startTutorial());
+}
+
+function cmpAddMsg(who, text) {
+  const wrap = document.getElementById("cmpMsgs");
+  if (!wrap) return null;
+  const div = document.createElement("div");
+  div.className = `cmp-msg ${who}`;
+  div.textContent = text;
+  wrap.appendChild(div);
+  wrap.scrollTop = wrap.scrollHeight;
+  return div;
+}
+
+function cmpTyping(text) {
+  const div = cmpAddMsg("typing", text || "…");
+  return () => { if (div && div.parentNode) div.parentNode.removeChild(div); };
+}
+
+function renderChatLog() {
+  if (!SHARE_MODE) return;
+  const wrap = document.getElementById("cmpMsgs");
+  if (!wrap) return;
+  wrap.innerHTML = "";
+  (CHAT_LOG || []).forEach((e) => cmpAddMsg(e.who === "client" ? "client" : "guide", e.text || ""));
+  if (!CHAT_LOG || !CHAT_LOG.length) {
+    cmpAddMsg("guide", `Hi! I'm here to help you train ${shareAgentName} to reply to leads the way YOU would. `
+      + `Rate the cards on the right, and tell me anything it should always know - pricing, links, tone. `
+      + `Nothing here ever emails a real person.`);
+  }
+  renderMaterials();
+}
+
+function chatContext() {
+  const { right, total } = SHARE_MODE ? roundScore() : { right: 0, total: 0 };
+  return {
+    readiness_score: Number(READINESS.score) || 0,
+    answered_count: CASES.filter((c) => isAnswered(c.id)).length,
+    cases_total: CASES.length,
+    round_num: SHARE_MODE ? currentRoundNum() : null,
+    round_right: right, round_total: total,
+    view,
+  };
+}
+
+async function cmpSendMsg() {
+  const input = document.getElementById("cmpInput");
+  if (!input || chatBusy) return;
+  const text = (input.value || "").trim();
+  if (!text) return;
+  input.value = "";
+  // Big pastes are training material, not conversation - route them to the
+  // document intake so the whole text gets read, not chatted about.
+  if (text.length > PASTE_THRESHOLD) { cmpSendMaterialText(text); return; }
+  chatBusy = true;
+  const sendBtn = document.getElementById("cmpSend");
+  if (sendBtn) sendBtn.disabled = true;
+  cmpAddMsg("client", text);
+  const doneTyping = cmpTyping("thinking…");
+  const res = await fetchJson("/api/setter/training/chat", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ share: SHARE_TOKEN, message: text, context: chatContext() }),
+  });
+  doneTyping();
+  chatBusy = false;
+  if (sendBtn) sendBtn.disabled = false;
+  if (!res.ok) {
+    if (res.status === 401) { renderShareExpired(); return; }
+    cmpAddMsg("guide", "Sorry - that didn't go through. Try again in a moment.");
+    return;
+  }
+  cmpAddMsg("guide", (res.data && res.data.reply) || "Got it.");
+  if (res.data && res.data.action === "show_tutorial") startTutorial();
+  const retrain = res.data && res.data.retrain;
+  if (retrain === "started" || retrain === "queued") startRetrainNotice();
+}
+
+async function cmpSendMaterialText(text) {
+  if (chatBusy) return;
+  chatBusy = true;
+  const sendBtn = document.getElementById("cmpSend");
+  if (sendBtn) sendBtn.disabled = true;
+  cmpAddMsg("client", `(pasted text - ${text.length.toLocaleString()} characters)`);
+  const doneTyping = cmpTyping("reading what you pasted…");
+  const res = await fetchJson("/api/setter/training/material", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ share: SHARE_TOKEN, text }),
+  });
+  doneTyping();
+  chatBusy = false;
+  if (sendBtn) sendBtn.disabled = false;
+  handleMaterialResponse(res, "what you pasted");
+}
+
+async function cmpUploadPdf(f) {
+  const drop = document.getElementById("cmpDrop");
+  if (!f || (drop && drop.classList.contains("busy"))) return;
+  if (!/pdf$/i.test(f.type) && !/\.pdf$/i.test(f.name)) {
+    cmpAddMsg("guide", "I can only read PDFs for now - for anything else, copy and paste the text into the chat.");
+    return;
+  }
+  if (f.size > 7 * 1024 * 1024) {
+    cmpAddMsg("guide", "That file is over 7MB. Try a smaller PDF, or paste the key text instead.");
+    return;
+  }
+  const prevLabel = drop ? drop.textContent : "";
+  if (drop) { drop.classList.add("busy"); drop.textContent = `Reading ${f.name}…`; }
+  cmpAddMsg("client", `(uploaded ${f.name})`);
+  const b64 = await new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(String(r.result).split(",", 2)[1] || "");
+    r.onerror = reject;
+    r.readAsDataURL(f);
+  }).catch(() => "");
+  if (!b64) {
+    if (drop) { drop.classList.remove("busy"); drop.textContent = prevLabel; }
+    cmpAddMsg("guide", "I couldn't read that file - try again, or paste the text instead.");
+    return;
+  }
+  const res = await fetchJson("/api/setter/training/material", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ share: SHARE_TOKEN, pdf_base64: b64, filename: f.name }),
+  });
+  if (drop) { drop.classList.remove("busy"); drop.textContent = prevLabel; }
+  handleMaterialResponse(res, f.name);
+}
+
+function handleMaterialResponse(res, label) {
+  if (!res.ok) {
+    if (res.status === 401) { renderShareExpired(); return; }
+    cmpAddMsg("guide", res.error || `I couldn't read ${label} - try again, or paste the text instead.`);
+    return;
+  }
+  const d = res.data || {};
+  const facts = Array.isArray(d.facts) ? d.facts : [];
+  if (!facts.length) {
+    cmpAddMsg("guide", d.message || `I read ${label}, but didn't find anything that would change how your AI replies.`);
+    return;
+  }
+  const preview = facts.slice(0, 3).map((f) => `• ${f}`).join("\n");
+  cmpAddMsg("guide", `Done - I read ${d.filename || label} and saved ${facts.length} thing${facts.length === 1 ? "" : "s"} your AI will remember, like:\n${preview}${facts.length > 3 ? "\n…and more." : ""}`);
+  MATERIALS.push({ filename: d.filename || label, summary: d.summary || "", facts_count: facts.length, at: new Date().toISOString() });
+  renderMaterials();
+  const retrain = d.retrain;
+  if (retrain === "started" || retrain === "queued") startRetrainNotice();
+}
+
+function renderMaterials() {
+  if (!SHARE_MODE) return;
+  const wrap = document.getElementById("cmpMaterials");
+  if (!wrap) return;
+  wrap.innerHTML = (MATERIALS || []).slice().reverse().map((m) => `
+    <div class="cmp-mat"><span class="cm-name">${esc(m.filename || "document")}</span>
+    <span class="cm-sum">${esc(m.summary || `${m.facts_count || 0} facts saved`)}</span></div>`).join("");
+}
+
+/* ══ First-visit interactive tutorial (share mode only) ═══════════════════
+   A dim layer + one floating card per step; spotlit elements are lifted
+   above the dim (see .tut-spot) so "try it now" steps stay clickable.
+   Skippable at every step, remembered per share token, re-openable from the
+   companion pane's link or by asking the guide. */
+
+const TUT_KEY = "trainTut:" + SHARE_TOKEN.slice(0, 24);
+let tutActive = false;
+let tutStep = 0;
+
+const TUT_STEPS = [
+  { title: "Welcome!", cta: "Show me around",
+    body: () => `This is where you teach ${shareAgentName} - your AI assistant - to reply to leads the way YOU would. It takes about 10 minutes, and nothing here ever emails a real person.`,
+    target: () => null },
+  { title: "Rate what it wrote", cta: "Next", advanceOnVerdict: true,
+    body: () => "Each card shows a conversation and your AI's draft reply. Two buttons: Correct if you'd send it, Needs work if not - then tell it what YOU would say, and it learns your voice. Try rating this one now, or hit Next.",
+    target: () => document.querySelector(".train-verdict") || document.querySelector(".train-card") || document.getElementById("trainApp") },
+  { title: "I'm your guide", cta: "Next",
+    body: () => "Ask me anything over here - how this works, where you're up to. And tell me standing rules like \"we never discount\" or \"our demo link is…\" - your AI remembers every one.",
+    target: () => document.getElementById("companionPane") },
+  { title: "Teach it your business", cta: "Let's go",
+    body: () => "Drop in a PDF - pricing, FAQs, case studies - or paste big chunks of text straight into the chat. Your AI reads it all and uses it when replying. Keep rating rounds until the score hits 90: that's when it's trained. Off you go!",
+    target: () => document.getElementById("cmpDrop") },
+];
+
+function maybeStartTutorial() {
+  if (!SHARE_MODE) return;
+  let seen = null;
+  try { seen = localStorage.getItem(TUT_KEY); } catch { /* ignore */ }
+  if (!seen) startTutorial();
+}
+
+function startTutorial() {
+  if (tutActive) return;
+  tutActive = true;
+  tutStep = 0;
+  renderTutStep();
+}
+
+function endTutorial() {
+  tutActive = false;
+  clearTutDom();
+  try { localStorage.setItem(TUT_KEY, "1"); } catch { /* ignore */ }
+}
+
+function clearTutDom() {
+  document.querySelectorAll(".tut-dim, .tut-card").forEach((n) => n.remove());
+  document.querySelectorAll(".tut-spot").forEach((n) => n.classList.remove("tut-spot"));
+}
+
+function tutNext() {
+  tutStep++;
+  if (tutStep >= TUT_STEPS.length) { endTutorial(); return; }
+  renderTutStep();
+}
+
+function renderTutStep() {
+  clearTutDom();
+  const step = TUT_STEPS[tutStep];
+  if (!step) { endTutorial(); return; }
+
+  const dim = document.createElement("div");
+  dim.className = "tut-dim";
+  document.body.appendChild(dim);
+
+  const target = step.target();
+  if (target) {
+    target.classList.add("tut-spot");
+    try { target.scrollIntoView({ block: "center", behavior: "instant" }); } catch { /* ignore */ }
+  }
+
+  const card = document.createElement("div");
+  card.className = "tut-card";
+  card.innerHTML = `
+    <div class="tc-step">Step ${tutStep + 1} of ${TUT_STEPS.length}</div>
+    <div class="tc-title">${esc(step.title)}</div>
+    <div class="tc-body">${esc(step.body())}</div>
+    <div class="tc-row">
+      <button class="btn primary" id="tutNextBtn" type="button">${esc(step.cta)}</button>
+      <a class="tc-skip" id="tutSkipBtn" role="button">Skip the tour</a>
+    </div>`;
+  card.style.visibility = "hidden";
+  document.body.appendChild(card);
+
+  // Position: centered when there's no target; otherwise below the target,
+  // flipping above when there's no room, always clamped to the viewport.
+  const ch = card.offsetHeight, cw = card.offsetWidth;
+  if (!target) {
+    card.style.top = `calc(50% - ${Math.round(ch / 2)}px)`;
+    card.style.left = `calc(50% - ${Math.round(cw / 2)}px)`;
+  } else {
+    const r = target.getBoundingClientRect();
+    let top = r.bottom + 12;
+    if (top + ch > window.innerHeight - 12) top = Math.max(12, r.top - ch - 12);
+    let left = Math.min(Math.max(12, r.left), window.innerWidth - cw - 12);
+    card.style.top = `${Math.round(top)}px`;
+    card.style.left = `${Math.round(left)}px`;
+  }
+  card.style.visibility = "";
+
+  document.getElementById("tutNextBtn").addEventListener("click", () => tutNext());
+  document.getElementById("tutSkipBtn").addEventListener("click", () => endTutorial());
+}
+
+// "Try it now" auto-advance: a verdict click during the rate-the-card step
+// moves the tour along after a beat, so the tour never sits on top of what
+// they just did. Capture phase so the card's own handler still runs.
+document.addEventListener("click", (e) => {
+  if (!tutActive) return;
+  const step = TUT_STEPS[tutStep];
+  if (step && step.advanceOnVerdict && e.target.closest && e.target.closest("#clientVerdictBtns")) {
+    setTimeout(() => { if (tutActive && TUT_STEPS[tutStep] === step) tutNext(); }, 400);
+  }
+}, true);
 
 /* ── Boot ──────────────────────────────────────────────── */
 boot();

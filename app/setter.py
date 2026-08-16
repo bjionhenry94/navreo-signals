@@ -10093,6 +10093,25 @@ def _get_training_gen_lock(agent_id: str) -> threading.Lock:
         return lock
 
 
+# Per-agent lock over the training doc's request-path read-modify-write
+# (answer / chat / material). Without it, rapid concurrent answer POSTs -
+# exactly what the portal's one-click "Correct" produces - each load the
+# doc, add their own answer, and save, silently dropping each other's
+# (observed 2026-08-16: 6 of 10 robot-speed answers lost). Held only around
+# the load→save window, never across an OpenAI call.
+_TRAINING_DOC_LOCKS: dict = {}
+_TRAINING_DOC_LOCKS_GUARD = threading.Lock()
+
+
+def _get_training_doc_lock(agent_id: str) -> threading.Lock:
+    with _TRAINING_DOC_LOCKS_GUARD:
+        lock = _TRAINING_DOC_LOCKS.get(agent_id)
+        if lock is None:
+            lock = threading.Lock()
+            _TRAINING_DOC_LOCKS[agent_id] = lock
+        return lock
+
+
 # ── public training share links ──────────────────────────────────────────────
 # The owner mints a per-agent link so a client can train ONE agent without a
 # Navreo login. Same stateless-HMAC idiom server.py uses for its own session
@@ -10875,6 +10894,15 @@ def route_training_get(params):
             # dead/self-healed worker (see the stale-running heal just
             # above) is never invisible to the trainer.
             "pending_merges": len(doc.get("pending_merges") or []),
+            # Client training portal (2026-08-16): the companion chat's own
+            # history (so a refresh doesn't wipe the conversation) and the
+            # documents the client has fed the agent - summaries only, the
+            # raw text never round-trips back out.
+            "chat_log": list(doc.get("chat_log") or []),
+            "materials": [{"filename": m.get("filename") or "", "kind": m.get("kind") or "",
+                           "summary": m.get("summary") or "", "facts_count": m.get("facts_count") or 0,
+                           "at": m.get("at") or ""}
+                          for m in (doc.get("materials") or []) if isinstance(m, dict)],
         }
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -11923,65 +11951,69 @@ def route_training_answer(payload):
         # found) apart from "this agent's doc just doesn't have this
         # case_id" (404 Training scenario not found). Saves one Supabase
         # round trip on every answer, note or not.
-        doc = _load_training(agent_id)
-        cases = list(doc.get("cases") or [])
-        if not any(str(c.get("id")) == case_id for c in cases):
-            if not _load_agent(agent_id):
-                return 404, {"error": "Agent not found."}
-            return 404, {"error": "Training scenario not found."}
+        # Doc lock: the portal's one-click "Correct" makes rapid concurrent
+        # answers routine; the whole load→save below must be atomic per
+        # agent or concurrent answers silently drop each other.
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            cases = list(doc.get("cases") or [])
+            if not any(str(c.get("id")) == case_id for c in cases):
+                if not _load_agent(agent_id):
+                    return 404, {"error": "Agent not found."}
+                return 404, {"error": "Training scenario not found."}
 
-        decision_ok = payload.get("decision_ok")
-        reply_ok = payload.get("reply_ok")
-        note = str(payload.get("note") or "").strip()
-        scope = payload.get("scope") or "one_off"
-        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            decision_ok = payload.get("decision_ok")
+            reply_ok = payload.get("reply_ok")
+            note = str(payload.get("note") or "").strip()
+            scope = payload.get("scope") or "one_off"
+            at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
-        answers = dict(doc.get("answers") or {})
-        answers[case_id] = {"decision_ok": decision_ok, "reply_ok": reply_ok, "note": note,
-                            "scope": scope, "at": at}
-        doc["answers"] = answers
+            answers = dict(doc.get("answers") or {})
+            answers[case_id] = {"decision_ok": decision_ok, "reply_ok": reply_ok, "note": note,
+                                "scope": scope, "at": at}
+            doc["answers"] = answers
 
-        # Thumbs-up teaches too (owner brief 2026-07-14: "when I give a
-        # thumbs up it doesn't learn from it"): a confirmed decision_ok=True
-        # becomes a compact exemplar {gist, decision, at} the training/
-        # retrain digests can point future passes at (see
-        # _training_session_feedback_digest). Rolling cap 20, newest kept.
-        # Same single doc write as the answer below - no extra round trip.
-        if decision_ok is True:
-            case = next((c for c in cases if str(c.get("id")) == case_id), None)
-            gist = str(((case or {}).get("inbound") or {}).get("body") or "").strip()[:90]
-            if gist:
-                confirmed = list(doc.get("confirmed_examples") or [])
-                confirmed.append({"gist": gist, "decision": (case or {}).get("decision"), "at": at})
-                doc["confirmed_examples"] = confirmed[-20:]
+            # Thumbs-up teaches too (owner brief 2026-07-14: "when I give a
+            # thumbs up it doesn't learn from it"): a confirmed decision_ok=True
+            # becomes a compact exemplar {gist, decision, at} the training/
+            # retrain digests can point future passes at (see
+            # _training_session_feedback_digest). Rolling cap 20, newest kept.
+            # Same single doc write as the answer below - no extra round trip.
+            if decision_ok is True:
+                case = next((c for c in cases if str(c.get("id")) == case_id), None)
+                gist = str(((case or {}).get("inbound") or {}).get("body") or "").strip()[:90]
+                if gist:
+                    confirmed = list(doc.get("confirmed_examples") or [])
+                    confirmed.append({"gist": gist, "decision": (case or {}).get("decision"), "at": at})
+                    doc["confirmed_examples"] = confirmed[-20:]
 
-        # scope="remember" (owner ruling 2026-07-14) is meant to merge the
-        # note straight into the agent's own `instructions` text via
-        # merge_correction_into_instructions - the single living manual, feeds
-        # every future classify()/draft_reply() call and every future
-        # training generation, exactly the same helper the inbox correction/
-        # redraft flows still use synchronously. But that helper calls
-        # gpt-5-mini (5-15s), and this route must return in well under a
-        # second so "Save & continue" never blocks the trainer waiting for
-        # the next card. So here the note is only QUEUED onto the training
-        # doc's own `pending_merges` list (written by the SAME _save_training
-        # call below that stores the answer - one write, no extra round
-        # trip); the background retrain worker kicked off further down
-        # drains and merges it. scope="one_off" (or an empty note) is
-        # audit-only and changes nothing but feedback_log, exactly as before.
-        if note and scope == "remember":
-            pending_merges = list(doc.get("pending_merges") or [])
-            pending_merges.append({"note": note, "source": f"training:{case_id}", "at": at})
-            doc["pending_merges"] = pending_merges
-        elif note:
-            _append_agent_feedback_log(agent_id, note, source=f"training:{case_id}")
+            # scope="remember" (owner ruling 2026-07-14) is meant to merge the
+            # note straight into the agent's own `instructions` text via
+            # merge_correction_into_instructions - the single living manual, feeds
+            # every future classify()/draft_reply() call and every future
+            # training generation, exactly the same helper the inbox correction/
+            # redraft flows still use synchronously. But that helper calls
+            # gpt-5-mini (5-15s), and this route must return in well under a
+            # second so "Save & continue" never blocks the trainer waiting for
+            # the next card. So here the note is only QUEUED onto the training
+            # doc's own `pending_merges` list (written by the SAME _save_training
+            # call below that stores the answer - one write, no extra round
+            # trip); the background retrain worker kicked off further down
+            # drains and merges it. scope="one_off" (or an empty note) is
+            # audit-only and changes nothing but feedback_log, exactly as before.
+            if note and scope == "remember":
+                pending_merges = list(doc.get("pending_merges") or [])
+                pending_merges.append({"note": note, "source": f"training:{case_id}", "at": at})
+                doc["pending_merges"] = pending_merges
+            elif note:
+                _append_agent_feedback_log(agent_id, note, source=f"training:{case_id}")
 
-        readiness = compute_readiness(doc)
-        history = list(doc.get("readiness_history") or [])
-        history.append({"at": at, "score": readiness["score"], "n_answers": readiness["n_answers"]})
-        doc["readiness_history"] = history
+            readiness = compute_readiness(doc)
+            history = list(doc.get("readiness_history") or [])
+            history.append({"at": at, "score": readiness["score"], "n_answers": readiness["n_answers"]})
+            doc["readiness_history"] = history
 
-        _save_training(agent_id, doc)
+            _save_training(agent_id, doc)
 
         answered_count = sum(1 for c in cases if _is_case_answered(c.get("id"), answers))
         unanswered_count = len(cases) - answered_count
@@ -12061,6 +12093,237 @@ def route_training_share_info(params):
         if not agent:
             return 404, {"error": "Agent not found."}
         return 200, {"agent_name": agent.get("name") or "", "agent_id": agent_id}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+# ── client training portal: chat companion + material intake ─────────────────
+# Both routes are PUBLIC behind a share token (server.py _AUTH_PUBLIC_POST)
+# and scoped by the same _resolve_share_scope helper as every other training
+# route: one token, one agent, nothing else reachable. Neither can send mail -
+# they only ever write to the agent's own training doc / instructions.
+
+TRAINING_CHAT_CAP = 60          # rolling chat_log entries kept in the doc
+TRAINING_MATERIALS_CAP = 20     # rolling materials entries kept in the doc
+TRAINING_MATERIAL_TEXT_CAP = 200_000    # pasted/extracted chars fed to distill
+TRAINING_MATERIAL_PDF_CAP = 7 * 1024 * 1024  # decoded PDF bytes
+
+TRAINING_CHAT_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"reply": {"type": "string"},
+                   "action": {"type": "string",
+                              "enum": ["none", "remember_feedback", "show_tutorial"]},
+                   "feedback_text": {"type": "string"}},
+    "required": ["reply", "action", "feedback_text"],
+}
+
+TRAINING_CHAT_SYSTEM = """You are the friendly guide on a training page where a business owner teaches their AI email assistant (their "AI") how to reply to leads in their voice. You are NOT the AI being trained - you are the helper standing next to them.
+
+The page: scenario cards on the right show a simulated conversation and the AI's draft reply. The owner marks each card "Correct" or "Needs work" (Needs work requires saying what they'd do instead - that reason teaches the AI). Every verdict teaches the AI. A readiness score climbs as they rate; at 90 the AI is considered trained. They train in rounds of about 10 cards. They can also drop in documents (pricing, FAQs, case studies) or just tell YOU standing rules in this chat.
+
+Your job, in order of priority:
+1. If their message is standing guidance about how their AI should behave, write, or answer ("we never discount", "our demo link is X", "always sound informal", pricing details, resource rules) - set action to "remember_feedback" and put a clean, self-contained version of the rule in feedback_text. In reply, confirm in one short sentence that their AI will remember it. Copy exact facts (prices, links, names) verbatim - never invent or embellish them.
+2. If they ask how the page works, seem lost, or ask to see the tutorial/walkthrough again - set action to "show_tutorial" and tell them you'll bring it up.
+3. Otherwise action is "none" and feedback_text is empty: answer their question or give brief, encouraging commentary on where they are (use the context numbers you're given - never invent progress).
+
+Voice rules: plain, warm, simple English a 16-year-old would understand. 1-3 short sentences. No jargon, no internal system talk (never say "agent doc", "instructions merge", "readiness_history" or similar). Never promise anything about emailing real people - this page never emails anyone. Never give business, legal, or pricing advice of your own - their answers train their AI; you only guide the process."""
+
+TRAINING_DISTILL_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"summary": {"type": "string"},
+                   "facts": {"type": "array", "items": {"type": "string"}}},
+    "required": ["summary", "facts"],
+}
+
+TRAINING_DISTILL_SYSTEM = """A business owner uploaded a document (or pasted text) to teach their AI email assistant about their business. Distill it into standing facts the assistant can use when replying to leads.
+
+Extract ONLY what would change how a reply is written: pricing and what it includes, offers and guarantees, resources/links and when to share each, answers to common questions, named case studies or proof points, and voice/tone rules. Copy exact numbers, names, and URLs verbatim - never round, never invent. Skip filler, marketing fluff, and anything generic.
+
+Return: summary = one plain sentence saying what this document is. facts = up to 12 self-contained bullet statements, each usable on its own (e.g. "Pricing: the Growth plan is $1,500/month and includes up to 3 campaigns."). If the text contains nothing usable, return an empty facts list."""
+
+
+def _training_chat_llm(agent: dict, message: str, context: dict, chat_log: list) -> dict:
+    key = _KEYS.get("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY missing from keys")
+    payload = {
+        "owner_message": str(message)[:2000],
+        "agent_name": agent.get("name") or "your AI",
+        "page_context": {k: context.get(k) for k in
+                         ("readiness_score", "answered_count", "cases_total",
+                          "round_num", "round_right", "round_total", "view")
+                         if context.get(k) is not None},
+        # last few turns so follow-ups make sense; text only, capped
+        "recent_chat": [{"who": e.get("who"), "text": str(e.get("text") or "")[:400]}
+                        for e in (chat_log or [])[-8:]],
+    }
+    r = _openai({"model": OPENAI_MODEL,
+                 "messages": [{"role": "system", "content": TRAINING_CHAT_SYSTEM},
+                             {"role": "user", "content": json.dumps(payload)}],
+                 "response_format": {"type": "json_schema", "json_schema": {
+                     "name": "training_chat", "strict": True, "schema": TRAINING_CHAT_SCHEMA}}}, key)
+    if not isinstance(r, dict):
+        raise RuntimeError("OpenAI: empty response")
+    if r.get("error"):
+        raise RuntimeError(f"OpenAI: {str(r['error'].get('message', r['error']))[:200]}")
+    return json.loads(r["choices"][0]["message"]["content"])
+
+
+def route_training_chat(payload):
+    """The portal's companion chat. Commentary + walkthrough by default; a
+    standing rule typed here queues onto pending_merges (the SAME low-latency
+    path a "Remember going forward" note takes in route_training_answer - the
+    background retrain worker drains and merges it), so the chat response
+    never waits on a 5-15s instructions merge."""
+    try:
+        payload = payload or {}
+        agent_id, err = _resolve_share_scope(payload.get("agent_id"),
+                                             payload.get("share") or "",
+                                             bool(payload.get("___public")))
+        if err:
+            return err
+        message = str(payload.get("message") or "").strip()
+        if not message:
+            return 400, {"error": "message is required"}
+        if len(message) > 4000:
+            return 400, {"error": "That message is too long for the chat - use the paste box for big text."}
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+        doc = _load_training(agent_id)
+        chat_log = list(doc.get("chat_log") or [])
+        context = payload.get("context") if isinstance(payload.get("context"), dict) else {}
+
+        out = _training_chat_llm(agent, message, context, chat_log)
+        reply = str(out.get("reply") or "").strip() or "I'm here - what would you like to know?"
+        action = out.get("action") if out.get("action") in ("none", "remember_feedback", "show_tutorial") else "none"
+        feedback_text = str(out.get("feedback_text") or "").strip()
+
+        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        saved = False
+        retrain = None
+        # Reload under the doc lock: the LLM call above took seconds, and an
+        # answer POST may have written the doc in the meantime - never save
+        # over it from the stale pre-LLM copy.
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            if action == "remember_feedback" and feedback_text:
+                pending = list(doc.get("pending_merges") or [])
+                pending.append({"note": feedback_text[:2500], "source": "chat-feedback", "at": at})
+                doc["pending_merges"] = pending
+                saved = True
+            fresh_log = list(doc.get("chat_log") or [])
+            fresh_log.append({"who": "client", "text": message[:2000], "at": at})
+            fresh_log.append({"who": "guide", "text": reply[:2000], "at": at, "action": action})
+            doc["chat_log"] = fresh_log[-TRAINING_CHAT_CAP:]
+            _save_training(agent_id, doc)
+        if saved:
+            retrain = _kick_off_training_retrain(agent_id)
+
+        return 200, {"reply": reply, "action": action, "saved": saved, "retrain": retrain}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def _extract_pdf_text(data: bytes) -> str:
+    from io import BytesIO
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        raise RuntimeError("PDF reading isn't available right now - copy and paste the text instead.")
+    reader = PdfReader(BytesIO(data))
+    parts = []
+    for page in reader.pages[:80]:
+        try:
+            parts.append(page.extract_text() or "")
+        except Exception:  # noqa: BLE001 - one unreadable page never kills the doc
+            continue
+    return "\n".join(parts).strip()
+
+
+def _training_distill_llm(text: str, filename: str) -> dict:
+    key = _KEYS.get("OPENAI_API_KEY")
+    if not key:
+        raise RuntimeError("OPENAI_API_KEY missing from keys")
+    r = _openai({"model": OPENAI_MODEL,
+                 "messages": [{"role": "system", "content": TRAINING_DISTILL_SYSTEM},
+                             {"role": "user", "content": json.dumps(
+                                 {"filename": filename, "text": text[:TRAINING_MATERIAL_TEXT_CAP]})}],
+                 "response_format": {"type": "json_schema", "json_schema": {
+                     "name": "training_distill", "strict": True, "schema": TRAINING_DISTILL_SCHEMA}}},
+                key, timeout=90)
+    if not isinstance(r, dict):
+        raise RuntimeError("OpenAI: empty response")
+    if r.get("error"):
+        raise RuntimeError(f"OpenAI: {str(r['error'].get('message', r['error']))[:200]}")
+    return json.loads(r["choices"][0]["message"]["content"])
+
+
+def route_training_material(payload):
+    """PDF drop / large-text paste from the portal. Extracts, distills to
+    instruction-ready facts (one gpt-5-mini call, inline - a single call
+    stays well under the edge-proxy timeout), then queues ONE combined
+    correction onto pending_merges so the background retrain worker merges
+    it into the agent's instructions - the client's page never blocks on the
+    merge itself. The raw document text is never stored, only the distilled
+    facts and a one-line summary."""
+    try:
+        payload = payload or {}
+        agent_id, err = _resolve_share_scope(payload.get("agent_id"),
+                                             payload.get("share") or "",
+                                             bool(payload.get("___public")))
+        if err:
+            return err
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+
+        filename = str(payload.get("filename") or "").strip()[:120]
+        text = str(payload.get("text") or "").strip()
+        pdf_b64 = payload.get("pdf_base64") or ""
+        kind = "text"
+        if pdf_b64:
+            import base64
+            try:
+                data = base64.b64decode(pdf_b64, validate=False)
+            except Exception:  # noqa: BLE001
+                return 400, {"error": "That file didn't upload cleanly - try again."}
+            if len(data) > TRAINING_MATERIAL_PDF_CAP:
+                return 400, {"error": "That PDF is too big (7MB max). Try a smaller file, or paste the key text instead."}
+            text = _extract_pdf_text(data)
+            kind = "pdf"
+            filename = filename or "document.pdf"
+        if len(text) < 50:
+            return 400, {"error": "I couldn't read enough text from that. If it's a scanned PDF, "
+                                  "copy and paste the text instead."}
+        filename = filename or "pasted text"
+
+        out = _training_distill_llm(text, filename)
+        facts = [str(f).strip() for f in (out.get("facts") or []) if str(f).strip()][:12]
+        summary = str(out.get("summary") or "").strip()[:300]
+        if not facts:
+            return 200, {"ok": True, "facts": [], "summary": summary,
+                        "message": "I read it, but couldn't find anything that would change how your AI replies. "
+                                   "Try a document with pricing, offers, links, or answers to common questions."}
+
+        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        note = f"Reference material from \"{filename}\": " + " ".join(f"- {f}" for f in facts)
+        # Same doc-lock discipline as answer/chat: the distill call above
+        # took seconds, so load fresh inside the lock before writing.
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            pending = list(doc.get("pending_merges") or [])
+            pending.append({"note": note[:2500], "source": f"material:{filename}", "at": at})
+            doc["pending_merges"] = pending
+            materials = list(doc.get("materials") or [])
+            materials.append({"filename": filename, "kind": kind, "chars": len(text),
+                             "summary": summary, "facts_count": len(facts), "at": at})
+            doc["materials"] = materials[-TRAINING_MATERIALS_CAP:]
+            _save_training(agent_id, doc)
+        retrain = _kick_off_training_retrain(agent_id)
+
+        return 200, {"ok": True, "facts": facts, "summary": summary, "filename": filename,
+                    "retrain": retrain}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -12161,6 +12424,8 @@ POST_ROUTES = {
     "/api/setter/training/recheck": route_training_recheck,
     "/api/setter/training/reset": route_training_reset,
     "/api/setter/training/share": route_training_share,
+    "/api/setter/training/chat": route_training_chat,
+    "/api/setter/training/material": route_training_material,
     "/api/setter/test/inject": route_test_inject,
     "/api/setter/edit-lesson/undo": route_edit_lesson_undo,
 }

@@ -384,6 +384,15 @@ class FakeHTTP:
         # "setter_lesson_from_edit"). None -> is_lesson False, so a test that
         # doesn't opt in never accidentally teaches from an edit.
         self.lesson_fn = None
+        # chat_fn(body) -> {"reply","action","feedback_text"} for the client
+        # training portal's companion chat (schema "training_chat"). None ->
+        # plain commentary, action "none", so tests that don't opt in never
+        # accidentally queue a chat-taught rule.
+        self.chat_fn = None
+        # distill_fn(body) -> {"summary","facts"} for the portal's PDF/paste
+        # intake (schema "training_distill"). None -> one generic fact, so a
+        # test that doesn't care about content still gets a queued merge.
+        self.distill_fn = None
         self.calendly_avail = []
         self.smartlead_calls = []
         self.calls = []
@@ -468,6 +477,14 @@ class FakeHTTP:
                          "subject": "Re: our email", "body": f"Synthetic {cat} reply body #{i}. Thanks."}
                         for i, cat in enumerate(plan)
                     ]}
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "training_chat":
+                data = (self.chat_fn(body) if self.chat_fn
+                        else {"reply": "You're doing great.", "action": "none", "feedback_text": ""})
+                return {"choices": [{"message": {"content": json.dumps(data)}}]}
+            if schema == "training_distill":
+                data = (self.distill_fn(body) if self.distill_fn
+                        else {"summary": "A business document.", "facts": ["Fact from the document."]})
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
             return {"choices": [{"message": {"content": "{}"}}]}
         if "calendly.com" in url:
@@ -6066,6 +6083,115 @@ def test_correction_route_share_scope():
     check("correction share: ___public with no share at all -> 401", status4 == 401, (status4, resp4))
 
 
+# ── client training portal (2026-08-16): companion chat + material intake ──
+
+def test_training_portal_chat_and_material():
+    """The portal's two new public routes enforce the same share scope as
+    every other training route, and both intake paths land on the SAME
+    low-latency pending_merges queue route_training_answer uses (the
+    background retrain worker may drain it at any moment, so assertions
+    accept either the queued note or the already-merged instructions)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-portal01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base instructions."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    token = setter.mint_training_share(agent["id"])
+
+    # chat: a standing rule typed to the guide queues a merge
+    http.chat_fn = lambda body: {"reply": "Got it - your AI will remember that.",
+                                 "action": "remember_feedback",
+                                 "feedback_text": "Never offer a discount."}
+    status, resp = setter.route_training_chat({"share": token, "message": "we never discount",
+                                               "___public": True})
+    check("portal chat: valid share -> 200 with a reply", status == 200 and resp.get("reply"), (status, resp))
+    check("portal chat: standing rule reported saved", resp.get("saved") is True, resp)
+    doc = setter._load_training(agent["id"])
+    queued = any(p.get("source") == "chat-feedback" for p in (doc.get("pending_merges") or []))
+    merged = "Never offer a discount." in ((setter._load_agent(agent["id"]) or {}).get("instructions") or "")
+    check("portal chat: the rule is queued or already merged", queued or merged,
+         (doc.get("pending_merges"), (setter._load_agent(agent["id"]) or {}).get("instructions")))
+    check("portal chat: chat_log persisted both turns",
+         len(doc.get("chat_log") or []) == 2 and doc["chat_log"][0]["who"] == "client", doc.get("chat_log"))
+
+    # chat: pure commentary saves nothing
+    http.chat_fn = lambda body: {"reply": "You're at round 1 - keep going!", "action": "none", "feedback_text": ""}
+    status2, resp2 = setter.route_training_chat({"share": token, "message": "how am I doing?",
+                                                 "___public": True})
+    check("portal chat: commentary -> saved False", status2 == 200 and resp2.get("saved") is False, (status2, resp2))
+
+    # chat: share scope enforced exactly like the other training routes
+    s401, _ = setter.route_training_chat({"share": "garbage", "message": "hi", "___public": True})
+    check("portal chat: invalid token -> 401", s401 == 401, s401)
+    s401b, _ = setter.route_training_chat({"agent_id": agent["id"], "message": "hi", "___public": True})
+    check("portal chat: public with no share -> 401", s401b == 401, s401b)
+    s403, _ = setter.route_training_chat({"share": token, "agent_id": "other-agent", "message": "hi",
+                                          "___public": True})
+    check("portal chat: mismatched agent_id -> 403", s403 == 403, s403)
+    s400, _ = setter.route_training_chat({"share": token, "___public": True})
+    check("portal chat: missing message -> 400", s400 == 400, s400)
+
+    # material: pasted text distills to facts, queues ONE combined merge,
+    # and records a summary-only materials entry (never the raw text)
+    http.distill_fn = lambda body: {"summary": "The pricing one-pager.",
+                                    "facts": ["Pricing: the Growth plan is $1,500/month.",
+                                              "The demo link is https://example.com/demo."]}
+    long_text = "Our pricing. " * 20
+    sm, rm = setter.route_training_material({"share": token, "text": long_text, "___public": True})
+    check("portal material: paste -> 200 with facts", sm == 200 and len(rm.get("facts") or []) == 2, (sm, rm))
+    doc2 = setter._load_training(agent["id"])
+    mat = (doc2.get("materials") or [{}])[-1]
+    check("portal material: materials entry recorded (summary only)",
+         mat.get("summary") == "The pricing one-pager." and mat.get("facts_count") == 2, mat)
+    queued2 = any(str(p.get("source") or "").startswith("material:")
+                  for p in (doc2.get("pending_merges") or []))
+    merged2 = "$1,500/month" in ((setter._load_agent(agent["id"]) or {}).get("instructions") or "")
+    check("portal material: facts queued or already merged", queued2 or merged2,
+         (doc2.get("pending_merges"), (setter._load_agent(agent["id"]) or {}).get("instructions")))
+
+    sm2, rm2 = setter.route_training_material({"share": token, "text": "too short", "___public": True})
+    check("portal material: unusably short text -> 400", sm2 == 400, (sm2, rm2))
+    sm3, _ = setter.route_training_material({"text": long_text, "___public": True})
+    check("portal material: public with no share -> 401", sm3 == 401, sm3)
+
+    # the GET the portal boots from carries both new fields
+    sg, rg = setter.route_training_get({"share": token})
+    check("portal get: chat_log + materials round-trip",
+         isinstance(rg.get("chat_log"), list) and len(rg["chat_log"]) >= 2
+         and isinstance(rg.get("materials"), list) and len(rg["materials"]) == 1, rg.get("materials"))
+    check("portal get: materials never leak raw text",
+         "Our pricing." not in json.dumps(rg.get("materials")), rg.get("materials"))
+
+
+def test_training_answer_concurrent_writes_not_lost():
+    """The portal's one-click "Correct" produces rapid concurrent answer
+    POSTs. Before the per-agent doc lock (2026-08-16), each request loaded
+    the doc, added its own answer, and saved - concurrently they clobbered
+    each other (observed live: 6 of 10 answers silently dropped). All N
+    concurrent answers must survive."""
+    import concurrent.futures as _fut
+    sb, http = fresh_setter()
+    agent = {"id": "agent-race01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Base instructions."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    n = 10
+    doc = {"cases": [{"id": f"case-{i:04d}"} for i in range(n)], "answers": {},
+          "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    def answer_one(i):
+        return setter.route_training_answer({"agent_id": agent["id"], "case_id": f"case-{i:04d}",
+                                             "decision_ok": True, "reply_ok": True, "note": "", "scope": "one_off"})
+
+    with _fut.ThreadPoolExecutor(max_workers=n) as pool:
+        results = list(pool.map(answer_one, range(n)))
+    check("concurrent answers: every request returned 200",
+         all(s == 200 for s, _ in results), [s for s, _ in results])
+    saved = setter._load_training(agent["id"])
+    check("concurrent answers: all answers survived (none clobbered)",
+         len(saved.get("answers") or {}) == n, len(saved.get("answers") or {}))
+
+
 # ── training answer latency fix (2026-07-14): merge moved to the background
 # retrain worker via pending_merges, so route_training_answer never blocks
 # "Save & continue" on a gpt-5-mini call any more ─────────────────────────
@@ -9956,6 +10082,8 @@ if __name__ == "__main__":
     test_training_recheck_concurrent_answer_survives()
     test_training_recheck_failed_case_leaves_recheck_absent()
     test_correction_route_share_scope()
+    test_training_portal_chat_and_material()
+    test_training_answer_concurrent_writes_not_lost()
     test_training_answer_remember_returns_fast_without_synchronous_merge()
     test_training_answer_remember_persists_pending_merge_in_same_write()
     test_training_retrain_worker_drains_pending_merges_in_order_across_queued_pass()
