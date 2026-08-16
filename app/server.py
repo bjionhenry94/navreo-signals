@@ -17592,6 +17592,42 @@ _REPORT_REPLIED_LOCK = threading.Lock()
 _REPORT_REPLIED_TTL_S = 600
 
 
+def _report_positive_gate(rows: list) -> list:
+    """Client-eyes quality gate: ONE gpt-5-mini call reads every candidate
+    reply and drops clear NON-positives the categoriser mislabelled (a flat
+    rejection labeled Interested reached the Asteri feed, 2026-08-16).
+    Fail-open by design — any error, missing key, or an implausible verdict
+    (gate wanting to kill most of the feed) keeps every row; the gate may
+    only ever subtract obvious mistakes, never blank a report."""
+    if not rows:
+        return rows
+    key = KEYS.get("OPENAI_API_KEY", "")
+    if not key:
+        return rows
+    lines = "\n".join(f"[{i}] {r['reply'][:400]}" for i, r in enumerate(rows))
+    schema = {"type": "object", "additionalProperties": False,
+              "required": ["not_positive"],
+              "properties": {"not_positive": {"type": "array", "items": {"type": "integer"}}}}
+    try:
+        out = _suggest_llm(
+            key,
+            "You review replies to cold B2B emails. A reply is POSITIVE when the "
+            "sender shows real interest: agrees or offers to talk, asks for more "
+            "information, proposes or confirms a time, or asks qualifying "
+            "questions about the offer. It is NOT positive when they decline, "
+            "object, say they are not interested or not willing, ask to be "
+            "removed, or reject the approach — however politely. When unsure, "
+            "treat it as positive.",
+            "Return the indexes of replies that are NOT positive.\n\n" + lines,
+            "positive_gate", schema)
+        bad = {int(i) for i in (out.get("not_positive") or [])}
+        if not bad or len(bad) > len(rows) * 0.5:
+            return rows
+        return [r for i, r in enumerate(rows) if i not in bad]
+    except Exception:  # noqa: BLE001 - fail-open
+        return rows
+
+
 def _campaign_launches(camp_ids: list, camp_names: dict,
                        start_iso: str, end_iso: str) -> list:
     """Campaigns that STARTED SENDING inside [start,end]: earliest
@@ -17620,7 +17656,7 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
     report range, plus the campaigns that launched (started sending) in it.
     Cheap PostgREST reads, 10-min cached per client|range; reply text is
     cleaned server-side so raw HTML never reaches a client."""
-    key = f"v3|{client}|{start_iso}|{end_iso}"   # v3: merge-tag-aware spintax resolve
+    key = f"v4|{client}|{start_iso}|{end_iso}"   # v4: LLM positive gate on the feed
     with _REPORT_REPLIED_LOCK:
         ent = _REPORT_REPLIED_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _REPORT_REPLIED_TTL_S:
@@ -17713,6 +17749,7 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
             "first_email": _first_email(r.get("smartlead_campaign_id"), r.get("vp")),
             "reply": reply[:1500],
         })
+    rows = _report_positive_gate(rows)
     launches = _campaign_launches(launch_ids, camp_names, start_iso, end_iso)
     with _REPORT_REPLIED_LOCK:
         _REPORT_REPLIED_CACHE[key] = {"rows": rows, "launches": launches, "ts": time.time()}
