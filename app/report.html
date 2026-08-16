@@ -103,6 +103,7 @@
 
 .ah .stamp{font:500 10.5px/1.5 var(--font-sans);color:var(--ink-3);letter-spacing:0;text-transform:none;white-space:nowrap}
 .ah .stamp.stale{color:var(--amber);font-weight:600}
+.ah .lane.lastvis::before{display:none}
 .ah .footnote{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
 .ah .gone{max-width:520px;margin:120px auto;text-align:center}
 .ah .gone h1{margin-bottom:14px}
@@ -150,14 +151,14 @@
   <div class="lanes">
 
     <!-- ── 1 · Which campaigns — and which messages — are winning? ── -->
-    <section class="lane" aria-label="Winning campaigns lane">
+    <section class="lane" id="lane-win" aria-label="Winning campaigns lane">
       <span class="node num">1</span>
       <div class="lane-head">
         <h2 class="lane-q">Which campaigns, and which messages, are winning?</h2>
       </div>
-      <div class="cards c32">
+      <div class="cards c32" id="win-cards">
 
-        <div class="acard">
+        <div class="acard" id="card-rank">
           <div class="card-head">
             <div class="card-kick">Campaigns, best to worst <span style="text-transform:none;letter-spacing:0;font-weight:500" id="rank-scope"></span> <span class="stamp" id="rank-stamp"></span></div>
           </div>
@@ -165,12 +166,11 @@
           <div class="take"><span class="arr">→</span><span id="rank-take">&nbsp;</span></div>
         </div>
 
-        <div class="acard">
+        <div class="acard" id="card-offer">
           <div class="card-head">
             <div class="card-kick">What is the offer? <span id="offer-scope" style="text-transform:none;letter-spacing:0;font-weight:500"></span> <span class="stamp" id="offer-stamp"></span></div>
           </div>
           <div id="offer-rows"><div class="subline">Loading…</div></div>
-          <div class="subline" id="offer-sub">&nbsp;</div>
           <div class="take" id="offer-take-row" style="display:none"><span class="arr">→</span><span id="offer-take">&nbsp;</span></div>
         </div>
 
@@ -178,7 +178,7 @@
     </section>
 
     <!-- ── 2 · Who actually replies? ── -->
-    <section class="lane" aria-label="Who replies lane">
+    <section class="lane" id="lane-who" aria-label="Who replies lane">
       <span class="node num">2</span>
       <div class="lane-head">
         <h2 class="lane-q">Who actually replies?</h2>
@@ -528,11 +528,7 @@ function renderRank() {
   });
   var top = rows.slice(0, 8);
   $("rank-scope").textContent = windowed ? "· " + winLabel() : "· all time";
-  if (!top.length) {
-    $("rank-rows").innerHTML = '<div class="subline">No campaign sent ' + fmtN(minSent) + "+ emails in this window yet.</div>";
-    $("rank-take").textContent = "";
-    return;
-  }
+  if (!top.length) return false;   // empty widgets never render (Bjion 2026-08-16)
   var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
   top.forEach(function (c, i) {
     var perPos = c.pos > 0 ? Math.round(c.sent / c.pos) : null;
@@ -549,6 +545,7 @@ function renderRank() {
   $("rank-rows").innerHTML = s;
   var pick = top.filter(function (c) { return c.mtg > 0 || c.pos > 0; })[0];
   $("rank-take").textContent = pick ? "“" + escq(pick.name.length > 64 ? pick.name.slice(0, 62) + "…" : pick.name) + "” is working best right now." : "";
+  return true;
 }
 
 /* ── what is the offer — this client's offers, re-priced over the window
@@ -587,14 +584,10 @@ function renderOffer() {
   }
   var scopeTxt = "· " + R.client + " · " + (windowed ? winLabel() : "all-time");
   $("offer-scope").textContent = scopeTxt;
-  if (!offerList || offerList.length < 2) {
-    box.innerHTML = '<div class="subline">Not enough sending behind any one offer for ' + escq(R.client) +
-      (windowed ? " in the " + winLabel() : "") + " yet.</div>";
-    $("offer-sub").textContent = "";
-    $("offer-take-row").style.display = "none";
-    return;
-  }
+  if (!offerList || offerList.length < 2) return false;
   var offers = offerList.slice(0, 5);
+  // a table of nothing but "–" says nothing — that counts as empty too
+  if (!offers.some(function (o) { return o[4] != null || o[5] != null; })) return false;
   var s = '<div class="ocol ohead"><span></span><span>Per positive</span><span>Per meeting</span></div>';
   s += offers.map(function (o, i) {
     var pos = o[4], mt = o[5];
@@ -603,17 +596,12 @@ function renderOffer() {
       '<span class="val num' + (i === 0 && mt ? " win" : "") + '">' + (mt ? fmtN(mt) : "–") + "</span></div>";
   }).join("");
   box.innerHTML = s;
-  var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
-  var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
-  var nomeet = offers.filter(function (o) { return !o[5]; }).length;
-  $("offer-sub").textContent = R.client + " — emails it costs to buy one" + (windowed ? " · " + winLabel() : "") +
-    ". Across " + fmtN(camps) + " campaigns and " + fmtN(sends) + " emails." +
-    (nomeet ? " “–” means no meetings booked off that offer yet." : "");
   if (windowed && offers.length && offers[0][4] != null) {
     $("offer-take").textContent = "The " + String(offers[0][0]).toLowerCase() +
       " ask is the cheapest way to a positive reply right now.";
     $("offer-take-row").style.display = "";
   } else $("offer-take-row").style.display = "none";
+  return true;
 }
 
 /* ── who's replying — role mix + company size ── */
@@ -640,21 +628,31 @@ function renderWho() {
     } else $("who-size").textContent = "Company size: not enough on file yet.";
     $("who-take").textContent = "Most of " + escq(R.client) + "'s real yeses come from " + b[0][0].toLowerCase() + ".";
     $("who-take-row").style.display = "";
-  } else {
-    $("who-n").textContent = fmtN((p && p.n) || 0);
-    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data in this window yet.</div>';
-    $("who-size").textContent = "";
-    $("who-take-row").style.display = "none";
+    return true;
   }
+  return false;
 }
 
 function renderAll() {
   $("rp-title").textContent = R.client + " · outbound report";
   $("rp-verdict").textContent = dfull(R.start) + " – " + dfull(R.end);
   renderTrend();
-  renderRank();
-  renderOffer();
-  renderWho();
+  // empty widgets never render: hide the card, the lane when both its cards
+  // are gone, and renumber what's left so the nodes stay 1..n
+  var hasRank = !!renderRank();
+  var hasOffer = !!renderOffer();
+  var hasWho = !!renderWho();
+  $("card-rank").style.display = hasRank ? "" : "none";
+  $("card-offer").style.display = hasOffer ? "" : "none";
+  $("win-cards").classList.toggle("c32", hasRank && hasOffer);
+  $("lane-win").style.display = (hasRank || hasOffer) ? "" : "none";
+  $("lane-who").style.display = hasWho ? "" : "none";
+  var vis = [$("lane-win"), $("lane-who")].filter(function (s) { return s.style.display !== "none"; });
+  [$("lane-win"), $("lane-who")].forEach(function (s) { s.classList.remove("lastvis"); });
+  vis.forEach(function (s, i) {
+    s.querySelector(".node").textContent = i + 1;
+    if (i === vis.length - 1) s.classList.add("lastvis");
+  });
 }
 
 /* ── boot: ONE fetch, token verbatim from the URL ── */
