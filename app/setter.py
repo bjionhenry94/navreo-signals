@@ -1493,6 +1493,33 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
             "for us to talk? Here is <a href=\"BOOKING_LINK\">my availability</a>.\", putting the real "
             "booking_link value in the href."
         )
+    # Lead-stated constraints must beat the agent's own template mandates
+    # (training round 1, 2026-08-16): with the law only in DRAFT_SYSTEM the
+    # drafter ACKNOWLEDGED a deferral ("I'll grab a slot for after Oct 2
+    # then") and STILL appended the mandated two-call-times paragraph with
+    # this week's slots, 5/12 scenarios. Same mechanics as
+    # no_live_slots_directive: the rule must sit in the user message, beside
+    # the instructions it has to beat, with the literal surgery spelled out.
+    payload["constraint_directive"] = (
+        "FIRST, before writing, scan reply_body and recent_thread for anything the lead has stated "
+        "as a condition or constraint on how we proceed: a timing deferral ('not until next year', "
+        "'after the summer', 'mid-September', 'back Oct 2', 'pick this up the week of Sept 14'), a "
+        "pause ('let's hold off', 'things have blown up here'), a channel preference ('email only', "
+        "'no calls', 'just send it over'), a handoff to a colleague, or a time that is already "
+        "agreed or being confirmed. If ANY such constraint exists, it outranks the two-call-times "
+        "default, the fallback ladder, and every mandated template: you MUST NOT propose any day, "
+        "date, or clock time of your own, MUST NOT use the slots you were given, and MUST NOT "
+        "include the 'Would you be open to a call on ...' paragraph, the 'If those times aren't "
+        "suitable' line, or the booking-link availability ask - drop those paragraphs entirely, "
+        "even where a template says to keep every block as written. Instead: answer their actual "
+        "message, acknowledge the constraint in one natural sentence and defer to it ('I'll circle "
+        "back in January as you suggested', 'I'll grab a time on your calendar for after Oct 2'). "
+        "When the lead pointed at their OWN calendar or window, commit to that - link their "
+        "calendar, never ours. When a time is already agreed or being confirmed, confirm that "
+        "exact time and add nothing new. Two things are NOT constraints: a lead actively trying "
+        "to schedule sooner or on a different day ('how about next week?', 'Friday works') - "
+        "propose times as normal, honouring their preference; and reviewer_feedback that "
+        "explicitly asks for times, which always wins.")
     # How hard to push for a call on THIS turn - see the call_ask rule in
     # DRAFT_SYSTEM. Owner report 2026-07-25: "when someone replies beyond the
     # first message, sometimes the drafted response ... just tries to continue

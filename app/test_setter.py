@@ -1451,6 +1451,25 @@ def test_inject_never_sends():
          row.get("status") in ("auto_sent", "sent", "needs_review"), row.get("status"))
 
 
+def test_draft_payload_carries_constraint_directive():
+    """Training round 1 (2026-08-16): the lead-constraint law must ride in
+    the user message on EVERY draft - with it only in DRAFT_SYSTEM the
+    mandated template's two-call-times paragraph still won 5/12."""
+    sb, http = fresh_setter()
+    draft_calls = []
+    http.draft_fn = lambda body: draft_calls.append(body) or {"subject": "Re: hi", "html": "Hi. Best, Sam"}
+    setter.draft_reply(
+        {"first_name": "Alex", "subject": "Re: hi", "body": "ok"},
+        {"id": "agent-cd01"}, {"primary_intent": "send_resource", "all_intents": ["send_resource"]},
+        [], "not_configured", "Sam")
+    payload = json.loads(draft_calls[-1]["messages"][1]["content"])
+    d = payload.get("constraint_directive") or ""
+    check("constraint_directive: always present in the draft payload", bool(d), list(payload.keys()))
+    check("constraint_directive: names the template surgery",
+         "MUST NOT" in d and "Would you be open to a call" in d, d[:120])
+    check("constraint_directive: schedule-sooner is exempt", "NOT constraints" in d, d[-200:])
+
+
 def test_inject_carries_thread_to_draft_transcript():
     """Deep-conversation test scenarios (training loop 2026-08-16): a
     test-inject payload may carry a caller-built thread; the pipeline must
@@ -9806,6 +9825,7 @@ if __name__ == "__main__":
     test_decide_multi_turn_autonomy()
     test_draft_reply_thread_continuity()
     test_draft_reply_structured_thread_transcript()
+    test_draft_payload_carries_constraint_directive()
     test_inject_carries_thread_to_draft_transcript()
     test_memory_digest_reaches_classify_and_draft()
     test_memory_digest_empty_is_byte_identical()
