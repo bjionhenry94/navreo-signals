@@ -3889,6 +3889,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     ["notwarming", "Not warming"],
     ["inwarmup", "In warm-up"],
     ["reconnect", "Needs reconnect"],
+    ["highbounce", "High bounce-rate"],
   ];
 
   // A mailbox row's stable selection key, always a string: live rows key by
@@ -4134,6 +4135,30 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       .sort((a, b) => a.reply_rate - b.reply_rate || b.sent - a.sent);
   }
 
+  // High bounce-rate flow: domains bouncing over the hard 3% line in the
+  // selected window — same domain-health rows, same >3% test the floor tab
+  // already paints red (brHot), so the badge, the list, and the red % can
+  // never disagree (one count source).
+  const BOUNCE_HOT_PCT = 3;
+  function highBounceRows() {
+    const src = dhSource();
+    if (!src) return null;
+    return src.rows
+      .filter((d) => (d.sent || 0) > 0 && d.bounce_rate > BOUNCE_HOT_PCT)
+      .sort((a, b) => b.bounce_rate - a.bounce_rate || b.sent - a.sent);
+  }
+  // Domains whose sends are paused via THIS tab — the server's durable cap
+  // stash (bundle.capStash) plus a local overlay so the button flips
+  // instantly, before the refreshed bundle reconciles it.
+  const BOUNCE_LOCAL = { paused: new Set(), resumed: new Set() };
+  function bouncePausedSet() {
+    const b = bundleData();
+    const out = new Set(Object.keys((b && b.capStash) || {}).map((d) => d.toLowerCase()));
+    BOUNCE_LOCAL.paused.forEach((d) => out.add(d));
+    BOUNCE_LOCAL.resumed.forEach((d) => out.delete(d));
+    return out;
+  }
+
   // Pending restore-queue entries, ranked closest-due first. Prefers the live
   // restore plan; local reminder rows until it lands.
   function reminderEntries() {
@@ -4158,6 +4183,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const nw = dlvApplyClientLens(rowsForFlow("notwarming"));
     const iw = dlvApplyClientLens(rowsForFlow("inwarmup"));
     const rc = dlvApplyClientLens(rowsForFlow("reconnect"));
+    const hb = dlvApplyClientLens(highBounceRows());
     const doms = (rows) => rows == null ? null : new Set(rows.map((r) => r.domain)).size;
     return {
       floor: fl == null ? null : fl.length,
@@ -4166,6 +4192,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       // Reconnect is a MAILBOX-level action, so its chip counts mailboxes —
       // the domain-scoped flows keep counting domains.
       reconnect: rc == null ? null : rc.length,
+      highbounce: hb == null ? null : hb.length,
       reminders: reminderEntries().length,
     };
   }
@@ -4186,6 +4213,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       notwarming: "Mailboxes with warmup switched OFF that SHOULD be warming — a real gap to fix. Maildoso fleets warm on Instantly and are checked there live on every refresh: their boxes appear here only when Instantly says warm-up is off.",
       inwarmup: "Sends held while warming — the cap is 0 so no cold sends go out. Maildoso warms externally (on its own schedule); the rest warm in Smartlead with a due-back date. Restore any of them to resume sending.",
       reconnect: "Mailboxes whose connection failed — silently sending nothing until reconnected",
+      highbounce: "Domains bouncing over 3% in the selected window — pause their sending before the reputation damage spreads, resume when the list is cleaned",
     };
     const chip = (id, label) => {
       const n = counts[id];
@@ -4195,7 +4223,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const chips = `<div class="dlv-flowchips" role="tablist">${MGR_FLOWS.map(([id, label]) => chip(id, label)).join("")}</div>`;
     const { minSent, cutoff } = dhCutoffMin();
     const src = dhSource();
-    const winSel = flow === "floor" ? `<span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" data-act="mgr-window" title="Reporting window the reply floor is judged over">
+    const winSel = (flow === "floor" || flow === "highbounce") ? `<span class="dlv-mb-cap">Window</span><select class="dlv-select" style="width:auto" data-act="mgr-window" title="${flow === "highbounce" ? "Reporting window the bounce rate is judged over" : "Reporting window the reply floor is judged over"}">
         ${[7, 14, 30].map((d) => `<option value="${d}" ${(UI.mgr.windowDays || 7) === d ? "selected" : ""}>Last ${d} days</option>`).join("")}
       </select>` : "";
     // Min-sent + the reply floor keep working exactly as before, but they are
@@ -4209,11 +4237,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       notwarming: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Domain / mailbox</th><th>Batch</th><th>Warmup</th><th style="text-align:right">Action</th>`,
       inwarmup: `<th>Domain / mailbox</th><th style="text-align:right">Mailboxes</th><th style="text-align:right">Due back</th><th>Status</th><th style="text-align:right">Action</th>`,
       reconnect: `<th class="ck"><input type="checkbox" data-act="mgr-select-all"></th><th>Mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>`,
+      highbounce: `<th>Domain</th><th style="text-align:right">Sent</th><th style="text-align:right">Bounce rate</th><th style="text-align:right">Reply rate</th><th style="text-align:right">Action</th>`,
     };
     const foot = flow === "floor"
       ? `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="domain-health">View full table</a></div>`
       : `<div style="margin-top:8px"><a class="dlv-dl" data-act="view-data" data-file="mailboxes">View problem mailboxes</a></div>`;
-    const winNote = flow === "floor" && src ? `<span class="dlv-mb-count">${esc(src.start || "")} → ${esc(src.end || "")}</span>` : "";
+    const winNote = (flow === "floor" || flow === "highbounce") && src ? `<span class="dlv-mb-count">${esc(src.start || "")} → ${esc(src.end || "")}</span>` : "";
     return `<div class="dlv-subtab-panel" id="dlv-fold-manager">
       <div class="dlv-subtab-head">${headIc("mail")}Inbox &amp; domain manager<span class="hint">${counts.floor ? counts.floor + " domain(s) need warm-up →" : ""} warm up · restore · reconnect</span></div>
       <div class="dlv-fold-body">
@@ -4237,7 +4266,9 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   function paintManagerRows() {
     const body = $id("dlv-mgr-body");
     if (!body) return;
-    if (UI.mgr.flow === "floor") paintFloorRows(); else paintGroupedRows();
+    if (UI.mgr.flow === "floor") paintFloorRows();
+    else if (UI.mgr.flow === "highbounce") paintHighBounceRows();
+    else paintGroupedRows();
   }
 
   // Freshness/refreshing suffix for the count line — the bundle refreshes in
@@ -4305,6 +4336,47 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         <td style="text-align:right">${action}</td>
       </tr>`;
     }).join("") || `<tr><td colspan="7" class="dlv-empty">✓ No domains below the ${cutoff}% reply floor in the last ${UI.mgr.windowDays} days</td></tr>`;
+  }
+
+  // "High bounce-rate" — domain rows over the 3% line, straight from the
+  // same windowed domain-health set the floor tab reads. One Pause button
+  // per domain zeroes every mailbox's cap; Resume restores the exact caps
+  // the server stashed at pause time.
+  function paintHighBounceRows() {
+    const body = $id("dlv-mgr-body");
+    if (!body) return;
+    let rows = highBounceRows();
+    const cnt = $id("dlv-mgr-count");
+    const bw0 = $id("dlv-mgr-bulk"); if (bw0) bw0.innerHTML = "";
+    if (rows == null) {
+      body.innerHTML = `<tr><td colspan="5" class="dlv-empty"><span class="dlv-spinner ink"></span> &nbsp;Loading the ${UI.mgr.windowDays}-day window…</td></tr>`;
+      if (cnt) cnt.textContent = "loading…";
+      return;
+    }
+    rows = dlvApplyClientLens(rows);
+    const q = (UI.mgr.search || "").trim().toLowerCase();
+    if (q) rows = rows.filter((d) => d.domain.toLowerCase().includes(q));
+    if (cnt) cnt.textContent = rows.length + " domain(s) over " + BOUNCE_HOT_PCT + "% bounce · last " + (UI.mgr.windowDays || 7) + " days" + mgrFreshNote();
+    const paused = bouncePausedSet();
+    const nb = (bundleData() && bundleData().domainBoxes) || {};
+    body.innerHTML = rows.map((d) => {
+      const dom = String(d.domain || "");
+      const boxN = nb[dom.toLowerCase()];
+      const isPaused = paused.has(dom.toLowerCase());
+      let action;
+      if (isPaused) {
+        action = `<span class="dlv-tag inactive" title="Send cap set to 0 on every mailbox — resume restores the exact previous caps">sends paused</span> <button class="btn sm" data-act="bounce-resume" data-domain="${esc(dom)}">Resume</button>`;
+      } else {
+        action = `<button class="btn sm" data-act="bounce-pause" data-domain="${esc(dom)}"${boxN ? ` title="Sets all ${boxN} mailbox(es) on ${esc(dom)} to 0/day — the previous caps are saved for Resume"` : ""}>Pause</button>`;
+      }
+      if (isClientRow(d)) action = `<span class="dlv-tag md">${esc(d.workspace)}</span> ` + action;
+      return `<tr><td><div class="dlv-mb-email">${esc(dom)}${boxN ? ` <span class="dlv-mb-dom">· ${boxN} mbx</span>` : ""}</div>${(d.batches && d.batches.length) ? `<div class="dlv-mb-dom">${d.batches.slice(0, 3).join(" · ")}</div>` : ""}</td>
+        <td style="text-align:right">${d.sent}</td>
+        <td style="text-align:right;color:var(--red);font-weight:700">${d.bounce_rate.toFixed(2)}%</td>
+        <td style="text-align:right">${d.reply_rate.toFixed(2)}% <span class="dlv-mb-dom">(${d.replied})</span></td>
+        <td style="text-align:right">${action}</td>
+      </tr>`;
+    }).join("") || `<tr><td colspan="5" class="dlv-empty">✓ No domains over ${BOUNCE_HOT_PCT}% bounce in the last ${UI.mgr.windowDays} days</td></tr>`;
   }
 
   // Shared painter for the three mailbox-backed flows — rows grouped by
@@ -7235,6 +7307,54 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     paintPage();
   }
 
+  // High bounce-rate tab: pause / resume a domain's sending. The server
+  // stashes every mailbox's current cap durably BEFORE zeroing (Supabase
+  // cap_stash blob), so Resume restores the exact caps — never a guess.
+  async function bouncePauseDomain(domain, btn) {
+    if (!domain) return;
+    const nb = (bundleData() && bundleData().domainBoxes) || {};
+    const boxN = nb[domain.toLowerCase()];
+    const ok = await dlvConfirm("Pause sending on " + domain + "?\n\nEvery mailbox on it" + (boxN ? " (" + boxN + ")" : "") + " goes to 0/day. The current caps are saved, so Resume puts each box back exactly where it was.", { title: "Pause high-bounce domain", yesLabel: "Pause " + domain });
+    if (!ok) return;
+    let n = 0;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("bounce-pause?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner"></span> Pausing…', { timeout: 120000 }); }
+      catch (e) { toast("Pause failed", "err"); return; }
+      if (!j || j.error) { toast((j && j.error) || "Pause failed", "err"); return; }
+      n = j.paused || 0;
+      invalidateMgrDh();
+    } else {
+      S.A.inboxRows.filter((r) => r.domain === domain).forEach((r) => { if (r.cap > 0) { r._savedCap = r.cap; r.cap = 0; n++; } });
+    }
+    BOUNCE_LOCAL.paused.add(domain.toLowerCase());
+    BOUNCE_LOCAL.resumed.delete(domain.toLowerCase());
+    logAction({ action: "bounce_pause", domains: 1, mailboxes: n, scope: domain });
+    saveState();
+    toast("Paused sending on " + domain + " — " + n + " mailbox(es) to 0/day, caps saved for Resume", "ok");
+    paintPage();
+  }
+  async function bounceResumeDomain(domain, btn) {
+    if (!domain) return;
+    let n = 0;
+    if (isLive()) {
+      let j;
+      try { j = await liveAction("bounce-resume?domain=" + encodeURIComponent(domain), btn, '<span class="dlv-spinner"></span> Resuming…', { timeout: 120000 }); }
+      catch (e) { toast("Resume failed", "err"); return; }
+      if (!j || j.error) { toast((j && j.error) || "Resume failed", "err"); return; }
+      n = j.resumed || 0;
+      invalidateMgrDh();
+    } else {
+      S.A.inboxRows.filter((r) => r.domain === domain).forEach((r) => { if (r._savedCap != null) { r.cap = r._savedCap; delete r._savedCap; n++; } });
+    }
+    BOUNCE_LOCAL.resumed.add(domain.toLowerCase());
+    BOUNCE_LOCAL.paused.delete(domain.toLowerCase());
+    logAction({ action: "bounce_resume", domains: 1, mailboxes: n, scope: domain });
+    saveState();
+    toast("Resumed " + domain + " — " + n + " mailbox(es) back on their saved caps", "ok");
+    paintPage();
+  }
+
   /* ============================================================
      28. Mailbox per-row + bulk actions
      ============================================================ */
@@ -8076,6 +8196,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       paintManagerRows();
       bulkAction("reconnect", t);
     }); return; }
+    if (act === "bounce-pause") { runAct(act, () => bouncePauseDomain(t.dataset.domain, t)); return; }
+    if (act === "bounce-resume") { runAct(act, () => bounceResumeDomain(t.dataset.domain, t)); return; }
     if (act === "domain-warmup") { runAct(act, () => domainWarmup(t.dataset.domain, t)); return; }
     if (act === "domain-reactivate") { runAct(act, () => domainReactivate(t.dataset.domain, t)); return; }
     if (act === "domain-restore-due") { runAct(act, () => domainRestoreDue(t)); return; }

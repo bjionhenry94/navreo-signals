@@ -256,6 +256,41 @@ def test_warmup():
     check("D4 warmup self-heal recovers", j.get("reason") != "run_first" and j.get("failed", 0) == 0, str(j))
 
 
+# ── Flow E: high bounce-rate tab — pause/resume with exact cap restore ──────
+def test_bounce_pause_resume():
+    """The High bounce-rate tab's contract: >3% domains listed, Pause zeroes
+    every sending box on the domain, Resume restores each box's EXACT
+    pre-pause cap (stash semantics — never a house default), and a spent
+    stash restores nothing on a second Resume."""
+    reset()
+    dom = "acme-mock-2.test"
+    dh = call("GET", "/api/deliverability/domain-health?start=&end=&minSent=500&cutoff=0.7")
+    hot = sorted(r["domain"] for r in dh["rows"] if r["bounce_rate"] > 3)
+    check("E1 domain-health flags exactly the >3% mock domains",
+          hot == ["acme-mock-2.test", "arnic-mock-1.test"], str(hot))
+
+    def dom_caps():
+        j = call("GET", "/api/deliverability/inboxes?view=all&batch=")
+        return {r["email"]: r["cap"] for r in j["rows"] if r["domain"] == dom}
+
+    before = dom_caps()
+    sending = sum(1 for c in before.values() if c > 0)
+    check("E2 mock domain has sending boxes to pause", sending > 0, str(before))
+    j = call("POST", "/api/deliverability/bounce-pause?domain=" + dom)
+    check("E3 pause zeroes every sending box",
+          j.get("paused") == sending and not j.get("failed"), str(j))
+    check("E4 all caps at 0 after pause", all(c == 0 for c in dom_caps().values()),
+          str(dom_caps()))
+    j = call("POST", "/api/deliverability/bounce-resume?domain=" + dom)
+    check("E5 resume restores the paused boxes",
+          j.get("resumed") == sending and not j.get("failed"), str(j))
+    check("E6 caps restored EXACTLY (stash, never house defaults)",
+          dom_caps() == before, f"before={before} after={dom_caps()}")
+    j = call("POST", "/api/deliverability/bounce-resume?domain=" + dom)
+    check("E7 stash cleared — a second resume restores nothing",
+          (j.get("resumed") or 0) == 0, str(j))
+
+
 def _page(path, with_cookie=True):
     """Raw GET of an app page. Returns (status, body_text); redirects NOT followed."""
     class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -295,7 +330,8 @@ def test_pages_layout():
 
 
 if __name__ == "__main__":
-    for fn in (test_boot, test_process_new, test_signatures, test_warmup, test_pages_layout):
+    for fn in (test_boot, test_process_new, test_signatures, test_warmup,
+               test_bounce_pause_resume, test_pages_layout):
         print(f"\n── {fn.__name__} ──")
         try:
             fn()

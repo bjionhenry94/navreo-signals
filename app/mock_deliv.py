@@ -357,6 +357,10 @@ def handle_proxy(method: str, rest: str, body: bytes | None):
             return _capacity(q, pause=True)
         if path == "capacity-resume" and method == "POST":
             return _capacity(q, pause=False)
+        if path == "bounce-pause" and method == "POST":
+            return _bounce_capacity(q, pause=True)
+        if path == "bounce-resume" and method == "POST":
+            return _bounce_capacity(q, pause=False)
         if path == "warmup-pause" and method == "POST":
             return _domain_warmup(q, pause=True)
         if path == "warmup-resume" and method == "POST":
@@ -508,6 +512,43 @@ def _capacity(q: dict, pause: bool):
     return 200, ({"paused": n, "skipped": skipped} if pause else {"resumed": n, "skipped": skipped})
 
 
+def _bounce_capacity(q: dict, pause: bool):
+    """High bounce-rate tab pause/resume (?domain=a.com[,b.com]): pause saves
+    each sending mailbox's EXACT cap and zeroes it; resume restores only the
+    saved cap — mirrors the real server's durable cap-stash semantics."""
+    doms = [d for d in (q.get("domain") or "").lower().split(",") if d]
+    n, skipped = 0, 0
+    for r in _STATE["fleet"].values():
+        if r["domain"] not in doms:
+            continue
+        if pause:
+            if r["cap"] > 0:
+                r["_bounce_saved_cap"] = r["cap"]
+                r["cap"] = 0
+                n += 1
+            else:
+                skipped += 1
+        else:
+            if r.get("_bounce_saved_cap"):
+                r["cap"] = r.pop("_bounce_saved_cap")
+                n += 1
+            else:
+                skipped += 1
+    return 200, ({"paused": n, "skipped": skipped, "failed": 0} if pause
+                 else {"resumed": n, "skipped": skipped, "failed": 0})
+
+
+def bounce_stash_domains() -> dict:
+    """{domain: n_boxes} holding a bounce-tab saved cap — feeds the bundle's
+    capStash so the tab's Pause/Resume state paints in mock mode."""
+    with _LOCK:
+        out = {}
+        for r in _STATE["fleet"].values():
+            if r.get("_bounce_saved_cap"):
+                out[r["domain"]] = out.get(r["domain"], 0) + 1
+        return out
+
+
 def _domain_warmup(q: dict, pause: bool):
     """Domain-scoped warm-up rest / restore — mirrors the real backend's
     warmup-pause / warmup-resume (?domain=a.com[,b.com]): pause saves each
@@ -624,7 +665,9 @@ def _domain_health(q: dict):
             # table (d.positive_rate.toFixed) — omitting them crashes the
             # manager tab's default view.
             "positive_rate": round(100.0 * positive / max(sent, 1), 2),
-            "bounce_rate": 1.5,
+            # Two domains over the high-bounce tab's 3% line so DELIV_MOCK
+            # exercises its list + Pause/Resume; the rest stay quiet at 1.5.
+            "bounce_rate": {"acme-mock-2.test": 4.8, "arnic-mock-1.test": 3.6}.get(d, 1.5),
             "batches": sorted({r["batch"] for r in dr}),
         })
     return 200, {"rows": rows, "resting": resting, "restingDue": resting_due,

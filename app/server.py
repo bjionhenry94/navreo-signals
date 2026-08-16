@@ -16502,6 +16502,96 @@ def _revive_reconnect_watchers():
                          daemon=True).start()
 
 
+# ── High bounce-rate tab: domain-level pause/resume with a durable cap stash ─
+# Pause zeroes every mailbox on the domain (Navreo + client workspaces alike);
+# the pre-pause caps land in deliverability_audit_cache (id "cap_stash")
+# BEFORE the first Smartlead write, so Resume restores each box's EXACT cap —
+# never a house default. Stash shape: {"domains": {domain: {"ws:slid": cap}}}.
+_CAP_STASH_ID = "cap_stash"
+
+
+def _cap_stash_read() -> dict:
+    return (_blob_snapshot_load(_CAP_STASH_ID) or {}).get("domains") or {}
+
+
+def _cap_stash_write(domains: dict) -> None:
+    _blob_snapshot_save(_CAP_STASH_ID, {"domains": domains})
+
+
+def _bounce_action(action: str, domain: str):
+    """(ok, skipped, failed, message) for bounce-pause / bounce-resume.
+    Mailboxes resolve from the Supabase mirror (full fleet, all workspaces);
+    Smartlead writes use the owning workspace's key and the mirror row is
+    patched immediately so the next bundle merge shows the new state."""
+    dom = (domain or "").strip().lower()
+    if not dom:
+        return 0, 0, 1, "missing domain"
+    boxes = sb("GET", "mailboxes?domain=eq.%s"
+                      "&select=smartlead_id,workspace,account_type,message_per_day" % dom) or []
+    boxes = [r for r in boxes if r.get("smartlead_id")]
+    if not boxes:
+        return 0, 0, 1, "no mailboxes found for %s" % dom
+    ok = skipped = failed = 0
+    msgs = []
+    stash = _cap_stash_read()
+    if action == "bounce-pause":
+        entry = dict(stash.get(dom) or {})
+        targets = []
+        for r in boxes:
+            cap = int(r.get("message_per_day") or 0)
+            if cap <= 0:
+                skipped += 1
+                continue
+            entry["%s:%s" % (r.get("workspace") or "navreo", r["smartlead_id"])] = cap
+            targets.append(r)
+        if not targets:
+            return 0, skipped, 0, ""
+        # Hard rule: the stash is durable BEFORE the first cap write, so a
+        # crash mid-pause can never orphan a box on 0 with its cap forgotten.
+        stash[dom] = entry
+        _cap_stash_write(stash)
+        for r in targets:
+            ws, sl = r.get("workspace") or "navreo", r["smartlead_id"]
+            try:
+                _smartlead_json("POST", "/email-accounts/%s" % sl,
+                                {"max_email_per_day": 0}, workspace=ws)
+                sb("PATCH", "mailboxes?workspace=eq.%s&smartlead_id=eq.%s" % (ws, sl),
+                   {"message_per_day": 0})
+                ok += 1
+            except Exception as e:  # noqa: BLE001 — keep going, report per box
+                failed += 1
+                msgs.append("%s:%s: %s" % (ws, sl, str(e)[:100]))
+            time.sleep(0.35)  # shared 200req/min Smartlead budget
+        return ok, skipped, failed, "; ".join(msgs[:5])
+    # bounce-resume: stashed cap first; history, then house caps, only for a
+    # 0-cap box the stash never saw. Boxes already sending are never touched.
+    entry = stash.get(dom) or {}
+    for r in boxes:
+        ws, sl = r.get("workspace") or "navreo", r["smartlead_id"]
+        if int(r.get("message_per_day") or 0) > 0:
+            skipped += 1
+            continue
+        cap = int(entry.get("%s:%s" % (ws, sl)) or 0)
+        if cap <= 0:
+            cap = _client_ws_restore_cap(ws, sl, r.get("account_type") == "OUTLOOK")
+        try:
+            _smartlead_json("POST", "/email-accounts/%s" % sl,
+                            {"max_email_per_day": cap}, workspace=ws)
+            sb("PATCH", "mailboxes?workspace=eq.%s&smartlead_id=eq.%s" % (ws, sl),
+               {"message_per_day": cap})
+            ok += 1
+        except Exception as e:  # noqa: BLE001 — keep going, report per box
+            failed += 1
+            msgs.append("%s:%s: %s" % (ws, sl, str(e)[:100]))
+        time.sleep(0.35)
+    if not failed and dom in stash:
+        # Only a clean restore clears the stash — a partial one keeps it so a
+        # retry can still restore the failed boxes to their exact caps.
+        stash.pop(dom, None)
+        _cap_stash_write(stash)
+    return ok, skipped, failed, "; ".join(msgs[:5])
+
+
 def _deliv_bundle_run_bg_inner():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
@@ -16565,6 +16655,14 @@ def _deliv_bundle_run_bg_inner():
             census_fresh = bool(boxes) and newest >= (
                 datetime.now(timezone.utc) - timedelta(hours=48)).isoformat()
         out["domainBoxes"] = boxes
+        # High-bounce tab: domains paused via the durable cap stash, as
+        # {domain: n_boxes_stashed} — the tab's Pause/Resume buttons read
+        # this off the cached bundle (no per-tab fetch).
+        try:
+            out["capStash"] = (mock_deliv.bounce_stash_domains() if _deliv_mock_on()
+                               else {d: len(m or {}) for d, m in _cap_stash_read().items()})
+        except Exception as e:  # noqa: BLE001
+            out["errors"]["capStash"] = str(e)[:200]
         # sends-paused truth: per-domain count of cap-0 boxes across the FULL
         # fleet (the audit backend's views truncate at 2,000 rows, so counting
         # its rows undercounts big domains and ghosts linger). Domains absent
@@ -22235,6 +22333,21 @@ class Handler(SimpleHTTPRequestHandler):
             # workspace's Smartlead; any backend ids on the same click still
             # forward to the backend and the counts merge.
             act = path[len("/api/deliverability/"):].split("?")[0].strip("/")
+            # High bounce-rate tab (domain-level, all workspaces, durable cap
+            # stash) — runs in-tool; mock mode falls through to the fake fleet.
+            if act in ("bounce-pause", "bounce-resume") and not _deliv_mock_on():
+                from urllib.parse import parse_qs, urlparse
+                dom = (parse_qs(urlparse(self.path).query).get("domain") or [""])[0]
+                ok, skipped, failed, msg = _bounce_action(act, dom)
+                log_activity(path, {"domain": dom, "ok": ok, "skipped": skipped,
+                                    "failed": failed, "message": msg[:200]},
+                             actor=self._authed_email() or "app",
+                             action=act, entity="deliverability")
+                out = {("paused" if act == "bounce-pause" else "resumed"): ok,
+                       "skipped": skipped, "failed": failed}
+                if failed and msg:
+                    out["error"] = msg[:200]
+                return self._json(out)
             if act in ("reconnect", "reenable", "capacity-pause", "capacity-resume"):
                 from urllib.parse import parse_qs, urlparse
                 q = parse_qs(urlparse(self.path).query)
