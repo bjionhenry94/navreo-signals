@@ -3856,7 +3856,12 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         "message_id": message_id, "source_message_id": message_id,
         "reply_subject": reply.get("subject") or "",
         "reply_body": reply.get("body") or "", "replied_at": reply.get("replied_at") or now_iso,
-        "category": reply.get("category"), "thread": [], "smartlead_lead_id": None,
+        # Test-inject rows may carry a caller-built thread (the downstream
+        # first_outbound fallback and draft transcript have expected one all
+        # along); real rows always get theirs from hydration below.
+        "category": reply.get("category"),
+        "thread": (reply.get("thread") or []) if bool(reply.get("is_test")) else [],
+        "smartlead_lead_id": None,
         "email_stats_id": None, "classification": None, "guardrails": None,
         "timezone": None, "slots": [], "draft_subject": None, "draft_body": None,
         "decision": None, "decision_reason": None, "status": "new",
@@ -9883,6 +9888,13 @@ def route_test_inject(payload):
             "message_id": f"test-{uuid.uuid4().hex[:10]}",
             "category": None, "is_test": True,
         }
+        # Optional caller-built thread for deep-conversation test scenarios
+        # (training loop 2026-08-16). Lead-side realism law applies to the
+        # caller; the pipeline treats it exactly like a hydrated thread.
+        if isinstance(payload.get("thread"), list):
+            reply["thread"] = payload["thread"]
+        if payload.get("sender_first"):
+            reply["sender_first"] = payload["sender_first"]
         row = process_reply(reply, agent, settings)
         return 200, {"row": row}
     except Exception as e:  # noqa: BLE001

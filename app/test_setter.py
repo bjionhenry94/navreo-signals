@@ -1451,6 +1451,48 @@ def test_inject_never_sends():
          row.get("status") in ("auto_sent", "sent", "needs_review"), row.get("status"))
 
 
+def test_inject_carries_thread_to_draft_transcript():
+    """Deep-conversation test scenarios (training loop 2026-08-16): a
+    test-inject payload may carry a caller-built thread; the pipeline must
+    store it on the is_test row AND hand the drafter the labelled transcript,
+    exactly as a hydrated real row would. Real rows are untouched (their
+    thread always comes from hydration)."""
+    sb, http = fresh_setter()
+    draft_calls = []
+    http.classify_fn = lambda _b: {
+        "primary_intent": "scheduling", "all_intents": ["scheduling"], "simple_ask": True,
+        "confidence": 0.97, "red_flags": [], "timezone_guess": "", "tz_confidence": 0.0,
+        "wants": "call next year", "rationale": "deferral with interest",
+    }
+    http.draft_fn = lambda body: draft_calls.append(body) or {"subject": "Re: hi", "html": "Hi Sam, noted. Best, Sam"}
+    agent = {"id": "agent-cccc3333", "mode": "copilot", "enabled": True, "campaign_ids": [223],
+             "allowed_intents": ["scheduling"], "confidence_threshold": 0.9,
+             "resource_link": "https://x.example/r"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    thread = [
+        {"type": "SENT", "time": "2026-08-01T09:00:00Z", "from_name": "Jane Doe",
+         "body": "<div>Hi Sam, quick idea about outbound.</div>"},
+        {"type": "REPLY", "time": "2026-08-03T10:00:00Z", "body": "<div>What does it cost?</div>"},
+        {"type": "SENT", "time": "2026-08-04T09:30:00Z", "from_name": "Jane Doe",
+         "body": "<div>Flat monthly fee.</div>"},
+    ]
+    status, resp = setter.route_test_inject({
+        "campaign_id": 223, "email": "test@example.com",
+        "body": "Don't reach out until next year, but I'm interested in a call.",
+        "thread": thread, "sender_first": "Jane"})
+    row = resp.get("row") or {}
+    check("inject+thread: returns 200", status == 200, (status, resp))
+    check("inject+thread: row stores the caller thread", len(row.get("thread") or []) == 3, row.get("thread"))
+    check("inject+thread: still never hydrates from Smartlead", http.smartlead_calls == [], http.smartlead_calls)
+    payload = json.loads(draft_calls[-1]["messages"][1]["content"]) if draft_calls else {}
+    rt = payload.get("recent_thread") or ""
+    check("inject+thread: drafter got the labelled transcript",
+         "US (Jane" in rt and "LEAD" in rt and "cost" in rt, rt)
+    check("inject+thread: first_outbound falls back to the thread's first SENT",
+         "quick idea" in (payload.get("original_outreach") or ""), payload.get("original_outreach"))
+
+
 def test_env_dry_run_send_never_hits_network():
     sb, http = fresh_setter()
     os.environ["SETTER_DRY_RUN"] = "1"
@@ -9764,6 +9806,7 @@ if __name__ == "__main__":
     test_decide_multi_turn_autonomy()
     test_draft_reply_thread_continuity()
     test_draft_reply_structured_thread_transcript()
+    test_inject_carries_thread_to_draft_transcript()
     test_memory_digest_reaches_classify_and_draft()
     test_memory_digest_empty_is_byte_identical()
     test_merge_correction_into_instructions_success_and_fallbacks()
