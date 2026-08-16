@@ -847,6 +847,24 @@ _CALL_OFFERED_RE = re.compile(
     r"\b(would you be free|are you free|book a call|grab a slot|my availability|"
     r"a good time for us to talk|find a time)\b", re.IGNORECASE)
 
+# A lead telling us the conversation stays in email, or naming a later
+# window before we may come back. Judged on the unquoted reply only.
+_NO_CALL_CHANNEL_RE = re.compile(
+    r"\b(no calls?|don'?t do calls?|calls? (are|is) (impossible|not possible|difficult|tough)|"
+    r"everything in writing|in writing,? please|email only|prefer email|over email,? please|"
+    r"send (it|everything|the details) (over|via|by) email|rather not (do |have )?a call)\b",
+    re.IGNORECASE)
+_DEFERRAL_RE = re.compile(
+    r"\b(not until|don'?t (reach|contact|call)[^.]{0,30}until|until (next|the new) year|"
+    r"ping me in|circle back in|reach (back )?out in|follow up (in|after)|"
+    r"pick (this|it) (back )?up (in|after|once|when)|"
+    r"after (the )?(summer|holidays?|show|conference|event)|"
+    r"(travell?ing|away|on leave|out of office) until|"
+    r"(after|when|once) i'?m back|budget freeze|"
+    r"(book|grab|find) (something|a (time|slot))[^.]{0,30}after)\b",
+    re.IGNORECASE)
+
+
 
 def call_ask_for(classification: dict, body_text: str, thread_text: str, first_touch: bool = True) -> str:
     """"required" | "only_if_relevant" | "avoid" - how hard THIS draft should
@@ -864,6 +882,15 @@ def call_ask_for(classification: dict, body_text: str, thread_text: str, first_t
     intents = set(classification.get("all_intents") or [])
     primary = classification.get("primary_intent") or ""
     body = _strip_quoted(str(body_text or ""))
+    # Channel preferences ("everything in writing") and explicit deferrals
+    # ("ping me in February", "traveling until Nov 5") beat EVERYTHING -
+    # including a scheduling intent (training rounds 1-4, 2026-08-16: the
+    # founding "don't reach out until next year, but I'm interested in a
+    # call" classifies as scheduling, so the old order forced call_ask=
+    # "required" and the prompt-level constraint had to out-argue the whole
+    # slot machinery on every draft - it lost roughly 1 in 3).
+    if _NO_CALL_CHANNEL_RE.search(body) or _DEFERRAL_RE.search(body):
+        return "avoid"
     # They are asking to book, or asking about times: always ask.
     if "scheduling" in intents or primary == "scheduling":
         return "required"

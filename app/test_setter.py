@@ -1451,6 +1451,31 @@ def test_inject_never_sends():
          row.get("status") in ("auto_sent", "sent", "needs_review"), row.get("status"))
 
 
+def test_call_ask_deferral_and_channel_beat_scheduling():
+    """Training rounds 1-4 (2026-08-16): a deferral or channel preference
+    forces call_ask='avoid' BEFORE the scheduling-intent check - the founding
+    'don't reach out until next year, but I'm interested in a call' classifies
+    as scheduling, and the old order handed it call_ask='required'."""
+    sched = {"primary_intent": "scheduling", "all_intents": ["scheduling"]}
+    cases_avoid = [
+        "Don't reach out to me until next year, but I'm interested in a call.",
+        "Genuinely like this, but we're in a budget freeze - ping me in February.",
+        "Calls are impossible with my schedule - everything in writing please.",
+        "This sounds interesting, but I don't do calls - can you send everything over email?",
+        "I'm traveling until Nov 5. Book something for after I'm back via my link.",
+    ]
+    for body in cases_avoid:
+        got = setter.call_ask_for(sched, body, "", first_touch=False)
+        check(f"call_ask avoid: {body[:45]!r}", got == "avoid", got)
+    cases_required = [
+        "OK - things have settled. Let's do that call. What have you got?",
+        "Sure, send me some options for a call next week.",
+    ]
+    for body in cases_required:
+        got = setter.call_ask_for(sched, body, "", first_touch=False)
+        check(f"call_ask required (no constraint): {body[:45]!r}", got == "required", got)
+
+
 def test_draft_payload_carries_constraint_directive():
     """Training round 1 (2026-08-16): the lead-constraint law must ride in
     the user message on EVERY draft - with it only in DRAFT_SYSTEM the
@@ -9838,6 +9863,7 @@ if __name__ == "__main__":
     test_decide_multi_turn_autonomy()
     test_draft_reply_thread_continuity()
     test_draft_reply_structured_thread_transcript()
+    test_call_ask_deferral_and_channel_beat_scheduling()
     test_draft_payload_carries_constraint_directive()
     test_inject_carries_thread_to_draft_transcript()
     test_memory_digest_reaches_classify_and_draft()
