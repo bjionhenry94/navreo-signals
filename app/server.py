@@ -17565,15 +17565,25 @@ def _report_message_label(vp) -> str:
         return ""
 
 
-def _resolve_spintax(t: str, cap: int = 40) -> str:
-    """First option of every flat {a|b|c} group — client-facing copy renders
-    resolved, never raw spintax. {{merge_tags}} pass through verbatim."""
+def _resolve_spintax(t: str, cap: int = 60) -> str:
+    """First option of every {a|b|c} group — client-facing copy renders
+    resolved, never raw spintax. {{merge_tags}} pass through verbatim, and a
+    group whose options CONTAIN a merge tag still resolves (the tags are
+    stashed first, so nested-brace groups go flat — the leak Bjion saw)."""
     t = str(t or "")
+    tags: list = []
+
+    def _stash(m):
+        tags.append(m.group(0))
+        return f"\x00{len(tags) - 1}\x01"
+    t = re.sub(r"\{\{[^{}]*\}\}", _stash, t)
     for _ in range(cap):
-        m = re.search(r"\{([^{}|]*(?:\|[^{}|]*)+)\}", t)
+        m = re.search(r"\{([^{}]*)\}", t)   # innermost group, pipe or not
         if not m:
             break
         t = t[:m.start()] + m.group(1).split("|")[0] + t[m.end():]
+    for i, tag in enumerate(tags):
+        t = t.replace(f"\x00{i}\x01", tag)
     return t
 
 
@@ -17610,7 +17620,7 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
     report range, plus the campaigns that launched (started sending) in it.
     Cheap PostgREST reads, 10-min cached per client|range; reply text is
     cleaned server-side so raw HTML never reaches a client."""
-    key = f"v2|{client}|{start_iso}|{end_iso}"   # v2: first-reply-per-prospect + first_email
+    key = f"v3|{client}|{start_iso}|{end_iso}"   # v3: merge-tag-aware spintax resolve
     with _REPORT_REPLIED_LOCK:
         ent = _REPORT_REPLIED_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _REPORT_REPLIED_TTL_S:
