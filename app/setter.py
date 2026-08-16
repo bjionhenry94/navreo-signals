@@ -1371,11 +1371,52 @@ Rules:
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
 - Match the tone AND the exact recurring phrasing of the real examples above - the goal is a reply indistinguishable from what the team actually sends.
 - original_outreach is the first email we sent this lead. Keep the reply consistent with what it actually offered - answer the thing they were pitched, and echo the lead's own wording where natural, so the message reads like a real continuation of that thread, not a generic template.
-- recent_thread, when present, is the last few messages in this thread (our sends and their replies, oldest first) - a later-turn reply must read as a natural continuation of it, never repeating something already said or re-introducing yourself.
+- recent_thread, when present, is a transcript of this thread, oldest first: lines starting "US" are emails WE sent, lines starting "LEAD" are the lead's replies, and the final LEAD line is the same message as reply_body - the one you are answering now. Read the WHOLE transcript before writing: a later-turn reply must read as a natural continuation of it, never repeating something already said, never re-introducing yourself, and never re-pitching what the transcript shows was already offered, answered, declined, or agreed.
+- Anything the lead has stated as a condition or constraint anywhere in the thread - and above all in their latest reply - binds the draft, even when it sits beside interest. A stated timing ("not until next year", "reach out after the summer", "busy until Q3") means propose NO call time now, even when slots were supplied and even when call_ask says times are the default: acknowledge their interest, defer to their timing in one natural sentence ("I'll circle back in the new year as you suggested"), and ask for nothing more. A stated channel or contact preference ("email only", "send it over rather than a call", "speak to my colleague") is obeyed the same way - the constraint always outranks the call-times default and every template mandate.
 - reviewer_feedback, when present, is the human reviewer's instruction for THIS regeneration ("shorter", "don't offer times", "mention the guide is free") - follow it faithfully while keeping every rule above. It never overrides the never-invent rules.
 - reviewer_feedback/owner_corrections may contain a LATEST OWNER RULES block: those rules are the owner's newest teaching and take priority over everything else, including older instructions - obey them exactly.
 - feedback_note is ONLY about reviewer_feedback, and only about the part you could NOT honour. When reviewer_feedback asks for something you have NO source for (a resource link when the instructions contain none, a fact or asset not present in the instructions, thread, or slots), do NOT invent it and do NOT silently ignore the ask - write one plain-English sentence in feedback_note saying what you couldn't do and why, plus what would unblock it (e.g. "No agent is assigned to this campaign, so I have no resource links to include - assign an agent or paste the link into the draft manually."). Never use feedback_note for gaps the reviewer didn't raise: a missing booking link, missing call slots, empty instructions, or any other limitation is NOT feedback_note material unless reviewer_feedback itself asked for that thing. When you honoured the feedback fully, or there is no reviewer_feedback, feedback_note must be exactly "".
 - Output STRICT JSON: {"subject": "...", "html": "...", "feedback_note": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
+
+
+_TRANSCRIPT_MSG_CAP = 600     # per-message ceiling inside the transcript
+_TRANSCRIPT_BUDGET = 2600     # whole-transcript ceiling
+
+
+def _thread_transcript(thread: list) -> str:
+    """The stored thread as a labelled transcript for the drafter: one block
+    per message - "US (Jane, 14 Jul): ..." / "LEAD (15 Jul): ..." - oldest
+    first, each body run through clean_body() so markup and quoted history
+    never reach the model. The budget walks NEWEST-first, so when a thread is
+    long it is the OLDEST turns that drop - the old space-join was
+    head-truncated in draft_reply ([:1200]), which handed a 3rd/4th-turn
+    draft a fragment of the ORIGINAL outreach and silently dropped the very
+    turns (constraints, agreements, answers) a deep-thread reply must honour
+    (owner report 2026-08-16)."""
+    blocks = []
+    used = 0
+    for m in reversed(thread or []):
+        if not isinstance(m, dict):
+            continue
+        text = re.sub(r"\s+", " ", clean_body(str(m.get("body") or ""))).strip()
+        if not text:
+            continue
+        if len(text) > _TRANSCRIPT_MSG_CAP:
+            text = text[:_TRANSCRIPT_MSG_CAP].rstrip() + " ..."
+        who = "US" if str(m.get("type") or "").upper() == "SENT" else "LEAD"
+        detail = []
+        if who == "US" and m.get("from_name"):
+            detail.append(str(m["from_name"]).split()[0])
+        try:
+            detail.append(_parse_iso(str(m.get("time"))).strftime("%d %b"))
+        except Exception:  # noqa: BLE001 - the date label is decoration, never load-bearing
+            pass
+        block = (f"{who} ({', '.join(detail)}): " if detail else f"{who}: ") + text
+        if blocks and used + len(block) > _TRANSCRIPT_BUDGET:
+            break
+        blocks.append(block)
+        used += len(block)
+    return "\n".join(reversed(blocks))
 
 
 def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slot_status: str, sender_first: str,
@@ -1396,7 +1437,11 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "lead_first_name": reply.get("first_name") or "",
         "original_subject": reply.get("subject") or "",
         "original_outreach": (reply.get("first_outbound") or "")[:1500],
-        "reply_body": (reply.get("body") or "")[:3000],
+        # clean_body, not raw: the redraft path passed the stored reply_body
+        # verbatim, so a full-HTML Outlook reply could spend the whole 3000
+        # cap on markup and push the lead's actual words past it. clean_body
+        # is a no-op on already-clean text, so the live path is unchanged.
+        "reply_body": clean_body(reply.get("body") or "")[:3000],
         "wants": classification.get("wants") or "",
         "primary_intent": classification.get("primary_intent") or "",
         "all_intents": classification.get("all_intents") or [],
@@ -1488,15 +1533,21 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
                 "zone label. If scheduling is on the table but you end up proposing no concrete "
                 "time, explain why in feedback_note (for example: no live availability was "
                 "supplied) - never skip the time silently.")
-    # Thread continuity (multi-turn autonomy): when the reply dict carries the
-    # recent thread text (hydrate_lead already collects it - norm[-6:] - the
-    # caller just needs to pass it through), give the drafter that context so
-    # a later-turn reply reads as a continuation, not a repeat.
-    thread_raw = str(reply.get("thread_text") or "").strip()
-    if thread_raw:
-        thread_clean = re.sub(r"\s+", " ", _TAG_RE.sub(" ", thread_raw)).strip()[:1200]
-        if thread_clean:
-            payload["recent_thread"] = thread_clean
+    # Thread continuity (multi-turn autonomy): when the caller passes the
+    # stored thread list, build the labelled transcript so the model knows
+    # who said what and the newest turns always survive the budget. The bare
+    # thread_text string stays as the fallback for older callers - tail-kept,
+    # not head-kept, because the newest text is the part a later-turn draft
+    # must honour.
+    transcript = _thread_transcript(reply.get("thread") or [])
+    if transcript:
+        payload["recent_thread"] = transcript
+    else:
+        thread_raw = str(reply.get("thread_text") or "").strip()
+        if thread_raw:
+            thread_clean = re.sub(r"\s+", " ", _TAG_RE.sub(" ", thread_raw)).strip()[-_TRANSCRIPT_BUDGET:]
+            if thread_clean:
+                payload["recent_thread"] = thread_clean
     if (regen_feedback or "").strip():
         # 4000, not 500: the feedback carries the LATEST OWNER RULES block
         # (~1600 chars) plus the session digest (~2000). The old 500-char cap
@@ -3486,6 +3537,7 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                     d = draft_reply(
                         {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
                          "body": row.get("reply_body"), "first_outbound": first_outbound,
+                         "thread": row.get("thread"),
                          "thread_text": thread_text, "timezone": tz},
                         snapshot, classification, slots, slot_status,
                         sender_first=_sender_first_for(snapshot))
@@ -4033,6 +4085,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             d = draft_reply(
                 {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text,
                  "first_outbound": first_outbound, "thread_text": thread_text,
+                 "thread": row.get("thread"),
                  "timezone": row.get("timezone"),
                  "call_ask": call_ask_for(classification, body_text, thread_text,
                                           first_touch=_inbound_turns <= 1)},
@@ -9709,6 +9762,7 @@ def _redraft_sync(payload):
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
              "first_outbound": row.get("first_outbound") or "",
+             "thread": row.get("thread"),
              "thread_text": thread_text, "call_ask": call_ask},
             agent, classification, slots, slot_status, sender_first=sender_first,
             regen_feedback=combined_feedback)

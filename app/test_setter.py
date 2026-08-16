@@ -3427,6 +3427,88 @@ def test_draft_reply_thread_continuity():
          "recent_thread" not in payload2, payload2)
 
 
+def test_draft_reply_structured_thread_transcript():
+    """Deep-thread context fix (owner report 2026-08-16): when the caller
+    passes the stored thread LIST, draft_reply builds a labelled US/LEAD
+    transcript - cleaned, oldest first - and the budget drops the OLDEST
+    turns, never the newest. The old path space-joined raw HTML and kept the
+    FIRST 1200 chars, so a 3rd/4th-turn draft saw only a fragment of the
+    original outreach and none of the constraints stated later."""
+    sb, http = fresh_setter()
+    draft_calls = []
+    http.draft_fn = lambda body: draft_calls.append(body) or {"subject": "Re: hi", "html": "Hi, thanks. Best, Sam"}
+    agent = {"id": "agent-thread02", "resource_link": "https://x.example/r"}
+    classification = {"primary_intent": "meeting_request", "all_intents": ["meeting_request"], "wants": "call"}
+
+    thread = [
+        {"type": "SENT", "time": "2026-08-01T09:00:00Z", "from_name": "Jane Doe",
+         "body": "<div>Hi Alex, quick idea about outbound.</div>"},
+        {"type": "REPLY", "time": "2026-08-03T10:00:00Z",
+         "body": "<div>What does it cost?</div>"},
+        {"type": "SENT", "time": "2026-08-04T09:30:00Z", "from_name": "Jane Doe",
+         "body": "<div>It is a flat monthly fee.</div>"},
+        {"type": "REPLY", "time": "2026-08-10T15:00:00Z",
+         "body": "<div>Don't reach out until next year, but I'm interested in a call.</div>"},
+    ]
+    setter.draft_reply(
+        {"first_name": "Alex", "subject": "Re: hi", "body": "Don't reach out until next year, but I'm interested in a call.",
+         "thread": thread, "thread_text": "legacy soup should be ignored"},
+        agent, classification, [], "not_configured", "Sam")
+    payload = json.loads(draft_calls[-1]["messages"][1]["content"])
+    rt = payload.get("recent_thread") or ""
+    check("transcript: US lines labelled with sender first name",
+         "US (Jane" in rt, rt)
+    check("transcript: LEAD lines labelled", "LEAD" in rt, rt)
+    check("transcript: oldest first (outreach before the latest reply)",
+         0 <= rt.find("quick idea") < rt.find("until next year"), rt)
+    check("transcript: HTML stripped", "<div>" not in rt, rt)
+    check("transcript: structured thread wins over legacy thread_text",
+         "legacy soup" not in rt, rt)
+    check("transcript: mid-thread turns present (the old head-cut's victims)",
+         "flat monthly fee" in rt and "cost" in rt, rt)
+
+    # Budget pressure: a long thread must keep the NEWEST turns and drop the
+    # oldest - the exact inversion of the old [:1200] head-cut.
+    filler = "word " * 200  # ~1000 chars per message, > budget across 4
+    long_thread = [
+        {"type": "SENT", "time": "2026-07-01T09:00:00Z", "body": f"<div>OLDEST-MARKER {filler}</div>"},
+        {"type": "REPLY", "time": "2026-07-02T09:00:00Z", "body": f"<div>{filler}</div>"},
+        {"type": "SENT", "time": "2026-07-03T09:00:00Z", "body": f"<div>{filler}</div>"},
+        {"type": "REPLY", "time": "2026-07-04T09:00:00Z", "body": f"<div>{filler}</div>"},
+        {"type": "SENT", "time": "2026-07-05T09:00:00Z", "body": f"<div>{filler}</div>"},
+        {"type": "REPLY", "time": "2026-07-06T09:00:00Z", "body": f"<div>NEWEST-MARKER {filler}</div>"},
+    ]
+    setter.draft_reply(
+        {"first_name": "Alex", "subject": "Re: hi", "body": "ok", "thread": long_thread},
+        agent, classification, [], "not_configured", "Sam")
+    rt2 = json.loads(draft_calls[-1]["messages"][1]["content"]).get("recent_thread") or ""
+    check("transcript budget: newest turn survives", "NEWEST-MARKER" in rt2, rt2[:200])
+    check("transcript budget: oldest turn dropped", "OLDEST-MARKER" not in rt2, rt2[:200])
+    check("transcript budget: total stays inside the ceiling",
+         len(rt2) <= setter._TRANSCRIPT_BUDGET + 200, len(rt2))
+
+    # Fallback path: no thread list -> thread_text still works, tail-kept so
+    # the newest text survives, never the oldest.
+    long_text = "HEAD-MARKER " + ("x " * 2000) + " TAIL-MARKER"
+    setter.draft_reply(
+        {"first_name": "Alex", "subject": "Re: hi", "body": "ok", "thread_text": long_text},
+        agent, classification, [], "not_configured", "Sam")
+    rt3 = json.loads(draft_calls[-1]["messages"][1]["content"]).get("recent_thread") or ""
+    check("fallback thread_text: tail kept (newest text survives)", "TAIL-MARKER" in rt3, rt3[-80:])
+    check("fallback thread_text: head dropped when over budget", "HEAD-MARKER" not in rt3, rt3[:80])
+
+    # reply_body is cleaned before the cap: a full-HTML Outlook reply must
+    # not spend the 3000-char budget on markup.
+    html_reply = ("<html><head><style>p{color:red}</style></head><body>" + "<div class=\"x\">" * 300 +
+                  "Don't reach out until next year, but I'm interested." + "</div>" * 300 + "</body></html>")
+    setter.draft_reply(
+        {"first_name": "Alex", "subject": "Re: hi", "body": html_reply},
+        agent, classification, [], "not_configured", "Sam")
+    rb = json.loads(draft_calls[-1]["messages"][1]["content"]).get("reply_body") or ""
+    check("reply_body: cleaned before the 3000 cap (lead's words survive markup)",
+         "until next year" in rb and "<div" not in rb, rb[:200])
+
+
 def test_memory_digest_reaches_classify_and_draft():
     """Feature 1: agent['memory'] must be fed into EVERY live pipeline pass -
     classify()'s owner_hints and draft_reply()'s regen_feedback - with no
@@ -9681,6 +9763,7 @@ if __name__ == "__main__":
     test_booking_link_derivation()
     test_decide_multi_turn_autonomy()
     test_draft_reply_thread_continuity()
+    test_draft_reply_structured_thread_transcript()
     test_memory_digest_reaches_classify_and_draft()
     test_memory_digest_empty_is_byte_identical()
     test_merge_correction_into_instructions_success_and_fallbacks()
