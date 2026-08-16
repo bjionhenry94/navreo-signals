@@ -17387,6 +17387,22 @@ def _who_replies_compute(client: str, days: int) -> dict:
     _SO = ["1–10", "11–50", "51–200", "201–1,000", "1,000+"]
     slist = [[k, size_buckets[k]] for k in _SO if k in size_buckets]
 
+    # title × company-size cross-tab — the "winning combination" heatmap. Reuses
+    # the title/size maps already built above; a cell counts only replies where
+    # BOTH the role bucket and the company size are known (size coverage is
+    # partial, so combo_named is usually << named — the card says so).
+    _combo_ct: dict = {}
+    for em in emails:
+        _tb = _ah_title_bucket(title_map.get(em, ""))
+        if _tb == "Unknown":
+            continue
+        _sb = size_of.get(dom_of.get(em))
+        if not _sb:
+            continue
+        _combo_ct[(_tb, _sb)] = _combo_ct.get((_tb, _sb), 0) + 1
+    combos = [[tb, sbnd, c] for (tb, sbnd), c in _combo_ct.items()]
+    combo_named = sum(_combo_ct.values())
+
     # answer speed from setter_queue, same client + window
     sq = sb_get_all("setter_queue?select=lead_email,sent_at,replied_at,smartlead_campaign_id,workspace"
                     "&status=in.(sent,auto_sent)&is_test=eq.false"
@@ -17469,7 +17485,9 @@ def _who_replies_compute(client: str, days: int) -> dict:
         subseq = None
     return {"client": client, "days": days, "n": n_pos, "named": named,
             "buckets": [[k, v] for k, v in blist], "sizes": slist,
-            "size_named": sum(size_buckets.values()), "speed": speed, "subseq": subseq,
+            "size_named": sum(size_buckets.values()),
+            "combos": combos, "combo_named": combo_named, "size_order": _SO,
+            "speed": speed, "subseq": subseq,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
 
 

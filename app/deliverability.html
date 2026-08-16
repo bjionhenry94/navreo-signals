@@ -189,6 +189,12 @@
 .ah .ocol.ohead span{text-align:right;font-weight:500}
 .ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
 .ah .fill.orange{background:var(--orange)}
+/* ── who's-replying · winning-combination heatmap (title × company size) ── */
+.ah .whm{display:grid;gap:4px;margin-top:6px;min-width:0}
+.ah .whm-ch{font-size:9.5px;color:var(--ink-3);text-align:center;font-weight:600;align-self:end;padding-bottom:2px;white-space:nowrap}
+.ah .whm-rl{font-size:11px;color:var(--ink-2);display:flex;align-items:center;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px}
+.ah .whm-cell{min-height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.ah .whm-cell.win{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--ink);position:relative;z-index:1}
 /* ── third card · follow-up (subsequence) effectiveness — benchmark meters ── */
 .ah .m5-meter+.m5-meter{margin-top:20px}
 .ah .m5-mtop{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
@@ -612,13 +618,13 @@
       </div>
       <div class="cards c23">
         <div class="acard">
-          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title · <span id="who-scope">whole book</span></span> <span class="stamp" id="who-stamp"></span></div>
+          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title</span></div>
           <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
           <div class="subline" id="who-size" style="margin-top:8px">&nbsp;</div>
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
         </div>
         <div class="acard">
-          <div class="card-kick">How fast we answer <span id="wait-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· interested replies · benchmark 15 min</span> <span class="stamp" id="wait-stamp"></span></div>
+          <div class="card-kick">How fast we answer</div>
           <div class="bignum num" id="wait-big">–</div>
           <div class="subline" id="wait-sub">&nbsp;</div>
           <div class="wspeed" id="wait-chart" style="display:none">
@@ -628,7 +634,7 @@
           <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
         </div>
         <div class="acard">
-          <div class="card-kick">How effective are our follow-ups <span id="subseq-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· automated subsequences</span> <span class="stamp" id="subseq-stamp"></span></div>
+          <div class="card-kick">How effective are our follow-ups <span id="subseq-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· automated subsequences</span></div>
           <div id="subseq-body"><div class="subline">Fills in after the next follow-up sync.</div></div>
           <div class="take" id="subseq-take-row" style="display:none"><span class="arr">→</span><span id="subseq-take"></span></div>
         </div>
@@ -2116,6 +2122,58 @@ function ensureWho() {
     })
     .catch(function () { if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null; });
 }
+// ── who's-replying heatmap: pivots p.combos (title × company-size cross-tab)
+// into the winning-combination grid. Returns false when the cross-tab is too
+// sparse to draw, so renderWho falls back to the role-mix bars. ──
+function whmTint(v, max) {
+  if (!v) return { bg: "#F7F7F6", fg: "#B7ADA2" };
+  var t = v / (max || 1);
+  if (t >= 0.85) return { bg: "#FF4D00", fg: "#fff" };
+  if (t >= 0.60) return { bg: "#FF6B30", fg: "#fff" };
+  if (t >= 0.40) return { bg: "#FF9463", fg: "#fff" };
+  if (t >= 0.22) return { bg: "#FFB187", fg: "#A83100" };
+  if (t >= 0.10) return { bg: "#FFCEB4", fg: "#A83100" };
+  return { bg: "#FFE7DA", fg: "#A83100" };
+}
+function renderWhoHeatmap(p, b, scope) {
+  var combos = (p && p.combos) || [];
+  if (combos.length < 3) return false;                     // too few pockets for a grid
+  var order = (p.size_order && p.size_order.length) ? p.size_order
+            : ["1–10", "11–50", "51–200", "201–1,000", "1,000+"];
+  var cellV = {}, cover = 0, maxV = 0, win = "";
+  combos.forEach(function (c) {
+    var k = c[0] + "||" + c[1], v = c[2] || 0;
+    cellV[k] = v; cover += v;
+    if (v > maxV) { maxV = v; win = k; }
+  });
+  if (cover < 6) return false;                             // not enough both-known yeses to be worth a grid
+  var titles = b.map(function (x) { return x[0]; }).filter(function (t) {
+    return combos.some(function (c) { return c[0] === t; });
+  });
+  var cols = order.filter(function (s) {
+    return combos.some(function (c) { return c[1] === s; });
+  });
+  if (titles.length < 1 || cols.length < 2) return false;
+  var h = '<div class="whm" style="grid-template-columns:96px repeat(' + cols.length + ',1fr)"><div></div>';
+  cols.forEach(function (s) { h += '<div class="whm-ch">' + escq(s) + "</div>"; });
+  titles.forEach(function (t) {
+    h += '<div class="whm-rl">' + escq(t) + "</div>";
+    cols.forEach(function (s) {
+      var k = t + "||" + s, v = cellV[k] || 0, tn = whmTint(v, maxV);
+      h += '<div class="whm-cell' + (k === win ? " win" : "") + '" style="background:' + tn.bg + ";color:" + tn.fg + '">' + fmtN(v) + "</div>";
+    });
+  });
+  h += "</div>";
+  $("who-rows").innerHTML = h;
+  var total = (p.named || 0);
+  $("who-size").innerHTML = '<span style="color:var(--ink-3)">From the <b style="color:var(--ink-2)">' + fmtN(cover) +
+    "</b> yeses where we know both title and company size" + (total ? " (of " + fmtN(total) + ")" : "") + ".</span>";
+  if (win) {
+    var wp = win.split("||");
+    $("who-take").textContent = "Build more lists of " + wp[0].toLowerCase() + " at " + wp[1] + " companies — your hot spot.";
+  }
+  return true;
+}
 function renderWho() {
   var p = (WHO_KEY === state.client + "|" + state.range) ? WHO : null;
   var scope = state.client === "All" ? "whole book" : state.client;
@@ -2132,20 +2190,23 @@ function renderWho() {
     $("who-size").textContent = ""; $("who-take-row").style.display = "none";
   } else if (named >= 3 && roleRows.length) {
     var b = roleRows.slice(0, 6);
-    var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
     $("who-n").textContent = fmtN(named);
-    $("who-rows").innerHTML = b.map(function (x, i) {
-      return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
-        '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
-        '<span class="val num">' + fmtN(x[1]) + "</span></div>";
-    }).join("");
-    var sizes = p.sizes || [];
-    if (sizes.length) {
-      var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
-      $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
-        sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
-    } else $("who-size").textContent = "Company size: not enough on file yet.";
-    $("who-take").textContent = "Aim new lists at " + b[0][0].toLowerCase() + " — most of " + scope + "'s real yeses.";
+    if (!renderWhoHeatmap(p, b, scope)) {
+      // fallback (cross-tab too sparse): role-mix bars + company-size line
+      var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
+      $("who-rows").innerHTML = b.map(function (x, i) {
+        return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
+          '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
+          '<span class="val num">' + fmtN(x[1]) + "</span></div>";
+      }).join("");
+      var sizes = p.sizes || [];
+      if (sizes.length) {
+        var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
+        $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
+          sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
+      } else $("who-size").textContent = "Company size: not enough on file yet.";
+      $("who-take").textContent = "Aim new lists at " + b[0][0].toLowerCase() + " — most of " + scope + "'s real yeses.";
+    }
     $("who-take-row").style.display = "";
   } else {
     $("who-n").textContent = fmtN((p && p.n) || 0);
@@ -2156,7 +2217,7 @@ function renderWho() {
   }
   // ── right box: how fast we answer interested replies (benchmark 15 min) ──
   var sp = p && p.speed;
-  $("wait-scope").textContent = "· " + scope + " · benchmark 15 min";
+  if ($("wait-scope")) $("wait-scope").textContent = "· " + scope + " · benchmark 15 min";
   if (!p) {
     $("wait-big").textContent = "…"; $("wait-big").className = "bignum num";
     $("wait-sub").textContent = "Loading…"; $("wait-take").textContent = "";
@@ -2215,7 +2276,7 @@ function renderSubseq(s) {
     if (s && s.windowed) {
       // windowed stats exist and the answer is a real zero — say so instead
       // of the "still syncing" line (a quiet week is data, not a data gap)
-      scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups · " + rangeLabel();
+      scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups";
       body.innerHTML = '<div class="subline">No follow-up sends in the ' + rangeLabel() + ".</div>";
     } else {
       scope.textContent = "· automated subsequences";
@@ -2230,7 +2291,7 @@ function renderSubseq(s) {
   // windowed payloads (s.windowed, per the page's 7/14/30 toggle) carry the
   // hourly sync's per-window sent + archive positives/booked; "all-time" only
   // survives as the label for a payload from before that sync ran
-  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups · " + (s.windowed ? rangeLabel() : "all-time");
+  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups";
   function tone(v, t) { return v >= t ? "green" : v >= t * 0.75 ? "amber" : "red"; }
   function chip(tn) {
     var t = tn === "green" ? "On target" : tn === "amber" ? "Just under" : "Well under";
