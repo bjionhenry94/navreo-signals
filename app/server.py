@@ -19477,22 +19477,42 @@ def _auto_domain_enabled() -> bool:
     return os.environ.get("NAVREO_AUTO_DOMAIN", "1").lower() not in ("0", "false", "no")
 
 
+def _auto_domain_recent_restores(days: int = 14) -> set:
+    """Domains restored/reactivated in the last `days` (activity log). A
+    domain fresh off a rest still carries weeks of bad history, so scoring it
+    on a 14/30-day window would re-park it the moment it returns — the
+    rest-clock-reset trap the caps engine's min-send floor exists to prevent.
+    The warm-up half leaves these alone until they've had time to re-prove."""
+    from datetime import datetime, timedelta, timezone
+    doms = set()
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    try:
+        rows = sb("GET", "app_activity_log?action=in.(restore_live,warmup_resume)"
+                         "&ts=gte.%s&select=entity_id,payload&limit=2000" % since)
+        for r in rows if isinstance(rows, list) else []:
+            p = r.get("payload") or {}
+            for d in (p.get("domains") or p.get("domains_list") or []):
+                doms.add(str(d).lower())
+            for d in str(r.get("entity_id") or "").split(","):
+                if d.strip():
+                    doms.add(d.strip().lower())
+    except Exception:  # noqa: BLE001 — guard is best-effort; ledger still filters
+        pass
+    return doms
+
+
 def _auto_domain_flagged():
-    """Server-side floorRows: 7-day domain-health rows below the reply floor,
-    minus anything already resting (backend resting map, live rest-due date,
-    or an undismissed ledger row). Same dhFlag maths as the manager tab."""
+    """Server-side floorRows across ALL THREE manager windows (7/14/30 days):
+    rows below the reply floor on >=minSent sends, minus anything already
+    resting (backend resting map, live rest-due date, undismissed ledger row)
+    and minus recently-restored domains (see _auto_domain_recent_restores).
+    Same dhFlag maths as the manager tab; the window union exists because a
+    slow bleed only crosses the send floor on the wider windows."""
     from datetime import date, timedelta
     blob_dh = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {})
     min_sent = int(blob_dh.get("minSent") or 500)
     cutoff = float(blob_dh.get("cutoff") or 0.7)
     today = date.today()
-    dh = _deliv_backend_get(
-        "domain-health?start=%s&end=%s&minSent=%s&cutoff=%s"
-        % ((today - timedelta(days=7)).isoformat(), today.isoformat(), min_sent, cutoff))
-    _deliv_fix_resting_due(dh)
-    resting = dh.get("resting") or {}
-    rest_due = {str(k).lower() for k in (dh.get("restingDue") or {})}
-    resting_doms = {str(k).lower() for k, v in resting.items() if (v or 0) > 0}
     ledger = set()
     if not _deliv_mock_on():
         try:
@@ -19501,24 +19521,34 @@ def _auto_domain_flagged():
                                          "&dismissed=is.false") or []}
         except Exception:  # noqa: BLE001 — resting/restingDue still guard below
             pass
+    recent = set() if _deliv_mock_on() else _auto_domain_recent_restores()
     mbx = {} if _deliv_mock_on() else (_restore_mailboxes() or {})
-    flagged = []
-    for d in (dh.get("rows") or []):
-        dom = str(d.get("domain") or "").lower()
-        if not dom:
-            continue
-        sent = d.get("sent") or 0
-        rate = d.get("reply_rate")
-        if rate is None or sent < min_sent:
-            continue
-        maildoso = bool(d.get("maildoso")) or bool((mbx.get(dom) or {}).get("maildoso"))
-        if rate >= (_AUTO_DOMAIN_MAILDOSO_FLOOR if maildoso else cutoff):
-            continue
-        if dom in resting_doms or dom in rest_due or dom in ledger:
-            continue
-        flagged.append({"domain": dom, "sent": sent, "reply_rate": rate,
-                        "workspace": d.get("workspace")})
-    return flagged, min_sent, cutoff
+    flagged: dict = {}
+    for days in (7, 14, 30):
+        dh = _deliv_backend_get(
+            "domain-health?start=%s&end=%s&minSent=%s&cutoff=%s"
+            % ((today - timedelta(days=days)).isoformat(), today.isoformat(),
+               min_sent, cutoff))
+        _deliv_fix_resting_due(dh)
+        resting = dh.get("resting") or {}
+        rest_due = {str(k).lower() for k in (dh.get("restingDue") or {})}
+        resting_doms = {str(k).lower() for k, v in resting.items() if (v or 0) > 0}
+        for d in (dh.get("rows") or []):
+            dom = str(d.get("domain") or "").lower()
+            if not dom or dom in flagged:
+                continue
+            sent = d.get("sent") or 0
+            rate = d.get("reply_rate")
+            if rate is None or sent < min_sent:
+                continue
+            maildoso = bool(d.get("maildoso")) or bool((mbx.get(dom) or {}).get("maildoso"))
+            if rate >= (_AUTO_DOMAIN_MAILDOSO_FLOOR if maildoso else cutoff):
+                continue
+            if dom in resting_doms or dom in rest_due or dom in ledger or dom in recent:
+                continue
+            flagged[dom] = {"domain": dom, "sent": sent, "reply_rate": rate,
+                            "window_days": days, "workspace": d.get("workspace")}
+    return list(flagged.values()), min_sent, cutoff
 
 
 def _auto_domain_check(trigger: str = "scheduled") -> dict:
@@ -19574,6 +19604,19 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                 if (res or {}).get("blacklist_warning"):
                     rec["blacklist_warning"] = res["blacklist_warning"]
                 if rec["ok"]:
+                    # Belt-and-braces true-up: the audit service's warmup-resume
+                    # only resumes boxes ITS inventory knows (a live run resumed
+                    # 0 of 52 held boxes, 2026-08-16). The same fast-lane resume
+                    # job the Reactivate button fires restores every still-parked
+                    # cap directly in Smartlead, retires the ledger row and
+                    # patches the mirror — without it the entry stays "due" and
+                    # every later check re-restores the same domain forever.
+                    try:
+                        jb, _s2 = api_warmup_job({"op": "resume",
+                                                  "domains": e.get("domains") or []})
+                        rec["true_up_job"] = (jb or {}).get("job_id")
+                    except Exception as ex:  # noqa: BLE001 — attach already landed
+                        rec["true_up_error"] = str(ex)[:120]
                     r["restored"].append(rec)
                 else:
                     rec["errors"] = ([er for rr in ((res or {}).get("results") or [])
