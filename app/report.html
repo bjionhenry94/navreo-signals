@@ -809,7 +809,7 @@ function renderReplied() {
       (r.role ? " · " + escq(r.role) : "") +
       (r.website ? ' · <a class="ws" href="https://' + escq(r.website) + '" target="_blank" rel="noopener">' + escq(r.website) + "</a>" : "") +
       "</div></div>" +
-      '<div class="right">' + (r.message ? '<span class="tag num">' + escq(r.message) + "</span>" : "") +
+      '<div class="right">' +
       '<svg class="chev" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
       "</div></div>" +
       '<div class="body">' +
@@ -821,7 +821,6 @@ function renderReplied() {
         : "") +
       '<div class="full">' + escq(r.reply) + "</div>" +
       '<div class="meta">' +
-      (r.campaign ? "<span>" + escq(r.campaign) + "</span>" : "") +
       (r.linkedin ? '<a href="' + escq(r.linkedin) + '" target="_blank" rel="noopener">LinkedIn</a>' : "") +
       (r.website ? '<a href="https://' + escq(r.website) + '" target="_blank" rel="noopener">' + escq(r.website) + "</a>" : "") +
       "</div></div></div>";
