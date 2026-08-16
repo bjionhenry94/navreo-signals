@@ -230,19 +230,9 @@
       </div>
     </section>
 
-    <!-- ── What happened this week? — quote timeline (P5) + campaign launches ── -->
-    <section class="lane" id="lane-replied" aria-label="What happened lane">
-      <span class="node num">2</span>
-      <div class="lane-head">
-        <h2 class="lane-q">What happened this week?</h2>
-      </div>
-      <div class="card-kick"><span id="rep-kick" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
-      <div class="tl" id="rep-tl"></div>
-    </section>
-
-    <!-- ── 3 · Who actually replies? ── -->
+    <!-- ── 2 · Who actually replies? ── -->
     <section class="lane" id="lane-who" aria-label="Who replies lane">
-      <span class="node num">3</span>
+      <span class="node num">2</span>
       <div class="lane-head">
         <h2 class="lane-q">Who actually replies?</h2>
       </div>
@@ -254,6 +244,17 @@
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
         </div>
       </div>
+    </section>
+
+    <!-- ── 3 · What happened this week? — quote timeline (P5) + campaign
+         launches. Always the LAST lane (Bjion 2026-08-16). ── -->
+    <section class="lane" id="lane-replied" aria-label="What happened lane">
+      <span class="node num">3</span>
+      <div class="lane-head">
+        <h2 class="lane-q">What happened this week?</h2>
+      </div>
+      <div class="card-kick"><span id="rep-kick" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
+      <div class="tl" id="rep-tl"></div>
     </section>
 
   </div>
@@ -852,7 +853,7 @@ function renderAll() {
   $("lane-win").style.display = (hasRank || hasOffer) ? "" : "none";
   $("lane-replied").style.display = hasReplied ? "" : "none";
   $("lane-who").style.display = hasWho ? "" : "none";
-  var lanes = [$("lane-win"), $("lane-replied"), $("lane-who")];
+  var lanes = [$("lane-win"), $("lane-who"), $("lane-replied")];
   var vis = lanes.filter(function (s) { return s.style.display !== "none"; });
   lanes.forEach(function (s) { s.classList.remove("lastvis"); });
   vis.forEach(function (s, i) {
