@@ -1361,7 +1361,7 @@ Rules:
 - When the intent is bespoke_request, objection_or_question, or wrong_person, the ack paragraph must acknowledge the lead's SPECIFIC ask honestly (e.g. "Happy to put a video together for you.") - never a generic "Of course." that ignores what they asked for, and never a promise of a date or deadline for the bespoke work.
 - Never say you are sharing, attaching, or sending something the draft does not actually contain. If the asked-for asset is not the agent's fixed resource, acknowledge the ask ("Happy to get that over to you.") without implying it is included in this email.
 - The ack paragraph must answer the SHAPE of the question. A yes/no question ("So you work on commission?") gets a direct, truthful opener grounded ONLY in the instructions ("Good question, it is a flat monthly fee rather than commission."), never "Of course."
-- BEFORE writing anything, decide the greeting name: use lead_first_name if it is a real name (it is "" when we don't have one, and "there" is a placeholder, never a name); otherwise LOOK AT THE END OF THEIR REPLY for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly"); otherwise LOOK AT THE GREETING LINE OF original_outreach, which opens "Hi <first name>," and names this same lead; only if no name exists in any of those three places use "Hi there". NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off.
+- BEFORE writing anything, decide the greeting name: use lead_first_name if it is a real name (it is "" when we don't have one, and "there" is a placeholder, never a name); otherwise LOOK AT THE END OF THEIR REPLY for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly"); otherwise LOOK AT THE GREETING LINE OF original_outreach, which opens "Hi <first name>," and names this same lead; only if no name exists in any of those three places use "Hi there". NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off. When the draft genuinely addresses two or more people (for example the lead just introduced a colleague), join the names with "and" - "Hi John and James" - never a comma list like "Hi John, James,".
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one. Acknowledge it and make it the reason for the call: "That's exactly what I'd walk you through on a quick call." Guessing at policies, capabilities, or processes is worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
@@ -4088,7 +4088,14 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     # their no-draft short-circuit.
     negative_but_surfaces = is_clear_negative and (
         (category in POSITIVE_CATEGORIES) or bool(classification.get("live_lead")))
-    wants_draft = (not is_clear_negative) or negative_but_surfaces
+    # Owner training rule (2026-08-16, round 1): "No matter what they say,
+    # always say something." Every HUMAN reply carries a draft even when it
+    # is a clear negative (not_interested / unsubscribe / wrong_person) - the
+    # reviewer wants a starting point, and decide() still routes the row
+    # (no_action rows just carry their draft quietly). Only machine mail
+    # (bounces, OOO autoreplies) keeps the no-draft short-circuit.
+    human_reply = primary not in ("ooo", "bounce_or_system")
+    wants_draft = (not is_clear_negative) or negative_but_surfaces or human_reply
 
     slots, slot_status, serr = [], "not_configured", ""
     if wants_draft:
@@ -4183,7 +4190,10 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
 
     if decision == "no_action":
         row["status"] = "no_action"
-        row["draft_subject"], row["draft_body"] = None, None
+        # Keep the draft (owner training rule 2026-08-16: "no matter what
+        # they say, always say something") - a no_action row now carries its
+        # starting point instead of a blank composer. Nothing sends here.
+        row["draft_subject"], row["draft_body"] = draft_subject, draft_body
     elif decision == "auto_send":
         result = _send_reply(row, agent, draft_subject or f"Re: {row['reply_subject']}", draft_body or "",
                              is_test=is_test, success_status="auto_sent")

@@ -8855,8 +8855,21 @@ def test_trust_true_negative_keeps_no_draft_short_circuit():
              "category": None}
     row = setter.process_reply(reply, agent, {})
     check("trust always-draft: true negative stays no_action", row.get("status") == "no_action", row.get("status"))
-    check("trust always-draft: true negative has no draft", not row.get("draft_body"), row.get("draft_body"))
-    check("trust always-draft: drafter never called for a true negative", len(draft_calls) == 0, len(draft_calls))
+    # Owner training rule (2026-08-16): "No matter what they say, always say
+    # something" - a HUMAN negative now carries a draft even at no_action.
+    check("always-say-something: human negative still gets a draft", bool(row.get("draft_body")), row.get("draft_body"))
+    check("always-say-something: drafter called once for a human negative", len(draft_calls) == 1, len(draft_calls))
+
+    # Machine mail keeps the old short-circuit: no human spoke, nothing to say.
+    draft_calls.clear()
+    http.classify_fn = lambda _b: {**_TRUST_NEG_CLASSIFY, "primary_intent": "bounce_or_system",
+                                   "all_intents": ["bounce_or_system"]}
+    reply2 = dict(reply, email="neg3@example.com", message_id="m-trust-neg3",
+                  body="Delivery has failed to these recipients")
+    row2 = setter.process_reply(reply2, agent, {})
+    check("always-say-something: bounce keeps no_action", row2.get("status") == "no_action", row2.get("status"))
+    check("always-say-something: bounce still gets NO draft", not row2.get("draft_body"), row2.get("draft_body"))
+    check("always-say-something: drafter never called for machine mail", len(draft_calls) == 0, len(draft_calls))
 
 
 
