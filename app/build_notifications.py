@@ -46,6 +46,12 @@ Report logic (the skill file is the spec):
     bug, reply rate under 1%. Low = lifecycle only. Ordered by Impact Score
     descending (expected remaining positives x performance multiplier - see
     compute_impact); tier survives as a badge and tiebreaker only.
+  - Scale-winner parity (2026-08-16): one extra variant_call/scale_winner row
+    per campaign whose Messaging tab currently shows the BEST "Send 100% of
+    Email X to it" button, computed from the SAME payload the tab renders
+    (/api/cockpit/messaging) - no completion gate, no 800-send gate, every
+    workspace. Client-workspace campaigns get ONLY this row (the section 1-7
+    report stays navreo-scoped). See the scale-winner parity section below.
   - claude_prompt: Section 7 rows of type replace_variants / scale_winner /
     disable_loser / kill_threshold_pivot / run_list_audit carry a pre-made
     Claude Code prompt (STATIC string assembly, no LLM calls) following the
@@ -323,12 +329,13 @@ def sb(method: str, path: str, body=None, prefer: str = ""):
         return None
 
 
-def sl_get(endpoint: str, params: dict | None = None):
+def sl_get(endpoint: str, params: dict | None = None, api_key: str | None = None):
     """Smartlead GET-only helper, rate-limited with one retry. NEVER call this
     with POST/PUT/DELETE - Smartlead access in this script is read-only by
-    construction (there is no write helper)."""
+    construction (there is no write helper). api_key= targets a client
+    workspace's Smartlead account (scale-winner parity); default is Navreo's."""
     params = dict(params or {})
-    params["api_key"] = KEYS["SMARTLEAD_API_KEY"]
+    params["api_key"] = api_key or KEYS["SMARTLEAD_API_KEY"]
     url = f"{SMARTLEAD_BASE}{endpoint}?{urllib.parse.urlencode(params)}"
     for attempt in (1, 2, 3):
         try:
@@ -547,23 +554,49 @@ def wipe_all_rows() -> None:
 
 # -- Smartlead pulls ---------------------------------------------------------
 
+def fetch_workspaces() -> list[dict]:
+    """Enabled workspaces + their Smartlead keys, same source of truth as
+    server.py's ws_all(): navreo's key stays env-only, client keys ride the
+    `workspaces` table (client-workspaces-hub). A Supabase failure degrades to
+    navreo-only, exactly like the pre-federation behaviour."""
+    out = [{"id": "navreo", "label": "", "api_key": KEYS["SMARTLEAD_API_KEY"]}]
+    rows = sb("GET", "workspaces?select=id,display_label,api_key,status&order=added_at")
+    for r in rows if isinstance(rows, list) else []:
+        if r.get("id") == "navreo" or (r.get("status") or "enabled") != "enabled":
+            continue
+        if r.get("api_key"):
+            out.append({"id": r["id"], "label": r.get("display_label") or r["id"],
+                        "api_key": r["api_key"]})
+    return out
+
+
 def fetch_active_campaigns() -> list[dict]:
-    print("Pulling campaign list...")
-    campaigns, offset = [], 0
-    while True:
-        page = as_list(sl_get("/campaigns", {"limit": 100, "offset": offset}),
-                       "data", "campaigns", "result")
-        campaigns.extend(page)
-        if len(page) < 100:
-            break
-        offset += 100
-    active = [c for c in campaigns if c.get("status") == "ACTIVE"]
-    print(f"  {len(campaigns)} campaigns total, {len(active)} ACTIVE")
+    """ACTIVE campaigns across every enabled workspace. Each campaign dict is
+    tagged _ws/_ws_label/_ws_key. Navreo campaigns get the full section 1-7
+    report; client-workspace campaigns get ONLY the scale-winner parity row
+    (see main) - the optimiser report itself stays navreo-scoped."""
+    active: list[dict] = []
+    for w in fetch_workspaces():
+        print(f"Pulling campaign list ({w['id']})...")
+        campaigns, offset = [], 0
+        while True:
+            page = as_list(sl_get("/campaigns", {"limit": 100, "offset": offset},
+                                  api_key=w["api_key"]),
+                           "data", "campaigns", "result")
+            campaigns.extend(page)
+            if len(page) < 100:
+                break
+            offset += 100
+        ws_active = [c for c in campaigns if c.get("status") == "ACTIVE"]
+        for c in ws_active:
+            c["_ws"], c["_ws_label"], c["_ws_key"] = w["id"], w["label"], w["api_key"]
+        print(f"  {len(campaigns)} campaigns total, {len(ws_active)} ACTIVE")
+        active.extend(ws_active)
     return active
 
 
-def fetch_analytics(campaign_id) -> dict:
-    data = sl_get(f"/campaigns/{campaign_id}/analytics") or {}
+def fetch_analytics(campaign_id, api_key: str | None = None) -> dict:
+    data = sl_get(f"/campaigns/{campaign_id}/analytics", api_key=api_key) or {}
     if isinstance(data, list):
         data = data[0] if data else {}
     if isinstance(data, dict) and isinstance(data.get("data"), dict):
@@ -579,10 +612,11 @@ def fetch_analytics(campaign_id) -> dict:
     }
 
 
-def fetch_total_leads(campaign_id) -> int:
+def fetch_total_leads(campaign_id, api_key: str | None = None) -> int:
     """total_leads via the leads endpoint with limit=1 (the skill's method -
     NOT unique_lead_count from analytics)."""
-    data = sl_get(f"/campaigns/{campaign_id}/leads", {"limit": 1, "offset": 0})
+    data = sl_get(f"/campaigns/{campaign_id}/leads", {"limit": 1, "offset": 0},
+                  api_key=api_key)
     if isinstance(data, dict):
         return to_int(data.get("total_leads"))
     return 0
@@ -720,6 +754,181 @@ def fetch_booked_journey_labels(campaign_id) -> set:
                     if st != "_x" and lbl:
                         out.add((str(st), str(lbl)))
     return out
+
+
+# -- scale-winner parity (the Messaging tab's BEST pill) ---------------------
+# The campaign page's Messaging tab crowns a best opener and shows a 1-click
+# "Send 100% of Email X to it" button (campaigns.html versionTableHTML, the
+# `var best` block). That verdict is a journey ranking - fewest sends per
+# MEETING on the opener's best path (800-send floor preferred), falling back
+# to fewest sends per positive - which is a different rule from Section 4's
+# positives-only winner, and Section 4 is also gated to <60% completion. So
+# clear winners routinely showed the pill with no optimisation row (parity
+# loop 2026-08-16: 41 of 41 pill campaigns had none). This section closes the
+# gap: it reads each campaign's pill from the SAME data the tab renders
+# (/api/cockpit/messaging on the web app - journeys/meetings live behind it in
+# the reply archive and can't be recomputed here without duplicating
+# server.py's _variant_paths) and emits one variant_call/scale_winner row per
+# campaign whose pill would show. Rows retire through the normal retirement
+# pass the moment the split moves to 100 (or the winner changes), because the
+# emitted title changes with the verdict. If the web app is unreachable for a
+# campaign, its existing parity row is protected from retirement that run -
+# an outage must never mass-resolve real findings.
+
+SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL",
+                              "https://navreo-signals.onrender.com").rstrip("/")
+
+
+def _signals_cookie() -> str:
+    """Mint a navreo_session cookie the same way server.py's _mint_session
+    does (HMAC over 'email|expiry' with sha256(SRK+':navreo-session-v1'))."""
+    import base64
+    import hashlib
+    import hmac as hmac_mod
+    srk = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
+    secret = hashlib.sha256((srk + ":navreo-session-v1").encode()).digest()
+    payload = f"admin@navreo.ai|{int(time.time()) + 6 * 3600}".encode()
+    sig = hmac_mod.new(secret, payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+_SIGNALS_COOKIE_CACHE: list = []
+
+
+def fetch_messaging(campaign_id) -> dict | None:
+    """One campaign's Messaging-tab payload from the web app (which federates
+    workspaces by campaign id itself). One retry after a pause - the server
+    warms its Smartlead cache on first ask, mirroring the tab's own retry.
+    None = unreachable/degraded; the caller must then PROTECT, not resolve."""
+    if not _SIGNALS_COOKIE_CACHE:
+        _SIGNALS_COOKIE_CACHE.append(_signals_cookie())
+    url = f"{SIGNALS_BASE}/api/cockpit/messaging?id={campaign_id}"
+    for attempt in (1, 2):
+        try:
+            req = urllib.request.Request(
+                url, headers={"User-Agent": UA,
+                              "Cookie": "navreo_session=" + _SIGNALS_COOKIE_CACHE[0]})
+            with urllib.request.urlopen(req, timeout=45, context=SSL_CTX) as resp:
+                m = json.loads(resp.read().decode())
+            if isinstance(m, dict) and not m.get("degraded"):
+                return m
+        except Exception as e:  # noqa: BLE001
+            if attempt == 2:
+                print(f"  ! messaging fetch failed for {campaign_id}: {e}")
+        if attempt == 1:
+            time.sleep(10)
+    return None
+
+
+def pill_best_opener(m: dict) -> tuple:
+    """Faithful port of campaigns.html's best-opener block. Returns
+    (best_label|None, has_scale, evidence|None). has_scale True = the tab
+    renders the 'Send 100% of Email 1 to it' button right now."""
+    import math
+    versions = m.get("versions") or []
+    meetings = m.get("meetings") or {}
+    paths = m.get("paths")
+    by_var = meetings.get("by_variant") or {}
+    clusters = meetings.get("clusters") or {}
+    rep_of = {}
+    for sk, cls in clusters.items():
+        for cl in (cls or []):
+            for lbl in (cl.get("labels") or [cl.get("rep")]):
+                rep_of[f"{sk}|{lbl}"] = cl.get("rep")
+    sent_by_rep: dict = {}
+    for v in versions:
+        if v.get("inline") or v.get("label") is None:
+            ki = f"{v.get('step')}|Email {v.get('step')}"
+            sent_by_rep[ki] = sent_by_rep.get(ki, 0) + (v.get("sent") or 0)
+            continue
+        rep = rep_of.get(f"{v.get('step')}|{v.get('label')}") or v.get("label")
+        kk = f"{v.get('step')}|{rep}"
+        sent_by_rep[kk] = sent_by_rep.get(kk, 0) + (v.get("sent") or 0)
+    step1 = [v for v in versions if str(v.get("step")) == "1"]
+    best = None
+    via = None
+    if paths:
+        s1_tot = sum(s for k, s in sent_by_rep.items() if k.startswith("1|"))
+        bp_all = []
+        for k, d in paths.items():
+            p = k.split(">")
+            d = d or {}
+            e1s = sent_by_rep.get("1|" + p[0], 0)
+            e2s = sent_by_rep.get("2|" + p[1], 0) if len(p) > 1 else 0
+            # JS Math.round = half away from zero (values are non-negative here)
+            snt = e1s + math.floor((e2s * e1s / s1_tot if s1_tot else e2s) + 0.5) if e1s else 0
+            bp_all.append({"e1": p[0], "mt": d.get("meetings") or 0,
+                           "pos": d.get("positives") or 0, "snt": snt})
+        bp_mt = sorted([c for c in bp_all if c["mt"] > 0 and c["snt"] > 0],
+                       key=lambda c: c["snt"] / c["mt"])
+        floor800 = [c for c in bp_mt if c["snt"] >= 800]
+        bp_top = floor800[0] if floor800 else (bp_mt[0] if bp_mt else None)
+        if bp_top is None:
+            by_pos = sorted([c for c in bp_all if c["pos"] > 0 and c["snt"] > 0],
+                            key=lambda c: c["snt"] / c["pos"])
+            bp_top = by_pos[0] if by_pos else None
+        if bp_top and (bp_top["mt"] > 0 or bp_top["pos"] > 0):
+            for v in step1:
+                if best or v.get("disabled") or v.get("inline") or not v.get("sent") \
+                        or v.get("label") is None:
+                    continue
+                if v["label"] == bp_top["e1"] or \
+                        (rep_of.get("1|" + v["label"]) or v["label"]) == bp_top["e1"]:
+                    best, via = {"label": v["label"]}, "best-path"
+    if best is None:
+        for v in step1:
+            if v.get("disabled") or v.get("inline") or not v.get("sent") \
+                    or v.get("label") is None:
+                continue
+            rep = rep_of.get("1|" + v["label"]) or v["label"]
+            mv = by_var.get("1|" + rep, 0) if rep == v["label"] else 0
+            if not mv:
+                continue
+            pm = v["sent"] / mv
+            if best is None or pm < best["pm"]:
+                best, via = {"label": v["label"], "pm": pm}, "meetings-per-send"
+    if best is None:
+        for v in step1:
+            if v.get("disabled") or v.get("inline") or not (v.get("positives") or 0) \
+                    or not v.get("sent"):
+                continue
+            pp = v["sent"] / v["positives"]
+            if best is None or pp < best["pp"]:
+                best, via = {"label": v["label"], "pp": pp}, "sends-per-positive"
+    if best is None:
+        return None, False, None
+    lab = best["label"]
+    bv = next((v for v in step1 if v.get("label") == lab and not v.get("inline")), None)
+    split = bv.get("split") if bv else None
+    has_scale = bv is not None and split is not None and 0 < split < 100
+    return lab, has_scale, {"via": via, "split": split,
+                            "sent": (bv or {}).get("sent") or 0,
+                            "positives": (bv or {}).get("positives") or 0}
+
+
+def build_pill_row(ctx: dict, m: dict) -> dict | None:
+    """The parity row itself, or None when the pill would not show. Title is
+    the pill's own wording on stable identifiers (step + label) so the row
+    key flips - and the old row auto-resolves - when the verdict changes."""
+    lab, has_scale, ev = pill_best_opener(m)
+    if not has_scale:
+        return None
+    why = {"best-path": "its journey books meetings on the fewest sends",
+           "meetings-per-send": "it books the most meetings per email sent",
+           "sends-per-positive": "it needs the fewest sends per positive reply",
+           }.get(ev["via"], "it is the proven best opener")
+    title = f"Send 100% of Email 1 to Version {lab}"
+    return {**row_base(ctx), "finding_type": "variant_call", "section": 4,
+            "priority": "Medium", "action_type": "scale_winner",
+            "title": title,
+            "detail": clean_text(
+                f"The Messaging tab crowns Version {lab} the best opener - {why} "
+                f"({ev['sent']:,} sent, {rep_count(ev['positives'])} on its own sends) - "
+                f"but it only gets {ev['split']}% of Email 1's traffic. "
+                "The 1-click button on the Messaging tab moves all of Email 1 to it."),
+            "suggested_action": title,
+            "sent": ev["sent"], "positive": ev["positives"],
+            "sent_pos_ratio": ratio(ev["sent"], ev["positives"])}
 
 
 def reconcile_positives(agg: dict, campaign_positives: int) -> None:
@@ -1603,11 +1812,54 @@ def main() -> int:
     all_rows: list[dict] = []
     campaign_actions: list[tuple[dict, list[dict]]] = []
     in_report = all_clear = 0
+    pill_failed: list[str] = []  # messaging unreachable -> protect, never resolve
+    pill_rows = 0
+
+    def add_pill_row(ctx: dict, sibling_rows: list[dict]) -> None:
+        """Fetch the campaign's Messaging-tab payload and emit the parity row
+        when the pill shows. Skipped when this run already emitted a
+        scale_winner for the campaign (Section 4's own winner call) - one
+        scale card per campaign, never two."""
+        nonlocal pill_rows
+        if any(r.get("action_type") == "scale_winner" for r in sibling_rows):
+            return
+        m = fetch_messaging(ctx["cid"])
+        if m is None:
+            pill_failed.append(ctx["cid"])
+            return
+        prow = build_pill_row(ctx, m)
+        if prow:
+            all_rows.append(prow)
+            pill_rows += 1
+            print(f"    scale-winner parity: {prow['title']}")
 
     for i, c in enumerate(active, 1):
         cid = str(c["id"])
         name = clean_text(c.get("name") or f"Campaign {c['id']}")
+        ws = c.get("_ws") or "navreo"
         print(f"[{i}/{len(active)}] {name} ({cid})", flush=True)
+        if ws != "navreo":
+            # Client workspace: scale-winner parity ONLY - the full section
+            # 1-7 report stays navreo-scoped (blast-radius ruling, parity
+            # loop 2026-08-16). The pill shows on their campaign pages too,
+            # so the optimisation must exist for them all the same.
+            analytics = fetch_analytics(c["id"], api_key=c.get("_ws_key"))
+            sent, positives = analytics["sent"], analytics["positives"]
+            total_leads = fetch_total_leads(c["id"], api_key=c.get("_ws_key"))
+            ctx = {
+                "cid": cid, "name": name, "client": c.get("_ws_label") or ws,
+                "client_id": infer_client_id(c.get("_ws_label") or ws, name),
+                "sent": sent, "positives": positives, "replies": analytics["replies"],
+                "reply_rate": round(analytics["replies"] / sent * 100, 2) if sent else None,
+                "completion_pct": (round(sent / (total_leads * 2) * 100, 1)
+                                   if total_leads > 0 else None),
+                "total_leads": total_leads, "meetings": 0,
+                "variant_stats": {}, "variant_index": {},
+            }
+            ctx["impact_score"], ctx["impact_reason"] = compute_impact(
+                sent, positives, 0, total_leads)
+            add_pill_row(ctx, [])
+            continue
         analytics = fetch_analytics(c["id"])
         sent, positives = analytics["sent"], analytics["positives"]
         client = infer_client(name)
@@ -1640,6 +1892,9 @@ def main() -> int:
                                  f"{sent:,} sent, {rep_count(positives)}. Still under the 1,500-send "
                                  "mark, so it is not on the priority list of campaigns to act on yet."),
                              "suggested_action": None, "action_type": "none"})
+            # the pill has no send threshold - a young campaign with an early
+            # meeting shows it too, so parity must look below 1,500 as well
+            add_pill_row(ctx, [])
             continue
         in_report += 1
         ctx["variant_index"] = fetch_sequences(c["id"])
@@ -1654,6 +1909,7 @@ def main() -> int:
         rows, actions = build_campaign_findings(ctx)
         all_rows.extend(rows)
         campaign_actions.append((ctx, actions))
+        add_pill_row(ctx, rows)
 
     all_rows.extend(build_section7(campaign_actions))
 
@@ -1675,6 +1931,23 @@ def main() -> int:
     print(f"\nUpserted {upserted} rows into `{TABLE}` (run date {date.today().isoformat()}).")
 
     emitted_keys = {(r["campaign_id"], r["finding_type"], r["title"]) for r in all_rows}
+    if pill_failed:
+        # the web app was unreachable for these campaigns, so this run cannot
+        # know whether their pill still shows - protect their existing
+        # scale-winner rows from the retirement pass rather than resolving
+        # findings on an outage
+        ids = ",".join(pill_failed)
+        prev = sb("GET", f"{TABLE}?campaign_id=in.({ids})&action_type=eq.scale_winner"
+                         "&status=eq.new&select=campaign_id,finding_type,title")
+        protected = 0
+        for r in prev if isinstance(prev, list) else []:
+            key = (r.get("campaign_id"), r.get("finding_type"), r.get("title"))
+            if key not in emitted_keys:
+                emitted_keys.add(key)
+                protected += 1
+        print(f"\nscale-winner parity: messaging unreachable for {len(pill_failed)} "
+              f"campaign(s) - protected {protected} existing row(s) from retirement.")
+    print(f"scale-winner parity rows this run: {pill_rows}")
     resolved_n, revived_n, resolved_rows = run_retirement_pass(emitted_keys)
     print(f"\nRetirement pass: {resolved_n} row(s) resolved (no longer emitted this run), "
           f"{revived_n} row(s) revived new -> resolved rows that reappeared.")
