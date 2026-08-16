@@ -1451,6 +1451,34 @@ def test_inject_never_sends():
          row.get("status") in ("auto_sent", "sent", "needs_review"), row.get("status"))
 
 
+def test_draft_system_round4_owner_rules():
+    """Round-4 owner rules (2026-08-16) ride in DRAFT_SYSTEM: booked-call
+    placeholder format, CTA-matches-the-thread, no parroting, process
+    questions answerable, no unasked extras."""
+    ds = setter.DRAFT_SYSTEM
+    check("round4: booked-call placeholder line present",
+         "I've booked in for [day and time]" in ds and "You will be speaking with [name]." in ds, None)
+    check("round4: CTA must match the thread's offer",
+         "the call to action would be the idea, not a demo" in ds, None)
+    check("round4: no parroting the lead's phrasing",
+         "never mirror their phrasing back" in ds, None)
+    check("round4: process questions answerable",
+         "what would the first month look like?" in ds, None)
+    check("round4: never claim they asked for something they didn't",
+         'never write "you asked for X"' in ds, None)
+    cd = None
+    # constraint_directive is built inside draft_reply; capture via payload
+    sb, http = fresh_setter()
+    calls = []
+    http.draft_fn = lambda body: calls.append(body) or {"subject": "Re: x", "html": "Hi. Best, Sam"}
+    setter.draft_reply({"first_name": "A", "subject": "Re: x", "body": "ok"},
+                       {"id": "agent-r4"}, {"primary_intent": "send_resource", "all_intents": []},
+                       [], "not_configured", "Sam")
+    cd = json.loads(calls[-1]["messages"][1]["content"]).get("constraint_directive") or ""
+    check("round4: constraint_directive carries the booked-in placeholder recipe",
+         "I've booked in for [day and time]" in cd and "You will be speaking with [name]." in cd, cd[-200:])
+
+
 def test_call_ask_deferral_and_channel_beat_scheduling():
     """Training rounds 1-4 (2026-08-16): a deferral or channel preference
     forces call_ask='avoid' BEFORE the scheduling-intent check - the founding
@@ -9864,6 +9892,7 @@ if __name__ == "__main__":
     test_draft_reply_thread_continuity()
     test_draft_reply_structured_thread_transcript()
     test_call_ask_deferral_and_channel_beat_scheduling()
+    test_draft_system_round4_owner_rules()
     test_draft_payload_carries_constraint_directive()
     test_inject_carries_thread_to_draft_transcript()
     test_memory_digest_reaches_classify_and_draft()
