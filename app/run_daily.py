@@ -22,6 +22,7 @@ import server  # noqa: E402
 import build_notifications  # noqa: E402 — Lilly Optimiser notifications generator
 import campaign_register  # noqa: E402 — server-side auto-registration reconcile
 import subsequence_optimisations  # noqa: E402 — "no live campaign without a subsequence" audit
+import scale_winner_insights  # noqa: E402 — Messaging-tab BEST pill → campaign-view card mirror
 
 LOG = Path(__file__).parent / "data" / "daily_log.json"
 
@@ -170,6 +171,20 @@ def main():
               f"{s.get('cleared', 0)} cleared)")
     except Exception as e:  # noqa: BLE001 — the audit must never kill the run
         print(f"subsequence audit · FAILED: {str(e)[:200]}")
+
+    # Scale-winner parity, campaign-view leg (Bjion 2026-08-16): mirror the live
+    # scale_winner optimiser_notifications rows (maintained by the optimiser
+    # refresh above, pill-rule parity) into campaign_insights cards so the
+    # campaigns page's "Review N" badge + action cards carry them too. Cheap —
+    # two Supabase reads — so it runs every tick, no gate. Runs AFTER the
+    # optimiser refresh so a same-tick verdict flip mirrors in the same tick.
+    try:
+        s = scale_winner_insights.refresh()
+        print(f"scale-winner cards · {s.get('wanted', 0)} wanted "
+              f"(+{s.get('added', 0)} new, {s.get('refreshed', 0)} refreshed, "
+              f"{s.get('cleared', 0)} cleared, {s.get('skipped_crunch_dupe', 0)} crunch-owned)")
+    except Exception as e:  # noqa: BLE001 — the mirror must never kill the run
+        print(f"scale-winner cards · FAILED: {str(e)[:200]}")
 
     # Analytics client-windows blob (the Analytics page's day-by-day + window
     # source): built HERE, on the cron's own instance, and persisted to
