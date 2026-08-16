@@ -19142,10 +19142,12 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
                      "/api/setter/training/recheck", "/api/setter/agents/correction",
-                     # Client training portal (2026-08-16): companion chat +
-                     # PDF/paste intake - share-token-verified inside setter.py
-                     # exactly like the four training routes above.
-                     "/api/setter/training/chat", "/api/setter/training/material",
+                     # Portal revision 2 (owner ruling 2026-08-16): the CSM
+                     # pre-trains the agent, so the client page is rating
+                     # rounds only - /training/chat and /training/material
+                     # are deliberately NOT public (owner-session only, via
+                     # setter.POST_ROUTES; their share-token logic stays for
+                     # a future re-opening).
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 # GET endpoints the public /app/setter-train.html share page calls WITHOUT a
