@@ -17689,7 +17689,8 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
     else:
         who, _ws = who_replies_get(client, n_win)
     if isinstance(who, dict) and not who.get("error"):
-        who = {k: who.get(k) for k in ("n", "named", "buckets", "sizes", "size_named", "asof")}
+        who = {k: who.get(k) for k in ("n", "named", "buckets", "sizes", "size_named",
+                                       "combos", "combo_named", "size_order", "asof")}
     else:
         who = None
     return {"ok": True, "client": client, "start": s_d.isoformat(), "end": e_d.isoformat(),

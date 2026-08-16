@@ -84,6 +84,12 @@
 .ah .brow .val{text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
 .ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
 .ah .fill.orange{background:var(--orange)}
+/* ── who's-replying · winning-combination heatmap (title × company size) ── */
+.ah .whm{display:grid;gap:4px;margin-top:6px;min-width:0}
+.ah .whm-ch{font-size:9.5px;color:var(--ink-3);text-align:center;font-weight:600;align-self:end;padding-bottom:2px;white-space:nowrap}
+.ah .whm-rl{font-size:11px;color:var(--ink-2);display:flex;align-items:center;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px}
+.ah .whm-cell{min-height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.ah .whm-cell.win{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--ink);position:relative;z-index:1}
 
 .ah .ocol{display:grid;grid-template-columns:1fr 92px 92px;align-items:center;gap:10px;font-size:12.5px;padding:4px 0}
 .ah .ocol + .ocol{border-top:1px solid var(--line)}
@@ -609,7 +615,57 @@ function renderOffer() {
   return true;
 }
 
-/* ── who's replying — role mix + company size ── */
+/* ── who's replying — winning-combination heatmap (title × company size),
+     falling back to the role-mix bars when the cross-tab is too thin ── */
+function whmTint(v, max) {
+  if (!v) return { bg: "#F7F7F6", fg: "#B7ADA2" };
+  var t = v / (max || 1);
+  if (t >= 0.85) return { bg: "#FF4D00", fg: "#fff" };
+  if (t >= 0.60) return { bg: "#FF6B30", fg: "#fff" };
+  if (t >= 0.40) return { bg: "#FF9463", fg: "#fff" };
+  if (t >= 0.22) return { bg: "#FFB187", fg: "#A83100" };
+  if (t >= 0.10) return { bg: "#FFCEB4", fg: "#A83100" };
+  return { bg: "#FFE7DA", fg: "#A83100" };
+}
+function renderWhoHeatmap(p, b) {
+  var combos = (p && p.combos) || [];
+  if (combos.length < 3) return false;                     // too few pockets for a grid
+  var order = (p.size_order && p.size_order.length) ? p.size_order
+            : ["1–10", "11–50", "51–200", "201–1,000", "1,000+"];
+  var cellV = {}, cover = 0, maxV = 0, win = "";
+  combos.forEach(function (c) {
+    var k = c[0] + "||" + c[1], v = c[2] || 0;
+    cellV[k] = v; cover += v;
+    if (v > maxV) { maxV = v; win = k; }
+  });
+  if (cover < 6) return false;                             // not enough both-known yeses to be worth a grid
+  var titles = b.map(function (x) { return x[0]; }).filter(function (t) {
+    return combos.some(function (c) { return c[0] === t; });
+  });
+  var cols = order.filter(function (s) {
+    return combos.some(function (c) { return c[1] === s; });
+  });
+  if (titles.length < 1 || cols.length < 2) return false;
+  var h = '<div class="whm" style="grid-template-columns:96px repeat(' + cols.length + ',1fr)"><div></div>';
+  cols.forEach(function (s) { h += '<div class="whm-ch">' + escq(s) + "</div>"; });
+  titles.forEach(function (t) {
+    h += '<div class="whm-rl">' + escq(t) + "</div>";
+    cols.forEach(function (s) {
+      var k = t + "||" + s, v = cellV[k] || 0, tn = whmTint(v, maxV);
+      h += '<div class="whm-cell' + (k === win ? " win" : "") + '" style="background:' + tn.bg + ";color:" + tn.fg + '">' + fmtN(v) + "</div>";
+    });
+  });
+  h += "</div>";
+  $("who-rows").innerHTML = h;
+  var total = (p.named || 0);
+  $("who-size").innerHTML = '<span style="color:var(--ink-3)">From the <b style="color:var(--ink-2)">' + fmtN(cover) +
+    "</b> yeses where we know both title and company size" + (total ? " (of " + fmtN(total) + ")" : "") + ".</span>";
+  if (win) {
+    var wp = win.split("||");
+    $("who-take").textContent = "Build more lists of " + wp[0].toLowerCase() + " at " + wp[1] + " companies — your hot spot.";
+  }
+  return true;
+}
 function renderWho() {
   var p = R.who;
   $("who-scope").textContent = R.client + " · " + winLabel();
@@ -618,20 +674,23 @@ function renderWho() {
   var roleRows = (p && p.buckets) || [];
   if (named >= 3 && roleRows.length) {
     var b = roleRows.slice(0, 6);
-    var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
     $("who-n").textContent = fmtN(named);
-    $("who-rows").innerHTML = b.map(function (x, i) {
-      return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
-        '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
-        '<span class="val num">' + fmtN(x[1]) + "</span></div>";
-    }).join("");
-    var sizes = p.sizes || [];
-    if (sizes.length) {
-      var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
-      $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
-        sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
-    } else $("who-size").textContent = "Company size: not enough on file yet.";
-    $("who-take").textContent = "Most of " + escq(R.client) + "'s real yeses come from " + b[0][0].toLowerCase() + ".";
+    if (!renderWhoHeatmap(p, b)) {
+      // fallback (cross-tab too sparse): role-mix bars + company-size line
+      var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
+      $("who-rows").innerHTML = b.map(function (x, i) {
+        return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
+          '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
+          '<span class="val num">' + fmtN(x[1]) + "</span></div>";
+      }).join("");
+      var sizes = p.sizes || [];
+      if (sizes.length) {
+        var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
+        $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
+          sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
+      } else $("who-size").textContent = "Company size: not enough on file yet.";
+      $("who-take").textContent = "Most of " + escq(R.client) + "'s real yeses come from " + b[0][0].toLowerCase() + ".";
+    }
     $("who-take-row").style.display = "";
     return true;
   }
