@@ -19108,6 +19108,205 @@ def api_restore_live(p: dict):
             "client": client, "capacity_restored": total_cap}, 200
 
 
+# ============================================================================
+# Automatic domain manager (owner ruling 2026-08-16)
+# ----------------------------------------------------------------------------
+# The below-floor pause engine proved itself, so the two clicks that used to
+# follow it are now automatic:
+#   1. "Warm up domain" — any domain the floor view flags (below the reply
+#      floor, not already resting) is parked via the SAME warm-up job the
+#      button fires (fast-lane queue, Tasks panel, activity log, ledger stamp
+#      → the domain lands in the restore queue with a rest+7d due date).
+#   2. "Restore"        — any restore-queue entry at/past its due date is
+#      restored via the SAME restore-live path the button fires, attached to
+#      the campaign where the client's accounts already sit (top suggestion).
+#      No suggestion (sweep empty / client has no active campaign) → left for
+#      manual restore and reported, never guessed. Blacklist hits FLAG, never
+#      block — same owner ruling (2026-07-15) as the manual click.
+# First check runs 5 minutes after boot, then every 6 hours. Manual trigger:
+# POST /api/domain-auto/check ({"wait": true} runs inline); result + history:
+# GET /api/domain-auto/status. Kill switch: NAVREO_AUTO_DOMAIN=0.
+# ============================================================================
+_AUTO_DOMAIN_FIRST_DELAY_S = 5 * 60
+_AUTO_DOMAIN_INTERVAL_S = 6 * 3600
+_AUTO_DOMAIN_MAILDOSO_FLOOR = 0.5   # mirrors deliverability-tab.js MAILDOSO_FLOOR
+_AUTO_DOMAIN = {"running": False, "last": None, "history": []}
+_AUTO_DOMAIN_LOCK = threading.Lock()
+
+
+def _auto_domain_enabled() -> bool:
+    return os.environ.get("NAVREO_AUTO_DOMAIN", "1").lower() not in ("0", "false", "no")
+
+
+def _auto_domain_flagged():
+    """Server-side floorRows: 7-day domain-health rows below the reply floor,
+    minus anything already resting (backend resting map, live rest-due date,
+    or an undismissed ledger row). Same dhFlag maths as the manager tab."""
+    from datetime import date, timedelta
+    blob_dh = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {})
+    min_sent = int(blob_dh.get("minSent") or 500)
+    cutoff = float(blob_dh.get("cutoff") or 0.7)
+    today = date.today()
+    dh = _deliv_backend_get(
+        "domain-health?start=%s&end=%s&minSent=%s&cutoff=%s"
+        % ((today - timedelta(days=7)).isoformat(), today.isoformat(), min_sent, cutoff))
+    _deliv_fix_resting_due(dh)
+    resting = dh.get("resting") or {}
+    rest_due = {str(k).lower() for k in (dh.get("restingDue") or {})}
+    resting_doms = {str(k).lower() for k, v in resting.items() if (v or 0) > 0}
+    ledger = set()
+    if not _deliv_mock_on():
+        try:
+            ledger = {str(r.get("domain") or "").lower()
+                      for r in sb("GET", "deliverability_resting_ledger?select=domain"
+                                         "&dismissed=is.false") or []}
+        except Exception:  # noqa: BLE001 — resting/restingDue still guard below
+            pass
+    mbx = {} if _deliv_mock_on() else (_restore_mailboxes() or {})
+    flagged = []
+    for d in (dh.get("rows") or []):
+        dom = str(d.get("domain") or "").lower()
+        if not dom:
+            continue
+        sent = d.get("sent") or 0
+        rate = d.get("reply_rate")
+        if rate is None or sent < min_sent:
+            continue
+        maildoso = bool(d.get("maildoso")) or bool((mbx.get(dom) or {}).get("maildoso"))
+        if rate >= (_AUTO_DOMAIN_MAILDOSO_FLOOR if maildoso else cutoff):
+            continue
+        if dom in resting_doms or dom in rest_due or dom in ledger:
+            continue
+        flagged.append({"domain": dom, "sent": sent, "reply_rate": rate,
+                        "workspace": d.get("workspace")})
+    return flagged, min_sent, cutoff
+
+
+def _auto_domain_check(trigger: str = "scheduled") -> dict:
+    """One automatic pass over both halves. Returns (and stores) a summary.
+    Each half fails independently — a backend outage on one never blocks the
+    other."""
+    from datetime import datetime, timezone
+    with _AUTO_DOMAIN_LOCK:
+        if _AUTO_DOMAIN["running"]:
+            return {"ok": False, "skipped": "already_running"}
+        _AUTO_DOMAIN["running"] = True
+    out = {"ok": True, "trigger": trigger,
+           "started_at": datetime.now(timezone.utc).isoformat(),
+           "warmup": {}, "restore": {}}
+    try:
+        # ── 1. Warm up every domain the floor view flags ────────────────────
+        try:
+            flagged, min_sent, cutoff = _auto_domain_flagged()
+            w = out["warmup"] = {"flagged": [f["domain"] for f in flagged],
+                                 "minSent": min_sent, "cutoff": cutoff}
+            if flagged:
+                body, _st = api_warmup_job({"op": "pause",
+                                            "domains": [f["domain"] for f in flagged]})
+                w["job_id"] = (body or {}).get("job_id")
+        except Exception as e:  # noqa: BLE001 — one half failing must not kill the other
+            out["warmup"] = {"error": str(e)[:200]}
+            out["ok"] = False
+        # ── 2. Restore every queue entry at/past its due date ───────────────
+        try:
+            _restore_sweep_start()          # suggestions need campaign membership
+            deadline = time.time() + 240
+            while time.time() < deadline:   # cold boot: the sweep takes ~1 min
+                with _RESTORE_SWEEP_LOCK:
+                    if _RESTORE_SWEEP["data"] is not None:
+                        break
+                time.sleep(10)
+            entries, _src, _mbx, _bl = _restore_entries()
+            due = [e for e in entries if e.get("overdue")]
+            r = out["restore"] = {"due": [e["id"] for e in due], "restored": [],
+                                  "skipped": []}
+            for e in due:
+                dry, _st = api_restore_live({"id": e["id"], "dry_run": True})
+                sugg = (dry or {}).get("suggestions") or []
+                if not sugg:
+                    r["skipped"].append({"id": e["id"], "domains": e.get("domains"),
+                                         "reason": "no campaign suggestion — left for manual restore"})
+                    continue
+                res, st = api_restore_live({"id": e["id"],
+                                            "campaign_ids": [sugg[0]["id"]]})
+                rec = {"id": e["id"], "domains": e.get("domains"),
+                       "campaign": {"id": sugg[0]["id"], "name": sugg[0].get("name")},
+                       "ok": bool((res or {}).get("ok")), "status": st}
+                if (res or {}).get("blacklist_warning"):
+                    rec["blacklist_warning"] = res["blacklist_warning"]
+                if rec["ok"]:
+                    r["restored"].append(rec)
+                else:
+                    rec["errors"] = ([er for rr in ((res or {}).get("results") or [])
+                                      for er in (rr.get("errors") or [])][:5]
+                                     or [str((res or {}).get("message")
+                                             or (res or {}).get("error"))[:160]])
+                    r["skipped"].append(rec)
+                    out["ok"] = False
+        except Exception as e:  # noqa: BLE001
+            out["restore"] = {"error": str(e)[:200]}
+            out["ok"] = False
+    finally:
+        out["finished_at"] = datetime.now(timezone.utc).isoformat()
+        with _AUTO_DOMAIN_LOCK:
+            _AUTO_DOMAIN.update(running=False, last=out)
+            _AUTO_DOMAIN["history"] = ([out] + _AUTO_DOMAIN["history"])[:20]
+    try:
+        log_activity("/api/domain-auto/check",
+                     {"trigger": trigger,
+                      "flagged": (out.get("warmup") or {}).get("flagged"),
+                      "warmup_job": (out.get("warmup") or {}).get("job_id"),
+                      "restored": [x.get("id") for x in
+                                   ((out.get("restore") or {}).get("restored") or [])],
+                      "skipped": (out.get("restore") or {}).get("skipped"),
+                      "ok": out["ok"]},
+                     actor="deliverability-auto", action="auto_domain_check",
+                     entity="domain")
+    except Exception:  # noqa: BLE001 — the ledger row is nice-to-have
+        pass
+    return out
+
+
+def _auto_domain_loop():
+    """First check 5 minutes after boot (the restore sweep kicked here is
+    ready by then), then every 6 hours."""
+    _restore_sweep_start()
+    time.sleep(_AUTO_DOMAIN_FIRST_DELAY_S)
+    while True:
+        if _auto_domain_enabled():
+            try:
+                res = _auto_domain_check(trigger="scheduled")
+                print("[domain-auto] check done: ok=%s warmed=%s restored=%s"
+                      % (res.get("ok"),
+                         len((res.get("warmup") or {}).get("flagged") or []),
+                         len((res.get("restore") or {}).get("restored") or [])),
+                      flush=True)
+            except Exception as e:  # noqa: BLE001 — the loop must never die
+                print(f"[domain-auto] cycle failed: {e}", flush=True)
+        time.sleep(_AUTO_DOMAIN_INTERVAL_S)
+
+
+def api_domain_auto_status():
+    with _AUTO_DOMAIN_LOCK:
+        return {"enabled": _auto_domain_enabled(),
+                "running": _AUTO_DOMAIN["running"],
+                "first_delay_s": _AUTO_DOMAIN_FIRST_DELAY_S,
+                "interval_s": _AUTO_DOMAIN_INTERVAL_S,
+                "last": _AUTO_DOMAIN["last"],
+                "history": _AUTO_DOMAIN["history"][:5]}, 200
+
+
+def api_domain_auto_check(p: dict):
+    if not _auto_domain_enabled():
+        return {"ok": False, "error": "disabled",
+                "message": "NAVREO_AUTO_DOMAIN=0 — automatic domain checks are off."}, 409
+    if p.get("wait"):
+        return _auto_domain_check(trigger="manual"), 200
+    threading.Thread(target=_auto_domain_check, kwargs={"trigger": "manual"},
+                     daemon=True).start()
+    return {"ok": True, "started": True}, 202
+
+
 # ── Login gate ──────────────────────────────────────────────────────────────
 # Every page and API endpoint on this host requires a Navreo login — an
 # email+password user in Supabase Auth on the same project that already backs
@@ -20899,6 +21098,9 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
             return self._json(body, status)
+        if path == "/api/domain-auto/status":
+            body, status = api_domain_auto_status()
+            return self._json(body, status)
         if path == "/api/mailbox-settings-audit":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -21684,6 +21886,13 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, payload)
             body, status = api_restore_live(payload)
             return self._json(body, status)
+        if path == "/api/domain-auto/check":
+            try:
+                payload = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid_json"}, 400)
+            body, status = api_domain_auto_check(payload)
+            return self._json(body, status)
         if path == "/api/analytics-hub/refresh-insights":
             # Regenerate the hub's book insights (messaging league +
             # who-replies). Used by lilly-optimiser cockpit runs; the daily
@@ -22221,6 +22430,9 @@ if __name__ == "__main__":
     # per-campaign performance without 874 live calls per page load
     threading.Thread(target=_scorecard_sync_loop, daemon=True).start()
     threading.Thread(target=_subseq_stats_loop, daemon=True).start()
+    # Automatic domain manager: below-floor park + due-back restore (owner
+    # ruling 2026-08-16). First check 5 minutes after boot, then 6-hourly.
+    threading.Thread(target=_auto_domain_loop, daemon=True).start()
     # The live-confirmed collision census is HEAVY — one full Smartlead
     # leads-export per ACTIVE campaign, all held in memory to cross-reference
     # same-client overlap. Run inside the web process it OOM-killed the 512MB
