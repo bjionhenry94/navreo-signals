@@ -114,6 +114,39 @@
 .ah .stamp{font:500 10.5px/1.5 var(--font-sans);color:var(--ink-3);letter-spacing:0;text-transform:none;white-space:nowrap}
 .ah .stamp.stale{color:var(--amber);font-weight:600}
 .ah .lane.lastvis::before{display:none}
+
+/* ── who replied — quote timeline (report-replies-table-uxlab P5, picked
+   2026-08-16): the window as a feed of yeses, newest first ── */
+.ah .tl{margin-top:18px;position:relative;padding-left:26px}
+.ah .tl::before{content:"";position:absolute;left:7px;top:6px;bottom:6px;width:1px;background:var(--line-2)}
+.ah .tl .day{position:relative;margin-bottom:6px;padding-top:10px}
+.ah .tl .day::before{content:"";position:absolute;left:-23px;top:16px;width:9px;height:9px;border-radius:50%;background:var(--orange);border:2px solid var(--bg)}
+.ah .tl .dlab{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);margin-bottom:6px}
+.ah .tl .e{background:var(--card);border:1px solid var(--line);border-radius:12px;margin-bottom:8px;overflow:hidden}
+.ah .tl .ehd{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:11px 16px;cursor:pointer}
+.ah .tl .ehd:hover{background:var(--cream-50)}
+.ah .tl .quote{font-size:13.5px;line-height:1.5;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .tl .quote::before{content:"“";color:var(--orange);font-weight:700}
+.ah .tl .quote::after{content:"”";color:var(--orange);font-weight:700}
+.ah .tl .who{font-size:12px;color:var(--ink-3);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .tl .who a{color:var(--ink-2);font-weight:600;text-decoration:none;border-bottom:1px dotted var(--brown-300)}
+.ah .tl .who a:hover{color:var(--ink);border-bottom:1px solid var(--ink)}
+.ah .tl .who a.ws{font-weight:400;color:var(--ink-3)}
+.ah .tl .who a.ws:hover{color:var(--ink)}
+.ah .tl .right{display:flex;align-items:center;gap:8px}
+.ah .tl .tag{font-size:10.5px;font-weight:600;color:var(--ink-2);background:var(--bg-sunken);border-radius:999px;padding:4px 10px;white-space:nowrap}
+.ah .tl .chev{width:15px;height:15px;color:var(--ink-3);transition:transform .18s ease}
+.ah .tl .e.open .chev{transform:rotate(180deg)}
+.ah .tl .body{display:none;border-top:1px solid var(--line);padding:13px 16px;background:var(--cream-50)}
+.ah .tl .e.open .body{display:block}
+.ah .tl .full{font-size:13px;line-height:1.65;white-space:pre-line;max-width:780px}
+.ah .tl .meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:11px}
+.ah .tl .meta a,.ah .tl .meta span{font-size:11.5px;font-weight:600;color:var(--ink-2);background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:4px 11px;text-decoration:none;white-space:nowrap}
+.ah .tl .meta a:hover{background:var(--ink);border-color:var(--ink);color:#fff}
+.ah .tl .launch{display:flex;align-items:center;gap:9px;padding:8px 16px;margin-bottom:8px;border:1px dashed var(--line-2);border-radius:12px;background:var(--bg)}
+.ah .tl .launch .lp{font-size:9.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--orange-700);background:var(--orange-100);border-radius:999px;padding:3px 9px;white-space:nowrap}
+.ah .tl .launch .ln{font-size:12.5px;font-weight:600;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:900px){.ah .tl .tag{display:none}}
 .ah .footnote{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)}
 .ah .gone{max-width:520px;margin:120px auto;text-align:center}
 .ah .gone h1{margin-bottom:14px}
@@ -188,9 +221,19 @@
       </div>
     </section>
 
-    <!-- ── 2 · Who actually replies? ── -->
-    <section class="lane" id="lane-who" aria-label="Who replies lane">
+    <!-- ── What happened this week? — quote timeline (P5) + campaign launches ── -->
+    <section class="lane" id="lane-replied" aria-label="What happened lane">
       <span class="node num">2</span>
+      <div class="lane-head">
+        <h2 class="lane-q">What happened this week?</h2>
+      </div>
+      <div class="card-kick"><span id="rep-kick" style="text-transform:none;letter-spacing:0;font-weight:500"></span></div>
+      <div class="tl" id="rep-tl"></div>
+    </section>
+
+    <!-- ── 3 · Who actually replies? ── -->
+    <section class="lane" id="lane-who" aria-label="Who replies lane">
+      <span class="node num">3</span>
       <div class="lane-head">
         <h2 class="lane-q">Who actually replies?</h2>
       </div>
@@ -697,6 +740,84 @@ function renderWho() {
   return false;
 }
 
+/* ── who replied — quote timeline (P5): rows arrive pre-cleaned and
+   client-scoped from /api/report/data; the name always goes to LinkedIn
+   (profile when known, people-search otherwise — never a dead click) ── */
+function firstLine(t) {
+  var s = String(t || "").trim().split(/\n+/).map(function (x) { return x.trim(); })
+    .filter(function (x) {
+      if (!x) return false;
+      if (/^(hi|hey|hello|dear|good\s\w+)\b[^,]*,?$/i.test(x)) return false;
+      if (x.split(/\s+/).length <= 2 && /,$/.test(x)) return false;
+      return true;
+    });
+  return (s[0] || String(t || "").trim()).slice(0, 140);
+}
+function personName(r) {
+  if (r.name) return r.name;
+  return r.email.split("@")[0].split(/[._\-\d]+/).filter(Boolean)
+    .map(function (w) { return w[0].toUpperCase() + w.slice(1); }).join(" ");
+}
+function renderReplied() {
+  // one feed: positive replies + campaign launches, newest day first
+  // (replies before launches inside a day — the yeses are the headline)
+  var events = (R.who_replied || []).map(function (r) { return { t: "reply", d: r.date, r: r }; })
+    .concat((R.launches || []).map(function (l) { return { t: "launch", d: l.date, l: l }; }));
+  if (!events.length) return false;
+  events.sort(function (a, b) {
+    if (a.d !== b.d) return a.d < b.d ? 1 : -1;
+    return (a.t === "launch") - (b.t === "launch");
+  });
+  var nR = (R.who_replied || []).length, nL = (R.launches || []).length;
+  $("rep-kick").textContent =
+    (nR ? nR + " positive " + (nR === 1 ? "reply" : "replies") : "") +
+    (nR && nL ? " · " : "") +
+    (nL ? nL + (nL === 1 ? " campaign launched" : " campaigns launched") : "") +
+    " · newest first";
+  var h = "", lastDay = "", k = 0;
+  events.forEach(function (ev) {
+    if (ev.d !== lastDay) {
+      if (lastDay) h += "</div>";
+      h += '<div class="day"><div class="dlab">' + dfull(ev.d) + "</div>";
+      lastDay = ev.d;
+    }
+    if (ev.t === "launch") {
+      h += '<div class="launch"><span class="lp">Launched</span><span class="ln">' +
+        escq(ev.l.campaign) + " started sending</span></div>";
+      return;
+    }
+    var r = ev.r;
+    var who = personName(r);
+    var li = r.linkedin || ("https://www.linkedin.com/search/results/people/?keywords=" +
+      encodeURIComponent(who + " " + String(r.website || "").replace(/\.[a-z.]+$/i, "").replace(/[-_]/g, " ")));
+    h += '<div class="e" id="rep-it' + k + '">' +
+      '<div class="ehd" data-i="' + k + '">' +
+      '<div><div class="quote">' + escq(firstLine(r.reply)) + "</div>" +
+      '<div class="who"><a href="' + escq(li) + '" target="_blank" rel="noopener" title="Find on LinkedIn">' + escq(who) + "</a>" +
+      (r.role ? " · " + escq(r.role) : "") +
+      (r.website ? ' · <a class="ws" href="https://' + escq(r.website) + '" target="_blank" rel="noopener">' + escq(r.website) + "</a>" : "") +
+      "</div></div>" +
+      '<div class="right">' + (r.message ? '<span class="tag num">' + escq(r.message) + "</span>" : "") +
+      '<svg class="chev" viewBox="0 0 16 16" fill="none"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>' +
+      "</div></div>" +
+      '<div class="body"><div class="full">' + escq(r.reply) + "</div>" +
+      '<div class="meta">' +
+      (r.campaign ? "<span>" + escq(r.campaign) + "</span>" : "") +
+      (r.linkedin ? '<a href="' + escq(r.linkedin) + '" target="_blank" rel="noopener">LinkedIn</a>' : "") +
+      (r.website ? '<a href="https://' + escq(r.website) + '" target="_blank" rel="noopener">' + escq(r.website) + "</a>" : "") +
+      "</div></div></div>";
+    k++;
+  });
+  if (lastDay) h += "</div>";
+  var tl = $("rep-tl");
+  tl.innerHTML = h;
+  tl.onclick = function (ev) {
+    var hd = ev.target.closest(".ehd");
+    if (!hd || ev.target.closest("a")) return;
+    $("rep-it" + hd.dataset.i).classList.toggle("open");
+  };
+  return true;
+}
 function renderAll() {
   $("rp-title").textContent = R.client + " · outbound report";
   $("rp-verdict").textContent = dfull(R.start) + " – " + dfull(R.end);
@@ -705,14 +826,17 @@ function renderAll() {
   // are gone, and renumber what's left so the nodes stay 1..n
   var hasRank = !!renderRank();
   var hasOffer = !!renderOffer();
+  var hasReplied = !!renderReplied();
   var hasWho = !!renderWho();
   $("card-rank").style.display = hasRank ? "" : "none";
   $("card-offer").style.display = hasOffer ? "" : "none";
   $("win-cards").classList.toggle("c32", hasRank && hasOffer);
   $("lane-win").style.display = (hasRank || hasOffer) ? "" : "none";
+  $("lane-replied").style.display = hasReplied ? "" : "none";
   $("lane-who").style.display = hasWho ? "" : "none";
-  var vis = [$("lane-win"), $("lane-who")].filter(function (s) { return s.style.display !== "none"; });
-  [$("lane-win"), $("lane-who")].forEach(function (s) { s.classList.remove("lastvis"); });
+  var lanes = [$("lane-win"), $("lane-replied"), $("lane-who")];
+  var vis = lanes.filter(function (s) { return s.style.display !== "none"; });
+  lanes.forEach(function (s) { s.classList.remove("lastvis"); });
   vis.forEach(function (s, i) {
     s.querySelector(".node").textContent = i + 1;
     if (i === vis.length - 1) s.classList.add("lastvis");

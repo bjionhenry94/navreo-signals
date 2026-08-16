@@ -17529,6 +17529,144 @@ def who_replies_get(client: str, days: int) -> tuple[dict, int]:
 # other query param, so a viewer can never read another client's rows by
 # editing the URL.
 
+def _clean_reply_text(t) -> str:
+    """Reply text for client eyes: some archive replies are full raw HTML
+    emails — render the words, never the markup — and chop the quoted thread
+    under the actual reply (report-replies-table-uxlab P5, Bjion 2026-08-16)."""
+    import html as _html
+    t = str(t or "")
+    if re.search(r"<\w+[^>]*>", t):
+        t = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", t)
+        t = re.sub(r"(?i)<br\s*/?>|</(p|div|tr|li|h[1-6])>", "\n", t)
+        t = re.sub(r"<[^>]+>", "", t)
+        t = _html.unescape(t)
+    t = t.replace("​", " ").replace("\xa0", " ")
+    m = re.search(r"(?im)^[ \t>]*?(from:\s.+|on .{0,140}wrote:|-{2,}\s*original message)", t)
+    if m and m.start() > 30:
+        t = t[:m.start()]
+    t = re.sub(r"[ \t]+\n", "\n", t)
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
+
+
+def _report_message_label(vp) -> str:
+    """'Email 2 · Version A' from a vpath3 stamp {step: label} — the highest
+    stamped step is the message the reply is attributed to."""
+    try:
+        p = json.loads(vp) if isinstance(vp, str) else (vp or {})
+        steps = [(int(k), v) for k, v in p.items() if str(k).isdigit() and v]
+        if not steps:
+            return ""
+        n, lab = max(steps)
+        lab = str(lab)
+        return lab if lab.lower().startswith("email") else f"Email {n} · Version {lab}"
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_REPORT_REPLIED_CACHE: dict = {}
+_REPORT_REPLIED_LOCK = threading.Lock()
+_REPORT_REPLIED_TTL_S = 600
+
+
+def _campaign_launches(camp_ids: list, camp_names: dict,
+                       start_iso: str, end_iso: str) -> list:
+    """Campaigns that STARTED SENDING inside [start,end]: earliest
+    contact_history.first_contacted_at per campaign (aggregates are disabled
+    on this PostgREST, so one limit-1 probe per campaign — bounded to the
+    window's own campaigns and cached with the replied rows)."""
+    out = []
+    for cid in camp_ids[:40]:
+        try:
+            r = sb("GET", f"contact_history?smartlead_campaign_id=eq.{cid}"
+                          "&select=first_contacted_at&first_contacted_at=not.is.null"
+                          "&order=first_contacted_at.asc&limit=1")
+        except Exception:  # noqa: BLE001
+            r = None
+        first = (r[0].get("first_contacted_at") if isinstance(r, list) and r else "") or ""
+        d = str(first)[:10]
+        if d and start_iso <= d <= end_iso:
+            out.append({"campaign": camp_names.get(str(cid)) or "", "date": d})
+    return out
+
+
+def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
+                         start_iso: str, end_iso: str, launch_ids: list) -> dict:
+    """The "What happened this week?" lane (P5 quote-timeline, picked
+    2026-08-16): every positive reply for the token's client inside the EXACT
+    report range, plus the campaigns that launched (started sending) in it.
+    Cheap PostgREST reads, 10-min cached per client|range; reply text is
+    cleaned server-side so raw HTML never reaches a client."""
+    key = f"{client}|{start_iso}|{end_iso}"
+    with _REPORT_REPLIED_LOCK:
+        ent = _REPORT_REPLIED_CACHE.get(key)
+        if ent and (time.time() - ent["ts"]) < _REPORT_REPLIED_TTL_S:
+            return {"rows": ent["rows"], "launches": ent["launches"]}
+    pos = ",".join(urllib.parse.quote(c) for c in _AH_POSITIVE_CATS)
+    ids = ",".join(urllib.parse.quote(f'"{i}"') for i in camp_ids)
+    raw = sb_get_all(
+        "replies?select=email,category,replied_at,smartlead_campaign_id,reply_body,"
+        "rawbody:raw->>body,vp:raw->>vpath3"
+        f"&category=in.({pos})&smartlead_campaign_id=in.({ids})"
+        f"&replied_at=gte.{start_iso}&replied_at=lt.{end_iso}T23:59:59"
+        "&order=replied_at.desc&limit=200") or []
+    seen, leads = set(), []
+    for r in raw:
+        em = (r.get("email") or "").strip().lower()
+        if not em or em in seen:
+            continue
+        seen.add(em)
+        leads.append(r)
+    leads = leads[:60]
+    info: dict = {}
+    emails = [r["email"].strip().lower() for r in leads]
+    for i in range(0, len(emails), 50):
+        batch = ",".join(urllib.parse.quote(f'"{e}"') for e in emails[i:i + 50])
+        for table, cols in (
+                ("people", "email,first_name,last_name,title,linkedin_slug,company_domain"),
+                ("signal_leads", "email,full_name,title,linkedin_url,domain")):
+            try:
+                resp = sb("GET", f"{table}?email=in.({batch})&select={cols}")
+            except Exception:  # noqa: BLE001
+                resp = None
+            for row in (resp if isinstance(resp, list) else []):
+                em = (row.get("email") or "").strip().lower()
+                cur = info.setdefault(em, {})
+                for k, v in row.items():
+                    if v and not cur.get(k):
+                        cur[k] = v
+    rows = []
+    for r in leads:
+        em = r["email"].strip().lower()
+        e = info.get(em, {})
+        name = e.get("full_name") or " ".join(
+            x for x in (e.get("first_name"), e.get("last_name")) if x)
+        li = e.get("linkedin_url") or ""
+        if not li and e.get("linkedin_slug"):
+            li = "https://www.linkedin.com/in/" + str(e["linkedin_slug"]).strip("/")
+        reply = _clean_reply_text(r.get("reply_body") or r.get("rawbody"))
+        if not reply:
+            continue
+        rows.append({
+            "name": name, "role": e.get("title") or "",
+            "linkedin": li,
+            "website": e.get("domain") or e.get("company_domain")
+                       or (em.split("@", 1)[1] if "@" in em else ""),
+            "email": em,
+            "campaign": camp_names.get(str(r.get("smartlead_campaign_id"))) or "",
+            "date": (r.get("replied_at") or "")[:10],
+            "message": _report_message_label(r.get("vp")),
+            "reply": reply[:1500],
+        })
+    launches = _campaign_launches(launch_ids, camp_names, start_iso, end_iso)
+    with _REPORT_REPLIED_LOCK:
+        _REPORT_REPLIED_CACHE[key] = {"rows": rows, "launches": launches, "ts": time.time()}
+        if len(_REPORT_REPLIED_CACHE) > 200:
+            _REPORT_REPLIED_CACHE.pop(next(iter(_REPORT_REPLIED_CACHE)))
+    return {"rows": rows, "launches": launches}
+
+
 def mint_report_share(client: str, start: str, end: str, days: int = 90) -> str:
     """Client permalink token. JSON payload (labels may hold any character)
     signed with the app auth secret, url-safe b64."""
@@ -17693,6 +17831,16 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
                                        "combos", "combo_named", "size_order", "asof")}
     else:
         who = None
+    replied = {"rows": [], "launches": []}
+    if sc:
+        try:
+            replied = _report_replied_rows(
+                client, list(sc.keys()),
+                {cid: (c.get("name") or "") for cid, c in sc.items()},
+                s_d.isoformat(), e_d.isoformat(),
+                [r["id"] for r in camps])
+        except Exception:  # noqa: BLE001 - the lane hides itself; never sink the report
+            replied = {"rows": [], "launches": []}
     return {"ok": True, "client": client, "start": s_d.isoformat(), "end": e_d.isoformat(),
             "window_days": n_win, "days": axis,
             "series": {"sent": sent, "replies": replies,
@@ -17704,6 +17852,7 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
                        "bounced": win.get("bounced")},
             "campaigns": camps, "campaigns_scope": "window" if camps else "lifetime",
             "scorecard": sc, "offer": offer, "who": who,
+            "who_replied": replied["rows"], "launches": replied["launches"],
             "asof": {"cw": cw.get("asof"), "hub": hub.get("asof")}}, 200
 
 
@@ -18902,6 +19051,10 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
                      "/api/setter/training/recheck", "/api/setter/agents/correction",
+                     # Client training portal (2026-08-16): companion chat +
+                     # PDF/paste intake - share-token-verified inside setter.py
+                     # exactly like the four training routes above.
+                     "/api/setter/training/chat", "/api/setter/training/material",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 # GET endpoints the public /app/setter-train.html share page calls WITHOUT a
