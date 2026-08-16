@@ -19328,6 +19328,48 @@ def _restore_forecast(entries, mbx):
             "zero_cap_note": sum(e.get("zero_cap_boxes") or 0 for e in pend)}
 
 
+def api_mailbox_client_map():
+    """Shared-fleet mailbox→client attribution for the Mailboxes tab's client
+    filter (owner ask 2026-08-17: a shared-fleet chip must move the numbers,
+    not restate the whole fleet). Truth = the restore sweep's campaign
+    membership (which accounts sit in which ACTIVE campaigns — the only real
+    membership source) joined to campaign_scorecard.client (the one label
+    authority). No new Smartlead traffic: this rides the same 30-min sweep
+    cache the restore forecast uses. Boxes attached to no labelled Navreo
+    campaign attribute to no client — they only ever show under All."""
+    sweep = None
+    with _RESTORE_SWEEP_LOCK:
+        if _RESTORE_SWEEP["data"] is not None:
+            sweep = _RESTORE_SWEEP["data"]
+        err = _RESTORE_SWEEP["error"]
+    st = _restore_sweep_start()   # cold: kick the build; stale: refresh behind the served data
+    if sweep is None:
+        return {"status": "computing", "running": bool(st.get("running", True)), "error": err}
+    try:
+        score = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,client,workspace") or []
+    except Exception as e:  # noqa: BLE001 — map is an enhancement, never a 500
+        return {"status": "error", "error": str(e)[:200]}
+    cl_of = {}
+    for r in score:
+        if (r.get("workspace") or "navreo") != "navreo":
+            continue
+        cl = (r.get("client") or "").strip()
+        if cl and not cl.startswith("__"):  # "__unassigned" is a bucket, not a client
+            cl_of[str(r.get("smartlead_campaign_id"))] = cl
+    emails, labels = {}, {}
+    for email, rec in (sweep.get("accounts") or {}).items():
+        for cid in rec.get("camps") or []:
+            cl = cl_of.get(str(cid))
+            if not cl:
+                continue
+            k = cl.lower()
+            labels.setdefault(k, cl)
+            emails.setdefault(k, set()).add(email)
+    return {"status": "ready",
+            "sweep_age_sec": round(time.time() - _RESTORE_SWEEP["ts"]),
+            "clients": {labels[k]: sorted(v) for k, v in emails.items()}}
+
+
 def api_restore_plan():
     entries, rem_src, mbx, _bl = _restore_entries()
     forecast = _restore_forecast(entries, mbx)
@@ -21497,6 +21539,8 @@ class Handler(SimpleHTTPRequestHandler):
             force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
             body, status = client_windows_get(force=force)
             return self._json(body, status)
+        if path == "/api/mailbox-client-map":
+            return self._json(api_mailbox_client_map())
         if path == "/api/who-replies":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)

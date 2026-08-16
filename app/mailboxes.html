@@ -50,14 +50,32 @@
   var MBX_LS = "mbx.client";
   var MBX = { client: "All", labels: { Asteri: "asteri", KRG: "krg" }, vol: {} };
   try { var _v = localStorage.getItem(MBX_LS); if (_v) MBX.client = _v; } catch (e) {}
+  function mbxUpdateNote() {
+    var note = document.getElementById("mbx-lens-note");
+    if (!note) return;
+    if (MBX.client === "All") { note.style.display = "none"; note.textContent = ""; return; }
+    note.style.display = "";
+    if (MBX.labels[MBX.client]) {
+      note.textContent = "Showing only " + MBX.client + "’s connected workspace — its own mailboxes, domains and alerts.";
+      return;
+    }
+    // Shared-fleet client: once the campaign-membership map is in, the tables
+    // below really are scoped to this client's own sender boxes.
+    var m = window.DLV_CLIENT_MAP, k = MBX.client.toLowerCase();
+    if (m && m.status === "ready" && m.emails[k] && m.emails[k].size) {
+      note.textContent = "Showing the shared-fleet mailboxes and domains on " + MBX.client + "’s campaigns. Fleet-wide checks in the to-do still cover the whole shared fleet.";
+    } else {
+      note.textContent = MBX.client + " sends from the shared Navreo fleet — showing the shared fleet (its health is " + MBX.client + "’s health).";
+    }
+  }
+  // The map can land after the chip was clicked — the manager fires this same
+  // event when it does, so the note upgrades itself (no dispatch here: only
+  // mbxPublishLens dispatches, so there is no event loop).
+  window.addEventListener("dlv-client-lens", mbxUpdateNote);
   function mbxPublishLens() {
     window.DLV_CLIENT_LENS = { client: MBX.client, ws: MBX.labels[MBX.client] || null };
     try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) {}
-    var note = document.getElementById("mbx-lens-note");
-    if (!note) return;
-    if (MBX.client === "All") { note.style.display = "none"; note.textContent = ""; }
-    else if (MBX.labels[MBX.client]) { note.style.display = ""; note.textContent = "Showing only " + MBX.client + "’s connected workspace — its own mailboxes, domains and alerts."; }
-    else { note.style.display = ""; note.textContent = MBX.client + " sends from the shared Navreo fleet — showing the shared fleet (its health is " + MBX.client + "’s health)."; }
+    mbxUpdateNote();
   }
   function mbxRenderChips() {
     var seen = {}, names = [];

@@ -3909,11 +3909,56 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // a workspace, so their rows filter exactly; every other client sends from
   // the shared Navreo fleet, so those chips show the shared fleet (the page
   // labels it). Set via window.DLV_CLIENT_LENS + a "dlv-client-lens" event.
+  // Shared-fleet attribution (/api/mailbox-client-map): which shared-fleet
+  // boxes send for which client's campaigns — the restore sweep's ACTIVE-
+  // campaign membership joined to scorecard client labels, server-side. Loaded
+  // lazily the first time a shared-fleet chip needs it; until it lands (or if
+  // the client has no labelled campaigns) the chip falls back to the whole
+  // shared fleet, which the page note already explains. Owner ask 2026-08-17:
+  // a shared-fleet chip must MOVE the numbers, not restate the fleet.
+  const CLIENT_MAP = { status: "idle", emails: {}, domains: {}, tries: 0 };
+  window.DLV_CLIENT_MAP = CLIENT_MAP; // mailboxes.html reads status for its note line
+  function dlvLoadClientMap() {
+    if (CLIENT_MAP.status === "loading" || CLIENT_MAP.status === "ready") return;
+    if (CLIENT_MAP.tries >= 10) return; // ~2.5 min of polling, then keep the labelled fallback
+    CLIENT_MAP.status = "loading";
+    CLIENT_MAP.tries++;
+    fetch("/api/mailbox-client-map", { credentials: "same-origin" })
+      .then((r) => (r.ok ? r.json() : null))
+      .then((m) => {
+        if (m && m.status === "ready" && m.clients) {
+          CLIENT_MAP.emails = {}; CLIENT_MAP.domains = {};
+          Object.keys(m.clients).forEach((name) => {
+            const k = name.toLowerCase();
+            const es = new Set(), ds = new Set();
+            (m.clients[name] || []).forEach((e) => {
+              e = String(e).toLowerCase(); es.add(e);
+              const d = e.split("@")[1]; if (d) ds.add(d);
+            });
+            CLIENT_MAP.emails[k] = es; CLIENT_MAP.domains[k] = ds;
+          });
+          CLIENT_MAP.status = "ready";
+          try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) { /* repaint is best-effort */ }
+        } else {
+          // computing server-side (cold sweep) — poll again shortly
+          CLIENT_MAP.status = "idle";
+          setTimeout(dlvLoadClientMap, 15000);
+        }
+      })
+      .catch(() => { CLIENT_MAP.status = "idle"; setTimeout(dlvLoadClientMap, 15000); });
+  }
   function dlvApplyClientLens(rows) {
     const L = window.DLV_CLIENT_LENS;
     if (!L || !L.client || L.client === "All" || !Array.isArray(rows)) return rows;
     if (L.ws) return rows.filter((r) => (r.workspace || "") === L.ws);
-    return rows.filter((r) => !isClientRow(r));
+    const base = rows.filter((r) => !isClientRow(r));
+    const k = L.client.toLowerCase();
+    if (CLIENT_MAP.status !== "ready") { dlvLoadClientMap(); return base; }
+    const es = CLIENT_MAP.emails[k], ds = CLIENT_MAP.domains[k];
+    if (!es || !es.size) return base; // no labelled campaigns for this client → whole shared fleet (the note says so)
+    // Mailbox rows match by email; domain-level rows (no email) by the
+    // domains of this client's member boxes.
+    return base.filter((r) => (r.email ? es.has(String(r.email).toLowerCase()) : ds.has(String(r.domain || "").toLowerCase())));
   }
   // The active WORKSPACE lens slug ("asteri"/"krg"), or null when the lens is
   // off, "All", or a shared-fleet client (whose truth IS the Navreo fleet).
@@ -3930,6 +3975,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const map = {};
     (((S.A || {}).domainHealth || {}).rows || []).forEach((d) => { if (d && d.domain) map[String(d.domain).toLowerCase()] = d.workspace || ""; });
     if (L.ws) return doms.filter((d) => map[String(d).toLowerCase()] === L.ws);
+    // Shared-fleet client: prefer the campaign-membership map (same source the
+    // row lens uses) so the restore card moves with the chip too.
+    const k = L.client.toLowerCase();
+    if (CLIENT_MAP.status === "ready" && CLIENT_MAP.domains[k] && CLIENT_MAP.domains[k].size) {
+      return doms.filter((d) => CLIENT_MAP.domains[k].has(String(d).toLowerCase()));
+    }
     return doms.filter((d) => { const w = map[String(d).toLowerCase()]; return !w || w === "navreo"; });
   }
 
@@ -4509,7 +4560,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // restorable; the confirm names how many are listed. dueN counts the
     // reconcile set directly so button, card, and action can never disagree,
     // even if a due domain were somehow missing a rendered row.
-    const dueSet = flow === "inwarmup" ? new Set(restoreReconcileNow(D).dueDomains) : new Set();
+    // Lensed like everything else on the page — under a client chip the
+    // button offers (and domainRestoreDue restores) only that client's due
+    // domains, never another client's capacity from a filtered view.
+    const dueSet = flow === "inwarmup" ? new Set(dlvLensDomainNames(restoreReconcileNow(D).dueDomains)) : new Set();
     const dueN = dueSet.size;
     const bw = $id("dlv-mgr-bulk");
     if (bw) {
@@ -7200,10 +7254,13 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // are INCLUDED here (same set the button count and the Today card show); the
     // confirm just names how many are still listed so it's an informed click.
     const _rec = restoreReconcileNow(D);
-    const domains = _rec.dueDomains;
+    // Same lensed set the button counted — a client-filtered view must never
+    // restore another client's domains.
+    const domains = dlvLensDomainNames(_rec.dueDomains);
     if (!domains.length) { toast("Nothing due for restore", "err"); return; }
-    const _blNote = _rec.blacklistedDue.length
-      ? "\n\n⚠ " + _rec.blacklistedDue.length + " of these are still blacklisted — restoring resumes sending from a listed domain."
+    const _blDue = _rec.blacklistedDue.filter((d) => domains.indexOf(d) !== -1);
+    const _blNote = _blDue.length
+      ? "\n\n⚠ " + _blDue.length + " of these are still blacklisted — restoring resumes sending from a listed domain."
       : "";
     const ok = await dlvConfirm("Restore the " + domains.length + " domain(s) due back from warm-up?\n\n  " + domains.slice(0, 10).join("\n  ") + (domains.length > 10 ? "\n  … +" + (domains.length - 10) + " more" : "") + _blNote + "\n\nRestores each mailbox to its saved daily cap and resumes sending.\n\nProceed?", { title: "Restore all due", yesLabel: "Restore " + domains.length });
     if (!ok) return;
