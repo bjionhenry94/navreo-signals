@@ -10955,7 +10955,13 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
         e["subject"] = _display_clean(e.get("subject"), first_name=lead_name)
 
     case = {
-        "id": f"case-{idx:04d}", "reply_id": reply_id, "campaign_id": campaign_id,
+        # Globally unique id (thread round 1, 2026-08-17): the old
+        # position-derived case-{idx:04d} collided as soon as cases were
+        # ever pruned from a doc - a duplicate id makes one answer mark its
+        # twin answered, ending a round after one card, and lets a recheck
+        # paint the wrong draft onto the wrong card. Same law as the queue:
+        # ids are never positional. idx stays as a readable suffix only.
+        "id": f"case-{uuid.uuid4().hex[:10]}-{idx:02d}", "reply_id": reply_id, "campaign_id": campaign_id,
         "category": category,
         "inbound": {"subject": subject, "body": body, "raw_body": raw_body},
         "original_outreach": original_outreach, "human_answer_history": human_answer_history,
