@@ -17110,12 +17110,10 @@ _INFRA_SEED = {
         "role": "Founder",
         "stage": "mailboxes",
         "domains": [
+            # trynavreo.com / navreohq.com were TRIAL buys (Bjion 2026-08-17) —
+            # bought to prove the 3-registrar chain, parked, never shown here.
             {"name": "usenavreo.com", "registrar": "DNSimple", "bought": "Aug 16",
              "cost": 15.50, "inboxes": 3, "status": "mailboxes_building"},
-            {"name": "trynavreo.com", "registrar": "Porkbun", "bought": "Aug 17",
-             "cost": 11.08, "inboxes": 3, "status": "bought"},
-            {"name": "navreohq.com", "registrar": "Dynadot", "bought": "Aug 17",
-             "cost": 10.88, "inboxes": 3, "status": "bought"},
         ],
     }]
 }
