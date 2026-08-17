@@ -121,8 +121,12 @@
 .il-list { flex: 1; overflow-y: auto; }
 .il-test-note { padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .il-list .empty { padding: 40px 16px; }
-.il-pager { flex-shrink: 0; border-top: 1px solid var(--line); padding: 7px 10px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
-.il-pager button { padding: 4px 9px; font-size: 12px; }
+/* Infinite-scroll load sentinel (replaces the pager 2026-08-17): a slim
+   watch target at the bottom of the loaded rows. Empty (invisible) until it
+   scrolls into view, then it flips to the loading state while the next keyset
+   page arrives. min-height keeps it a real intersection target even empty. */
+.il-sentinel { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 6px; padding: 10px; font-size: 12px; color: var(--ink-3); }
+.il-sentinel:empty { padding: 0; min-height: 4px; }
 .inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 0 26px 40px; }
 
 /* Fixed lead-info sidebar (third column), Smartlead Lead-Overview-style but
@@ -397,7 +401,7 @@
   .send-gate .sg-chip { min-height: 44px; }
 
   /* The retro follow-up picker + feedback input also live above the bar */
-  .qc-feedback { margin-bottom: 4px; }
+  .qc-feedback, .qc-linkbar { margin-bottom: 4px; }
 
   /* Lead-info ("how this was decided") drops below the conversation, calm */
   .inbox-shell.mobile-detail .lead-panel { margin-top: 14px; }
@@ -857,76 +861,8 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
 /* Manual link (owner ask 2026-07-17): highlight words in the draft, press Add
    link, paste a URL. Inserts the same plain <a href> the drafter writes, so a
    hand-added link and a generated one are the same shape on the way out. */
-/* Selection popover (P1, lab 2026-08-17): the link dialog appears AT the
-   highlighted words - the old URL bar above the draft scrolled off-screen and
-   read as "did my click even register?". visibility+opacity (not display) so
-   the fade actually has two frames to animate across, both ways. */
-.linkpop {
-  position: fixed; z-index: 999;
-  visibility: hidden; pointer-events: none;
-  background: var(--card); border: 1px solid var(--line-2); border-radius: 10px;
-  box-shadow: 0 10px 28px rgba(20,17,14,0.18), 0 2px 8px rgba(20,17,14,0.09);
-  padding: 6px; opacity: 0; transform: translateY(4px) scale(0.96);
-  transition: opacity .12s ease, transform .12s ease, box-shadow .12s ease, visibility 0s linear .12s;
-}
-.linkpop.show {
-  visibility: visible; pointer-events: auto;
-  opacity: 1; transform: translateY(0) scale(1);
-  transition: opacity .12s ease, transform .12s ease, box-shadow .12s ease;
-}
-/* Passive "peek": visible at the selection but not yet focused. Full opacity
-   (Bjion 2026-08-17) - the lighter shadow alone marks it as unfocused. */
-.linkpop.peek { box-shadow: 0 6px 18px rgba(20,17,14,0.12), 0 1px 4px rgba(20,17,14,0.05); }
-.linkpop-inner { display: flex; align-items: center; gap: 5px; }
-.linkpop-icon { flex-shrink: 0; color: var(--ink-3); display: flex; padding: 0 2px; }
-.linkpop-input {
-  border: 1px solid var(--line-2); border-radius: 6px; padding: 7px 9px;
-  font: 13px var(--font-sans); width: 240px; outline: none; color: var(--ink);
-  transition: border-color .12s ease, box-shadow .12s ease;
-}
-.linkpop-input:focus { border-color: var(--orange); box-shadow: 0 0 0 3px rgba(255,77,0,0.15); }
-.linkpop-input.shake { animation: linkpop-shake .32s; border-color: var(--red); }
-@keyframes linkpop-shake {
-  10%, 90% { transform: translateX(-1px); }
-  20%, 80% { transform: translateX(3px); }
-  30%, 50%, 70% { transform: translateX(-5px); }
-  40%, 60% { transform: translateX(5px); }
-}
-.linkpop-remove, .linkpop-open {
-  background: none; border: none; color: var(--ink-3); font: 500 12px var(--font-sans);
-  cursor: pointer; padding: 6px 7px; white-space: nowrap; border-radius: 6px;
-}
-.linkpop-remove:hover { color: var(--red); background: var(--red-bg); }
-.linkpop-open:hover { color: var(--orange-700); background: var(--orange-100); }
-.linkpop-x {
-  background: none; border: none; color: var(--ink-3); cursor: pointer;
-  font-size: 13px; padding: 4px 6px; line-height: 1; border-radius: 6px; flex-shrink: 0;
-}
-.linkpop-x:hover { color: var(--ink); background: var(--bg-sunken); }
-.linkpop-hint { font-size: 11px; color: var(--red); padding: 5px 8px 1px; display: none; }
-.linkpop-hint.show { display: block; }
-.linkpop-peek-hint {
-  font-size: 11px; color: var(--ink-3); padding: 5px 8px 1px; display: none; white-space: nowrap;
-}
-.linkpop.peek .linkpop-peek-hint { display: block; }
-.linkpop :focus-visible { outline: none; box-shadow: var(--focus); }
-.caret-hint {
-  position: fixed; z-index: 998; background: var(--ink); color: var(--cream-50);
-  font-size: 12px; font-weight: 500; padding: 7px 12px; border-radius: 7px;
-  opacity: 0; pointer-events: none; transform: translateY(4px);
-  transition: opacity .15s ease, transform .15s ease;
-  max-width: 280px; box-shadow: 0 6px 18px rgba(20,17,14,0.2);
-}
-.caret-hint.show { opacity: 1; transform: translateY(0); }
-.link-flash {
-  position: fixed; z-index: 998;
-  background: var(--green-bg); color: var(--green); border: 1px solid var(--green-line);
-  font-size: 12px; font-weight: 600; padding: 6px 11px; border-radius: 7px;
-  opacity: 0; pointer-events: none; transform: translateY(4px) scale(0.98);
-  transition: opacity .18s ease, transform .18s ease;
-  box-shadow: 0 6px 16px rgba(20,17,14,0.12);
-}
-.link-flash.show { opacity: 1; transform: translateY(0) scale(1); }
+.qc-linkbar { display: flex; gap: 8px; margin-top: 10px; align-items: center; flex-wrap: wrap; }
+.qc-linkbar .qc-link-input { flex: 1; min-width: 200px; }
 /* Can't-comply note from a feedback redraft (warn only, never inject -
    owner ruling 2026-07-16): the drafter explains what it couldn't honour. */
 .qc-note { font-size: 12.5px; line-height: 1.5; color: #6B4A00; background: var(--amber-bg);
@@ -1143,7 +1079,6 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
         </div>
         <div class="il-test-note small muted" id="testOnlyNote" style="display:none"></div>
         <div class="il-list" id="inboxList"><div class="empty"><span class="btnspin"></span> Loading replies…</div></div>
-        <div class="il-pager" id="inboxPager" style="display:none"></div>
         <div class="il-rail"><button type="button" class="il-collapse-btn" id="listExpandBtn" title="Show the conversations list">&#187;</button></div>
         <div class="il-resizer" id="listResizer" title="Drag to resize"></div>
       </div>
@@ -1243,24 +1178,6 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
     </div>
   </div>
 </div>
-
-<!-- Selection popover (P1): the link dialog that appears AT the highlighted words -->
-<div class="linkpop" id="linkPop" aria-hidden="true" role="dialog" aria-label="Add link">
-  <div class="linkpop-inner">
-    <span class="linkpop-icon" aria-hidden="true">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-    </span>
-    <input type="text" class="linkpop-input" id="linkPopInput" placeholder="Paste the URL, e.g. calendly.com/navreo/30min" autocomplete="off">
-    <button class="btn primary sm" id="linkPopApply" type="button">Add link</button>
-    <button class="linkpop-remove" id="linkPopRemove" type="button" style="display:none">Remove link</button>
-    <button class="linkpop-open" id="linkPopOpenBtn" type="button" style="display:none">Open &#8599;</button>
-    <button class="linkpop-x" id="linkPopCloseBtn" type="button" aria-label="Close">&#10005;</button>
-  </div>
-  <div class="linkpop-hint" id="linkPopHint"></div>
-  <div class="linkpop-peek-hint" id="linkPopPeekHint"></div>
-</div>
-<div class="caret-hint" id="caretHint"></div>
-<div class="link-flash" id="linkFlash"></div>
 
 <script src="shell.js"></script>
 <script>
@@ -1417,10 +1334,19 @@ const EDITED_DRAFTS = {};
 /* rowId -> the drafter's can't-comply note from the last feedback redraft
    (transient by design - the backend never persists it; schema-freeze) */
 const REDRAFT_NOTES = {};
-/* left-list pagination: 25 rows/page. Reset to page 1 whenever the filter
-   pill, search query, or test-toggle changes the underlying row set. */
-let inboxPage = 1;
-const INBOX_PAGE_SIZE = 25;
+/* Left-list infinite scroll (replaces the 25-per-page pager, owner ask
+   2026-08-17). The list mounts a growing window of visibleInboxRows(); when
+   the window nears the end of what's loaded AND the server still has older
+   rows, it pulls the next keyset page via ?before=<oldest created_at>.
+   OLDER_ROWS holds those cursor-paged rows so the 60s reload (which rebuilds
+   QUEUE_ROWS from the newest-200 head) doesn't drop them. */
+const INBOX_RENDER_STEP = 30;   // rows added to the DOM per scroll step
+let inboxRenderCount = INBOX_RENDER_STEP;
+let OLDER_ROWS = [];            // server cursor-paged rows for the current pill
+let _queueHasMore = true;       // the server may hold rows older than we have
+let _loadingMore = false;       // single-flight guard for loadMoreQueue
+let _forceInboxTop = false;     // one-shot: the next list render lands at the top
+let _inboxIO = null;            // IntersectionObserver watching the scroll sentinel
 
 /* Each pill maps to a server-side count key on KPIS.counts (see _compute_kpis),
    so every chip shows its live item total. "Needs review" = they replied last
@@ -1950,6 +1876,18 @@ async function _loadQueueInner(prefetch) {
   _queueLoading = false;
   if (res.ok) {
     QUEUE_ROWS = reconcileQueuePayload(res.data.rows || []);
+    // Infinite scroll (2026-08-17): this is the newest-200 HEAD reload. Fold
+    // the cursor-paged OLDER_ROWS back in (deduped) so a reviewer who scrolled
+    // deep doesn't lose those rows on the 60s refresh; re-run reconcile over
+    // them too so a dismissed/answered older row is dropped just like a head
+    // row. If the head itself came back short of the cap there is no backlog
+    // past it, so drop the older set and close paging.
+    {
+      const freshCount = (res.data.rows || []).length;
+      if (freshCount < 200) { OLDER_ROWS = []; _queueHasMore = false; }
+      if (OLDER_ROWS.length) OLDER_ROWS = reconcileQueuePayload(OLDER_ROWS);
+      applyOlderRows();
+    }
     // Fresh counters, with the still-live local deltas applied — and every
     // delta the server has already absorbed RETIRED (see bumpCounts).
     KPIS = res.data.kpis || {};
@@ -2601,7 +2539,7 @@ function renderQueueFilters() {
   if (uncatChipEl) uncatChipEl.addEventListener("click", () => {
     UNCAT_ONLY = !UNCAT_ONLY;
     if (UNCAT_ONLY) currentStatus = "needs_review";
-    inboxPage = 1;
+    resetInboxWindowHard();
     try {
       history.replaceState(null, "", UNCAT_ONLY ? "#uncategorised" : location.pathname + location.search);
     } catch (e) { /* history API blocked - the lens still works */ }
@@ -2615,7 +2553,7 @@ function renderQueueFilters() {
   });
   wrap.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     currentStatus = b.getAttribute("data-status");
-    inboxPage = 1;
+    resetInboxWindowHard();
     // Instant pill switch: filter the hydrated corpus client-side (mirrors
     // the server's direction reclass) - zero network. Fall back to a server
     // fetch while hydration is still in flight, or if the corpus is running
@@ -2656,7 +2594,7 @@ function renderClientFilter() {
   sel.value = currentClient;
   sel.onchange = () => {
     currentClient = sel.value;
-    inboxPage = 1;
+    resetInboxView();
     renderQueue();
   };
 }
@@ -2697,16 +2635,126 @@ function visibleInboxRows() {
   return rows;
 }
 
-/* 25-per-page slice of visibleInboxRows() for the left list's DOM. Clamps
-   inboxPage back into range whenever the underlying set shrinks (a dismiss,
-   a filter switch, a narrower search). */
+/* The rendered window: the first inboxRenderCount rows of visibleInboxRows()
+   for the left list's DOM. Infinite scroll grows inboxRenderCount; the reset
+   helpers below shrink it back to one step on a context switch. hasMoreLocal
+   says "more rows are already loaded, just not mounted yet". */
 function pagedInboxRows() {
   const rows = visibleInboxRows();
-  const totalPages = Math.max(1, Math.ceil(rows.length / INBOX_PAGE_SIZE));
-  if (inboxPage > totalPages) inboxPage = totalPages;
-  if (inboxPage < 1) inboxPage = 1;
-  const start = (inboxPage - 1) * INBOX_PAGE_SIZE;
-  return { rows: rows.slice(start, start + INBOX_PAGE_SIZE), total: rows.length, totalPages };
+  if (inboxRenderCount < INBOX_RENDER_STEP) inboxRenderCount = INBOX_RENDER_STEP;
+  return {
+    rows: rows.slice(0, inboxRenderCount),
+    total: rows.length,
+    hasMoreLocal: inboxRenderCount < rows.length,
+  };
+}
+
+/* Reset back to the top of the CURRENT loaded set - render window only,
+   keeping the cursor-paged OLDER_ROWS (same pill, just re-filtered): used on
+   a client-filter or search change. */
+function resetInboxView() {
+  inboxRenderCount = INBOX_RENDER_STEP;
+  _forceInboxTop = true;
+}
+
+/* Hard reset - a pill/lens switch changes which corpus we're in, so drop the
+   cursor-paged older rows and re-open paging from the newest window. */
+function resetInboxWindowHard() {
+  inboxRenderCount = INBOX_RENDER_STEP;
+  OLDER_ROWS = [];
+  _queueHasMore = true;
+  _loadingMore = false;
+  _forceInboxTop = true;
+}
+
+/* Fold the cursor-paged OLDER_ROWS into QUEUE_ROWS (deduped by id) and keep
+   the whole set newest-first. Called after every head reload (the reload
+   rebuilds QUEUE_ROWS from the fresh newest-200 and would otherwise drop the
+   older rows the reviewer scrolled in) and after each older page arrives. */
+function applyOlderRows() {
+  if (!OLDER_ROWS.length) return;
+  const seen = new Set(QUEUE_ROWS.map((r) => String(r.id)));
+  for (const r of OLDER_ROWS) {
+    if (r && !seen.has(String(r.id))) { QUEUE_ROWS.push(r); seen.add(String(r.id)); }
+  }
+  QUEUE_ROWS.sort((a, b) =>
+    String((b || {}).created_at || "").localeCompare(String((a || {}).created_at || "")));
+}
+
+/* The oldest created_at we currently hold for this pill = the keyset cursor
+   for the next older page. */
+function oldestLoadedCreatedAt() {
+  let min = null;
+  for (const r of QUEUE_ROWS) {
+    const c = r && r.created_at;
+    if (!c) continue;
+    if (min === null || c < min) min = c;
+  }
+  return min;
+}
+
+/* Pull the next keyset page (rows older than our cursor) from the server and
+   fold it in. Single-flighted; terminates when the server reports no more
+   rows, or when a page brings nothing new (a boundary tie we can't advance
+   past). Not run under a SEARCH - that path already escalates to Smartlead on
+   its own and the keyset endpoint is status-scoped, not search-scoped. */
+async function loadMoreQueue() {
+  if (_loadingMore || !_queueHasMore) return;
+  if (inboxSearchQuery.trim()) return;
+  const cursor = oldestLoadedCreatedAt();
+  if (!cursor) { _queueHasMore = false; return; }
+  _loadingMore = true;
+  renderInboxList();   // flip the sentinel into its loading state
+  const params = new URLSearchParams();
+  if (currentStatus) params.set("status", currentStatus);
+  params.set("limit", "200");
+  params.set("before", cursor);
+  const res = await fetchJson(`/api/setter/queue?${params.toString()}`,
+                              { _timeoutMs: 25000, _retries: 2 });
+  _loadingMore = false;
+  if (!res.ok) { renderInboxList(); return; }   // keep hasMore; a later scroll retries
+  const batch = reconcileQueuePayload(res.data.rows || []);
+  _queueHasMore = !!res.data.has_more;
+  const known = new Set(OLDER_ROWS.map((r) => String(r.id)));
+  const fresh = batch.filter((r) => r && !known.has(String(r.id))
+                                    && !QUEUE_ROWS.some((q) => String(q.id) === String(r.id)));
+  if (!fresh.length) {
+    // A full window that added nothing new = the cursor can't advance
+    // (boundary rows share the cursor timestamp). Stop rather than re-fetch
+    // the same page forever.
+    _queueHasMore = false;
+    renderInboxList();
+    return;
+  }
+  OLDER_ROWS = OLDER_ROWS.concat(fresh);
+  applyOlderRows();
+  inboxRenderCount += INBOX_RENDER_STEP;   // reveal what we just pulled
+  renderClientFilter();                    // older rows may add clients to the filter
+  renderInboxList();
+}
+
+/* The scroll sentinel's IntersectionObserver, created once against the
+   scrollable #inboxList. Re-bound to the fresh sentinel node after each
+   render (innerHTML replacement discards the old one). */
+function ensureInboxObserver() {
+  if (!_inboxIO) {
+    _inboxIO = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) onInboxSentinel();
+    }, { root: document.getElementById("inboxList") || null, rootMargin: "400px 0px" });
+  }
+  return _inboxIO;
+}
+
+/* Sentinel came into view: mount more already-loaded rows first (free), then
+   - once the loaded set is exhausted - ask the server for the next page. */
+function onInboxSentinel() {
+  const total = visibleInboxRows().length;
+  if (inboxRenderCount < total) {
+    inboxRenderCount = Math.min(total, inboxRenderCount + INBOX_RENDER_STEP);
+    renderInboxList();
+    return;
+  }
+  loadMoreQueue();
 }
 
 function renderQueue() {
@@ -2873,6 +2921,12 @@ function renderSmartleadDetail(h, thread) {
 
 function renderInboxList() {
   const el = document.getElementById("inboxList");
+  // Preserve the reviewer's scroll across the re-render: the 60s reload and
+  // every action repaint this list wholesale (innerHTML), which resets
+  // scrollTop to 0 - fine for a 25-row page, but with an infinite-scrolled
+  // list it would snap the reviewer back to the top mid-read. A context
+  // switch (pill/search/filter) asks for the top explicitly via _forceInboxTop.
+  const keepScroll = el ? el.scrollTop : 0;
   const paged = pagedInboxRows();
   const testNoteEl = document.getElementById("testOnlyNote");
   if (testNoteEl) {
@@ -2889,7 +2943,17 @@ function renderInboxList() {
       : `<div class="empty">No replies here. New ones will show up after the next check.</div>`)
       + smartleadSectionHtml();
   } else {
-    el.innerHTML = paged.rows.map(inboxItemHtml).join("") + smartleadSectionHtml();
+    // The sentinel is mounted whenever more rows exist - more already loaded
+    // (hasMoreLocal) or more fetchable from the server (_queueHasMore, but not
+    // under a search, which pages differently). Empty until it scrolls near,
+    // then it shows the loading state while the next page arrives.
+    const moreServer = !inboxSearchQuery.trim() && _queueHasMore;
+    const sentinel = (paged.hasMoreLocal || moreServer)
+      ? `<div class="il-sentinel" id="inboxSentinel">${
+          _loadingMore ? `<span class="btnspin"></span> Loading older replies…` : ``
+        }</div>`
+      : ``;
+    el.innerHTML = paged.rows.map(inboxItemHtml).join("") + sentinel + smartleadSectionHtml();
   }
   // One wiring pass for BOTH kinds of row: local queue rows open via
   // selectRow, Smartlead-section hits via openSmartleadHit (which routes
@@ -2898,23 +2962,12 @@ function renderInboxList() {
     const slk = item.getAttribute("data-slkey");
     item.addEventListener("click", () => slk ? openSmartleadHit(slk) : selectRow(item.getAttribute("data-id")));
   });
-  renderInboxPager(paged.total, paged.totalPages);
-}
-
-function renderInboxPager(total, totalPages) {
-  const el = document.getElementById("inboxPager");
-  if (!el) return;
-  if (total <= INBOX_PAGE_SIZE) { el.style.display = "none"; el.innerHTML = ""; return; }
-  el.style.display = "flex";
-  el.innerHTML = `
-    <button type="button" class="btn" id="inboxPrevBtn" ${inboxPage <= 1 ? "disabled" : ""}>&lsaquo;</button>
-    <span>Page ${inboxPage} of ${totalPages}</span>
-    <button type="button" class="btn" id="inboxNextBtn" ${inboxPage >= totalPages ? "disabled" : ""}>&rsaquo;</button>
-  `;
-  const prevBtn = document.getElementById("inboxPrevBtn");
-  const nextBtn = document.getElementById("inboxNextBtn");
-  if (prevBtn) prevBtn.addEventListener("click", () => { inboxPage = Math.max(1, inboxPage - 1); renderInboxList(); });
-  if (nextBtn) nextBtn.addEventListener("click", () => { inboxPage = Math.min(totalPages, inboxPage + 1); renderInboxList(); });
+  if (el) el.scrollTop = _forceInboxTop ? 0 : keepScroll;
+  _forceInboxTop = false;
+  // (Re)bind the infinite-scroll observer to the freshly-rendered sentinel.
+  if (_inboxIO) _inboxIO.disconnect();
+  const sentinelEl = document.getElementById("inboxSentinel");
+  if (sentinelEl) ensureInboxObserver().observe(sentinelEl);
 }
 
 /* Hold-reason keyword map: each keyword is checked in order against the
@@ -3146,6 +3199,17 @@ function selectRow(id) {
   // empty (found live by a tester).
   const row = QUEUE_ROWS.find((r) => String(r.id) === String(id))
            || ALL_ROWS.find((r) => String(r.id) === String(id));
+  // Sent-tab loader parity (owner report 2026-08-17): rows where WE sent last
+  // open from a stored snapshot that may predate the lead's newest email. The
+  // tray path already shows "Loading the latest emails…" until refreshThreadFor
+  // confirms freshness, but Sent/Auto-sent opens hydrated silently — new
+  // messages popped in with no warning. Same flag, same lifecycle. Only when a
+  // refresh will actually run (refreshThreadFor's 10s throttle would otherwise
+  // leave the loader with nothing to clear it); test rows never hydrate.
+  if (row && !row.is_test && (row.status === "sent" || row.status === "auto_sent")
+      && Date.now() - (THREAD_FETCHED_AT.get(String(row.id)) || 0) >= 10000) {
+    row._thread_pending = true;
+  }
   // A different row means a different pane: re-baseline the fingerprint so
   // refreshOpenDetail compares like with like on the next queue reload.
   _lastDetailSignature = detailSignature(row);
@@ -3441,6 +3505,7 @@ function renderDetail(row) {
       ${sentLineHtml}
       ${repliedBackHtml}
       ${noSlotsHint}
+      ${composerLinkHtml(row)}
       ${composerHtml(row)}
       ${composerActionsHtml(row)}
       ${composerFeedbackHtml(row)}
@@ -4801,6 +4866,14 @@ function linkButtonHtml(row) {
   return `<button class="btn sm qc-link-btn" data-id="${esc(row.id)}" type="button" disabled
     title="Highlight the words in your reply you want to link, then press this (or ${linkShortcutLabel()}).">Add link</button>`;
 }
+function composerLinkHtml(row) {
+  if (!needsComposerActions(row)) return "";
+  return `<div class="qc-linkbar" id="lk-${esc(row.id)}" style="display:none">
+    <input type="text" class="qc-link-input" data-id="${esc(row.id)}" placeholder="Paste the URL, e.g. calendly.com/navreo/30min">
+    <button class="btn primary qc-link-apply" data-id="${esc(row.id)}" type="button">Add link</button>
+    <button class="btn qc-link-cancel" data-id="${esc(row.id)}" type="button">Cancel</button>
+  </div>`;
+}
 function composerHtml(row) {
   if (needsComposerActions(row)) {
     return `<div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>
@@ -4926,22 +4999,21 @@ function wireDetailEvents(root, row) {
     // selection, and the click event arrives too late to read it.
     btn.addEventListener("mousedown", (e) => {
       e.preventDefault();
-      const held = currentDraftSelection();
-      if (held) PENDING_LINK = pendingFromRange(held);
+      PENDING_LINK = currentDraftSelection() || PENDING_LINK;
     });
-    btn.addEventListener("click", () => {
-      // Never a silent no-op: a stale/no selection gets a visible reason.
-      if (!PENDING_LINK) { showCaretHint("Highlight the words you want to link first"); return; }
-      showLinkPopover(true);
-    });
+    btn.addEventListener("click", () => openLinkBar(btn.getAttribute("data-id")));
   });
+  root.querySelectorAll(".qc-link-apply").forEach((btn) => btn.addEventListener("click", () => applyDraftLink(btn.getAttribute("data-id"))));
+  root.querySelectorAll(".qc-link-cancel").forEach((btn) => btn.addEventListener("click", () => closeLinkBar(btn.getAttribute("data-id"))));
+  root.querySelectorAll(".qc-link-input").forEach((inp) => inp.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { closeLinkBar(inp.getAttribute("data-id")); return; }
+    if (e.key !== "Enter") return;
+    e.preventDefault();
+    applyDraftLink(inp.getAttribute("data-id"));
+  }));
   LAST_DRAFT_SEL = null;
   PENDING_LINK = null;
   syncLinkButtons();
-  // This re-render put fresh DOM under any open popover: a passive peek is now
-  // anchored to dead nodes, so close it. A FOCUSED popover is left alone - the
-  // background refresh guards skip re-rendering mid-typing anyway.
-  if (typeof _linkPopOpen !== "undefined" && _linkPopOpen && !_linkPopFocused) dismissLinkPopover();
 
   const draftEl = root.querySelector(".qc-draft[contenteditable]");
   if (draftEl) {
@@ -4949,8 +5021,20 @@ function wireDetailEvents(root, row) {
       EDITED_DRAFTS[row.id] = draftEl.innerHTML;
       queueDraftSave(row.id);
     });
-    // Cmd+K / Ctrl+K is handled document-wide by the link popover engine
-    // (it also covers follow-up drafts, which this per-render wiring never did).
+    // Cmd+K / Ctrl+K - what every other editor binds to "make this a link".
+    // Read live here rather than from PENDING_LINK: a keypress doesn't disturb
+    // the highlight, so the selection under the cursor is still the real one.
+    draftEl.addEventListener("keydown", (e) => {
+      if (!(e.metaKey || e.ctrlKey) || (e.key || "").toLowerCase() !== "k") return;
+      e.preventDefault();
+      const held = currentDraftSelection();
+      if (!held) {
+        showDetailError(`Highlight the words you want to link, then press ${linkShortcutLabel()} again.`);
+        return;
+      }
+      PENDING_LINK = held;
+      openLinkBar(held.id);
+    });
   }
 }
 
@@ -4984,30 +5068,15 @@ function syncLinkButtons() {
 }
 document.addEventListener("selectionchange", () => {
   const sel = document.getSelection();
-  const r = sel && sel.rangeCount ? sel.getRangeAt(0) : null;
-  const draftEl = r && closestDraft(r.commonAncestorContainer);
-  if (!draftEl) {
-    // Selection left the drafts (the popover's URL box taking focus shows up
-    // here). A FOCUSED popover owns its frozen target - PENDING_LINK - so
-    // nothing here can hurt it; an unfocused peek is stale and goes.
-    LAST_DRAFT_SEL = null;
-    syncLinkButtons();
-    if (_linkPopOpen && !_linkPopFocused) dismissLinkPopover();
-    return;
-  }
+  if (!sel || !sel.rangeCount) return;
+  const draftEl = closestDraft(sel.getRangeAt(0).commonAncestorContainer);
+  // Selection changes outside a draft (the URL box taking focus, for one) must
+  // leave the saved highlight alone - that highlight is the whole point.
+  if (!draftEl) return;
   LAST_DRAFT_SEL = sel.isCollapsed
     ? null
-    : { id: draftEl.getAttribute("data-id"), range: r.cloneRange() };
+    : { id: draftEl.getAttribute("data-id"), range: sel.getRangeAt(0).cloneRange() };
   syncLinkButtons();
-  if (_linkPopOpen) {
-    if (_linkPopFocused) return;
-    // Typed over it / re-highlighted / moved the caret - the peek is stale.
-    // Dismiss AND fall through to the debounce, so a shift+arrow nudge of the
-    // selection re-settles the peek instead of silently vanishing it.
-    dismissLinkPopover();
-  }
-  clearTimeout(linkPopDebounce);
-  if (LAST_DRAFT_SEL) linkPopDebounce = setTimeout(linkPopSelectionSettled, 150);
 });
 /* Only http(s) and mailto ever reach the lead's inbox. A bare domain gets
    https://, a bare address gets mailto:, and script-ish schemes get nothing. */
@@ -5019,367 +5088,66 @@ function normaliseUrl(raw) {
   if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return "";
   return `https://${v}`;
 }
-/* ---- Selection popover engine (P1, lab 2026-08-17) ----
-   Passive "peek" when a highlight settles (150ms) - visible at the selection,
-   never steals focus, typing flows on and dismisses it. Deliberate gestures
-   focus it: clicking into it, the Add link button, cmd/ctrl+K, or clicking an
-   existing link (edit mode: Save / Remove / Open). PENDING_LINK freezes the
-   target the moment the popover is summoned:
-     { mode: "create", id, range } | { mode: "edit", id, anchorEl }. */
-let linkPopDebounce = null;
-let _linkPopOpen = false;
-let _linkPopFocused = false;
-let _linkPopForId = null;
-let savedDraftUrl = null; // typed-but-unapplied URL, keyed to its selection text
-
-const linkPop = document.getElementById("linkPop");
-const linkPopInput = document.getElementById("linkPopInput");
-const linkPopApply = document.getElementById("linkPopApply");
-const linkPopRemove = document.getElementById("linkPopRemove");
-const linkPopOpenBtn = document.getElementById("linkPopOpenBtn");
-const linkPopCloseBtn = document.getElementById("linkPopCloseBtn");
-const linkPopHint = document.getElementById("linkPopHint");
-const linkPopPeekHint = document.getElementById("linkPopPeekHint");
-const caretHintEl = document.getElementById("caretHint");
-const linkFlashEl = document.getElementById("linkFlash");
-
-function anchorAt(node) {
-  const el = node && node.nodeType === 1 ? node : (node && node.parentElement);
-  return el ? el.closest(".qc-draft[contenteditable] a") : null;
+function existingHrefIn(range) {
+  const node = range.commonAncestorContainer;
+  const el = node.nodeType === 1 ? node : node.parentElement;
+  const a = el && el.closest("a[href]");
+  return a ? a.getAttribute("href") : "";
 }
-function pendingFromRange(held) {
-  const startA = anchorAt(held.range.startContainer);
-  const endA = anchorAt(held.range.endContainer);
-  if (startA && startA === endA) return { mode: "edit", id: held.id, anchorEl: startA };
-  return { mode: "create", id: held.id, range: held.range };
+function closeLinkBar(id) {
+  const bar = document.getElementById(`lk-${id}`);
+  if (bar) {
+    bar.style.display = "none";
+    const inp = bar.querySelector(".qc-link-input");
+    if (inp) inp.value = "";
+  }
+  PENDING_LINK = null;
 }
-function pendingKey() {
-  if (!PENDING_LINK) return "";
-  if (PENDING_LINK.mode === "edit" && PENDING_LINK.anchorEl) return "edit:" + PENDING_LINK.anchorEl.textContent;
-  if (PENDING_LINK.range) return "create:" + PENDING_LINK.range.toString();
-  return "";
+function openLinkBar(id) {
+  // mousedown froze the highlight into PENDING_LINK; a keyboard press has no
+  // mousedown, so fall back to the tracked one.
+  const held = [PENDING_LINK, LAST_DRAFT_SEL].find((s) => s && String(s.id) === String(id));
+  if (!held) return;
+  PENDING_LINK = held;
+  const bar = document.getElementById(`lk-${id}`);
+  if (!bar) return;
+  bar.style.display = "flex";
+  const inp = bar.querySelector(".qc-link-input");
+  if (!inp) return;
+  // Highlighting text that is already linked prefills its URL, so the same
+  // control repoints a wrong link instead of forcing a delete-and-retype.
+  inp.value = existingHrefIn(PENDING_LINK.range) || "";
+  inp.focus();
+  inp.select();
 }
-function draftElForPending() {
-  if (!PENDING_LINK) return null;
-  if (PENDING_LINK.mode === "edit" && PENDING_LINK.anchorEl) return closestDraft(PENDING_LINK.anchorEl);
-  if (PENDING_LINK.range) return closestDraft(PENDING_LINK.range.commonAncestorContainer);
-  return null;
-}
-/* EDITED_DRAFTS/queueDraftSave persist the MAIN draft only - a follow-up
-   draft shares the row id and saving its body would clobber the real draft. */
-function persistDraftEl(draftEl) {
-  if (!draftEl || draftEl.classList.contains("qc-followup-draft")) return;
-  const id = draftEl.getAttribute("data-id");
+function applyDraftLink(id) {
+  const draftEl = document.querySelector(`.qc-draft[contenteditable][data-id="${CSS.escape(String(id))}"]`);
+  if (!draftEl) return;
+  const inp = document.querySelector(`.qc-link-input[data-id="${CSS.escape(String(id))}"]`);
+  const url = normaliseUrl(inp ? inp.value : "");
+  if (!url) {
+    showDetailError("That doesn't look like a web address. Paste a link like https://calendly.com/navreo/30min");
+    return;
+  }
+  const live = PENDING_LINK && String(PENDING_LINK.id) === String(id) &&
+               !PENDING_LINK.range.collapsed &&
+               draftEl.contains(PENDING_LINK.range.commonAncestorContainer);
+  if (!live) {
+    showDetailError("Highlight the words you want to link, then press Add link again.");
+    closeLinkBar(id);
+    return;
+  }
+  const sel = document.getSelection();
+  draftEl.focus();
+  sel.removeAllRanges();
+  sel.addRange(PENDING_LINK.range);
+  document.execCommand("createLink", false, url);
   EDITED_DRAFTS[id] = draftEl.innerHTML;
   queueDraftSave(id);
-}
-
-function linkPopSelectionSettled() {
-  const held = currentDraftSelection();
-  if (!held) return;
-  PENDING_LINK = pendingFromRange(held);
-  showLinkPopover(false); // passive peek - never steals focus
-}
-document.addEventListener("mouseup", (e) => {
-  if (_linkPopOpen) return;
-  if (!closestDraft(e.target)) return;
-  clearTimeout(linkPopDebounce);
-  linkPopDebounce = setTimeout(linkPopSelectionSettled, 150);
-});
-
-/* Click an existing link in any draft -> edit mode. mousedown (bubble phase,
-   after the outside-click dismisser has run) freezes the anchor; click opens
-   focused. preventDefault keeps contenteditable from moving the caret oddly. */
-document.addEventListener("mousedown", (e) => {
-  const a = anchorAt(e.target);
-  if (!a) return;
-  e.preventDefault();
-  const dEl = closestDraft(a);
-  PENDING_LINK = { mode: "edit", id: dEl ? dEl.getAttribute("data-id") : null, anchorEl: a };
-});
-document.addEventListener("click", (e) => {
-  const a = anchorAt(e.target);
-  if (!a) return;
-  e.preventDefault();
-  if (PENDING_LINK && PENDING_LINK.mode === "edit") showLinkPopover(true);
-});
-
-/* cmd/ctrl+K from any draft (follow-up drafts included). */
-document.addEventListener("keydown", (e) => {
-  if (!(e.metaKey || e.ctrlKey) || (e.key || "").toLowerCase() !== "k") return;
-  const active = document.activeElement;
-  const inDraft = active && active.closest && active.closest(".qc-draft[contenteditable]");
-  if (!inDraft && active !== linkPopInput) return;
-  e.preventDefault();
-  const held = currentDraftSelection();
-  if (!held) { showCaretHint(); return; }
-  PENDING_LINK = pendingFromRange(held);
-  showLinkPopover(true);
-});
-
-function showLinkPopover(focusNow) {
-  if (!PENDING_LINK) return;
-  _linkPopOpen = true;
-  _linkPopFocused = false;
-  _linkPopForId = PENDING_LINK.id;
-  clearTimeout(linkPopDebounce);
-  caretHintEl.classList.remove("show");
-  linkPopInput.classList.remove("shake");
-  linkPopHint.classList.remove("show");
-  linkPop.classList.remove("peek");
-
-  if (PENDING_LINK.mode === "edit") {
-    linkPopInput.value = PENDING_LINK.anchorEl.getAttribute("href") || "";
-    linkPopApply.textContent = "Save";
-    linkPopRemove.style.display = "inline-flex";
-    linkPopOpenBtn.style.display = "inline-flex";
-  } else {
-    // A URL typed last time but never applied comes back - but ONLY for the
-    // same selection text; different words start clean (wrong-target guard).
-    linkPopInput.value = (savedDraftUrl && savedDraftUrl.key === pendingKey()) ? savedDraftUrl.url : "";
-    linkPopApply.textContent = "Add link";
-    linkPopRemove.style.display = "none";
-    linkPopOpenBtn.style.display = "none";
-  }
-
-  // Peek adds a hint row that changes the popover height - the class must be
-  // ON before measuring, or an above-anchored popover grows into the highlight.
-  if (!focusNow) {
-    linkPop.classList.add("peek");
-    linkPopPeekHint.textContent = (PENDING_LINK.mode === "edit")
-      ? `${linkShortcutLabel()} or click to edit link`
-      : `${linkShortcutLabel()} or click to add link`;
-  }
-
-  positionLinkPopover();
-  if (!_linkPopOpen) return; // bailed - target gone or off-screen
-
-  linkPop.classList.add("show");
-  linkPop.setAttribute("aria-hidden", "false");
-
-  if (focusNow) {
-    // Focus SYNCHRONOUSLY: the opening click queues a selectionchange, and if
-    // focus is still pending when it lands, the dismiss-if-unfocused guard
-    // tears the popover down before the user ever sees it (lab finding).
-    _linkPopFocused = true;
-    linkPopInput.focus(); linkPopInput.select();
-  }
-}
-
-function linkTargetRect() {
-  if (!PENDING_LINK) return null;
-  if (PENDING_LINK.mode === "edit" && PENDING_LINK.anchorEl && PENDING_LINK.anchorEl.isConnected) {
-    return PENDING_LINK.anchorEl.getBoundingClientRect();
-  }
-  if (PENDING_LINK.range) return PENDING_LINK.range.getBoundingClientRect();
-  return null;
-}
-
-function positionLinkPopover() {
-  const rect = linkTargetRect();
-  if (!rect || (rect.width === 0 && rect.height === 0)) { hideLinkPopover(false); return; }
-  if (rect.bottom < -4 || rect.top > window.innerHeight + 4) {
-    // Scrolled fully out of view. A trackpad flick mid-typing must not eat
-    // the typed URL (panel finding) - stash it before dismissing.
-    stashTypedUrl();
-    hideLinkPopover(false);
-    PENDING_LINK = null;
-    return;
-  }
-  const popRect = linkPop.getBoundingClientRect();
-  const popW = popRect.width || 320;
-  const popH = popRect.height || 44;
-  const margin = 10;
-  let top = rect.top - popH - margin;
-  if (top < 8) top = Math.min(rect.bottom + margin, window.innerHeight - popH - 8);
-  let left = rect.left + (rect.width / 2) - (popW / 2);
-  left = Math.max(8, Math.min(left, window.innerWidth - popW - 8));
-  linkPop.style.top = top + "px";
-  linkPop.style.left = left + "px";
-}
-
-function stashTypedUrl() {
-  if (linkPopInput.value.trim() && PENDING_LINK) {
-    savedDraftUrl = { url: linkPopInput.value, key: pendingKey() };
-  }
-}
-
-function hideLinkPopover(returnFocus) {
-  _linkPopOpen = false;
-  _linkPopFocused = false;
-  linkPop.classList.remove("show", "peek");
-  linkPop.setAttribute("aria-hidden", "true");
-  linkPopInput.classList.remove("shake");
-  linkPopHint.classList.remove("show");
-  if (returnFocus && _linkPopForId != null) {
-    const dEl = document.querySelector(`.qc-draft[contenteditable][data-id="${CSS.escape(String(_linkPopForId))}"]`);
-    if (dEl) dEl.focus();
-  }
-}
-function dismissLinkPopover() { PENDING_LINK = null; hideLinkPopover(false); }
-
-/* Focus lands inside the popover only via a deliberate gesture - drop the
-   peek treatment for good, and re-anchor: hiding the peek hint row changes
-   the popover height (panel finding: don't let the box hop unanchored). */
-linkPop.addEventListener("focusin", () => {
-  if (!_linkPopOpen) return;
-  _linkPopFocused = true;
-  linkPop.classList.remove("peek");
-  positionLinkPopover();
-});
-
-/* Follow the selection on scroll; dismiss cleanly if it leaves the viewport.
-   Capture phase catches the inner panes scrolling, not just the window. */
-window.addEventListener("scroll", () => {
-  if (_linkPopOpen) requestAnimationFrame(positionLinkPopover);
-}, true);
-window.addEventListener("resize", () => { if (_linkPopOpen) positionLinkPopover(); });
-
-/* Outside click dismisses - but must not eat a typed URL: it is stashed,
-   keyed to the selection TEXT it was meant for, and restored only when the
-   popover reopens on that same text. */
-document.addEventListener("mousedown", (e) => {
-  if (!_linkPopOpen) return;
-  if (linkPop.contains(e.target)) return;
-  if (e.target.closest && e.target.closest(".qc-link-btn")) return; // its own handler manages the hop
-  stashTypedUrl();
-  hideLinkPopover(false);
-  PENDING_LINK = null;
-}, true);
-
-/* Keyboard inside the popover. */
-linkPop.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    e.preventDefault();
-    PENDING_LINK = null;
-    hideLinkPopover(true);
-    return;
-  }
-  if (e.key === "Enter" && document.activeElement === linkPopInput) {
-    e.preventDefault();
-    applyLinkPopover();
-    return;
-  }
-  if (e.key === "Tab") {
-    const focusables = [linkPopInput, linkPopApply, linkPopRemove, linkPopOpenBtn, linkPopCloseBtn]
-      .filter((el) => el.offsetParent !== null);
-    const first = focusables[0], last = focusables[focusables.length - 1];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  }
-});
-
-linkPopApply.addEventListener("click", applyLinkPopover);
-linkPopCloseBtn.addEventListener("click", () => { savedDraftUrl = null; PENDING_LINK = null; hideLinkPopover(true); });
-linkPopRemove.addEventListener("click", () => {
-  if (!PENDING_LINK || PENDING_LINK.mode !== "edit" || !PENDING_LINK.anchorEl) { hideLinkPopover(true); return; }
-  const a = PENDING_LINK.anchorEl;
-  const flashRect = a.getBoundingClientRect(); // capture before it detaches
-  const draftEl = closestDraft(a);
-  const parent = a.parentNode;
-  if (parent) {
-    while (a.firstChild) parent.insertBefore(a.firstChild, a);
-    parent.removeChild(a);
-    parent.normalize();
-  }
-  persistDraftEl(draftEl);
-  showLinkFlash(flashRect, "Link removed");
-  PENDING_LINK = null;
-  hideLinkPopover(true);
-});
-linkPopOpenBtn.addEventListener("click", () => {
-  if (PENDING_LINK && PENDING_LINK.anchorEl) {
-    window.open(PENDING_LINK.anchorEl.getAttribute("href"), "_blank", "noopener");
-  }
-});
-
-function applyLinkPopover() {
-  const raw = linkPopInput.value.trim();
-  if (!raw) { shakeLinkInput("Enter a URL first."); return; }
-  const url = normaliseUrl(raw);
-  if (!url) { shakeLinkInput("That doesn't look like a web address. Try https://calendly.com/navreo/30min"); return; }
-  if (!PENDING_LINK) { hideLinkPopover(false); return; }
-
-  let flashRect = null;
-  let flashMsg = "Link added ✓";
-  let draftEl = null;
-
-  if (PENDING_LINK.mode === "edit" && PENDING_LINK.anchorEl && PENDING_LINK.anchorEl.isConnected) {
-    draftEl = closestDraft(PENDING_LINK.anchorEl);
-    PENDING_LINK.anchorEl.setAttribute("href", url);
-    flashRect = PENDING_LINK.anchorEl.getBoundingClientRect();
-    flashMsg = "Saved ✓"; // editing an existing link, not creating one
-  } else if (PENDING_LINK.range) {
-    draftEl = closestDraft(PENDING_LINK.range.commonAncestorContainer);
-    const live = draftEl && !PENDING_LINK.range.collapsed &&
-                 draftEl.contains(PENDING_LINK.range.commonAncestorContainer);
-    if (!live) {
-      showCaretHint("Highlight the words you want to link, then try again");
-      hideLinkPopover(false);
-      PENDING_LINK = null;
-      return;
-    }
-    const sel = document.getSelection();
-    draftEl.focus();
-    // Restore the frozen Range right before the DOM surgery that needs it -
-    // it has been dead (focus in the URL box) the whole time the popover was open.
-    sel.removeAllRanges();
-    sel.addRange(PENDING_LINK.range);
-    document.execCommand("createLink", false, url);
-    const r2 = sel.rangeCount ? sel.getRangeAt(0) : null;
-    flashRect = r2 ? r2.getBoundingClientRect() : draftEl.getBoundingClientRect();
-    sel.collapseToEnd(); // caret lands after the new link, typing continues
-  }
-
-  persistDraftEl(draftEl);
-  showLinkFlash(flashRect, flashMsg);
-  savedDraftUrl = null;
-  PENDING_LINK = null;
-  hideLinkPopover(false);
-  // A successful link clears any earlier "highlight the words…" complaint.
+  closeLinkBar(id);
+  // A successful link clears any earlier "highlight the words…" complaint —
+  // nothing else repaints this banner while the draft keeps focus.
   clearDetailError();
-}
-
-function shakeLinkInput(msg) {
-  linkPopInput.classList.remove("shake");
-  void linkPopInput.offsetWidth; // restart the animation
-  linkPopInput.classList.add("shake");
-  linkPopHint.textContent = msg;
-  linkPopHint.classList.add("show");
-  linkPopInput.focus();
-}
-
-/* cmd+K with no selection, or Add link clicked with nothing tracked: a gentle
-   hint near the caret. Never a silent no-op. */
-function showCaretHint(message) {
-  const sel = document.getSelection();
-  let rect = null;
-  if (sel && sel.rangeCount) rect = sel.getRangeAt(0).getBoundingClientRect();
-  if (!rect || (rect.width === 0 && rect.height === 0)) {
-    const dEl = document.querySelector(".qc-draft[contenteditable]");
-    rect = dEl ? dEl.getBoundingClientRect() : { left: 20, top: 80, bottom: 100, width: 0 };
-  }
-  caretHintEl.textContent = message || `Highlight the words you want to link, then press ${linkShortcutLabel()}`;
-  const left = Math.max(8, Math.min(rect.left, window.innerWidth - 280));
-  let top = rect.top - 38;
-  if (top < 8) top = rect.bottom + 8;
-  caretHintEl.style.left = left + "px";
-  caretHintEl.style.top = top + "px";
-  caretHintEl.classList.add("show");
-  clearTimeout(showCaretHint._t);
-  showCaretHint._t = setTimeout(() => caretHintEl.classList.remove("show"), 2200);
-}
-
-/* Anchored confirmation: "Link added" / "Saved" / "Link removed" - the state
-   change announces itself where the user is already looking. */
-function showLinkFlash(rect, message) {
-  if (!rect) return;
-  linkFlashEl.textContent = message || "Link added ✓";
-  linkFlashEl.style.left = Math.max(8, rect.left) + "px";
-  linkFlashEl.style.top = Math.max(8, rect.top - 32) + "px";
-  linkFlashEl.classList.add("show");
-  clearTimeout(showLinkFlash._t);
-  showLinkFlash._t = setTimeout(() => linkFlashEl.classList.remove("show"), 1400);
 }
 
 /* Auto-save (owner ask 2026-07-16): EDITED_DRAFTS is browser memory only, so a
@@ -6097,7 +5865,7 @@ function pollResultNote(done) {
 }
 document.getElementById("inboxSearch").addEventListener("input", (e) => {
   inboxSearchQuery = e.target.value || "";
-  inboxPage = 1;
+  resetInboxView();
   const note = document.getElementById("searchAllNote");
   const searching = !!inboxSearchQuery.trim();
   if (note) note.style.display = searching ? "inline" : "none";
@@ -6141,8 +5909,14 @@ document.addEventListener("keydown", (e) => {
   let idx = rows.findIndex((r) => String(r.id) === String(selectedRowId));
   let nextIdx = idx === -1 ? 0 : idx + (isDown ? 1 : -1);
   nextIdx = Math.max(0, Math.min(rows.length - 1, nextIdx));
-  const neededPage = Math.floor(nextIdx / INBOX_PAGE_SIZE) + 1;
-  if (neededPage !== inboxPage) { inboxPage = neededPage; renderInboxList(); }
+  // Make sure the target row is mounted before selecting it: infinite scroll
+  // only renders the first inboxRenderCount rows, so a keyboard step past the
+  // rendered window has to grow the window first (the row must exist in the
+  // DOM for selectRow + scrollIntoView to land on it).
+  if (nextIdx >= inboxRenderCount) {
+    inboxRenderCount = nextIdx + INBOX_RENDER_STEP;
+    renderInboxList();
+  }
   selectRow(rows[nextIdx].id);
   scrollSelectedIntoView();
 });
