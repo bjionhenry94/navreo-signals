@@ -8997,16 +8997,28 @@ def _qualify(comp: dict, icp: dict, title: str = ""):
         knew_anything = True
         if not any(r in title.lower() for r in roles):
             return "unlikely", f"A {title} replied - not the buyer this client usually sells to."
-    lo, hi = icp.get("headcount_min"), icp.get("headcount_max")
-    if hc is not None and (lo or hi):
-        knew_anything = True
-        if (lo and hc < int(lo)) or (hi and hc > int(hi)):
-            return "unlikely", f"~{hc} staff - outside this client's {lo or 1}-{hi or 'any'} range."
     countries = [str(c).lower() for c in (icp.get("countries") or [])]
     if countries and country:
         knew_anything = True
         if country.lower() not in countries:
             return "unlikely", f"Based in {country} - not a target market for this client."
+    # Per-market headcount floor (owner ICP 2026-08-17: Navreo takes 10+
+    # staff anywhere, but 2+ from the US/UK/Netherlands/Germany) - matched
+    # by substring so "United States of America" still hits "united states".
+    lo, hi = icp.get("headcount_min"), icp.get("headcount_max")
+    floors = icp.get("headcount_min_by_country")
+    if country and isinstance(floors, dict):
+        cl = country.lower()
+        for k, v in floors.items():
+            if str(k).lower() in cl:
+                lo = v
+                break
+    if hc is not None and (lo or hi):
+        knew_anything = True
+        if lo and hc < int(lo):
+            return "unlikely", f"~{hc} staff - under this client's {lo}-person floor for {country or 'their market'}."
+        if hi and hc > int(hi):
+            return "unlikely", f"~{hc} staff - bigger than this client usually sells to (cap {hi})."
     industries = [str(i).lower() for i in (icp.get("industries") or [])]
     if industries and industry:
         knew_anything = True
@@ -9018,7 +9030,8 @@ def _qualify(comp: dict, icp: dict, title: str = ""):
     if roles and title:
         bits.append(f"a {title} replied")
     if hc is not None:
-        bits.append(f"~{hc} staff fits the {lo or 1}-{hi or 'any'} range")
+        bits.append(f"~{hc} staff fits the {lo or 1}-{hi or 'any'} range" if hi
+                    else f"~{hc} staff clears the {lo or 1}+ floor")
     if country:
         bits.append(f"based in {country}")
     line = ", ".join(bits)

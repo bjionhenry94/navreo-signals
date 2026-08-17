@@ -3916,7 +3916,9 @@ function leadDecisionHtml(row) {
   // 2026-08-17: the drafted email itself shows the offered times). The
   // timezone row gets a colour dot - green when it's a good time to call,
   // orange outside working hours (owner point 2).
-  const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent" && f.label !== "Call slots");
+  // Opt-out hits also cut from the sidebar (owner 2026-08-17: guardrail
+  // internals like "spam" read as noise here; the Try-it drawer keeps them).
+  const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent" && f.label !== "Call slots" && f.label !== "Opt-out hits");
   if (facts.length) {
     parts.push(`<dl class="lp-facts">` + facts.map((f) =>
       `<div class="lp-fact"><dt>${esc(f.label)}</dt><dd>${f.tone ? `<span class="lp-tz-dot ${esc(f.tone)}"></span>` : ""}${esc(f.value)}</dd></div>`).join("") + `</dl>`);
