@@ -688,8 +688,13 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-phone-kind { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 4px; background: var(--bg-2, #eee); color: var(--ink-3); }
 .lp-phone-copy { font-size: 10px; letter-spacing: 0; text-transform: none; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 5px; padding: 1px 6px; cursor: pointer; color: var(--ink-3); }
 .lp-phone-copy:hover { color: var(--ink-1, inherit); }
-.lp-person-role { margin-bottom: 8px; }
-.lp-person-role dd { font-weight: 600; }
+.lp-verdict-row { margin-top: 10px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lp-verdict-row .lp-qual { margin-left: 0; }
+.lp-qual-reason-inline { font-size: 11px; color: var(--ink-3); line-height: 1.4; }
+.lp-tz-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
+.lp-tz-dot.good { background: #2e8b57; }
+.lp-tz-dot.off { background: #e8930c; }
+.lp-crm-link { font-weight: 600; }
 .lp-call-btn span { white-space: nowrap; }
 .lp-phone-bad { color: var(--ink-3); }
 .lp-kind-bad { background: #f7e8e4; color: #a33b25; }
@@ -3361,7 +3366,7 @@ function renderDetail(row) {
     // The whole lead-details column is shown/hidden as one (see
     // applyLeadPanelHidden + the top-bar #panelToggleBtn); the panel itself is
     // just a titled stack of sections.
-    panelEl.innerHTML = `<div class="lp-panel-head"><span>Lead details</span>${leadPhoneHtml(row)}</div>` + leadPanelHtml(row);
+    panelEl.innerHTML = `<div class="lp-panel-head"><span>Lead details</span></div>` + leadPanelHtml(row);
     wireClientToggle(panelEl);
     wirePhoneDisposition(panelEl, row);
   }
@@ -3517,13 +3522,14 @@ function decisionFacts(row, opts) {
   if (tz) {
     try {
       const now = new Date();
-      const t = new Intl.DateTimeFormat([], { timeZone: tz, hour: "numeric", minute: "2-digit" }).format(now);
+      const t = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(now);
       const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
       const hint = (h >= 9 && h < 18) ? "good time to call" : (h >= 18 && h < 21 ? "evening for them" : "outside work hours");
       tzShown = `${t} for them — ${hint}`;
     } catch { /* bad tz name - keep the raw value */ }
   }
-  facts.push({ label: "Timezone", value: tzShown });
+  facts.push({ label: "Timezone", value: tzShown,
+               tone: tz ? (/good time to call/.test(tzShown) ? "good" : "off") : "" });
   if (!opts.hideEmpty || lexHits.length) facts.push({ label: "Opt-out hits", value: lexHits.length ? lexHits.join(", ") : "none" });
   if (!opts.hideEmpty || redFlags.length) facts.push({ label: "AI flags", value: redFlags.length ? redFlags.join(", ") : "none" });
   facts.push({ label: "Call slots", value: slotSituationText(row) });
@@ -3677,7 +3683,10 @@ function leadQuickLinksHtml(row) {
   const wcPh = ((wcSticky.phone_meta || {}).status === "bad") ? "" : String(wcSticky.phone || "").trim();
   const callBtn = wcPh
     ? `<a class="lp-qbtn lp-call-btn" href="tel:${esc(wcPh.replace(/[^+\d]/g, ""))}" title="Call ${esc(wcPh)}"><span>📞 ${esc(wcPh)}</span></a>` : "";
-  return callBtn + websiteBtn + linkedinBtn + smartleadBtn;
+  const crmUrl = (wcSticky.client || {}).crm_url || "";
+  const crmBtn = crmUrl
+    ? `<a class="lp-qbtn" href="${esc(crmUrl)}" target="_blank" rel="noopener" title="All campaign responses in the client's portal">${ICON_EXTERNAL}<span>CRM</span></a>` : "";
+  return callBtn + websiteBtn + linkedinBtn + smartleadBtn + crmBtn;
 }
 /* Colour tone for the current-category pill: green for a positive, red for a
    clear negative, amber for uncategorised, neutral grey for everything else
@@ -3797,26 +3806,6 @@ function leadPanelHtml(row) {
    qualified_info / client_info); before hydration they show quiet dashes, and
    hydrateLeadContact swaps each block in place by id so a category pick in
    progress is never clobbered. */
-function leadPhoneHtml(row) {
-  const wc = warmcallFor(row);
-  const ph = String(wc.phone || row.lead_phone || "").trim();
-  if (!ph) return `<span class="lp-phone muted" id="lpPhone">${wc.done ? "no number" : "…"}</span>`;
-  // Number type + provenance + freshness (SDR panel rounds 1-2, 2026-08-15):
-  // a verified MOBILE is a different dial decision than a listed office
-  // line; the tooltip says where the number came from and when; a rep-filed
-  // "bad" disposition strikes the number instead of vouching for it.
-  const meta = wc.phone_meta || {};
-  const bad = meta.status === "bad";
-  const kind = bad ? "bad" : (wc.phone_kind === "mobile" ? "mobile" : "listed");
-  const prov = (wc.phone_kind === "mobile" ? "Provider-verified mobile" : "Number on file (type unverified)")
-    + (meta.captured ? ` — captured ${meta.captured}` : "")
-    + (meta.source ? ` via ${meta.source}` : "")
-    + (meta.status ? ` — marked ${meta.status} ${meta.status_at || ""}` : "");
-  const numHtml = bad
-    ? `<s class="lp-phone lp-phone-bad" title="${esc(prov)}">${esc(ph)}</s>`
-    : `<a class="lp-phone" href="tel:${esc(ph.replace(/[^+\d]/g, ""))}" title="${esc(prov)} - tap to call">${esc(ph)}</a>`;
-  return `<span class="lp-phone-wrap" id="lpPhone">${numHtml}<span class="lp-phone-kind${bad ? " lp-kind-bad" : ""}">${kind}</span><button type="button" class="lp-phone-copy" title="Copy the number" onclick="navigator.clipboard && navigator.clipboard.writeText('${esc(ph)}'); this.textContent='✓'; setTimeout(() => { this.textContent='copy'; }, 1200)">copy</button></span>`;
-}
 /* One-tap call disposition (SDR panel round 2, 2026-08-15): after a dial the
    rep files what happened right where they dialled. Writes to OUR enrichment
    row only (never Smartlead); "bad" strikes the number everywhere. */
@@ -3838,8 +3827,6 @@ function wirePhoneDisposition(scope, row) {
         body: JSON.stringify({ email: row.lead_email, status: next }) });
       if (!res.ok) { protoNote("Couldn't save the call outcome - try again."); return; }
       wc.phone_meta = { ...(wc.phone_meta || {}), status: next, status_at: new Date().toISOString().slice(0, 10) };
-      const phEl = document.getElementById("lpPhone");
-      if (phEl) phEl.outerHTML = leadPhoneHtml(row);
       const dEl = document.getElementById("lpDisp");
       if (dEl) { dEl.outerHTML = phoneDispositionHtml(row); wirePhoneDisposition(document, row); }
       document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
@@ -3848,43 +3835,59 @@ function wirePhoneDisposition(scope, row) {
   });
 }
 function companySectionHtml(row) {
+  // ONE profile, not "person" vs "company" (owner redesign 2026-08-17): who
+  // they are and where they work in clear rows, then a single verdict that
+  // weighed all of it (role, size, geo, industry). Rendered before + after
+  // hydration - missing facts show quiet dashes, never inventions.
   const wc = warmcallFor(row);
   const c = wc.company || row.company_info || {};
   const q = wc.qualified || row.qualified_info || {};
   const dash = `<span class="muted">—</span>`;
+  const fullName = [row.lead_first_name, row.lead_last_name].filter(Boolean).join(" ");
+  const role = String(wc.person_title || "").trim();
   const loc = [c.city, c.state, c.country].filter(Boolean).join(", ");
   const hc = c.employee_count ? `~${c.employee_count} staff` : (c.employee_range ? `${c.employee_range} staff` : "");
-  const chipLabel = q.verdict === "likely" ? "Likely qualified"
-    : q.verdict === "unlikely" ? "Unlikely fit"
-    : wc.done ? "Fit unknown" : "";
-  const chip = chipLabel ? `<span class="lp-qual lp-qual-${esc(q.verdict || "unknown")}" title="${esc(q.reason || "")}">${chipLabel}</span>` : "";
   const name = c.name || row.company_name || "";
   const site = (row.company_website || "").replace(/^https?:\/\//, "");
   const desc = c.description ? String(c.description) : "";
-  const descShown = desc.length > 260 ? desc.slice(0, 257).replace(/\s+\S*$/, "") + "…" : desc;
-  const role = String(wc.person_title || "").trim();
+  const descShown = desc.length > 220 ? desc.slice(0, 217).replace(/\s+\S*$/, "") + "…" : desc;
+  const chipLabel = q.verdict === "likely" ? "Likely qualified"
+    : q.verdict === "unlikely" ? "Unlikely fit"
+    : wc.done ? "Fit unknown" : "";
+  const verdictHtml = chipLabel
+    ? `<div class="lp-verdict-row"><span class="lp-qual lp-qual-${esc(q.verdict || "unknown")}">${chipLabel}</span>${q.reason ? `<span class="lp-qual-reason-inline">${esc(q.reason)}</span>` : ""}</div>`
+    : "";
+  const fact = (label, val) => `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
   return `<div class="lp-section lp-company" id="lpCompany">
-    ${role ? `<div class="lp-fact lp-person-role"><dt>Their role</dt><dd>${esc(role)}</dd></div>` : ""}
-    <div class="lp-label">Company${chip}</div>
-    ${name ? `<div class="lp-company-name">${esc(name)}${site ? ` <span class="muted small">· ${esc(site)}</span>` : ""}</div>` : ""}
-    ${descShown ? `<div class="lp-company-desc">${esc(descShown)}</div>` : ""}
+    <div class="lp-label">Profile</div>
     <dl class="lp-facts">
-      <div class="lp-fact"><dt>Headcount</dt><dd>${hc ? esc(hc) : dash}</dd></div>
-      <div class="lp-fact"><dt>Location</dt><dd>${loc ? esc(loc) : dash}</dd></div>
-      <div class="lp-fact"><dt>Industry</dt><dd>${c.industry ? esc(c.industry) : dash}</dd></div>
+      ${fullName ? fact("Name", esc(fullName)) : ""}
+      ${fact("Role", role ? esc(role) : dash)}
+      ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· ${esc(site)}</span>` : ""}` : dash)}
+      ${fact("Size", hc ? esc(hc) : dash)}
+      ${fact("Location", loc ? esc(loc) : dash)}
+      ${fact("Industry", c.industry ? esc(c.industry) : dash)}
     </dl>
-    ${q.reason ? `<div class="lp-note lp-qual-reason">${esc(q.reason)}</div>` : ""}
+    ${descShown ? `<div class="lp-company-desc">${esc(descShown)}</div>` : ""}
+    ${verdictHtml}
   </div>`;
 }
 function clientSectionHtml(row) {
   const cl = warmcallFor(row).client || row.client_info || {};
+  // The client is the CAMPAIGN's client, not the workspace (owner fix
+  // 2026-08-17: every navreo-workspace row said "About Navreo" even when
+  // the campaign was Amplifyy's) - the server resolves it via the
+  // scorecard, the UI's own clientForRow is the pre-hydration fallback.
   const label = cl.label || clientForRow(row) || "the client";
-  const key = `setterClientOpen:${(row.workspace || "navreo")}`;
+  const key = `setterClientOpen:${esc((cl.slug || row.workspace || "navreo"))}`;
   let open = false; try { open = localStorage.getItem(key) === "1"; } catch { /* ignore */ }
-  return `<details class="lp-section lp-client" id="lpClient" data-open-key="${esc(key)}"${open ? " open" : ""}>
+  const crm = cl.crm_url
+    ? `<div class="lp-client-line"><a href="${esc(cl.crm_url)}" target="_blank" rel="noopener" class="lp-crm-link">Open in CRM ↗</a> <span class="muted small">— all campaign responses in ${esc(label)}'s portal</span></div>` : "";
+  return `<details class="lp-section lp-client" id="lpClient" data-open-key="${key}"${open ? " open" : ""}>
     <summary>About ${esc(label)} (the client)</summary>
     ${cl.about ? `<div class="lp-client-line">${esc(cl.about)}</div>` : `<div class="lp-client-line muted">No client notes saved yet.</div>`}
     ${cl.offer ? `<div class="lp-client-line"><b>Offer:</b> ${esc(cl.offer)}</div>` : ""}
+    ${crm}
   </details>`;
 }
 /* Remember the About-the-client fold per workspace (hide/show, owner ask
@@ -3907,10 +3910,14 @@ function leadDecisionHtml(row) {
   if (verdict) {
     parts.push(`<div class="lp-verdict"><b>Would this have auto-sent?</b> ${verdict}</div>`);
   }
-  const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent");
+  // Sidebar cuts: Intent (owner ask 2026-08-11) and Call slots (owner ask
+  // 2026-08-17: the drafted email itself shows the offered times). The
+  // timezone row gets a colour dot - green when it's a good time to call,
+  // orange outside working hours (owner point 2).
+  const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent" && f.label !== "Call slots");
   if (facts.length) {
     parts.push(`<dl class="lp-facts">` + facts.map((f) =>
-      `<div class="lp-fact"><dt>${esc(f.label)}</dt><dd>${esc(f.value)}</dd></div>`).join("") + `</dl>`);
+      `<div class="lp-fact"><dt>${esc(f.label)}</dt><dd>${f.tone ? `<span class="lp-tz-dot ${esc(f.tone)}"></span>` : ""}${esc(f.value)}</dd></div>`).join("") + `</dl>`);
   }
   if (row.no_slots_reason) parts.push(`<div class="lp-note">${esc(row.no_slots_reason)}</div>`);
   const pricing = agentPricingHtml(row);
@@ -4002,8 +4009,6 @@ async function hydrateLeadContact(row) {
       // the phone chip in the bar appears with hydration, not just links.
       document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
     }
-    const phEl = document.getElementById("lpPhone");
-    if (phEl) phEl.outerHTML = leadPhoneHtml(row);
     const coEl = document.getElementById("lpCompany");
     if (coEl) coEl.outerHTML = companySectionHtml(row);
     const clEl = document.getElementById("lpClient");

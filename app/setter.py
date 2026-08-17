@@ -8914,12 +8914,42 @@ def _company_row(domain: str) -> dict:
         return {}
 
 
-_CLIENT_CTX_CACHE: dict = {}      # workspace -> (fetched_at, row)
+_CLIENT_CTX_CACHE: dict = {}      # client slug -> (fetched_at, row)
 _CLIENT_CTX_TTL = 300.0
+_CLIENT_SLUG_CACHE: dict = {}     # campaign_id -> (fetched_at, slug)
 
 
-def _client_context(workspace: str) -> dict:
+def _client_slug_for(campaign_id, workspace) -> str:
+    """ Which CLIENT a row belongs to (owner fix 2026-08-17: the fold said
+    'About Navreo' on every navreo-workspace row, but Amplifyy/Arnic/etc
+    campaigns live INSIDE that workspace). A federated client workspace IS
+    the client; navreo rows resolve through campaign_scorecard.client - the
+    one label authority - mirroring the UI's clientForRow()."""
     ws = (workspace or WORKSPACE or "navreo").lower()
+    if ws != "navreo":
+        return ws
+    if not (campaign_id and _SB):
+        return "navreo"
+    key = str(campaign_id)
+    now = _time.time()
+    hit = _CLIENT_SLUG_CACHE.get(key)
+    if hit and (now - hit[0]) < 600:
+        return hit[1]
+    slug = "navreo"
+    try:
+        rows = _SB("GET", f"campaign_scorecard?smartlead_campaign_id=eq.{quote(key, safe='')}"
+                          "&select=client&limit=1")
+        c = str((rows[0].get("client") or "")).strip() if isinstance(rows, list) and rows else ""
+        if c and c != "__unassigned":
+            slug = c.lower()
+    except Exception:  # noqa: BLE001 - unknown campaign just reads as Navreo
+        pass
+    _CLIENT_SLUG_CACHE[key] = (now, slug)
+    return slug
+
+
+def _client_context(slug: str) -> dict:
+    ws = (slug or "navreo").lower()
     now = _time.time()
     hit = _CLIENT_CTX_CACHE.get(ws)
     if hit and (now - hit[0]) < _CLIENT_CTX_TTL:
@@ -8951,15 +8981,22 @@ def _headcount_number(comp: dict):
     return None
 
 
-def _qualify(comp: dict, icp: dict):
+def _qualify(comp: dict, icp: dict, title: str = ""):
     """(verdict, reason) for the sidebar chip: likely / unlikely / unknown.
-    Plain-English reason, always - the chip must say WHY (owner brief)."""
+    Considers the WHOLE profile - the replier's role plus company size, geo
+    and industry (owner redesign 2026-08-17). Plain-English reason, always."""
     if not isinstance(icp, dict) or not icp:
         return "unknown", "No qualification rules saved for this client yet."
     hc = _headcount_number(comp or {})
     country = str((comp or {}).get("country") or "").strip()
     industry = str((comp or {}).get("industry") or "").strip()
+    title = str(title or "").strip()
     knew_anything = False
+    roles = [str(r).lower() for r in (icp.get("roles") or []) if str(r).strip()]
+    if roles and title:
+        knew_anything = True
+        if not any(r in title.lower() for r in roles):
+            return "unlikely", f"A {title} replied - not the buyer this client usually sells to."
     lo, hi = icp.get("headcount_min"), icp.get("headcount_max")
     if hc is not None and (lo or hi):
         knew_anything = True
@@ -8978,11 +9015,14 @@ def _qualify(comp: dict, icp: dict):
     if not knew_anything:
         return "unknown", "Not enough company data yet to judge fit."
     bits = []
+    if roles and title:
+        bits.append(f"a {title} replied")
     if hc is not None:
         bits.append(f"~{hc} staff fits the {lo or 1}-{hi or 'any'} range")
     if country:
         bits.append(f"based in {country}")
-    return "likely", (" and ".join(bits) or "Matches this client's saved rules") + "."
+    line = ", ".join(bits)
+    return "likely", ((line[0].upper() + line[1:]) if line else "Matches this client's saved rules") + "."
 
 
 def _prospeo_enrich(email: str, linkedin: str = "") -> dict:
@@ -9245,13 +9285,19 @@ def route_lead_contact_get(params):
                     "industry": comp.get("industry") or "",
                     "linkedin_url": comp.get("linkedin_url") or "",
                 }
-            ctx = _client_context(workspace)
+            client_slug = _client_slug_for(campaign_id, workspace)
+            # No fallback to the workspace row: an Amplifyy lead borrowing
+            # Navreo's about/offer is exactly the wrong-client bug (owner,
+            # 2026-08-17) - an honest empty fold beats the wrong pitch.
+            ctx = _client_context(client_slug)
             icp = ctx.get("icp") if isinstance(ctx.get("icp"), dict) else {}
-            verdict, reason = _qualify(comp or {}, icp)
+            verdict, reason = _qualify(comp or {}, icp, (out.get("person") or {}).get("title") or "")
             out["qualified"] = {"verdict": verdict, "reason": reason}
-            out["client"] = {"label": ctx.get("client_label") or workspace.title(),
+            out["client"] = {"label": ctx.get("client_label") or client_slug.title(),
+                             "slug": client_slug,
                              "about": ctx.get("about") or "",
-                             "offer": ctx.get("offer") or ""}
+                             "offer": ctx.get("offer") or "",
+                             "crm_url": ctx.get("crm_url") or ""}
         except Exception:  # noqa: BLE001 - warm-call extras never break quick links
             pass
         _LEAD_CONTACT_CACHE[cache_key] = (now, out)
