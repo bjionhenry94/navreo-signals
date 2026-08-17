@@ -309,7 +309,13 @@ def client_campaigns(cfg: dict, sl_key: str) -> tuple[set[int], dict[int, str]]:
         camps = sl_json("GET", "/campaigns", sl_key)
         if isinstance(camps, list):
             status_by_id = {c["id"]: (c.get("status") or "").upper() for c in camps}
-            ids |= {c["id"] for c in camps if c.get("client_id") == cfg["smartlead_client_id"]}
+            # A null config client_id must NEVER match Smartlead's null client_id —
+            # in the main workspace that is every Navreo-own campaign (the
+            # thunderbird 2026-08-17 incident). Name-token clients get their
+            # campaign set from the scorecard alone.
+            if cfg["smartlead_client_id"] is not None:
+                ids |= {c["id"] for c in camps
+                        if c.get("client_id") == cfg["smartlead_client_id"]}
     except Exception as e:  # noqa: BLE001 — scorecard set alone is still usable
         log(f"WARNING smartlead campaign list failed, using scorecard only: {e}")
     return ids, status_by_id
