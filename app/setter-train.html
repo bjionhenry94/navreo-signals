@@ -1323,15 +1323,14 @@ function renderCase(unanswered, i) {
           <button type="button" class="btn big-no ${p.verdict === "needs_work" ? "sel" : ""}" data-v="needs_work">✍️ Needs work</button>
         </div>
       </div>
-      <div class="field" id="clientReasonField" style="display:${p.verdict === "needs_work" ? "" : "none"}">
-        <label>What should it have said or done instead?</label>
-        <textarea id="trNote" placeholder="Tell it what you'd say - your AI remembers this and replies that way from now on">${esc(p.note || "")}</textarea>
+      <div class="field" id="clientReasonField">
+        <label>Something off? Tell it what you'd say instead</label>
+        <textarea id="trNote" placeholder="Your AI remembers this and replies that way from now on (needed for Needs work)">${esc(p.note || "")}</textarea>
       </div>
       <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
       <div class="grade-nav">
         <button type="button" class="btn" id="trPrevBtn" ${i === 0 ? "disabled" : ""}>&lsaquo; Previous</button>
         <button type="button" class="btn" id="midGenerateBtn" style="display:none">Get more scenarios</button>
-        <button type="button" class="btn primary" id="trNextBtn" style="display:${p.verdict === "needs_work" ? "" : "none"}">Save & continue &rsaquo;</button>
       </div>
     </div>` : `
     <div class="train-verdict">
@@ -1379,38 +1378,43 @@ function renderCase(unanswered, i) {
 function wireCaseEvents(c, unanswered, i) {
   const p = pendingFor(c.id);
 
-  // Share mode (owner ruling 2026-08-16): exactly two options - "Correct"
-  // saves and advances immediately; "Needs work" requires a reason, which
-  // ALWAYS teaches (scope remember - the reason is the training). The
-  // owner-mode two-question flow below stays untouched.
+  // Share mode (owner rulings 2026-08-16/17): exactly two options, and the
+  // feedback box is ALWAYS visible (owner: "I shouldn't have to click
+  // 'Needs work' to then add feedback"). "Correct" saves and advances
+  // immediately; "Needs work" needs the box filled - the reason ALWAYS
+  // teaches (scope remember) - and then also saves immediately, so there
+  // is no separate save button. Owner-mode flow below stays untouched.
   const clientWrap = document.getElementById("clientVerdictBtns");
   if (clientWrap) {
     const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
     clientWrap.querySelectorAll("button[data-v]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const v = btn.getAttribute("data-v");
+        hideNudge();
+        const noteEl2 = document.getElementById("trNote");
+        const noteVal = noteEl2 ? noteEl2.value.trim() : "";
+        if (v === "needs_work" && !noteVal) {
+          showNudge("Tell it what you'd say instead in the box above - that's how it learns.");
+          if (noteEl2) noteEl2.focus();
+          return;
+        }
         clientWrap.querySelectorAll("button").forEach((b) => b.classList.remove("sel"));
         btn.classList.add("sel");
-        hideNudge();
         if (v === "correct") {
           p.verdict = "correct";
           p.decision_ok = true;
           p.reply_ok = hasDraft ? true : null;
-          p.note = "";
-          p.scope = "one_off";
-          submitAndAdvance(c);
-          return;
+          // A filled box on a Correct card is still feedback worth keeping.
+          p.note = noteVal;
+          p.scope = noteVal ? "remember" : "one_off";
+        } else {
+          p.verdict = "needs_work";
+          p.decision_ok = false;
+          p.reply_ok = hasDraft ? false : null;
+          p.note = noteVal;
+          p.scope = "remember";
         }
-        p.verdict = "needs_work";
-        p.decision_ok = false;
-        p.reply_ok = hasDraft ? false : null;
-        p.scope = "remember";
-        const field = document.getElementById("clientReasonField");
-        if (field) field.style.display = "";
-        const saveBtn = document.getElementById("trNextBtn");
-        if (saveBtn) saveBtn.style.display = "";
-        const noteEl2 = document.getElementById("trNote");
-        if (noteEl2) noteEl2.focus();
+        submitAndAdvance(c);
       });
     });
     const noteEl = document.getElementById("trNote");
@@ -1422,8 +1426,6 @@ function wireCaseEvents(c, unanswered, i) {
       midGenBtn.style.display = "";
       midGenBtn.addEventListener("click", () => generateMore());
     }
-    const nextBtn = document.getElementById("trNextBtn");
-    if (nextBtn) nextBtn.addEventListener("click", () => submitAndAdvance(c));
     return;
   }
 
