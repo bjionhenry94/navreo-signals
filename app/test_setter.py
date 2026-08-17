@@ -4718,6 +4718,31 @@ def test_training_case_drafts_human_negatives_but_not_machine_mail():
          not case2.get("draft_html"), case2.get("draft_html"))
 
 
+def test_invention_outreach_reuse_keeps_batches_full():
+    """Thread round 1 (2026-08-17): the owner hit a one-card 'round' because
+    the model filled outreach_body for only part of an outreach_needed batch
+    and the no-us-side guard dropped the rest. A missing outreach now
+    borrows a sibling's from the same call."""
+    sb, http = fresh_setter()
+
+    def invent_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        plan = payload.get("scenario_plan") or []
+        # model fills outreach for the FIRST scenario only
+        return {"scenarios": [
+            {"lead_first_name": f"L{i}", "lead_company": f"C{i}", "subject": "Re: hi",
+             "body": f"Reply {i}.", "prior_lead_reply": "",
+             "outreach_subject": "hi" if i == 0 else "",
+             "outreach_body": "Hi L0, our pitch. Bjion" if i == 0 else ""}
+            for i, _ in enumerate(plan)
+        ]}
+    http.invent_fn = invent_fn
+    agent = {"id": "agent-reuse01", "campaign_ids": []}  # no sends -> outreach_needed
+    scens = setter._invent_training_scenarios(agent, {"cases": [], "answers": {}}, 4)
+    check("outreach reuse: every scenario in an outreach_needed batch carries an outreach",
+         len(scens) == 4 and all(s["outreach_body"] for s in scens), scens)
+
+
 def test_synthetic_scenario_with_no_buildable_outreach_yields_no_case():
     sb, http = fresh_setter()
     http.classify_fn = _training_classify_fn
@@ -10330,6 +10355,7 @@ if __name__ == "__main__":
     test_case_thread_display_cleans_spintax_at_choke_point()
     test_training_case_drafts_greet_the_lead_by_name()
     test_training_case_drafts_human_negatives_but_not_machine_mail()
+    test_invention_outreach_reuse_keeps_batches_full()
     test_synthetic_scenario_with_no_buildable_outreach_yields_no_case()
     test_training_generate_memory_digest_reaches_classify()
     test_training_generate_concurrent_preserves_selection_order()

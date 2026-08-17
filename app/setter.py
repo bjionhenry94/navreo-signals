@@ -10779,6 +10779,20 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
             "outreach_subject": str(item.get("outreach_subject") or "").strip(),
             "outreach_body": str(item.get("outreach_body") or "").strip(),
         })
+    # Outreach reuse (thread round 1, 2026-08-17): when outreach was needed
+    # the model sometimes fills it for only part of the batch (the classic
+    # ~1-in-3 prompt-rule miss). A scenario without one would be DROPPED by
+    # the case builder's no-us-side guard, silently shrinking the batch -
+    # the owner hit a "round" of one card. Deterministic repair: borrow a
+    # sibling's outreach from the SAME call (same agent, same context; the
+    # greeting is renamed per-lead downstream), so batches stay full.
+    if outreach_needed:
+        donor = next((s for s in scenarios if s["outreach_body"]), None)
+        if donor:
+            for s in scenarios:
+                if not s["outreach_body"]:
+                    s["outreach_body"] = donor["outreach_body"]
+                    s["outreach_subject"] = s["outreach_subject"] or donor["outreach_subject"]
     return scenarios
 
 
