@@ -306,11 +306,27 @@ def _agent_instructions(agent: dict) -> str:
     return str(agent.get("pricing_notes") or "")
 
 
+def _is_navreo_agent(agent: dict) -> bool:
+    """The live Navreo-brand setter (not a client agent, not the 'Navreo copy'
+    or dummy-trainer clones). Gated on the exact agent name, matching the
+    house convention that Navreo-own is filtered by name, not client id."""
+    return str((agent or {}).get("name") or "").strip().lower() == "navreo"
+
+
 def _booking_link(agent: dict) -> str:
     """The single Calendly link used when no two-slot answer applies.
     Derived from calendly_event_url (trailing slash stripped) unless an
-    explicit legacy booking_link is still set on the doc."""
+    explicit legacy booking_link is still set on the doc.
+
+    The Navreo brand retired its standalone backup booking link (owner ruling
+    2026-08-17): the two offered call-time slot links stay (those come from
+    calendly_event_url via _slot_link, not from here), but there is no separate
+    "book a call here" fallback link. Returning "" here makes every downstream
+    surface (draft payload, lint ctx) see Navreo as having no backup link, and
+    the drafter/lint then fall back to asking the lead to suggest times."""
     agent = agent or {}
+    if _is_navreo_agent(agent):
+        return ""
     explicit = str(agent.get("booking_link") or "").strip()
     if explicit:
         return explicit
@@ -1107,9 +1123,20 @@ def lint_draft(html: str, ctx: dict):
         # above already enforces (instructions/booking/thread - never a slot
         # deep-link, since slot_links is empty in fallback mode, so any
         # calendly.com/.../<iso> anchor is already caught above, not here).
-        anchor_hrefs = {_norm_url(h) for h in _ANCHOR_HREF_RE.findall(text) if h}
-        if not (anchor_hrefs & allowed_urls):
-            return False, "The draft doesn't link a calendar for the lead to pick a time."
+        #
+        # But ONLY when a scheduling link actually exists to link. When there
+        # is none anywhere - no booking link and no scheduling-host URL in the
+        # instructions or thread (e.g. the Navreo brand, which retired its
+        # backup link and carries no calendar URL) - the correct fallback is a
+        # plain-text ask for the lead to suggest times, with no link, so don't
+        # reject it here (owner ruling 2026-08-17).
+        _sched_hosts = ("calendly.com", "savvycal.com", "cal.com")
+        _has_sched = bool(booking) or any(
+            any(h in u for h in _sched_hosts) for u in allowed_urls)
+        if _has_sched:
+            anchor_hrefs = {_norm_url(h) for h in _ANCHOR_HREF_RE.findall(text) if h}
+            if not (anchor_hrefs & allowed_urls):
+                return False, "The draft doesn't link a calendar for the lead to pick a time."
 
     allowed_text = " ".join([
         str(ctx.get("instructions") or ""),
@@ -1426,6 +1453,7 @@ Rules:
 - If a question's answer is NOT in the instructions or the resource, do not improvise one - but never dodge the question either. FIRST answer it with everything you truly have: any fact the LEAD themselves stated in this thread (their team size, their CRM, their stack, their constraints) must be named and used ("For a 12-person team running your own LinkedIn outbound..."; "Since you run everything through HubSpot..."), and anything the instructions DO answer must be answered plainly. Only THEN, for the specific part you genuinely cannot answer, make that named gap the reason for the call ("exactly how it would sit alongside HubSpot is what I'd walk you through on a quick call") - unless a stated channel or timing constraint applies (see constraint_directive), which always wins over this - never a bare "That's exactly what I'd walk you through on a quick call" that ignores the lead's own stated facts; that reads as not having read their email. Engaging their facts NEVER licenses asserting a mechanism: if the instructions don't state how something works (an integration, a data mapping, a process, a guarantee), do not describe it as if it exists ("we would map our outbound data into your CRM" is an invented claim unless the instructions say so) - name their fact, put the HOW behind the call. One carve-out (owner rule 2026-08-16): a question about PROCESS - "what would the first month look like?", "what happens after we start?" - may be answered with a natural plain-English description of how an engagement typically runs, even when the instructions don't spell it out; hard facts (prices, numbers, dates, guarantees, integrations) stay instruction-only. Answer ONLY what they asked: never bolt on an unasked section, and never write "you asked for X" / "here is the X you asked for" about something their message did not ask for. Guessing at policies, capabilities, or processes is still worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
 - Whenever slots are supplied and slot_status is "ok" you MUST include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. This is the DEFAULT and does not depend on the intent: a resource send, a pricing answer, or a question we can't fully answer all still get the two call times when live slots exist. Two things, and only these two, override that default. FIRST, call_ask: when call_ask is "avoid" the lead is already sorted for a call (a time is agreed, they have booked, or they have just told you when they are free) or has asked something that a fresh call pitch would talk straight past - answer THAT message on its own terms and do not propose times again; when call_ask is "only_if_relevant" a call has already been offered earlier in this thread and their latest message is not about scheduling, so lead with the actual answer and only reach for times if the answer genuinely needs a call; when call_ask is "required" or absent, the default above stands. Never re-propose times a lead has already turned down or already accepted. SECOND, reviewer_feedback about WHICH times to offer ("offer different times", "offer next week"): the slots you have been given have ALREADY been re-picked from the real calendar to match that request, so propose exactly the slots in front of you and do not apologise for or refer to the times a previous draft proposed. You still never invent a time: if the feedback asks for times the calendar cannot supply, say so in feedback_note and use the fallback ladder instead of making one up. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), meaning real dates or times written out as data and never a formatting template, an example time, or a rule about where times come from, pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
+- NO BACKUP BOOKING LINK. When booking_link is empty, there is NO standalone backup booking link, so you must NOT output a "book a call here" paragraph, a "my availability" booking-link paragraph, or ANY standalone booking/scheduling link anywhere in the draft. The two call-time paragraph (each time its own per-slot link) is unchanged when live slots exist. Wherever the examples show the "If those times aren't suitable, feel free to book a call here" booking-link fallback paragraph, write instead this plain-text paragraph with NO link: "If those times aren't suitable, feel free to suggest some times that work for you." And when there are no call times at all, ask for the lead's availability with that same plain-text sentence, never a booking or calendar link. This overrides the RESOURCE + CALL example's fallback line and every fallback-ladder step that would otherwise carry BOOKING_LINK.
 - If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you.
@@ -1535,6 +1563,23 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     # caught every one, so nothing sent, but the draft was wasted. The
     # "literal list" carve-out keeps fallback ladder step ONE-A alive: an
     # agent whose instructions DO list real times still proposes them.
+    # When there is a backup booking link, the no-slots fallback ends with the
+    # "Here is my availability" booking-link paragraph. When there is none
+    # (booking_link empty - e.g. the Navreo brand, which retired its backup
+    # link), that same fallback becomes a plain-text ask for the lead to
+    # suggest times, with NO link (owner ruling 2026-08-17).
+    if payload["booking_link"]:
+        _step2_fallback = (
+            "with exactly this, as its own paragraph: \"When would be a good time "
+            "for us to talk? Here is <a href=\"BOOKING_LINK\">my availability</a>.\", putting the real "
+            "booking_link value in the href."
+        )
+    else:
+        _step2_fallback = (
+            "with exactly this plain-text paragraph, containing NO link: \"When would be a good time "
+            "for us to talk? Feel free to suggest some times that work for you.\" There is no backup "
+            "booking link, so never output a booking or calendar link here."
+        )
     if (slot_status or "not_configured") != "ok" or not slots:
         payload["no_live_slots_directive"] = (
             "You were given NO call times for this draft. Follow the fallback ladder in your rules. "
@@ -1551,9 +1596,22 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
             "to a call on [first specific time] or [second specific time], where I could WORDING?\" "
             "becomes \"Would you be open to a call, where I could WORDING?\". STEP 2: replace the "
             "template's \"if those times aren't suitable\" style fallback line (there are no times "
-            "for it to refer to) with exactly this, as its own paragraph: \"When would be a good time "
-            "for us to talk? Here is <a href=\"BOOKING_LINK\">my availability</a>.\", putting the real "
-            "booking_link value in the href."
+            "for it to refer to) " + _step2_fallback
+        )
+    # No standalone backup booking link (booking_link empty): the slots-ok
+    # fallback line must ask the lead to suggest times in plain text instead of
+    # the "book a call here" booking-link paragraph. Sits in the user message,
+    # beside the instructions it has to beat (same mechanics as the directives
+    # above), so it overrides the RESOURCE + CALL exemplar in DRAFT_SYSTEM.
+    if not payload["booking_link"]:
+        payload["no_backup_link_directive"] = (
+            "There is NO backup booking link for this agent. Never output a \"book a call here\" "
+            "paragraph, a \"my availability\" booking-link paragraph, or any standalone booking or "
+            "calendar link anywhere in the draft. When live slots exist, keep the two call-time "
+            "paragraph exactly as required, each time carrying its own per-slot link, then replace "
+            "the \"If those times aren't suitable, feel free to book a call here\" booking-link "
+            "paragraph with exactly this plain-text paragraph, containing NO link: \"If those times "
+            "aren't suitable, feel free to suggest some times that work for you.\""
         )
     # Lead-stated constraints must beat the agent's own template mandates
     # (training round 1, 2026-08-16): with the law only in DRAFT_SYSTEM the
@@ -7948,8 +8006,19 @@ def _rows_lock(key):
         return lk
 
 
-def _fetch_queue_rows(status: str, limit: int):
+def _fetch_queue_rows(status: str, limit: int, before: str = None,
+                      return_raw_count: bool = False):
     """The uncached read: fetch, direction-reclassify, annotate. Pure read.
+
+    `before` (an ISO created_at) fetches the window STRICTLY OLDER than that
+    cursor - the keyset page behind the inbox's infinite scroll (owner ask
+    2026-08-17). It lets the tray reach past the newest-`limit` window without
+    ever holding the whole backlog resident: each older page is fetched,
+    served, and dropped (the cursor path is never cached). `return_raw_count`
+    makes the return a (rows, raw_len) tuple - raw_len is the count BEFORE
+    collapse/reclass, so the caller can tell "the scan filled the window"
+    (raw_len == limit, maybe more older rows) from "the window wasn't full"
+    (the genuine end of the backlog).
 
     Returns None (NOT []) when the underlying Supabase fetch FAILED. A false-
     empty here would blank an inbox whose pill COUNT still reports a backlog -
@@ -7966,8 +8035,13 @@ def _fetch_queue_rows(status: str, limit: int):
     by /api/setter/thread (cache-first) - never by the list."""
     rows = []
     fetch_failed = False
+    raw_len = 0
     if _SB:
-        base = (f"{_list_ws_filter()}&order=created_at.desc&limit={limit}"
+        # Keyset cursor: `created_at=lt.<before>` is the window strictly older
+        # than the client's oldest loaded row (infinite scroll). No `before`
+        # is the normal newest-`limit` head fetch, byte-identical to before.
+        cursor = f"&created_at=lt.{quote(before, safe='')}" if before else ""
+        base = (f"{_list_ws_filter()}&order=created_at.desc&limit={limit}{cursor}"
                 f"&select={QUEUE_LIST_COLUMNS}")
         # For the direction-aware pills (needs_review / sent / auto_sent) the
         # membership depends on who spoke last, computed at read time from
@@ -7999,12 +8073,13 @@ def _fetch_queue_rows(status: str, limit: int):
             fetched = _one_fetch(base)
         if isinstance(fetched, list):
             rows = fetched
+            raw_len = len(fetched)   # BEFORE collapse/reclass — the has_more signal
         else:  # None = timeout/error from _SB, never "no rows"
             fetch_failed = True
         # Every fetch failed and we have nothing: signal failure so the caller
         # keeps its last-good rows instead of caching/serving a false-empty.
         if fetch_failed and not rows:
-            return None
+            return (None, 0) if return_raw_count else None
         # Thread collapse FIRST (one representative row per conversation),
         # THEN the who-spoke-last reclass on the survivor - the order is
         # load-bearing: a stale needs_review sibling must vanish because a
@@ -8023,7 +8098,7 @@ def _fetch_queue_rows(status: str, limit: int):
         rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
     out = [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
     _attach_campaign_names(out)
-    return out
+    return (out, raw_len) if return_raw_count else out
 
 
 # Mutation generation counter (panel fix 2026-07-30, H1). Stale-marking means
@@ -8222,6 +8297,20 @@ def route_queue_get(params):
         except ValueError:
             limit = 200
         limit = max(1, min(limit, 500))
+        before = _qp(params, "before", "") or None
+        if before:
+            # Infinite-scroll keyset page: rows OLDER than the client's cursor,
+            # fetched fresh and never cached (the 512MB box must not hold the
+            # whole backlog resident). has_more = the raw scan filled the
+            # window, so a still-older ?before request may find more. The KPI
+            # block is deliberately omitted - the head fetch owns the counts;
+            # an older page only extends the list.
+            page_rows, raw_len = (_fetch_queue_rows(status, limit, before=before,
+                                                    return_raw_count=True)
+                                  if _SB else ([], 0))
+            if page_rows is None:
+                return 503, {"error": "Couldn't load older replies - retry in a moment."}
+            return 200, {"rows": page_rows, "has_more": raw_len >= limit}
         rows = _queue_rows_cached(status, limit) if _SB else []
         # fields=list is accepted for client compatibility but is now a no-op:
         # the slim QUEUE_LIST_COLUMNS select never fetches `thread`, so list
@@ -8355,6 +8444,7 @@ def queue_response(params, accept_gzip: bool):
     """
     import gzip
     status_q = _qp(params, "status", "")
+    before_q = _qp(params, "before", "")
     try:
         limit = max(1, min(int(_qp(params, "limit", "200") or 200), 500))
     except (ValueError, TypeError):
@@ -8365,7 +8455,9 @@ def queue_response(params, accept_gzip: bool):
     # discarded pre-lock warm. Pills build fresh on their rare click, but
     # single-flighted (panel fix 2026-07-30, H7) and BOUNDED (2026-08-01):
     # one slow "All" build must not serially pin every pill click forever.
-    if status_q != "needs_review" or limit != 200:
+    # An infinite-scroll cursor (?before=…) ALWAYS takes this fresh path too
+    # (2026-08-17): older pages are one-shot reads, never memoized/cached.
+    if before_q or status_q != "needs_review" or limit != 200:
         if not _PILL_BUILD_LOCK.acquire(timeout=10.0):
             return 503, None, json.dumps({"error": "That view is busy building - retry in a moment."}).encode()
         try:

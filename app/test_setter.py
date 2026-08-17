@@ -1086,6 +1086,41 @@ def test_lint_draft_calendly_fallback_instructions_link():
          not ok and reason == "The draft doesn't link a calendar for the lead to pick a time.", reason)
 
 
+def test_booking_link_empty_for_navreo_brand():
+    """Owner ruling 2026-08-17: the Navreo brand retired its standalone backup
+    booking link. _booking_link returns "" for the exact-name Navreo agent (so
+    every downstream surface sees no backup link), while client agents and the
+    'Navreo copy'/dummy clones keep theirs."""
+    fresh_setter()
+    cal = "https://calendly.com/navreo/navreo-book-a-call-with-us-clone"
+    check("booking: the Navreo brand agent has no backup link",
+          setter._booking_link({"name": "Navreo", "calendly_event_url": cal}) == "",
+          setter._booking_link({"name": "Navreo", "calendly_event_url": cal}))
+    check("booking: a client agent keeps its backup link",
+          setter._booking_link({"name": "Amplifyy", "calendly_event_url": cal}) == cal, None)
+    check("booking: 'Navreo copy' is not the brand, keeps its link",
+          setter._booking_link({"name": "Navreo copy", "calendly_event_url": cal}) == cal, None)
+
+
+def test_lint_no_backup_link_allows_plaintext_suggest_times():
+    """Owner ruling 2026-08-17: with NO scheduling link anywhere (booking empty
+    AND no calendar-host URL in instructions/thread), a slots_fallback
+    availability ask may be plain text with no link - the calendar-anchor
+    requirement only fires when a scheduling link actually exists to link."""
+    fresh_setter()
+    ctx = {
+        "subject": "Re: hi", "first_name": "Jane", "needs_resource_link": False,
+        "instructions": "Resource: The guide - https://navreo.notion.site/guide - send on request.",
+        "slot_status": "not_configured", "slot_links": [], "slot_labels": [], "thread_text": "",
+        "booking_link": "",  # backup link retired
+        "slots_fallback": True, "needs_availability_ask": True,
+    }
+    plain = ('<div>Hi Jane,</div><br><div>Would love to find a time that works for you.</div><br>'
+             '<div>Feel free to suggest some times that work for you.</div><br><div>Bjion</div>')
+    ok, reason = setter.lint_draft(plain, ctx)
+    check("lint: no scheduling link anywhere -> a plain-text suggest-times ask passes", ok, reason)
+
+
 def test_lint_draft_slot_status_ok_unchanged_by_fallback_rules():
     """slots_fallback/needs_availability_ask are irrelevant when slot_status
     is "ok" - the pre-existing two-slots + booking-link behaviour is exactly
@@ -10416,6 +10451,8 @@ if __name__ == "__main__":
     test_lint_draft_calendly_fallback_booking_link()
     test_calendly_availability_non_calendly_link_is_not_configured()
     test_lint_draft_calendly_fallback_instructions_link()
+    test_booking_link_empty_for_navreo_brand()
+    test_lint_no_backup_link_allows_plaintext_suggest_times()
     test_lint_draft_slot_status_ok_unchanged_by_fallback_rules()
     test_decide_matrix()
     test_decide_gate7_calendly_fallback_skips_holds()
