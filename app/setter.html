@@ -1037,9 +1037,6 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
     <div class="setter-head-row">
       <h1 class="sh-title">Inbox</h1>
       <div class="filters" id="queueFilters"></div>
-      <label class="test-toggle" id="testToggleWrap" style="display:none">
-        <input type="checkbox" id="showTestChk" checked> Show test items
-      </label>
       <div class="sh-spacer"></div>
       <div class="stats-inline" id="statsInline"><span class="muted"><span class="btnspin"></span> Loading…</span></div>
       <span class="small muted" id="lastCheckedNote"></span>
@@ -2547,8 +2544,6 @@ function renderQueueFilters() {
       loadQueue();
     }
   }));
-  const hasTest = QUEUE_ROWS.some((r) => r.is_test);
-  document.getElementById("testToggleWrap").style.display = hasTest ? "flex" : "none";
 }
 
 /* Client filter dropdown: repopulated on every queue reload from the
@@ -2582,11 +2577,12 @@ function renderClientFilter() {
    slices it for display, but keyboard nav and the KPI counts always work off
    this complete list so paging never hides a match. */
 function visibleInboxRows() {
-  const chk = document.getElementById("showTestChk");
-  const showTest = chk ? chk.checked : true;
+  // Test rows never render in the inbox (owner ask 2026-08-17: the "Show
+  // test items" toggle is retired) - training/QA rows live in their own
+  // surfaces, the inbox is real replies only.
   const q = inboxSearchQuery.trim().toLowerCase();
   const source = q ? ALL_ROWS : QUEUE_ROWS;
-  let rows = showTest ? source : source.filter((r) => !r.is_test);
+  let rows = source.filter((r) => !r.is_test);
   if (UNCAT_ONLY) {
     // Uncategorised-only lens (ship 2026-07-20): the alert's deep link and
     // the toolbar chip narrow the list to unresolved uncategorised replies.
@@ -5728,7 +5724,6 @@ function pollResultNote(done) {
   if (!n) return "No new replies";
   return n === 1 ? "1 new reply" : `${n} new replies`;
 }
-document.getElementById("showTestChk").addEventListener("change", () => { inboxPage = 1; renderQueue(); renderKpis(); });
 document.getElementById("inboxSearch").addEventListener("input", (e) => {
   inboxSearchQuery = e.target.value || "";
   inboxPage = 1;
