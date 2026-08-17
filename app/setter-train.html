@@ -1274,9 +1274,9 @@ function renderCase(unanswered, i) {
     ? (() => {
         const ids = ROUND_IDS || [];
         const ratedInRound = ids.filter((id) => isAnswered(id)).length;
-        return `Round ${currentRoundNum()} &middot; rated ${ratedInRound} of ${ids.length || total} &middot; shortcuts: <b>C</b> correct, <b>N</b> needs work, <b>Enter</b> save`;
+        return `Round ${currentRoundNum()} &middot; rated ${ratedInRound} of ${ids.length || total}`;
       })()
-    : `Rated ${answeredCount} of ${CASES.length} in this batch &middot; shortcuts: <b>Y</b>/<b>N</b> answer, <b>S</b> skip draft, <b>Enter</b> save`;
+    : `Rated ${answeredCount} of ${CASES.length} in this batch`;
   // Portal thread view (owner founding case 2026-08-17): when the case
   // carries a thread, render it via the shared renderer — max 4 emails,
   // we-sent / they-sent, lead always last. Pre-thread cases (generated
@@ -1593,48 +1593,8 @@ function submitAndAdvance(c) {
   });
 }
 
-/* ── Keyboard shortcuts: Y/N answer the first unanswered question on the
-   card (Right call first, then Good draft), S skips the draft, Enter saves.
-   Ignored while typing in the feedback box. ─────────────────────────────── */
-document.addEventListener("keydown", (e) => {
-  if (view !== "stream") return;
-  const tag = (document.activeElement && document.activeElement.tagName) || "";
-  if (tag === "TEXTAREA" || tag === "INPUT" || tag === "SELECT") return;
-  const k = e.key.toLowerCase();
-  const clickIn = (wrapId, val) => {
-    const wrap = document.getElementById(wrapId);
-    if (!wrap) return false;
-    const btn = wrap.querySelector(`[data-v="${val}"]`);
-    if (btn) { btn.click(); return true; }
-    return false;
-  };
-  // Share mode's two-option card: C = Correct (saves instantly), N = Needs
-  // work (opens the reason box), Enter = save.
-  if (SHARE_MODE) {
-    if (k === "c" || k === "y") { e.preventDefault(); clickIn("clientVerdictBtns", "correct"); }
-    else if (k === "n") { e.preventDefault(); clickIn("clientVerdictBtns", "needs_work"); }
-    else if (e.key === "Enter") {
-      e.preventDefault();
-      const save = document.getElementById("trNextBtn");
-      if (save) save.click();
-    }
-    return;
-  }
-  const decisionUnset = !document.querySelector("#decisionBtns .sel");
-  if (k === "y" || k === "n") {
-    e.preventDefault();
-    const val = k === "y" ? "true" : "false";
-    if (decisionUnset) clickIn("decisionBtns", val);
-    else clickIn("replyBtns", val);
-  } else if (k === "s") {
-    e.preventDefault();
-    clickIn("replyBtns", "null");
-  } else if (e.key === "Enter") {
-    e.preventDefault();
-    const save = document.getElementById("trNextBtn");
-    if (save) save.click();
-  }
-});
+/* Keyboard shortcuts removed (owner ruling 2026-08-17): stray keypresses were
+   triggering verdicts. Ratings are click-only now. */
 
 /* ══ First-visit interactive tutorial (share mode only) ═══════════════════
    A dim layer + one floating card per step; spotlit elements are lifted
