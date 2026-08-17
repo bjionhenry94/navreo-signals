@@ -52,6 +52,7 @@ Exit: 0 on success, 1 on unrecoverable failure.
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.parse
@@ -233,6 +234,58 @@ def enrich_meta(meta: dict, cfg: dict, email: str, sl_key: str,
         except Exception as e:  # noqa: BLE001 — sent email is best-effort
             log(f"WARN sent-email fetch {email}: {e}")
     return meta
+
+
+def find_phone(meta: dict, email: str):
+    """BetterContact -> Prospeo mobile waterfall (lilly-phone-finder recipe),
+    for auto-created rows whose Smartlead record has no phone (Bjion ruling
+    2026-08-17: numbers are part of enrichment going forward). ~10 BetterContact
+    credits per number FOUND, misses free. Returns (number, source) or
+    (None, None); any failure is logged and never blocks row creation."""
+    name = (meta.get("name") or "").strip()
+    first, _, last = name.partition(" ")
+    domain = re.sub(r"^https?://(www\.)?", "", meta.get("website") or "").split("/")[0]
+    bc = server.KEYS.get("BETTERCONTACT_API_KEY")
+    try:
+        if bc and first and last and (meta.get("company") or domain):
+            payload = {"data": [{"first_name": first, "last_name": last,
+                                 "company": meta.get("company") or "",
+                                 "company_domain": domain,
+                                 "linkedin_url": meta.get("linkedin") or "",
+                                 "email": email, "custom_fields": {"uuid": "1"}}],
+                       "enrich_email_address": False, "enrich_phone_number": True}
+            r = server.http_json("POST", "https://app.bettercontact.rocks/api/v2/async",
+                                 {"X-API-Key": bc}, payload)
+            rid = (r or {}).get("request_id")
+            deadline = time.time() + 90
+            while rid and time.time() < deadline:
+                time.sleep(6)
+                st = server.http_json(
+                    "GET", f"https://app.bettercontact.rocks/api/v2/async/{rid}",
+                    {"X-API-Key": bc})
+                if (st or {}).get("status") == "terminated":
+                    row = (st.get("data") or [{}])[0]
+                    num = row.get("contact_phone_number")
+                    if num and str(num).strip():
+                        return str(num).strip(), "BetterContact"
+                    break
+    except Exception as e:  # noqa: BLE001
+        log(f"phone waterfall BetterContact failed for {email}: {str(e)[:120]}")
+    pk = server.KEYS.get("PROSPEO_API_KEY")
+    try:
+        if pk and (meta.get("linkedin") or email):
+            body = {"enrich_mobile": True,
+                    "data": ({"linkedin_url": meta["linkedin"]} if meta.get("linkedin")
+                             else {"email": email})}
+            r = server.http_json("POST", "https://api.prospeo.io/enrich-person",
+                                 {"X-KEY": pk}, body)
+            person = (((r or {}).get("response") or r or {}).get("person")) or {}
+            mob = person.get("mobile") or {}
+            if mob.get("status") == "VERIFIED" and mob.get("mobile"):
+                return str(mob["mobile"]).strip(), "Prospeo"
+    except Exception as e:  # noqa: BLE001
+        log(f"phone waterfall Prospeo failed for {email}: {str(e)[:120]}")
+    return None, None
 
 
 def notion_create_row(cfg: dict, email: str, status: str, meta: dict) -> str:
@@ -645,10 +698,13 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
                     meta["campaign_name"] = name_rows[0].get("name")
             enrich_meta(meta, cfg, email, sl_key, camp_ids,
                         detail_rows[0]["smartlead_campaign_id"] if detail_rows else None)
+            if not meta.get("phone") and not DRY:
+                meta["phone"], meta["phone_source"] = find_phone(meta, email)
             page_id = "" if DRY else notion_create_row(cfg, email, target, meta)
             counts["notion_created"] += 1
             rec("notion_row_created", email, "smartlead->notion", after=target,
-                detail={"page_id": page_id, "campaign": meta.get("campaign_name")})
+                detail={"page_id": page_id, "campaign": meta.get("campaign_name"),
+                        "phone_source": meta.get("phone_source")})
             upsert_state(client, email, {
                 "source": "smartlead_created", "notion_page_id": page_id,
                 "booked_at": meta.get("replied_at")
