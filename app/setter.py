@@ -626,14 +626,15 @@ def guess_timezone(hints: dict):
 
 
 def resolve_timezone(hints: dict, classification: dict):
-    """Best-effort IANA timezone plus whether it is CONFIDENT enough to
-    auto-send at. A deterministic hit (company country/state/city, phone
-    country code, ccTLD) is always confident. Otherwise the model's educated
-    guess (inferred from the company/domain/signature, like a person glancing
-    at LinkedIn) is used for DISPLAY even when weak - so a held draft still
-    shows a plausible local time instead of defaulting to London - but only
-    counts as confident for AUTO-SENDING at tz_confidence >= 0.7, so a real
-    send never fires at a guessed-wrong hour. Returns (tz|None, confident)."""
+    """Best-effort IANA timezone plus whether it is CONFIDENT. A deterministic
+    hit (company country/state/city, phone country code, ccTLD) is always
+    confident. Otherwise the model's educated guess (inferred from the
+    company/domain/signature, like a person glancing at LinkedIn) is used even
+    when weak. Owner ruling 2026-08-15: this NEVER returns None any more -
+    with zero signal of any kind we assume Eastern Time (America/New_York),
+    because most leads are US and a concrete proposed time (labelled ET by
+    _slot_label) beats a bare availability ask every time. tz_unknown is dead
+    as an outcome. Returns (tz, confident)."""
     tz, _ = guess_timezone(hints or {})
     if tz:
         return tz, True
@@ -645,7 +646,7 @@ def resolve_timezone(hints: dict, classification: dict):
         gc = 0.0
     if guess:
         return guess, gc >= 0.7
-    return None, False
+    return "America/New_York", False
 
 
 # ── slot picking + labelling ─────────────────────────────────────────────────
@@ -666,9 +667,6 @@ def slot_situation(slot_status: str, tz, slots, error: str = "") -> dict:
     elif status == "none_available":
         reason = (f"Timezone known ({tz}), but Calendly had no bookable slots inside the "
                   "booking window — the draft offers the booking link instead.")
-    elif status == "tz_unknown":
-        reason = ("The lead's timezone couldn't be pinned down, so no fixed times were "
-                  "proposed — the draft asks for their availability instead.")
     elif status == "error":
         detail = f" ({str(error)[:120]})" if error else ""
         reason = (f"Couldn't load Calendly availability{detail} — the draft falls back "
@@ -1201,28 +1199,13 @@ def decide(classification: dict, agent: dict, ctx: dict):
         return "review", ("Held for review: the instructions offer more than one link and the "
                           "original outreach couldn't be loaded, so a person should pick.")
 
-    # 7. slots + timezone. A guessed timezone is fine for showing a draft,
-    # but PROPOSING actual times needs to be CONFIDENT of the hour, or we
-    # might offer 2pm when it is 2am for them. Owner ruling 2026-07-14:
-    # when real call times aren't available for ANY reason (Calendly not
-    # connected, an API error, no free slots, or the lead's timezone
-    # couldn't be worked out at all), the agent no longer holds the reply -
-    # it drafts the fallback ask instead ("When would be a good time for us
-    # to talk? Here is my availability", hyperlinked to the booking link).
-    # That fallback proposes zero times, so the timezone-risk this gate
-    # exists to catch is zero too, and none of the three holds below apply.
-    # slots_fallback is set at every ctx build site as (slot_status != "ok");
-    # falling back to deriving it here keeps direct decide() calls (tests,
-    # older callers) that never set the key working exactly as before.
-    slot_status = ctx.get("slot_status")
-    slots_fallback = ctx.get("slots_fallback")
-    if slots_fallback is None:
-        slots_fallback = slot_status != "ok"
-    if not slots_fallback:
-        if ctx.get("timezone") is None:
-            return "review", "Held for review: couldn't work out the lead's timezone."
-        if not ctx.get("tz_confident", True):
-            return "review", "Held for review: not sure enough of the lead's timezone to pick a time for them."
+    # 7. (retired) slots + timezone. This gate used to hold a reply when the
+    # timezone was unresolved or a low-confidence guess, so a real send never
+    # fired at a possibly-wrong hour. Owner ruling 2026-08-15: gone entirely -
+    # if we know the timezone we ALWAYS recommend a time, and when we don't,
+    # resolve_timezone() assumes Eastern (America/New_York) and the times are
+    # labelled with their zone (ET etc.) by _slot_label, so the lead can see
+    # exactly what was assumed. The label is the safety valve now, not a hold.
 
     # 8. length + lint
     if int(ctx.get("body_len") or 0) > 1500:
@@ -3601,21 +3584,20 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                                                "email_domain": domain, "company_location": company_location},
                                               snapshot, owner_hints=mem_hints)
                     now = _dt.datetime.now(_dt.timezone.utc)
-                    tz = row.get("timezone")
+                    # Owner ruling 2026-08-15: a stranded row with no stored
+                    # timezone assumes Eastern - times are always proposed.
+                    tz = row.get("timezone") or "America/New_York"
                     slots, slot_status, serr = [], "not_configured", ""
-                    if tz:
-                        eff_settings = dict(_load_settings())
-                        eff_settings["_agent"] = snapshot
-                        eff_settings["_lead"] = {"first_name": row.get("lead_first_name"),
-                                                 "last_name": row.get("lead_last_name"),
-                                                 "email": row.get("lead_email")}
-                        slot_status, avail, serr = get_calendly_availability(snapshot, eff_settings, now)
-                        if slot_status == "ok":
-                            slots = pick_slots(avail, tz, eff_settings, now)
-                            if not slots:
-                                slot_status = "none_available"
-                    else:
-                        slot_status = "tz_unknown"
+                    eff_settings = dict(_load_settings())
+                    eff_settings["_agent"] = snapshot
+                    eff_settings["_lead"] = {"first_name": row.get("lead_first_name"),
+                                             "last_name": row.get("lead_last_name"),
+                                             "email": row.get("lead_email")}
+                    slot_status, avail, serr = get_calendly_availability(snapshot, eff_settings, now)
+                    if slot_status == "ok":
+                        slots = pick_slots(avail, tz, eff_settings, now)
+                        if not slots:
+                            slot_status = "none_available"
                     thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
                     d = draft_reply(
                         {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
@@ -4152,20 +4134,18 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         eff_settings = dict(settings)
         eff_settings["_agent"] = agent
         eff_settings["_lead"] = {"first_name": row["lead_first_name"], "last_name": row["lead_last_name"], "email": email}
-        # Build slots only when we have a timezone (even a low-confidence
-        # guess) - so a held draft shows plausible LOCAL times. When the
-        # timezone is genuinely unknown we never fabricate London times; the
-        # draft falls back to booking-link phrasing instead.
-        if tz:
-            slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
-            if slot_status == "ok":
-                slots = pick_slots(avail, tz, eff_settings, now)
-                if not slots:
-                    slot_status = "none_available"
-            if serr and not row.get("error"):
-                row["error"] = serr
-        else:
-            slot_status = "tz_unknown"
+        # Owner ruling 2026-08-15: resolve_timezone() always returns a zone
+        # (Eastern assumed when there is zero signal), so slots are ALWAYS
+        # built - a lead never gets a bare availability ask just because we
+        # couldn't place them. _slot_label stamps each time with its zone
+        # (ET etc.), so an assumed zone is visible, never silent.
+        slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
+        if slot_status == "ok":
+            slots = pick_slots(avail, tz, eff_settings, now)
+            if not slots:
+                slot_status = "none_available"
+        if serr and not row.get("error"):
+            row["error"] = serr
     row["slots"] = slots
     row["guardrails"].update(slot_situation(slot_status, tz, slots, serr))
 
@@ -9893,31 +9873,32 @@ def _redraft_sync(payload):
         # read the typed feedback for a WHEN request and re-pick the slots from
         # the real calendar to match it. Nothing is invented - the plan only
         # skips slots this row already proposed and/or moves the floor forward.
+        # Owner ruling 2026-08-15: an old stored row may still carry no
+        # timezone (and a classify outage skips the re-resolve above) -
+        # assume Eastern rather than skip the slot build. tz_unknown is dead.
+        tz = tz or "America/New_York"
         time_plan = time_feedback_plan(feedback_text, tz, now)
         slots, slot_status, serr = [], "not_configured", ""
         slot_note = ""
-        if tz:
-            slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
-            if slot_status == "ok":
-                if time_plan:
-                    prior = [str(s.get("iso")) for s in (row.get("slots") or []) if isinstance(s, dict)]
-                    slots = pick_slots(avail, tz, eff_settings, now,
-                                       exclude_isos=prior,
-                                       not_before_utc=time_plan.get("not_before_utc"),
-                                       horizon_days_override=time_plan.get("horizon"))
-                    if not slots:
-                        # The calendar genuinely has nothing matching. Fall back
-                        # to the normal pick and SAY SO rather than silently
-                        # re-offering the same times as if nothing was asked.
-                        slots = pick_slots(avail, tz, eff_settings, now)
-                        slot_note = (f"You asked for {time_plan['said']}, but the calendar has no "
-                                     f"free slot that matches inside the booking window.")
-                else:
-                    slots = pick_slots(avail, tz, eff_settings, now)
+        slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
+        if slot_status == "ok":
+            if time_plan:
+                prior = [str(s.get("iso")) for s in (row.get("slots") or []) if isinstance(s, dict)]
+                slots = pick_slots(avail, tz, eff_settings, now,
+                                   exclude_isos=prior,
+                                   not_before_utc=time_plan.get("not_before_utc"),
+                                   horizon_days_override=time_plan.get("horizon"))
                 if not slots:
-                    slot_status = "none_available"
-        else:
-            slot_status = "tz_unknown"
+                    # The calendar genuinely has nothing matching. Fall back
+                    # to the normal pick and SAY SO rather than silently
+                    # re-offering the same times as if nothing was asked.
+                    slots = pick_slots(avail, tz, eff_settings, now)
+                    slot_note = (f"You asked for {time_plan['said']}, but the calendar has no "
+                                 f"free slot that matches inside the booking window.")
+            else:
+                slots = pick_slots(avail, tz, eff_settings, now)
+            if not slots:
+                slot_status = "none_available"
         thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
         # Standing memory always applies first, then this specific redraft's
         # feedback on top of it - same order Feature 1's spec sets for every
@@ -10964,16 +10945,15 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
 
     slots, slot_status = [], "not_configured"
     if wants_draft:
-        if tz:
-            slot_status = slot_status0
-            if slot_status == "ok":
-                eff_lead = dict(eff_settings)
-                eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
-                slots = pick_slots(avail, tz, eff_lead, now)
-                if not slots:
-                    slot_status = "none_available"
-        else:
-            slot_status = "tz_unknown"
+        # resolve_timezone() always returns a zone (owner ruling 2026-08-15:
+        # Eastern assumed on zero signal), so slots are always built here.
+        slot_status = slot_status0
+        if slot_status == "ok":
+            eff_lead = dict(eff_settings)
+            eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
+            slots = pick_slots(avail, tz, eff_lead, now)
+            if not slots:
+                slot_status = "none_available"
 
     # Calendly fallback (owner ruling 2026-07-14) - see decide() gate 7
     # and lint_draft().
@@ -11836,16 +11816,15 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
 
         slots, slot_status = [], "not_configured"
         if wants_draft:
-            if tz:
-                slot_status = slot_status0
-                if slot_status == "ok":
-                    eff_lead = dict(eff_settings)
-                    eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
-                    slots = pick_slots(avail, tz, eff_lead, now)
-                    if not slots:
-                        slot_status = "none_available"
-            else:
-                slot_status = "tz_unknown"
+            # resolve_timezone() always returns a zone (owner ruling
+            # 2026-08-15: Eastern assumed on zero signal) - always build.
+            slot_status = slot_status0
+            if slot_status == "ok":
+                eff_lead = dict(eff_settings)
+                eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
+                slots = pick_slots(avail, tz, eff_lead, now)
+                if not slots:
+                    slot_status = "none_available"
 
         slots_fallback = slot_status != "ok"
         needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
@@ -11962,16 +11941,15 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
 
         slots, slot_status = [], "not_configured"
         if wants_draft:
-            if tz:
-                slot_status = slot_status0
-                if slot_status == "ok":
-                    eff_lead = dict(eff_settings)
-                    eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
-                    slots = pick_slots(avail, tz, eff_lead, now)
-                    if not slots:
-                        slot_status = "none_available"
-            else:
-                slot_status = "tz_unknown"
+            # resolve_timezone() always returns a zone (owner ruling
+            # 2026-08-15: Eastern assumed on zero signal) - always build.
+            slot_status = slot_status0
+            if slot_status == "ok":
+                eff_lead = dict(eff_settings)
+                eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
+                slots = pick_slots(avail, tz, eff_lead, now)
+                if not slots:
+                    slot_status = "none_available"
 
         slots_fallback = slot_status != "ok"
         needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])

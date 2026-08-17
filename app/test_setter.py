@@ -22,8 +22,8 @@ Covers (per the build spec's Tests section):
   - test-inject never calls Smartlead's real send endpoint
   - poll batching cap (run_poll processes at most 15 replies per tick) and the
     campaign_assigned_at filter (backlog before assignment is never swept up)
-  - unknown timezone still builds tentative slots; decide() still vetoes
-    auto-send purely on timezone=None
+  - zero timezone signal assumes Eastern and still proposes real times
+    (owner ruling 2026-08-15); decide() never vetoes on timezone any more
   - handle_inbound(): Smartlead EMAIL_REPLY webhook -> pipeline field mapping,
     and every ignore case (non-reply event, missing message id, missing
     campaign/email, unassigned campaign)
@@ -1154,7 +1154,7 @@ def test_decide_matrix():
     check("decide: Calendly not connected -> calendly fallback -> auto_send", d == "auto_send", r)
 
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "timezone": None})
-    check("decide: unresolved timezone -> review", d == "review", r)
+    check("decide: unresolved timezone no longer holds (owner ruling 2026-08-15)", d == "auto_send", r)
 
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "body_len": 1600})
     check("decide: body over 1500 chars -> review", d == "review", r)
@@ -1257,20 +1257,21 @@ def test_decide_gate7_calendly_fallback_ignores_tz_confidence():
     check("decide: calendly fallback ignores tz_confident=False -> auto_send", d == "auto_send", r)
 
 
-def test_decide_gate7_slot_status_ok_keeps_holds_unchanged():
-    """When slot_status IS "ok" (slots_fallback False), gate 7 behaves
-    exactly as before the rework - an unresolved timezone or a low-confidence
-    guess still holds, real times are actually being proposed."""
+def test_decide_gate7_timezone_holds_retired():
+    """Owner ruling 2026-08-15: gate 7's timezone holds are gone entirely.
+    Even with real times proposed (slot_status "ok"), an unresolved or
+    low-confidence timezone never holds the reply any more - the zone label
+    on each proposed time (ET etc.) is the safety valve, not a hold."""
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO,
                          {**CTX_ALL_GOOD, "slot_status": "ok", "timezone": None, "slots_fallback": False})
-    check("decide: slot_status ok + unresolved timezone still holds, unchanged",
-         d == "review" and r == "Held for review: couldn't work out the lead's timezone.", r)
+    check("decide: slot_status ok + unresolved timezone no longer holds",
+         d == "auto_send", (d, r))
 
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO,
                          {**CTX_ALL_GOOD, "slot_status": "ok", "timezone": "Europe/London",
                           "tz_confident": False, "slots_fallback": False})
-    check("decide: slot_status ok + low-confidence timezone still holds, unchanged",
-         d == "review" and "not sure enough of the lead's timezone" in r, r)
+    check("decide: slot_status ok + low-confidence timezone no longer holds",
+         d == "auto_send", (d, r))
 
 
 def test_decide_gate_3b_same_day_ask_still_holds_under_fallback():
@@ -3231,16 +3232,33 @@ def _future_weekday_avail(count=6):
     return out
 
 
-def test_tz_none_calendly_fallback_no_slots_but_auto_sends():
-    """Owner ruling 2026-07-14: an unresolved timezone alone no longer holds
-    the reply for review. slot_status still resolves to "tz_unknown" and NO
-    real call times are ever fabricated for an unknown timezone (that part
-    is unchanged - see the assertions below) - but decide()'s gate 7 now
-    treats "no real times available for any reason" as calendly-fallback
-    mode, where timezone risk is zero because no time is being proposed at
-    all. A simple send_resource ask with everything else green now
-    auto-sends instead of holding (previously: test_tz_none_still_builds_
-    tentative_slots_but_vetoes_auto asserted review here)."""
+def _slot_echo_draft_fn(greet: str, resource_url: str, signer: str = "Sam"):
+    """A draft_fn fake that behaves like the real drafter: it reads the two
+    proposed slots out of the request payload and anchors each one in the
+    draft (lint requires every slot link to appear when slot_status is ok)."""
+    def fn(body):
+        blob = json.dumps(body).replace('\\"', '"').replace("\\\\", "\\").replace("\\/", "/")
+        pairs = re.findall(r'"label": "([^"]+)", "link": "(https://calendly\.com[^"]+)"', blob)
+        seen, slot_html = set(), ""
+        for label, link in pairs:
+            if link in seen:
+                continue
+            seen.add(link)
+            slot_html += f'<div><a href="{link}">{label}</a></div><br>'
+        return {"subject": "Re: hi",
+                "html": f'<div>Hi {greet},</div><br>'
+                        f'<div><a href="{resource_url}">Here it is</a>.</div><br>'
+                        f'{slot_html}<div>{signer}</div>'}
+    return fn
+
+
+def test_tz_none_assumes_eastern_and_proposes_times():
+    """Owner ruling 2026-08-15: a lead with ZERO timezone signal no longer
+    gets the bare availability ask - resolve_timezone() assumes Eastern
+    (America/New_York), the slot pipeline runs, and real times are proposed
+    labelled with their zone. tz_unknown is dead as an outcome (previously:
+    this test asserted timezone None + zero slots under the 2026-07-14
+    calendly-fallback ruling)."""
     sb, http = fresh_setter()
     http.calendly_avail = _future_weekday_avail()
     http.message_history = [{
@@ -3252,9 +3270,7 @@ def test_tz_none_calendly_fallback_no_slots_but_auto_sends():
         "confidence": 0.99, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
         "wants": "wants the resource", "rationale": "unqualified yes",
     }
-    http.draft_fn = lambda _b: {"subject": "Re: hi",
-                               "html": '<div>Hi Test,</div><br><div><a href="https://x.example/r">'
-                                       'Here it is</a>.</div><br><div>Sam</div>'}
+    http.draft_fn = _slot_echo_draft_fn("Test", "https://x.example/r")
 
     agent = {
         "id": "agent-tzNone01", "mode": "autopilot", "enabled": True, "campaign_ids": [909],
@@ -3274,19 +3290,24 @@ def test_tz_none_calendly_fallback_no_slots_but_auto_sends():
     }
     row = setter.process_reply(reply, agent, settings)
 
-    check("tz-none: timezone stays unresolved", row.get("timezone") is None, row.get("timezone"))
-    check("tz-none: NO slots are fabricated when the timezone is unknown (never a London default)",
-         len(row.get("slots") or []) == 0, row.get("slots"))
-    check("tz-none: no draft slot uses a Europe/London zone abbreviation",
-         not any((s.get("label") or "")[-3:] in ("GMT", "BST") for s in (row.get("slots") or [])), row.get("slots"))
-    check("tz-none: calendly fallback (owner ruling 2026-07-14) - unresolved timezone no longer holds",
+    check("tz-none: zero signal assumes Eastern (owner ruling 2026-08-15)",
+         row.get("timezone") == "America/New_York", row.get("timezone"))
+    check("tz-none: real times ARE proposed from the calendar",
+         len(row.get("slots") or []) > 0, row.get("slots"))
+    check("tz-none: proposed slots carry an Eastern zone label, never London",
+         all((s.get("label") or "").rstrip()[-3:] in ("EDT", "EST")
+             for s in (row.get("slots") or [])), row.get("slots"))
+    check("tz-none: assumed timezone never holds the reply",
          row.get("decision") == "auto_send", row)
+    check("tz-none: slot_status is ok with a stamped reason",
+         (row.get("guardrails") or {}).get("slot_status") == "ok",
+         (row.get("guardrails") or {}).get("slot_reason"))
 
 
-def test_tz_guessed_low_confidence_shows_local_times_but_holds():
-    # A weak educated guess (e.g. US company, no hard signal): the draft should
-    # show plausible LOCAL times, but the decision must still HOLD - never
-    # auto-send at a possibly-wrong hour.
+def test_tz_guessed_low_confidence_shows_local_times_and_sends():
+    # A weak educated guess (e.g. US company, no hard signal): the draft shows
+    # plausible LOCAL times AND may auto-send (owner ruling 2026-08-15 - the
+    # zone label on each time is the safety valve, not a hold).
     sb, http = fresh_setter()
     http.calendly_avail = _future_weekday_avail()
     http.message_history = [{
@@ -3298,11 +3319,11 @@ def test_tz_guessed_low_confidence_shows_local_times_but_holds():
         "confidence": 0.99, "red_flags": [], "timezone_guess": "America/New_York", "tz_confidence": 0.4,
         "wants": "wants the resource", "rationale": "US company guess",
     }
-    http.draft_fn = lambda _b: {"subject": "Re: hi",
-                               "html": 'Hi There, <a href="https://x.example/r">Here it is</a>. Best, Sam'}
+    http.draft_fn = _slot_echo_draft_fn("There", "https://x.example/r")
     agent = {
         "id": "agent-tzLo01", "mode": "autopilot", "enabled": True, "campaign_ids": [909],
         "allowed_intents": ["send_resource", "pricing", "scheduling"], "pricing_notes": "x",
+        "instructions": "Resource: The guide - https://x.example/r - send when they want more info.",
         "confidence_threshold": 0.9, "resource_link": "https://x.example/r",
         "calendly_event_url": "https://calendly.com/navreo/book-a-call-with-us-clone-2",
     }
@@ -3313,19 +3334,17 @@ def test_tz_guessed_low_confidence_shows_local_times_but_holds():
              "replied_at": "2026-07-10T09:00:00+00:00", "is_test": False}
     row = setter.process_reply(reply, agent, settings)
     check("tz-guess-low: timezone is the guessed zone", row.get("timezone") == "America/New_York", row.get("timezone"))
-    check("tz-guess-low: local slots ARE built for the reviewer to see", len(row.get("slots") or []) > 0, row.get("slots"))
-    check("tz-guess-low: held, not auto-sent", row.get("decision") == "review", row.get("decision"))
-    check("tz-guess-low: reason is the confidence gate",
-         "not sure enough of the lead's timezone" in (row.get("decision_reason") or ""), row.get("decision_reason"))
+    check("tz-guess-low: local slots ARE built", len(row.get("slots") or []) > 0, row.get("slots"))
+    check("tz-guess-low: no confidence hold any more (owner ruling 2026-08-15)",
+         row.get("decision") == "auto_send", (row.get("decision"), row.get("decision_reason")))
 
 
 def test_tz_confidence_gate_in_decide():
-    # A guessed timezone that isn't confident holds; a confident one is eligible.
+    # Owner ruling 2026-08-15: confidence no longer gates the decision -
+    # a weak guess and a confident one are both eligible to auto-send.
     d_lo, r_lo = setter.decide(_cls("send_resource"),
                               AGENT_AUTO, {**CTX_ALL_GOOD, "timezone": "America/New_York", "tz_confident": False})
-    check("tz-decide: low-confidence timezone holds", d_lo == "review", (d_lo, r_lo))
-    check("tz-decide: hold reason is the confidence gate",
-         "not sure enough of the lead's timezone" in r_lo, r_lo)
+    check("tz-decide: low-confidence timezone no longer holds", d_lo == "auto_send", (d_lo, r_lo))
     d_hi, r_hi = setter.decide(_cls("send_resource"),
                               AGENT_AUTO, {**CTX_ALL_GOOD, "timezone": "America/New_York", "tz_confident": True})
     check("tz-decide: confident guess is eligible to auto-send", d_hi == "auto_send", (d_hi, r_hi))
@@ -10323,7 +10342,7 @@ if __name__ == "__main__":
     test_decide_matrix()
     test_decide_gate7_calendly_fallback_skips_holds()
     test_decide_gate7_calendly_fallback_ignores_tz_confidence()
-    test_decide_gate7_slot_status_ok_keeps_holds_unchanged()
+    test_decide_gate7_timezone_holds_retired()
     test_decide_gate_3b_same_day_ask_still_holds_under_fallback()
     test_decide_gate7_master_switch_still_last_under_fallback()
     test_fixtures()
@@ -10389,8 +10408,8 @@ if __name__ == "__main__":
     test_run_poll_skips_reply_already_queued_under_swapped_mid()
     test_claim_rows_carry_source_message_id()
     test_hydrate_lead_answered_since_reply()
-    test_tz_none_calendly_fallback_no_slots_but_auto_sends()
-    test_tz_guessed_low_confidence_shows_local_times_but_holds()
+    test_tz_none_assumes_eastern_and_proposes_times()
+    test_tz_guessed_low_confidence_shows_local_times_and_sends()
     test_tz_confidence_gate_in_decide()
     test_process_reply_calendly_not_connected_scheduling_ask_auto_sends()
     test_handle_inbound_field_mapping()
