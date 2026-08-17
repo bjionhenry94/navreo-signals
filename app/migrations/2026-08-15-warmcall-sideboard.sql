@@ -27,3 +27,10 @@ create table if not exists setter_client_context (
   icp jsonb,
   updated_at timestamptz not null default now()
 );
+
+-- 2026-08-17: rep-filed call dispositions (SDR panel round 2) - connected |
+-- voicemail | bad; "bad" strikes the number in the UI instead of vouching
+-- for it. Applied via the management API 2026-08-17.
+alter table setter_lead_enrichment
+  add column if not exists phone_status text,
+  add column if not exists phone_status_at timestamptz;

@@ -9125,6 +9125,16 @@ def route_lead_contact_get(params):
                 # prospeo/getleads numbers are provider-verified MOBILES; the
                 # backfill sources are numbers on file, type unknown.
                 out["phone_kind"] = "mobile" if (enr.get("phone_source") or "") in ("prospeo", "getleads") else "listed"
+                # Freshness + provenance for the tooltip, and the rep-filed
+                # disposition (connected / voicemail / bad) so a number one
+                # rep learned is dead stops being vouched for (SDR panel
+                # round 2, 2026-08-15).
+                out["phone_meta"] = {
+                    "source": enr.get("phone_source") or "",
+                    "captured": str(enr.get("enriched_at") or "")[:10],
+                    "status": enr.get("phone_status") or "",
+                    "status_at": str(enr.get("phone_status_at") or "")[:10],
+                }
             elif out.get("phone"):
                 out["phone_kind"] = "listed"
             # The replier's role: the people table first, else whatever the
@@ -9161,6 +9171,31 @@ def route_lead_contact_get(params):
             pass
         _LEAD_CONTACT_CACHE[cache_key] = (now, out)
         return 200, out
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_phone_status_post(payload):
+    """POST /api/setter/phone-status {email, status} - the rep's one-tap call
+    disposition (SDR panel 2026-08-15): connected | voicemail | bad | "" to
+    clear. Written on the setter_lead_enrichment row (OUR table - never
+    Smartlead), so a number a rep learned is dead stops being vouched for
+    everywhere the sideboard renders it."""
+    try:
+        email = str((payload or {}).get("email") or "").strip().lower()
+        status = str((payload or {}).get("status") or "").strip().lower()
+        if not email:
+            return 400, {"error": "email is required"}
+        if status not in ("connected", "voicemail", "bad", ""):
+            return 400, {"error": "status must be connected, voicemail, bad, or empty to clear"}
+        if not _SB:
+            return 503, {"error": "storage unavailable"}
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        _SB("PATCH", f"setter_lead_enrichment?lead_email=eq.{quote(email, safe='')}",
+            {"phone_status": status or None, "phone_status_at": now_iso if status else None})
+        for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
+            _LEAD_CONTACT_CACHE.pop(k, None)
+        return 200, {"ok": True, "status": status}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -12826,4 +12861,5 @@ POST_ROUTES = {
     "/api/setter/training/material": route_training_material,
     "/api/setter/test/inject": route_test_inject,
     "/api/setter/edit-lesson/undo": route_edit_lesson_undo,
+    "/api/setter/phone-status": route_phone_status_post,
 }

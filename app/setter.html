@@ -691,6 +691,16 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-person-role { margin-bottom: 8px; }
 .lp-person-role dd { font-weight: 600; }
 .lp-call-btn span { white-space: nowrap; }
+.lp-phone-bad { color: var(--ink-3); }
+.lp-kind-bad { background: #f7e8e4; color: #a33b25; }
+.lp-said { font-size: 12px; font-style: italic; color: var(--ink-2, inherit); line-height: 1.45; margin-bottom: 12px; }
+.lp-disp { display: flex; align-items: center; gap: 6px; margin: -4px 0 12px; flex-wrap: wrap; }
+.lp-disp-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
+.lp-disp-btn { font-size: 10px; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 999px; padding: 2px 8px; cursor: pointer; color: var(--ink-3); }
+.lp-disp-btn:hover { color: var(--ink-1, inherit); }
+.lp-disp-btn.on { background: var(--ink-1, #222); color: var(--bg-1, #fff); border-color: var(--ink-1, #222); }
+.lp-undo-btn { font-size: 11px; font-weight: 700; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 5px; padding: 1px 8px; cursor: pointer; margin-left: 4px; }
+.lp-cat-actions .arming { opacity: 0.55; }
 .dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -3357,6 +3367,7 @@ function renderDetail(row) {
     // just a titled stack of sections.
     panelEl.innerHTML = `<div class="lp-panel-head"><span>Lead details</span>${leadPhoneHtml(row)}</div>` + leadPanelHtml(row);
     wireClientToggle(panelEl);
+    wirePhoneDisposition(panelEl, row);
   }
   // Wire the top-bar button that hides/shows the entire lead-details column,
   // and apply the remembered state (default shown on desktop, hidden on phones).
@@ -3666,7 +3677,8 @@ function leadQuickLinksHtml(row) {
     ? `<a class="lp-qbtn" href="${slHref}" target="_blank" rel="noopener" title="${row.lead_map_id ? "Open this exact conversation in Smartlead" : "Open this lead's conversation in Smartlead's master inbox"}">${ICON_EXTERNAL}<span>Smartlead</span></a>` : "";
   // One-tap dial from the always-visible bar (SDR panel gripe 2026-08-15:
   // on phones the sidebar phone was toggle-then-tap - two taps).
-  const wcPh = String(warmcallFor(row).phone || "").trim();
+  const wcSticky = warmcallFor(row);
+  const wcPh = ((wcSticky.phone_meta || {}).status === "bad") ? "" : String(wcSticky.phone || "").trim();
   const callBtn = wcPh
     ? `<a class="lp-qbtn lp-call-btn" href="tel:${esc(wcPh.replace(/[^+\d]/g, ""))}" title="Call ${esc(wcPh)}"><span>📞 ${esc(wcPh)}</span></a>` : "";
   return callBtn + websiteBtn + linkedinBtn + smartleadBtn;
@@ -3760,8 +3772,22 @@ function leadPanelHtml(row) {
   // Warm-call order (owner ask 2026-08-15): category -> company breakdown with
   // the qualified chip (the "should I call?" facts) -> decision block -> the
   // client's own context, collapsed at the bottom.
+  // "In their words" (SDR panel round 2, 2026-08-15, mobile ask): on phones
+  // the panel stacks ABOVE the reply, so the lead's actual ask lives below
+  // the fold - one quoted line keeps the verdict and their words together.
+  // This is the lead's own text, not the AI intent label the owner removed
+  // from the sidebar 2026-08-11.
+  const saidLines = String(row.reply_body || "")
+    .replace(/<(br|\/p|\/div)[^>]*>/gi, "\n").replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">").replace(/&#39;|&apos;/gi, "'").replace(/&quot;/gi, '"')
+    .split(/\n+/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const saidRaw = saidLines[0] || "";
+  const saidHtml = saidRaw ? `<div class="lp-said">“${esc(saidRaw.length > 110 ? saidRaw.slice(0, 107).replace(/\s+\S*$/, "") + "…" : saidRaw)}”</div>` : "";
   return `
+    ${saidHtml}
     ${catSectionHtml}
+    ${phoneDispositionHtml(row)}
     ${noAgentHtml}
     ${companySectionHtml(row)}
     <div class="lp-section">
@@ -3779,12 +3805,51 @@ function leadPhoneHtml(row) {
   const wc = warmcallFor(row);
   const ph = String(wc.phone || row.lead_phone || "").trim();
   if (!ph) return `<span class="lp-phone muted" id="lpPhone">${wc.done ? "no number" : "…"}</span>`;
-  // Number type + provenance (SDR panel 2026-08-15): a verified MOBILE is a
-  // different dial decision than a listed office line - say which this is,
-  // and let desktop reps copy it into a softphone in one click.
-  const kind = wc.phone_kind === "mobile" ? "mobile" : "listed";
-  const prov = wc.phone_kind === "mobile" ? "Provider-verified mobile" : "Number on file (type unverified)";
-  return `<span class="lp-phone-wrap" id="lpPhone"><a class="lp-phone" href="tel:${esc(ph.replace(/[^+\d]/g, ""))}" title="${prov} - tap to call">${esc(ph)}</a><span class="lp-phone-kind">${kind}</span><button type="button" class="lp-phone-copy" title="Copy the number" onclick="navigator.clipboard && navigator.clipboard.writeText('${esc(ph)}'); this.textContent='✓'; setTimeout(() => { this.textContent='copy'; }, 1200)">copy</button></span>`;
+  // Number type + provenance + freshness (SDR panel rounds 1-2, 2026-08-15):
+  // a verified MOBILE is a different dial decision than a listed office
+  // line; the tooltip says where the number came from and when; a rep-filed
+  // "bad" disposition strikes the number instead of vouching for it.
+  const meta = wc.phone_meta || {};
+  const bad = meta.status === "bad";
+  const kind = bad ? "bad" : (wc.phone_kind === "mobile" ? "mobile" : "listed");
+  const prov = (wc.phone_kind === "mobile" ? "Provider-verified mobile" : "Number on file (type unverified)")
+    + (meta.captured ? ` — captured ${meta.captured}` : "")
+    + (meta.source ? ` via ${meta.source}` : "")
+    + (meta.status ? ` — marked ${meta.status} ${meta.status_at || ""}` : "");
+  const numHtml = bad
+    ? `<s class="lp-phone lp-phone-bad" title="${esc(prov)}">${esc(ph)}</s>`
+    : `<a class="lp-phone" href="tel:${esc(ph.replace(/[^+\d]/g, ""))}" title="${esc(prov)} - tap to call">${esc(ph)}</a>`;
+  return `<span class="lp-phone-wrap" id="lpPhone">${numHtml}<span class="lp-phone-kind${bad ? " lp-kind-bad" : ""}">${kind}</span><button type="button" class="lp-phone-copy" title="Copy the number" onclick="navigator.clipboard && navigator.clipboard.writeText('${esc(ph)}'); this.textContent='✓'; setTimeout(() => { this.textContent='copy'; }, 1200)">copy</button></span>`;
+}
+/* One-tap call disposition (SDR panel round 2, 2026-08-15): after a dial the
+   rep files what happened right where they dialled. Writes to OUR enrichment
+   row only (never Smartlead); "bad" strikes the number everywhere. */
+function phoneDispositionHtml(row) {
+  const wc = warmcallFor(row);
+  if (!String(wc.phone || "").trim()) return `<div class="lp-disp" id="lpDisp" style="display:none"></div>`;
+  const cur = (wc.phone_meta || {}).status || "";
+  const btn = (val, label) =>
+    `<button type="button" class="lp-disp-btn${cur === val ? " on" : ""}" data-disp="${val}" title="${cur === val ? "Filed - click to clear" : `File the call as ${label.toLowerCase()}`}">${label}</button>`;
+  return `<div class="lp-disp" id="lpDisp"><span class="lp-disp-label">Last call:</span>${btn("connected", "Connected")}${btn("voicemail", "Voicemail")}${btn("bad", "Bad number")}</div>`;
+}
+function wirePhoneDisposition(scope, row) {
+  (scope || document).querySelectorAll("#lpDisp .lp-disp-btn").forEach((b) => {
+    b.addEventListener("click", async () => {
+      const wc = warmcallFor(row);
+      const cur = (wc.phone_meta || {}).status || "";
+      const next = b.getAttribute("data-disp") === cur ? "" : b.getAttribute("data-disp");
+      const res = await fetchJson("/api/setter/phone-status", { method: "POST",
+        body: JSON.stringify({ email: row.lead_email, status: next }) });
+      if (!res.ok) { protoNote("Couldn't save the call outcome - try again."); return; }
+      wc.phone_meta = { ...(wc.phone_meta || {}), status: next, status_at: new Date().toISOString().slice(0, 10) };
+      const phEl = document.getElementById("lpPhone");
+      if (phEl) phEl.outerHTML = leadPhoneHtml(row);
+      const dEl = document.getElementById("lpDisp");
+      if (dEl) { dEl.outerHTML = phoneDispositionHtml(row); wirePhoneDisposition(document, row); }
+      document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
+      protoNote(next ? `Filed: ${next}` : "Call outcome cleared");
+    });
+  });
 }
 function companySectionHtml(row) {
   const wc = warmcallFor(row);
@@ -3922,6 +3987,7 @@ async function hydrateLeadContact(row) {
   WARMCALL[wcKey] = { ...wcPrev, done: true,
     phone: String(res.data.phone || ""),
     phone_kind: String(res.data.phone_kind || ""),
+    phone_meta: res.data.phone_meta || {},
     person_title: String((res.data.person || {}).title || ""),
     company: res.data.company || {},
     qualified: res.data.qualified || {},
@@ -3946,6 +4012,8 @@ async function hydrateLeadContact(row) {
     if (coEl) coEl.outerHTML = companySectionHtml(row);
     const clEl = document.getElementById("lpClient");
     if (clEl) { clEl.outerHTML = clientSectionHtml(row); wireClientToggle(document); }
+    const dEl = document.getElementById("lpDisp");
+    if (dEl) { dEl.outerHTML = phoneDispositionHtml(row); wirePhoneDisposition(document, row); }
   }
   // First-ever open of a pre-enrichment row: the server kicks its one-time
   // enrichment ON this fetch, so the data lands seconds AFTER this response.
@@ -4131,6 +4199,11 @@ function wireOneClickCat(block, sel, catName) {
   const el = block.querySelector(sel);
   if (!el) return;
   el.addEventListener("click", async () => {
+    // Undo grace (SDR panel 2026-08-15): a fat-thumb tap on a moving train
+    // must not write straight to Smartlead. The click arms a 5s countdown
+    // shown in the hint line; Undo cancels it, silence commits it. The
+    // server write itself is untouched - this only defers WHEN it fires.
+    if (el._armTimer) return;  // already counting down
     const cats = await fetchCategories();
     const hit = (cats || []).find((c) => String(c.name || "").trim().toLowerCase() === catName.toLowerCase());
     const hint = block.querySelector(".lp-cat-hint");
@@ -4138,7 +4211,30 @@ function wireOneClickCat(block, sel, catName) {
       if (hint) { hint.textContent = `"${catName}" isn't in this workspace's Smartlead categories - use the dropdown instead.`; hint.classList.add("lp-hint-err"); }
       return;
     }
-    applyCategory(block, { id: hit.id, name: hit.name, btnSel: sel });
+    let left = 5;
+    el.classList.add("arming");
+    const paint = () => {
+      if (hint) hint.innerHTML = `Filing as <b>${esc(hit.name)}</b> in ${left}s… <button type="button" class="lp-undo-btn">Undo</button>`;
+      const u = hint && hint.querySelector(".lp-undo-btn");
+      if (u) u.addEventListener("click", () => {
+        clearInterval(el._armTimer); el._armTimer = null;
+        el.classList.remove("arming");
+        if (hint) hint.textContent = "";
+        protoNote("Cancelled - nothing filed");
+      });
+    };
+    paint();
+    el._armTimer = setInterval(() => {
+      left -= 1;
+      if (left <= 0) {
+        clearInterval(el._armTimer); el._armTimer = null;
+        el.classList.remove("arming");
+        if (hint) hint.textContent = "";
+        applyCategory(block, { id: hit.id, name: hit.name, btnSel: sel });
+        return;
+      }
+      paint();
+    }, 1000);
   });
 }
 function wireLeadPanelEvents(root, row) {
