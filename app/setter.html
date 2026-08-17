@@ -1993,6 +1993,42 @@ async function _loadTrayInner() {
     unresolvedRows = res.data.rows;
   }
   renderUnresolvedTray();
+  prefetchTrayRows();   // background; never awaited on the feed path
+}
+/* Tray thread prefetch (owner ask 2026-08-15: "cache it like needs review"):
+   needs-review rows open instantly because the queue list ships each row's
+   stored thread snapshot up front — tray rows arrived as slim reminder rows,
+   so the conversation only appeared after an at-open fetch. Fetch each tray
+   row's FULL stored row (thread snapshot included) in the background as soon
+   as the feed lands, so opening one paints the whole cached conversation in
+   the first frame. One GET /queue/row per row — an indexed Supabase select
+   with NO Smartlead hydrate behind it — max 3 in flight, each id tried once
+   per session. Freshness stays a separate question: the snapshot may still
+   predate our own follow-up, so openUnresolvedRow keeps the
+   "Loading the latest emails…" pending state until refreshThreadFor
+   confirms (stale !== true). */
+const TRAY_PREFETCH = new Map();        // row id -> full annotated row
+const _TRAY_PREFETCH_TRIED = new Set();
+let _trayPrefetchRunning = false;
+async function prefetchTrayRows() {
+  if (_trayPrefetchRunning) return;
+  _trayPrefetchRunning = true;
+  try {
+    const known = (id) =>
+      QUEUE_ROWS.some((x) => String(x.id) === id) || ALL_ROWS.some((x) => String(x.id) === id);
+    const todo = (unresolvedRows || []).map((r) => String(r.id))
+      .filter((id) => !_TRAY_PREFETCH_TRIED.has(id) && !known(id));
+    for (let i = 0; i < todo.length; i += 3) {
+      await Promise.all(todo.slice(i, i + 3).map(async (id) => {
+        _TRAY_PREFETCH_TRIED.add(id);
+        const res = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(id)}`);
+        if (res.ok && res.data && res.data.row) TRAY_PREFETCH.set(id, res.data.row);
+      }));
+    }
+    // Bound both across very long sessions / re-intakes.
+    if (TRAY_PREFETCH.size > 200) TRAY_PREFETCH.clear();
+    if (_TRAY_PREFETCH_TRIED.size > 400) _TRAY_PREFETCH_TRIED.clear();
+  } finally { _trayPrefetchRunning = false; }
 }
 function loadUnresolvedTray() {
   // Same coalescing shape as loadQueue (panel fix 2026-08-01): at most one
@@ -2129,7 +2165,17 @@ async function openUnresolvedRow(id) {
   // full row (thread, draft, decision) folds in when it lands. renderDetail's
   // anchor-stable repaint keeps the fold-in from moving anything.
   const t = unresolvedRows.find((r) => String(r.id) === String(id));
-  if (t) {
+  // Prefetched full row (owner ask 2026-08-15: "cache it like needs review"):
+  // when the background prefetch already holds this row, the FIRST frame is
+  // the whole cached conversation — thread, draft, decision — not a shell.
+  // The pending flag still applies: cached is instant, but only a confirmed
+  // stale!==true /thread response proves the latest email is really the
+  // latest, so the loader stays until refreshThreadFor clears it.
+  const pre = TRAY_PREFETCH.get(String(id));
+  if (pre) {
+    ALL_ROWS.push(Object.assign({}, pre, { _thread_pending: !pre.is_test }));
+    selectRow(id);
+  } else if (t) {
     ALL_ROWS.push({
       id: t.id, lead_email: t.lead_email,
       lead_first_name: t.lead_first_name || String(t.lead_name || "").split(" ")[0] || "",
