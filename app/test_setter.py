@@ -308,6 +308,18 @@ class FakeSB:
             rows = [r for r in rows if self._match_eq(r.get("category"), params["category"])]
         if "id" in params:
             rows = [r for r in rows if self._match_eq(r.get("id"), params["id"])]
+        # email is filtered for real (2026-08-17): the re-reply category
+        # resolver keys on `email=ilike.<lead>`, and a fake that ignored the
+        # filter handed one lead's category history to EVERY lead - masking
+        # exactly the wrong-lead resolution the label fix must never do. The
+        # real queries carry no wildcards, so ilike here means
+        # case-insensitive equality on the percent-decoded value.
+        email_op = params.get("email", "")
+        if email_op.startswith("ilike."):
+            want = unquote(email_op[6:]).lower()
+            rows = [r for r in rows if str(r.get("email") or "").lower() == want]
+        elif email_op:
+            rows = [r for r in rows if self._match_eq(r.get("email"), email_op)]
         order = params.get("order", "")
         if order.startswith("replied_at"):
             rows = sorted(rows, key=lambda r: r.get("replied_at") or "", reverse=order.endswith("desc"))
@@ -8007,6 +8019,72 @@ def test_non_core_categories_stay_out_both_paths():
         setter.process_reply = real_process_reply
 
 
+def test_re_reply_label_resolves_to_real_category():
+    """Owner ask 2026-08-17: 'positive-re-reply' is the categoriser's internal
+    archive label, never the lead's Smartlead status - intake stamps the
+    lead's latest REAL category on the queue row, and the poll's relabel
+    sweep re-stamps rows written before the resolution shipped. The label
+    still GATES intake (CORE_FOUR is untouched); only the stamped value
+    changes."""
+    # -- resolver: same-campaign row preferred, any-campaign fallback --
+    sb, http = fresh_setter()
+    sb.replies.append({"workspace": "navreo", "smartlead_campaign_id": 9301,
+                       "email": "lead@example.com", "category": "Interested",
+                       "replied_at": "2026-08-01T00:00:00+00:00"})
+    sb.replies.append({"workspace": "navreo", "smartlead_campaign_id": 9302,
+                       "email": "lead@example.com", "category": "Meeting Request",
+                       "replied_at": "2026-08-05T00:00:00+00:00"})
+    got = setter._resolve_re_reply_category("navreo", 9301, "lead@example.com",
+                                            "2026-08-10T00:00:00+00:00")
+    check("resolver prefers the same campaign's latest real category",
+         got == "Interested", got)
+    got2 = setter._resolve_re_reply_category("navreo", 9999, "lead@example.com",
+                                             "2026-08-10T00:00:00+00:00")
+    check("resolver falls back to any-campaign when the campaign has no row",
+         got2 == "Meeting Request", got2)
+    check("resolver returns None with no real-category history",
+         setter._resolve_re_reply_category("navreo", 9301, "nobody@example.com",
+                                           "2026-08-10T00:00:00+00:00") is None, sb.replies)
+
+    # -- agentless intake stamps the resolved category, never the label --
+    row = setter._intake_agentless({
+        "workspace": "navreo", "campaign_id": 9301, "email": "lead@example.com",
+        "subject": "Re: hi", "body": "still keen", "message_id": "rr-1",
+        "replied_at": "2026-08-10T00:00:00+00:00", "category": "positive-re-reply",
+        "is_test": False,
+    })
+    check("agentless intake resolves the archive label to the real category",
+         (row or {}).get("category") == "Interested", row)
+
+    # -- no history: the raw label survives (never invent a status) --
+    row2 = setter._intake_agentless({
+        "workspace": "navreo", "campaign_id": 9301, "email": "nohistory@example.com",
+        "subject": "Re: hi", "body": "hello again", "message_id": "rr-2",
+        "replied_at": "2026-08-10T00:00:00+00:00", "category": "positive-re-reply",
+        "is_test": False,
+    })
+    check("intake keeps the label when no prior real category exists",
+         (row2 or {}).get("category") == "positive-re-reply", row2)
+
+    # -- legacy sweep: pre-fix rows get re-stamped in place --
+    setter._RE_REPLY_UNRESOLVED.clear()
+    sb.queue.append({"id": 7001, "workspace": "navreo", "smartlead_campaign_id": 9301,
+                     "lead_email": "lead@example.com", "message_id": "legacy-1",
+                     "status": "needs_review", "category": "positive-re-reply",
+                     "replied_at": "2026-08-12T00:00:00+00:00"})
+    summary = {}
+    setter._sweep_re_reply_labels(summary)
+    legacy = next(r for r in sb.queue if r.get("id") == 7001)
+    check("sweep re-stamps a legacy queue row with the real category",
+         legacy.get("category") == "Interested"
+         and summary.get("re_reply_relabelled") == 1, (legacy, summary))
+    # rows that already carry a real category are never touched again
+    before = [dict(r) for r in sb.queue]
+    setter._sweep_re_reply_labels({})
+    check("sweep is idempotent once converged",
+         [dict(r) for r in sb.queue] == before, sb.queue)
+
+
 def test_handle_inbound_uncategorised_then_poll_catches_up():
     sb, http = fresh_setter()
     agent = {"id": "agent-catchup", "mode": "draft_only", "enabled": True, "campaign_ids": [9201]}
@@ -10528,6 +10606,7 @@ if __name__ == "__main__":
     test_decide_gate_6b_instruction_link_ambiguity()
     test_core_four_categories_enter_queue_both_paths()
     test_non_core_categories_stay_out_both_paths()
+    test_re_reply_label_resolves_to_real_category()
     test_handle_inbound_uncategorised_then_poll_catches_up()
     test_run_poll_agentless_campaign_queues_needs_review()
     test_run_poll_agentless_campaign_non_core_four_stays_out()

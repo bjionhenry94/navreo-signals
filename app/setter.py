@@ -228,6 +228,46 @@ CORE_FOUR = frozenset({"Interested", "Information Request", "Meeting Request",
 # instead of splitting on its internal space.
 CORE_FOUR_CATEGORY_FILTER = "in.(" + ",".join(quote(f'"{c}"', safe="") for c in sorted(CORE_FOUR)) + ")"
 
+# "positive-re-reply" is the categoriser routeB's ARCHIVE label for a fresh
+# reply landing on an already-positive thread - an internal marker, never the
+# lead's Smartlead category (routeB alerts + archives; it does not rewrite
+# the lead's category, so Smartlead still says Interested / Meeting Request /
+# ...). Stamping the label onto queue rows made the Lead-category pill read
+# as if the lead's status had changed (owner ask 2026-08-17: "keep it as
+# whatever the current status of it is"), so intake resolves the label to the
+# lead's latest REAL category before the row is written. Both intake
+# chokepoints (_process_reply_inner and _intake_agentless) call this, which
+# covers every seam: webhook, poll, self-heal sweep, monitor federation and
+# redrives. The label still GATES intake via CORE_FOUR - only the stamped
+# value changes.
+_RE_REPLY_LABEL = "positive-re-reply"
+
+
+def _resolve_re_reply_category(workspace, campaign_id, email: str, before_iso):
+    """The lead's latest real positive category from the replies archive -
+    same campaign preferred (the pill edits the per-campaign category), then
+    any-campaign fallback. None when no labelled row exists - the caller
+    keeps the raw label rather than inventing a status."""
+    if not _SB or not email:
+        return None
+    cats = ",".join(quote(f'"{c}"', safe="")
+                    for c in sorted(CORE_FOUR - {_RE_REPLY_LABEL}))
+    base = (f"replies?workspace=eq.{workspace}"
+            f"&email=ilike.{quote(email, safe='')}"
+            f"&category=in.({cats})"
+            f"&select=category&order=replied_at.desc&limit=1")
+    if before_iso:
+        base += f"&replied_at=lt.{quote(str(before_iso), safe='')}"
+    try:
+        probes = ([f"&smartlead_campaign_id=eq.{campaign_id}"] if campaign_id else []) + [""]
+        for probe in probes:
+            rows = _SB("GET", base + probe)
+            if isinstance(rows, list) and rows and (rows[0] or {}).get("category"):
+                return rows[0]["category"]
+    except Exception:  # noqa: BLE001 - resolution is display-truth, never load-bearing
+        pass
+    return None
+
 # Uncategorised handling (ship 2026-07-20): replies the categoriser failed on
 # or explicitly gave up on ("Uncategorizable by Ai" is the categoriser's own
 # white-flag label) still enter setter_queue - flagged, never auto-drafted -
@@ -3697,6 +3737,14 @@ def _intake_agentless(reply: dict) -> dict:
         is_test = bool(reply.get("is_test"))
         redrive_id = reply.get("_redrive_id")
 
+        # The archive label never reaches the queue row - the lead keeps its
+        # real category (see _resolve_re_reply_category).
+        if not is_test and str(reply.get("category") or "").strip().lower() == _RE_REPLY_LABEL:
+            real_cat = _resolve_re_reply_category(workspace, campaign_id, email,
+                                                  reply.get("replied_at"))
+            if real_cat:
+                reply["category"] = real_cat
+
         if not is_test and redrive_id is None:
             existing = _existing_row(workspace, campaign_id, email, message_id)
             if existing:
@@ -3898,6 +3946,14 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     email = (reply.get("email") or "").strip().lower()
     message_id = str(reply.get("message_id") or "")
     is_test = bool(reply.get("is_test"))
+    # The archive label never reaches the queue row - the lead keeps its real
+    # category (see _resolve_re_reply_category). Runs before the claim insert
+    # below so the claimed row is already stamped with the real category.
+    if not is_test and str(reply.get("category") or "").strip().lower() == _RE_REPLY_LABEL:
+        real_cat = _resolve_re_reply_category(workspace, campaign_id, email,
+                                              reply.get("replied_at"))
+        if real_cat:
+            reply["category"] = real_cat
     # Re-drive of a stranded claim (see _redrive_stranded_claims): the queue
     # row ALREADY exists - it is the husk of a tick that died between the
     # claim and the finish - so the existing-row short-circuit below would
@@ -5491,6 +5547,51 @@ def _sweep_uncategorised(agents, settings, since_iso: str, summary: dict) -> Non
         print(f"[setter] uncategorised sweep failed: {e}", file=sys.stderr)
 
 
+# Queue rows already stamped with the archive label before the intake-side
+# resolution shipped (2026-08-17) still display 'positive-re-reply' in the
+# Lead-category pill. Ids that could NOT resolve (no prior real-category row
+# in the archive - early rows predate the archive backfill) are memoised
+# in-process so a permanently unresolvable row costs one probe per boot,
+# not two GETs per tick forever.
+_RE_REPLY_SWEEP_CAP = 40
+_RE_REPLY_UNRESOLVED: set = set()
+
+
+def _sweep_re_reply_labels(summary: dict) -> None:
+    """Re-stamps legacy queue rows whose category is the internal archive
+    label 'positive-re-reply' with the lead's real category - the same
+    resolution intake now applies (see _resolve_re_reply_category). Runs
+    every poll tick; once the backlog is converged it costs one empty GET.
+    Never raises."""
+    if not _SB:
+        return
+    try:
+        rows = _SB("GET", f"{QUEUE_TABLE}?category=eq.{_RE_REPLY_LABEL}"
+                          f"&order=id.desc&limit={_RE_REPLY_SWEEP_CAP}"
+                          f"&select=id,workspace,smartlead_campaign_id,lead_email,replied_at,category")
+        for q in (rows if isinstance(rows, list) else []):
+            if not isinstance(q, dict) or q.get("id") in _RE_REPLY_UNRESOLVED:
+                continue
+            # Belt-and-braces: the fake test harness (and any future filter
+            # loosening) may hand back rows the category filter should have
+            # excluded - never re-stamp a row that no longer carries the label.
+            if str(q.get("category") or "").strip().lower() != _RE_REPLY_LABEL:
+                continue
+            cat = _resolve_re_reply_category(q.get("workspace") or WORKSPACE,
+                                             q.get("smartlead_campaign_id"),
+                                             (q.get("lead_email") or "").strip().lower(),
+                                             q.get("replied_at"))
+            if cat:
+                _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{q['id']}", {"category": cat},
+                    prefer="return=minimal")
+                summary["re_reply_relabelled"] = summary.get("re_reply_relabelled", 0) + 1
+            else:
+                _RE_REPLY_UNRESOLVED.add(q.get("id"))
+    except Exception as e:  # noqa: BLE001 - a relabel sweep must never break the poll
+        summary["errors"] += 1
+        print(f"[setter] re-reply relabel sweep failed: {e}", file=sys.stderr)
+
+
 # A claim only means "in flight" for the seconds a pipeline run takes; past
 # this it means the run died. Generous enough that a live tick is never reaped
 # out from under itself.
@@ -5841,6 +5942,10 @@ def run_poll() -> dict:
         # past the grace window. Runs AFTER the positive sweep so the 15-cap
         # above is always spent on positives first.
         _sweep_uncategorised(agents, settings, since, summary)
+        # Legacy 'positive-re-reply' labels: re-stamp queue rows written
+        # before intake started resolving the archive label to the lead's
+        # real category (owner ask 2026-08-17). Converges to one empty GET.
+        _sweep_re_reply_labels(summary)
         # Federation MONITOR sweep: pull every non-navreo enabled workspace's
         # recent replies into the queue as review-only rows (see the function
         # docstring). Last, so the navreo positive sweep always spends its cap
