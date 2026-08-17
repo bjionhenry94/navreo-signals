@@ -199,6 +199,7 @@ def enrich_meta(meta: dict, cfg: dict, email: str, sl_key: str,
     meta.setdefault("company", lead.get("company_name"))
     meta.setdefault("linkedin", lead.get("linkedin_profile") or None)
     meta.setdefault("website", lead.get("website") or None)
+    meta.setdefault("phone", lead.get("phone_number") or None)
     cf = lead.get("custom_fields") or {}
     meta["title"] = _re.split(r"\s*(?:--|\||–|—)\s*",
                               cf.get("Title") or "")[0].strip(" ,;")[:120]
@@ -255,6 +256,8 @@ def notion_create_row(cfg: dict, email: str, status: str, meta: dict) -> str:
         props["LinkedIn URL"] = {"url": meta["linkedin"]}
     if meta.get("website"):
         props["Website"] = {"url": meta["website"]}
+    if meta.get("phone"):
+        props["Phone"] = {"phone_number": str(meta["phone"]).strip()[:50]}
     data = server.http_json("POST", f"{NOTION_BASE}/pages", _notion_headers(),
                             {"parent": {"database_id": cfg["notion_database_id"]},
                              "properties": props})
