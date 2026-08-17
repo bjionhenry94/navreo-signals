@@ -45,11 +45,31 @@ table.ws tr:last-child td { border-bottom: none; }
   padding: 10px 18px; border-radius: 999px; z-index: 95; max-width: calc(100vw - 32px);
   box-shadow: 0 8px 24px rgba(20,17,14,.25); }
 .toast.hidden { display: none; }
+/* settings sub-menu column (Workspaces / Email Infrastructure) */
+.settings-cols { display: flex; flex: 1; min-width: 0; }
+.submenu { width: 208px; flex: 0 0 208px; background: var(--cream-50, #FCF7F1);
+  border-right: 1px solid var(--line); }
+.submenu h2 { font-size: 13px; font-weight: 600; color: var(--ink-3); text-transform: uppercase;
+  letter-spacing: .06em; padding: 22px 18px 10px; margin: 0; }
+.submenu .items { padding: 0 10px; }
+.submenu a { display: block; font-size: 13.5px; padding: 9px 18px; border-radius: 8px;
+  text-decoration: none; color: var(--ink-2); border: 1px solid transparent; }
+.submenu a:hover { background: var(--cream); }
+.submenu a.active { background: #fff; border: 1px solid var(--line-2); font-weight: 600;
+  color: var(--ink); box-shadow: 0 1px 2px rgba(20,17,14,.06); }
 </style>
 </head>
 <body>
 <div class="app">
   <div id="rail"></div>
+  <div class="settings-cols">
+  <nav class="submenu">
+    <h2>Settings</h2>
+    <div class="items">
+      <a href="settings.html" class="active">Workspaces</a>
+      <a href="infrastructure.html">Email Infrastructure</a>
+    </div>
+  </nav>
   <main class="main">
     <div class="page-head"><h1>Settings</h1></div>
 
@@ -81,6 +101,7 @@ table.ws tr:last-child td { border-bottom: none; }
       <span class="hint" id="demo-hint">Off — demo clients hidden everywhere.</span>
     </section>
   </main>
+  </div>
 </div>
 
 <div class="overlay hidden" id="rm-overlay">

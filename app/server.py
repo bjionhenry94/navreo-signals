@@ -17094,6 +17094,70 @@ def _client_hidden(label) -> bool:
     return is_demo_client(label) and not show_demo_clients()
 
 
+# ── Email Infrastructure tab (Settings → Email Infrastructure) ──────────────
+# Batch state lives in the same KV table as ui_prefs. Seeded once with the real
+# August verification batch (3 registrars, Hypertide google plan); the
+# domain-infra-orchestrator updates the blob as batches progress. "Add domains"
+# requests queue as blobs for the orchestrator — the web tier never buys.
+
+_INFRA_SEED = {
+    "batches": [{
+        "id": "2026-08-16-navreo-verification",
+        "label": "August setup",
+        "workspace": "Navreo",
+        "redirect": "navreo.ai",
+        "sender": "Bjion Henry",
+        "role": "Founder",
+        "stage": "mailboxes",
+        "domains": [
+            {"name": "usenavreo.com", "registrar": "DNSimple", "bought": "Aug 16",
+             "cost": 15.50, "inboxes": 3, "status": "mailboxes_building"},
+            {"name": "trynavreo.com", "registrar": "Porkbun", "bought": "Aug 17",
+             "cost": 11.08, "inboxes": 3, "status": "bought"},
+            {"name": "navreohq.com", "registrar": "Dynadot", "bought": "Aug 17",
+             "cost": 10.88, "inboxes": 3, "status": "bought"},
+        ],
+    }]
+}
+
+
+def _infra_batches() -> dict:
+    try:
+        rows = sb("GET", "deliverability_audit_cache?id=eq.infra_batches&select=blob") or []
+        if rows and isinstance(rows[0].get("blob"), dict) and rows[0]["blob"].get("batches"):
+            return rows[0]["blob"]
+    except Exception:  # noqa: BLE001 — a read miss falls through to the seed
+        pass
+    try:  # first read persists the seed so later updates have a row to merge into
+        sb("POST", "deliverability_audit_cache?on_conflict=id",
+           {"id": "infra_batches", "blob": _INFRA_SEED,
+            "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
+           prefer="resolution=merge-duplicates,return=minimal")
+    except Exception:  # noqa: BLE001
+        pass
+    return dict(_INFRA_SEED)
+
+
+def _infra_request_add(req: dict) -> dict:
+    rows = []
+    try:
+        got = sb("GET", "deliverability_audit_cache?id=eq.infra_requests&select=blob") or []
+        if got and isinstance(got[0].get("blob"), dict):
+            rows = list(got[0]["blob"].get("requests") or [])
+    except Exception:  # noqa: BLE001
+        pass
+    req = dict(req)
+    req["id"] = "req_" + _dtmod.datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    req["status"] = "queued"
+    req["created_at"] = _dtmod.datetime.utcnow().isoformat() + "Z"
+    rows.append(req)
+    sb("POST", "deliverability_audit_cache?on_conflict=id",
+       {"id": "infra_requests", "blob": {"requests": rows[-50:]},
+        "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
+       prefer="resolution=merge-duplicates,return=minimal")
+    return req
+
+
 # NOTE (2026-07-29): demo-client DATA seeding is intentionally NOT done via
 # campaign_scorecard rows — the Campaigns page (campaigns_unified) and the analytics
 # daily lines read LIVE from Smartlead, so fake scorecard ids never surface there, and
@@ -21389,6 +21453,10 @@ class Handler(SimpleHTTPRequestHandler):
             # respect the 30s TTL (hot path); the Settings save POST busts it
             # via _ui_prefs_set, so a toggle still shows on the next read
             return self._json({"ok": True, **_ui_prefs()})
+        if path == "/api/infrastructure/batches":
+            # Settings → Email Infrastructure: live batch state (KV-backed,
+            # updated by the domain-infra-orchestrator as batches progress).
+            return self._json({"ok": True, **_infra_batches()})
         if path == "/api/jobs":
             # Memory first (live progress), then union in durable app_jobs rows
             # that aren't in memory (recent history + jobs from before a restart).
@@ -21898,6 +21966,23 @@ class Handler(SimpleHTTPRequestHandler):
             blob = _ui_prefs_set(bool(p.get("show_demo_clients")))
             log_activity("/api/settings/ui", blob, action="set", entity="settings")
             return self._json({"ok": True, **blob})
+        if path == "/api/infrastructure/requests":
+            # Settings → Email Infrastructure "Add domains": queue the request
+            # for the orchestrator. The web tier never ideates, checks or buys —
+            # and nothing is ever bought without an explicit go-ahead later.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            req = {k: p.get(k) for k in
+                   ("website", "monthly_volume", "first_name", "last_name",
+                    "role", "workspace") if p.get(k) not in (None, "")}
+            if not req.get("website"):
+                return self._json({"ok": False, "message": "website is required"}, 400)
+            req = _infra_request_add(req)
+            log_activity("/api/infrastructure/requests", req, action="queue",
+                         entity="infrastructure")
+            return self._json({"ok": True, "request": req})
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",

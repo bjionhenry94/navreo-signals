@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Email Infrastructure · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* infrastructure-v1 — Settings → Email Infrastructure (P1 "Tracker" design, live data) */
+.settings-cols { display:flex; min-height:100vh; flex:1; min-width:0; }
+.submenu { width:208px; flex:0 0 208px; background:var(--cream-50, #FCF7F1);
+  border-right:1px solid var(--line); }
+.submenu h2 { font-size:13px; font-weight:600; color:var(--ink-3); text-transform:uppercase;
+  letter-spacing:.06em; padding:22px 18px 10px; margin:0; }
+.submenu .items { padding:0 10px; }
+.submenu a { display:block; font-size:13.5px; padding:9px 18px; border-radius:8px;
+  text-decoration:none; color:var(--ink-2); border:1px solid transparent; }
+.submenu a:hover { background:var(--cream); }
+.submenu a.active { background:#fff; border:1px solid var(--line-2); font-weight:600;
+  color:var(--ink); box-shadow:0 1px 2px rgba(20,17,14,.06); }
+
+.infra-main { flex:1; min-width:0; padding:28px 34px 60px; }
+.infra-main h1 { font-family:var(--font-display); font-size:22px; font-weight:700; margin:0; }
+.col { max-width:680px; margin:56px auto 0; }
+
+.headline { font-family:var(--font-display); font-weight:700; font-size:30px; line-height:1.22;
+  letter-spacing:-.01em; text-align:center; text-wrap:balance; color:var(--ink); }
+.headline .date { color:var(--orange); white-space:nowrap; }
+.subline { text-align:center; font-size:14px; color:var(--ink-3); margin-top:12px; }
+
+.tracker { display:flex; margin:48px 4px 0; }
+.step { flex:1; display:flex; flex-direction:column; align-items:center; position:relative; }
+.step .bar { position:absolute; top:7px; left:-50%; width:100%; height:3px;
+  background:var(--line-2); border-radius:2px; }
+.step:first-child .bar { display:none; }
+.step.done .bar { background:var(--orange); }
+.step.now .bar { background:linear-gradient(90deg, var(--orange) 0%, #FFE4D6 100%); }
+.step .knot { width:17px; height:17px; border-radius:50%; background:#fff;
+  border:3px solid var(--line-2); position:relative; z-index:1; }
+.step.done .knot { background:var(--orange); border-color:var(--orange); }
+.step.done .knot::after { content:""; position:absolute; inset:0;
+  background:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2.5 6.2l2.4 2.4 4.6-5" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>') center/9px no-repeat; }
+.step.now .knot { border-color:var(--orange); background:#FFE4D6;
+  animation:infra-pulse 2.4s ease-in-out infinite; }
+.step .lbl { margin-top:10px; font-size:12px; color:var(--brown-400, #A89684); text-align:center; }
+.step.done .lbl { color:var(--ink-3); }
+.step.now .lbl { color:var(--ink); font-weight:600; }
+@keyframes infra-pulse { 0%,100% { box-shadow:0 0 0 0 rgba(255,77,0,.30); }
+  50% { box-shadow:0 0 0 8px rgba(255,77,0,0); } }
+@media (prefers-reduced-motion: reduce) { .step.now .knot { animation:none; } }
+
+.dcard { margin-top:44px; background:var(--card); border:1px solid var(--line);
+  border-radius:14px; box-shadow:0 1px 2px rgba(20,17,14,.04); }
+.drow { display:flex; align-items:center; gap:14px; padding:16px 20px; }
+.drow + .drow { border-top:1px solid var(--line); }
+.drow .name { font-size:14.5px; font-weight:600; color:var(--ink); }
+.mbcount { font-size:12px; color:var(--brown-400, #A89684); white-space:nowrap; margin-left:2px; }
+.mbcount .tick { color:var(--green); }
+.drow .status { margin-left:auto; text-align:right; font-size:13px; color:var(--ink-3);
+  white-space:nowrap; }
+.drow .status b { font-weight:600; }
+.drow .status .ok { color:var(--green); }
+.drow .status .live { color:var(--orange-600, #DB4100); }
+.drow .status .dim { color:var(--brown-400, #A89684); font-weight:400; }
+.drow .status .when { color:var(--brown-400, #A89684); font-weight:400; margin-left:6px; }
+
+.foot { margin-top:26px; display:flex; align-items:center; justify-content:space-between;
+  gap:16px; padding:0 4px; }
+.quiet { font-size:12.5px; color:var(--brown-400, #A89684); display:flex; gap:18px; flex-wrap:wrap; }
+.quiet .tick { color:var(--green); margin-right:5px; }
+.quiet a { color:var(--ink-3); text-decoration:underline; text-underline-offset:2px; }
+.ghost { font:inherit; font-size:12.5px; color:var(--ink-3); background:transparent;
+  border:1px dashed var(--line-2); border-radius:8px; padding:7px 13px; cursor:pointer;
+  white-space:nowrap; }
+.ghost:hover { background:var(--cream-50, #FCF7F1); color:var(--ink); }
+
+/* intake */
+.panel { margin-top:40px; background:var(--cream-50, #FCF7F1); border:1px solid var(--line);
+  border-radius:14px; padding:22px 24px; }
+.panel label { display:block; font-size:12.5px; color:var(--ink-3); margin:0 0 6px; }
+.panel input { width:100%; box-sizing:border-box; font:inherit; font-size:14px; color:var(--ink);
+  background:#fff; border:1px solid var(--line-2); border-radius:8px; padding:10px 12px; }
+.panel input:focus { outline:none; box-shadow:0 0 0 3px rgba(255,77,0,.32); }
+.grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:16px; }
+.hintline { font-size:12px; color:var(--brown-400, #A89684); margin-top:6px; }
+.sectionlbl { font-size:12px; font-weight:700; color:var(--ink-3); text-transform:uppercase;
+  letter-spacing:.06em; margin:22px 0 10px; }
+.panel .sectionlbl:first-child { margin-top:0; }
+.row2 { display:flex; gap:14px; margin-top:18px; justify-content:flex-end; }
+.btn-go { font:inherit; font-size:14px; font-weight:600; color:#fff; background:var(--orange);
+  border:0; border-radius:9px; padding:11px 20px; cursor:pointer;
+  box-shadow:0 2px 6px rgba(255,77,0,.25); }
+.btn-go:hover { background:var(--orange-600, #DB4100); }
+.btn-go[disabled] { opacity:.55; cursor:default; }
+.linkbtn { font:inherit; font-size:13px; color:var(--ink-3); background:none; border:0;
+  cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+.linkbtn:hover { color:var(--ink); }
+
+/* queued confirmation + nudge */
+.queued { margin:26px auto 0; max-width:520px; background:var(--green-bg); border:1px solid var(--green-line);
+  border-radius:14px; padding:18px 22px; font-size:13.5px; color:var(--ink-2); line-height:1.6; }
+.queued b { color:var(--green); }
+.nudge { margin:26px auto 0; max-width:460px; background:var(--cream-50, #FCF7F1);
+  border:1px solid var(--line); border-radius:999px; padding:12px 22px; text-align:center;
+  font-size:13.5px; color:var(--ink-2); }
+.nudge a { color:var(--orange-600, #DB4100); font-weight:600; text-decoration:none; }
+.nudge a:hover { text-decoration:underline; text-underline-offset:3px; }
+.loading, .err { text-align:center; padding:60px 0; color:var(--ink-3); font-size:13.5px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <div class="settings-cols">
+    <nav class="submenu">
+      <h2>Settings</h2>
+      <div class="items">
+        <a href="settings.html">Workspaces</a>
+        <a href="infrastructure.html" class="active">Email Infrastructure</a>
+      </div>
+    </nav>
+    <main class="infra-main">
+      <h1>Email Infrastructure</h1>
+      <div class="col">
+        <div class="headline" id="headline"></div>
+        <div class="subline" id="subline"></div>
+        <div id="stage"><div class="loading">Loading your infrastructure…</div></div>
+      </div>
+    </main>
+  </div>
+</div>
+
+<script src="shell.js"></script>
+<script>
+(function () {
+  "use strict";
+  document.getElementById("rail").outerHTML = renderRail("settings");
+
+  var hl = document.getElementById("headline");
+  var sub = document.getElementById("subline");
+  var stage = document.getElementById("stage");
+  var BATCH = null;
+
+  var STEPS = ["Setup", "Buying", "Mailboxes", "Warming", "Ready"];
+  var STAGE_IDX = { setup: 0, buying: 1, mailboxes: 2, warming: 3, ready: 5 };
+
+  function esc(t) { return String(t == null ? "" : t)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;"); }
+
+  function statusHTML(d) {
+    switch (d.status) {
+      case "planned":  return '<b class="dim">Waiting its turn</b>';
+      case "buying":   return '<b class="live">Buying now</b><span class="when">from ' + esc(d.registrar) + '</span>';
+      case "bought":   return '<b class="ok">Bought ✓</b><span class="when">' + esc(d.bought || "") + ' · mailboxes queued</span>';
+      case "mailboxes_building": return '<b class="live">Mailboxes being built</b>';
+      case "warming":  return '<b>Warming</b><span class="when">· day ' + esc(d.warm_day || 1) + ' of 14' + (d.ready_date ? ' · ready ' + esc(d.ready_date) : '') + '</span>';
+      case "ready":    return '<b class="ok">Ready ✓</b>' + (d.ready_date ? '<span class="when">' + esc(d.ready_date) + '</span>' : '');
+      default:         return '<b class="dim">' + esc(d.status || "–") + '</b>';
+    }
+  }
+
+  function mbHTML(d) {
+    var built = ["warming", "ready", "mailboxes_building"].indexOf(d.status) >= 0 && d.status !== "mailboxes_building";
+    return esc(d.inboxes || 3) + ' inboxes' + (built ? ' <span class="tick">✓</span>' : '');
+  }
+
+  function headlineFor(b) {
+    var ds = b.domains || [];
+    var n = ds.length, boxes = ds.reduce(function (a, d) { return a + (d.inboxes || 3); }, 0);
+    var building = ds.filter(function (d) { return d.status === "mailboxes_building"; }).length;
+    var readyCt = ds.filter(function (d) { return d.status === "ready"; }).length;
+    if (b.stage === "ready" || readyCt === n)
+      return { h: 'All ' + n + ' domains are ready — <span class="date">' + boxes + ' inboxes</span>, good to go.',
+               s: "Sending as " + b.sender + " · visitors land on " + b.redirect + " · in your " + b.workspace + " workspace" };
+    if (b.stage === "warming")
+      return { h: 'Your inboxes are warming' + (b.ready_date ? ' — ready <span class="date">' + esc(b.ready_date) + '</span>' : '') + '.',
+               s: "Warming = sending friendly practice emails so inbox providers trust you. Nothing needed from you." };
+    if (b.stage === "mailboxes")
+      return { h: building === 1 && n > 1
+                 ? esc(ds.filter(function (d) { return d.status === "mailboxes_building"; })[0].name) + ' is getting its mailboxes — ' + (n - building) + ' more queued behind it.'
+                 : 'Building your inboxes — 3 on each domain.',
+               s: "Takes a few hours per domain. Nothing needed from you." };
+    if (b.stage === "buying")
+      return { h: 'Buying your ' + n + ' domains quietly over 2 days.',
+               s: "Spread out and from different places — on purpose. Nothing needed from you." };
+    return { h: "Setting up.", s: "" };
+  }
+
+  function trackerHTML(current) {
+    return '<div class="tracker">' + STEPS.map(function (label, i) {
+      var cls = i < current ? "done" : (i === current ? "now" : "");
+      return '<div class="step ' + cls + '"><span class="bar"></span><span class="knot"></span>' +
+             '<span class="lbl">' + label + '</span></div>';
+    }).join("") + '</div>';
+  }
+
+  function renderBatch(extraHTML) {
+    var b = BATCH;
+    var head = headlineFor(b);
+    hl.innerHTML = head.h;
+    sub.textContent = head.s;
+    var rows = (b.domains || []).map(function (d) {
+      return '<div class="drow"><span class="name">' + esc(d.name) + '</span>' +
+             '<span class="mbcount">' + mbHTML(d) + '</span>' +
+             '<span class="status">' + statusHTML(d) + '</span></div>';
+    }).join("");
+    var isReady = b.stage === "ready";
+    stage.innerHTML =
+      trackerHTML(STAGE_IDX[b.stage] != null ? STAGE_IDX[b.stage] : 2) +
+      '<div class="dcard">' + rows + '</div>' +
+      '<div class="foot"><div class="quiet">' +
+        '<span><span class="tick">✓</span>Checked automatically</span>' +
+        '<span><span class="tick">✓</span>In your <a href="mailboxes.html">Inbox manager</a></span>' +
+      '</div><button class="ghost" id="addBtn">+ Add domains</button></div>' +
+      (isReady ? '<div class="nudge">They’re warmed and trusted — <a href="campaigns.html">add them to a campaign now →</a></div>' : '') +
+      (extraHTML || '');
+    document.getElementById("addBtn").addEventListener("click", intake);
+  }
+
+  /* ── Add-domains intake: the exact questions the orchestrator needs ── */
+  function intake() {
+    hl.textContent = "Let’s set up more sending inboxes.";
+    sub.textContent = "Four quick questions — we do the rest.";
+    stage.innerHTML =
+      '<div class="panel">' +
+        '<div class="sectionlbl">Your site</div>' +
+        '<div class="grid2">' +
+          '<div><label for="site">Your website</label><input id="site" value="navreo.ai">' +
+            '<div class="hintline">We invent the domain names FOR you from this — and anyone who visits one lands here</div></div>' +
+          '<div><label for="vol">How many emails a month?</label><input id="vol" type="number" step="1000" min="1000" value="5000">' +
+            '<div class="hintline" id="volmath"></div></div>' +
+        '</div>' +
+        '<div class="sectionlbl">Who’s sending</div>' +
+        '<div class="grid2">' +
+          '<div><label for="first">First name</label><input id="first" value=""></div>' +
+          '<div><label for="last">Last name</label><input id="last" value=""></div>' +
+        '</div>' +
+        '<div class="grid2">' +
+          '<div><label for="role">Their role</label><input id="role" value="">' +
+            '<div class="hintline">Goes in the email signature — "Founder of Navreo"</div></div>' +
+          '<div><label for="ws">Workspace</label><input id="ws" value="Navreo">' +
+            '<div class="hintline">Which client these belong to</div></div>' +
+        '</div>' +
+        '<div class="row2">' +
+          '<button class="linkbtn" id="cancel">Cancel</button>' +
+          '<button class="btn-go" id="go">Invent my domains</button>' +
+        '</div>' +
+      '</div>';
+    function paintMath() {
+      var vol = Number(document.getElementById("vol").value) || 5000;
+      var inboxes = Math.max(3, Math.ceil(vol / 600));
+      var domains = Math.max(1, Math.ceil(inboxes / 3));
+      document.getElementById("volmath").textContent =
+        "That’s " + (domains * 3) + " inboxes on " + domains + " domains — we sort the inbox mix for you";
+    }
+    document.getElementById("vol").addEventListener("input", paintMath);
+    paintMath();
+    document.getElementById("cancel").addEventListener("click", function () { renderBatch(); });
+    document.getElementById("go").addEventListener("click", function () {
+      var btn = this;
+      btn.disabled = true; btn.textContent = "Sending…";
+      fetch("/api/infrastructure/requests", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          website: document.getElementById("site").value.trim(),
+          monthly_volume: Number(document.getElementById("vol").value) || 5000,
+          first_name: document.getElementById("first").value.trim(),
+          last_name: document.getElementById("last").value.trim(),
+          role: document.getElementById("role").value.trim(),
+          workspace: document.getElementById("ws").value.trim() || "Navreo"
+        })
+      }).then(function (r) { return r.json(); }).then(function (b) {
+        if (!b.ok) throw new Error(b.message || "request failed");
+        renderBatch('<div class="queued"><b>Request received ✓</b> — we’re inventing your domain names now and checking they’re available. ' +
+          'You’ll get the exact list and prices here for your go-ahead <b>before anything is bought</b>.</div>');
+      }).catch(function (e) {
+        btn.disabled = false; btn.textContent = "Invent my domains";
+        alert("Couldn’t send: " + (e.message || e));
+      });
+    });
+  }
+
+  fetch("/api/infrastructure/batches", { cache: "no-store" })
+    .then(function (r) { return r.json(); })
+    .then(function (b) {
+      var batches = (b && b.batches) || [];
+      if (!batches.length) { intake(); return; }
+      BATCH = batches[0];
+      renderBatch();
+    })
+    .catch(function (e) {
+      stage.innerHTML = '<div class="err">Could not load (' + esc(String(e)) + '). Refresh to retry.</div>';
+    });
+})();
+</script>
+</body>
+</html>
