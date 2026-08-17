@@ -604,10 +604,12 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
             counts["errors"] += 1
             rec("error_reverse", email, "smartlead->notion", detail={"error": str(e)[:300]})
             log(f"[{client}] ERROR reverse {email}: {e}")
-    # Make scenario 8946472 ("Amplifyy → portal DB") creates portal rows the
-    # instant a positive reply lands — it has first right of creation. We only
-    # backstop leads it MISSED: no creation while the newest evidence is fresh.
-    grace_cutoff = datetime.now(timezone.utc).timestamp() - 2 * 3600
+    # Clients with a live Make createAPage writer (make_first_grace) give Make
+    # first right of creation — we only backstop leads it MISSED (evidence >2h
+    # old). Clients with no Make writer get created immediately: waiting would
+    # just delay the row for nothing (the Touchpoint lesson, 2026-08-17).
+    grace_cutoff = (datetime.now(timezone.utc).timestamp() - 2 * 3600
+                    if cfg.get("make_first_grace") else float("inf"))
     deferred = 0
     for email, target in creates:
         if (state.get(email) or {}).get("source") == "smartlead_created":
