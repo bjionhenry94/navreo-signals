@@ -10417,6 +10417,142 @@ def _fetch_human_answer_history(campaign_id, email: str, replied_at: str) -> dic
     return {}
 
 
+# ── portal thread view (owner founding case 2026-08-17) ─────────────────────
+# Every training card must read as a REALISTIC email thread: at most
+# THREAD_RENDER_MAX emails, chronological, what-we-sent / what-they-sent,
+# and the LEAD is always the last to respond. These are structural
+# invariants, so they live here in deterministic code with tests — never in
+# a prompt (prompt rules lose ~1-in-3 against strong mandates; proven in the
+# setter-context training loop).
+
+THREAD_RENDER_MAX = 4
+
+
+def _assemble_case_thread(raw_thread: list, cutoff_at: str = None):
+    """Turns a queue-style thread ([{type: SENT|REPLY, time, subject, body,
+    from_name}]) into the portal card's thread: cleaned bodies, strictly
+    chronological (input order is untrusted), cut at `cutoff_at` when given
+    (so a case never shows messages newer than the reply it is about),
+    trailing us-side messages dropped (the lead is ALWAYS last — the card
+    is about answering them), and only the most recent THREAD_RENDER_MAX
+    emails kept. Returns (entries, earlier_count): entries as
+    [{who: us|lead, subject, body, at, from_name}], earlier_count = how
+    many older messages were cut (the card shows a note, never the raw
+    backlog). ([], 0) when nothing usable — callers fall back."""
+    def _ts(v):
+        try:
+            return _parse_iso(v).timestamp()
+        except (TypeError, ValueError):
+            return None
+    entries = []
+    for m in (raw_thread or []):
+        if not isinstance(m, dict):
+            continue
+        t = str(m.get("type") or m.get("who") or "").upper()
+        who = "us" if t in ("SENT", "US") else "lead"
+        body_c = clean_body(m.get("body") or "")
+        if not body_c.strip():
+            continue
+        at = str(m.get("time") or m.get("at") or "")
+        entries.append({"who": who, "subject": str(m.get("subject") or ""),
+                        "body": body_c, "at": at,
+                        "from_name": str(m.get("from_name") or ""), "_ts": _ts(at)})
+    entries.sort(key=lambda e: (e["_ts"] is None, e["_ts"] or 0.0))
+    cut_ts = _ts(cutoff_at) if cutoff_at else None
+    if cut_ts is not None:
+        # +2s tolerance: the same instant can differ by ms between the
+        # queue hydration and the replies table.
+        entries = [e for e in entries if e["_ts"] is None or e["_ts"] <= cut_ts + 2]
+    while entries and entries[-1]["who"] != "lead":
+        entries.pop()
+    if not entries:
+        return [], 0
+    earlier = max(0, len(entries) - THREAD_RENDER_MAX)
+    kept = entries[-THREAD_RENDER_MAX:]
+    for e in kept:
+        e.pop("_ts", None)
+    return kept, earlier
+
+
+def _fetch_queue_thread(campaign_id, email: str) -> dict:
+    """The richest real context we hold for (campaign, email): the setter
+    queue's hydrated thread AND the lead's first name, when a non-test row
+    exists. Returns {} (never raises) when there is none — the case falls
+    back to outreach + inbound and a nameless greeting is avoided via
+    thread from_name where possible."""
+    if not _SB or not campaign_id or not email:
+        return {}
+    try:
+        rows = _SB("GET", f"{QUEUE_TABLE}?smartlead_campaign_id=eq.{campaign_id}"
+                          f"&lead_email=eq.{quote(str(email), safe='')}&is_test=not.is.true"
+                          f"&select=thread,lead_first_name&order=id.desc&limit=1")
+        if isinstance(rows, list) and rows:
+            return rows[0] if isinstance(rows[0], dict) else {}
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _case_lead_first_name(case: dict) -> str:
+    """The lead's first name for a training case (owner verdict, round 1
+    2026-08-17: drafts must greet the lead by name — the live setter never
+    says 'Hi there'). Prefers the stored name, falls back to the newest
+    lead-side from_name in the case's thread."""
+    name = str((case or {}).get("lead_first_name") or "").strip()
+    if name:
+        return name.split()[0]
+    for e in reversed((case or {}).get("thread") or []):
+        if e.get("who") == "lead" and (e.get("from_name") or "").strip():
+            return str(e["from_name"]).strip().split()[0]
+    return ""
+
+
+_SPINTAX_ALT_RE = re.compile(r"\{([^{}|]*)\|[^{}]*\}")
+_MERGE_TOKEN_RE = re.compile(r"\{\{\s*([A-Za-z_ ]+?)\s*\}\}")
+_CTRL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f]")
+
+
+def _display_clean(text: str, first_name: str = "", company: str = "") -> str:
+    """Display hygiene for portal threads (training round 1, 2026-08-17):
+    raw spintax braces, unfilled merge tokens, and control characters must
+    never reach a client's eyes. Deterministic: spintax resolves to its
+    FIRST option (memory: copy-nonspintax-first), known merge tokens fill
+    from the lead we're rendering, unknown ones drop, control chars strip.
+    Runs on every thread body and subject at the case's single choke point
+    in _build_case_core."""
+    t = str(text or "")
+    for _ in range(3):  # nested/multiple spintax groups
+        t2 = _SPINTAX_ALT_RE.sub(lambda m: m.group(1), t)
+        if t2 == t:
+            break
+        t = t2
+
+    def _fill(m):
+        key = m.group(1).strip().lower().replace("_", "").replace(" ", "")
+        if key in ("firstname", "first"):
+            return first_name or ""
+        if key in ("company", "companyname"):
+            return company or ""
+        return ""
+    t = _MERGE_TOKEN_RE.sub(_fill, t)
+    t = _CTRL_CHAR_RE.sub("", t)
+    # collapse doubled spaces a dropped token can leave behind
+    t = re.sub(r"[ \t]{2,}", " ", t)
+    return t.strip()
+
+
+_GREETING_NAME_RE = re.compile(r"^(\s*(?:hi|hey|hello|dear)\s+)([A-Z][\w'-]*)", re.IGNORECASE)
+
+
+def _swap_greeting_name(body: str, first_name: str) -> str:
+    """Deterministic greeting swap for synthetic threads: a REAL outreach
+    body reused as a fictitious lead's email 1 gets its greeting renamed to
+    the invented lead — nothing else in the body changes."""
+    if not first_name:
+        return body
+    return _GREETING_NAME_RE.sub(lambda m: m.group(1) + first_name, body, count=1)
+
+
 # ── synthetic scenario invention (shortfall top-up, see the doctrine
 # comment above _TRAINING_ID_PREFIX) ────────────────────────────────────────
 
@@ -10482,8 +10618,17 @@ TRAINING_SCENARIO_ITEM_SCHEMA = {
     "properties": {
         "lead_first_name": {"type": "string"}, "lead_company": {"type": "string"},
         "subject": {"type": "string"}, "body": {"type": "string"},
+        # Portal thread view (2026-08-17): optional earlier lead turn - when
+        # non-empty the case builder constructs a 4-email thread (outreach ->
+        # this -> OUR real drafted reply -> body). Empty string = 2-email case.
+        "prior_lead_reply": {"type": "string"},
+        # Only used when the agent has zero real outreach to reuse (see
+        # fallback_context): a plausible outreach email 1 written FROM the
+        # agent's own instructions - never invented facts.
+        "outreach_subject": {"type": "string"}, "outreach_body": {"type": "string"},
     },
-    "required": ["lead_first_name", "lead_company", "subject", "body"],
+    "required": ["lead_first_name", "lead_company", "subject", "body",
+                 "prior_lead_reply", "outreach_subject", "outreach_body"],
 }
 
 TRAINING_SCENARIO_SCHEMA = {
@@ -10509,7 +10654,13 @@ fallback_context, when given instead (no reference replies exist yet), is the ag
 
 avoid_duplicating lists short gists (category plus the start of the inbound text) of scenarios already waiting to be answered - do not repeat any of these angles, names, or companies.
 
-Output STRICT JSON: {"scenarios": [{"lead_first_name": "...", "lead_company": "...", "subject": "...", "body": "..."}, ...]}, one object per scenario_plan position, in the same order. subject and body should read like a short, real inbound email reply - plain text, a couple of sentences, the way a busy person actually replies, never polished marketing copy."""
+THREAD DEPTH: for roughly one scenario in three (spread across categories), also fill prior_lead_reply - an EARLIER, shorter message from the same lead that came before the final reply in `body` (e.g. a first "sounds interesting, how does it work?" before the final "OK and what about pricing?"). The two lead messages must read as the same person continuing one conversation. For all other scenarios prior_lead_reply is an empty string. prior_lead_reply obeys the same lead-side-only law as body.
+
+outreach_subject / outreach_body: the payload's outreach_needed flag decides. When outreach_needed is false, leave both empty (a real sent email will be reused). When outreach_needed is true, ALWAYS write them - the outreach email the lead is replying to, a faithful short rendition of what this agent sends, drawn ONLY from the agent context you were given (reference_replies tone, fallback_context instructions); never invent a price, link, or claim that isn't in that context, and never leave them empty when outreach_needed is true.
+
+REALISM (how a real lead writes, learned from real replies): short sentences, sometimes fragments; typos and lowercase happen; specific practical questions ("does this work with outlook?", "what's the cost?"); mobile sign-offs ("Sent from my iPhone"); busy-person brevity ("Send it over.", "Not now - Q3 maybe."). Never bullet-pointed brochure prose, never perfectly parallel sentence structure.
+
+Output STRICT JSON: {"scenarios": [{"lead_first_name": "...", "lead_company": "...", "subject": "...", "body": "...", "prior_lead_reply": "...", "outreach_subject": "...", "outreach_body": "..."}, ...]}, one object per scenario_plan position, in the same order. subject and body should read like a short, real inbound email reply - plain text, a couple of sentences, the way a busy person actually replies, never polished marketing copy."""
 
 
 def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campaign_ids: list | None = None,
@@ -10556,7 +10707,14 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
 
     reference = reference_sample if reference_sample is not None else \
         _fetch_reply_tone_sample(allowed_campaign_ids=allowed_campaign_ids)
-    payload = {"scenario_plan": scenario_plan}
+    # Outreach availability is about SENDS, not replies (training round 1,
+    # 2026-08-17): an agent can have plenty of real replies in scope yet
+    # zero reusable outreach - the invention must then write email 1 itself
+    # or the synthetic thread has no us-side at all.
+    _camp_ids_for_outreach = allowed_campaign_ids if allowed_campaign_ids is not None \
+        else (agent.get("campaign_ids") or [])
+    outreach_needed = not _fetch_agent_outreach_sample(_camp_ids_for_outreach, limit=1)
+    payload = {"scenario_plan": scenario_plan, "outreach_needed": outreach_needed}
     if reference:
         payload["reference_replies"] = [
             {"category": r.get("category") or "", "subject": clean_body(r.get("reply_subject") or "")[:200],
@@ -10617,6 +10775,9 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
             "lead_company": str(item.get("lead_company") or "").strip(),
             "subject": str(item.get("subject") or "").strip(),
             "body": body,
+            "prior_lead_reply": str(item.get("prior_lead_reply") or "").strip(),
+            "outreach_subject": str(item.get("outreach_subject") or "").strip(),
+            "outreach_body": str(item.get("outreach_body") or "").strip(),
         })
     return scenarios
 
@@ -10624,7 +10785,9 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
 def _build_case_core(*, subject: str, body: str, raw_body: str, category, campaign_id, email_domain: str,
                      original_outreach: dict, human_answer_history: dict, agent: dict, eff_settings: dict,
                      avail: list, slot_status0: str, now, mem_digest: str, idx: int, reply_id,
-                     synthetic: bool) -> dict:
+                     synthetic: bool, thread_raw: list = None, cutoff_at: str = None,
+                     inbound_at: str = None, synthetic_thread: list = None,
+                     lead_first_name: str = "") -> dict:
     """Shared core of _build_training_case (real archived replies) and
     _build_synthetic_training_case (invented lead-side-only scenarios, see
     the doctrine comment above _TRAINING_ID_PREFIX): runs the exact
@@ -10637,6 +10800,17 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
     pipeline. Costs at most 2 gpt-5-mini calls (one classify, one draft - a
     clear-negative reply skips the draft call entirely). Never raises - a
     bad input just yields no case (caller's job to catch and return None)."""
+    # Lead-name fallback (owner verdict, round 1 2026-08-17): when the
+    # caller has no stored name, the newest lead-side from_name in the raw
+    # thread supplies it — drafting happens below, before thread assembly.
+    if not (lead_first_name or "").strip():
+        for m in reversed(thread_raw or []):
+            t = str((m or {}).get("type") or (m or {}).get("who") or "").upper()
+            if t not in ("SENT", "US") and str((m or {}).get("from_name") or "").strip():
+                lead_first_name = str(m["from_name"]).strip().split()[0]
+                break
+    lead_first_name = (lead_first_name or "").strip()
+
     first_outbound = original_outreach.get("body") or ""
     comp = _company_hints(email_domain) if email_domain else {}
     hints = {"phone": _extract_phone(body), "tld": ".".join(email_domain.split(".")[-2:]) if email_domain else "",
@@ -10653,9 +10827,19 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
     except (TypeError, ValueError):
         confidence = 0.0
     is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
+    # Owner training rule (2026-08-16, round 1), mirrored from the live
+    # pipeline's wants_draft gate: "No matter what they say, always say
+    # something" - every HUMAN reply gets a draft, even a clear negative.
+    # Only machine mail (OOO autoreplies, bounces) keeps the no-draft
+    # short-circuit. The training path had kept the old is_clear_neg skip
+    # (owner question, thread round 1 2026-08-17: "why is there no draft
+    # for Carl?" - Carl was machine mail, but the question exposed that
+    # human negatives were also draft-less here, diverging from live).
+    human_reply = primary not in ("ooo", "bounce_or_system")
+    wants_draft = (not is_clear_neg) or human_reply or (category in POSITIVE_CATEGORIES)
 
     slots, slot_status = [], "not_configured"
-    if not is_clear_neg:
+    if wants_draft:
         if tz:
             slot_status = slot_status0
             if slot_status == "ok":
@@ -10674,13 +10858,13 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
 
     draft_html = None
     lint_ok, lint_reason = False, "No draft was produced."
-    if not is_clear_neg:
+    if wants_draft:
         try:
-            # No hydration, so no real sender name to draw on - resolves to
-            # the agent's own configured identity via _sender_first_for, same
-            # as every other non-live surface (owner bug report 2026-07-14:
-            # this used to hardcode "Bjion" regardless of which agent it was).
-            d = draft_reply({"first_name": "", "subject": subject, "body": body,
+            # Sender identity resolves via _sender_first_for (owner bug
+            # report 2026-07-14). The LEAD's first name rides in the payload
+            # (owner verdict, round 1 2026-08-17): a draft must greet the
+            # lead by name — the live setter never says "Hi there".
+            d = draft_reply({"first_name": lead_first_name, "subject": subject, "body": body,
                              "first_outbound": first_outbound}, agent, cls, slots, slot_status,
                             sender_first=_sender_first_for(agent), regen_feedback=mem_digest)
             draft_html = d.get("html")
@@ -10691,7 +10875,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                 # (_build_synthetic_training_case) cases.
                 draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent))
             lint_ok, lint_reason = lint_draft(draft_html, {
-                "subject": d.get("subject"), "first_name": "",
+                "subject": d.get("subject"), "first_name": lead_first_name,
                 "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
                 "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                 "slot_labels": [s.get("label") for s in slots],
@@ -10716,6 +10900,46 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
     }
     decision, reason = decide(cls, agent, ctx)
 
+    # Portal thread view (owner founding case 2026-08-17): every case
+    # carries a render-ready thread — chronological, <= THREAD_RENDER_MAX
+    # emails, lead always last. Priority: real queue thread -> caller-built
+    # synthetic thread -> outreach+inbound fallback. The case's own inbound
+    # is guaranteed to be the final entry.
+    thread, thread_earlier = (_assemble_case_thread(thread_raw, cutoff_at=cutoff_at)
+                              if thread_raw else ([], 0))
+    if not thread and synthetic_thread:
+        thread = [dict(e) for e in synthetic_thread if isinstance(e, dict) and (e.get("body") or "").strip()]
+        thread_earlier = max(0, len(thread) - THREAD_RENDER_MAX)
+        thread = thread[-THREAD_RENDER_MAX:]
+    if not thread:
+        thread = []
+        if str(first_outbound or "").strip():
+            thread.append({"who": "us", "subject": original_outreach.get("subject") or "",
+                           "body": clean_body(first_outbound),
+                           "at": str(original_outreach.get("sent_at") or ""), "from_name": ""})
+        thread.append({"who": "lead", "subject": subject, "body": body,
+                       "at": str(inbound_at or ""), "from_name": ""})
+        thread_earlier = 0
+    else:
+        last = thread[-1]
+        same_inbound = last.get("who") == "lead" and \
+            (last.get("body") or "").strip()[:80] == (body or "").strip()[:80]
+        if not same_inbound:
+            thread.append({"who": "lead", "subject": subject, "body": body,
+                           "at": str(inbound_at or ""), "from_name": ""})
+            if len(thread) > THREAD_RENDER_MAX:
+                thread_earlier += len(thread) - THREAD_RENDER_MAX
+                thread = thread[-THREAD_RENDER_MAX:]
+
+    # Display hygiene choke point (training round 1, 2026-08-17): every
+    # thread body/subject - real, synthetic, or fallback - gets spintax
+    # resolved, merge tokens filled from the lead, control chars stripped.
+    lead_name = next((e.get("from_name") for e in thread
+                      if e.get("who") == "lead" and (e.get("from_name") or "").strip()), "")
+    for e in thread:
+        e["body"] = _display_clean(e.get("body"), first_name=lead_name)
+        e["subject"] = _display_clean(e.get("subject"), first_name=lead_name)
+
     case = {
         "id": f"case-{idx:04d}", "reply_id": reply_id, "campaign_id": campaign_id,
         "category": category,
@@ -10723,6 +10947,8 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
         "original_outreach": original_outreach, "human_answer_history": human_answer_history,
         "classification": cls, "decision": decision, "decision_reason": reason,
         "draft_html": draft_html,
+        "thread": thread, "thread_earlier": thread_earlier,
+        "lead_first_name": lead_first_name,
         "generated_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
     }
     if synthetic:
@@ -10752,12 +10978,16 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
         outreach = _fetch_original_outreach(campaign_id, email)
         human_answer = _fetch_human_answer_history(campaign_id, email, replied_at)
         domain = email.split("@", 1)[1] if "@" in email else ""
+        qrow = _fetch_queue_thread(campaign_id, email)
 
         return _build_case_core(subject=subject, body=body, raw_body=raw_body, category=category,
                                 campaign_id=campaign_id, email_domain=domain,
                                 original_outreach=outreach, human_answer_history=human_answer,
                                 agent=agent, eff_settings=eff_settings, avail=avail, slot_status0=slot_status0,
-                                now=now, mem_digest=mem_digest, idx=idx, reply_id=reply_id, synthetic=False)
+                                now=now, mem_digest=mem_digest, idx=idx, reply_id=reply_id, synthetic=False,
+                                thread_raw=qrow.get("thread") or [],
+                                cutoff_at=replied_at, inbound_at=replied_at,
+                                lead_first_name=str(qrow.get("lead_first_name") or ""))
     except Exception:  # noqa: BLE001 - a single bad reply must never abort the whole batch
         return None
 
@@ -10780,11 +11010,66 @@ def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: di
         body = clean_body(raw_body)
         subject = str(scenario.get("subject") or "")
 
+        # Portal thread view (2026-08-17): a synthetic case still shows a
+        # real-looking thread. Email 1 is REAL outreach (a genuine sent
+        # seq-1 body, greeting renamed to the invented lead) or, for an
+        # agent with zero sends, the outreach the invention wrote from the
+        # agent's own instructions. When the scenario carries a
+        # prior_lead_reply, the thread deepens to 4 emails and OUR mid-
+        # thread reply is the REAL drafter's output over that prior turn —
+        # every us-side email is pipeline output, never hand-written.
+        first_name = str(scenario.get("lead_first_name") or "").strip()
+        camp_ids = [campaign_id] if campaign_id else (agent.get("campaign_ids") or [])
+        sample = _fetch_agent_outreach_sample(camp_ids, limit=1)
+        if sample:
+            o_subject = str(sample[0].get("subject") or "")
+            o_body = _swap_greeting_name(clean_body(sample[0].get("body") or ""), first_name)
+        else:
+            o_subject = str(scenario.get("outreach_subject") or "")
+            o_body = clean_body(str(scenario.get("outreach_body") or ""))
+        prior = clean_body(str(scenario.get("prior_lead_reply") or ""))
+        if not o_body.strip():
+            # No us-side email is buildable (no real send to reuse AND the
+            # invention wrote no outreach): a practice thread where nobody
+            # wrote to the lead first isn't a thread - drop the scenario
+            # (same bad-scenario discipline as every other None return;
+            # training round 1, 2026-08-17).
+            return None
+
+        def _at(days_ago: float) -> str:
+            return (now - _dt.timedelta(days=days_ago)).isoformat(timespec="seconds")
+
+        synthetic_thread = []
+        original_outreach = {}
+        if o_body.strip():
+            original_outreach = {"subject": o_subject, "body": o_body, "sent_at": _at(6)}
+            synthetic_thread.append({"who": "us", "subject": o_subject, "body": o_body,
+                                     "at": _at(6), "from_name": ""})
+        if prior and o_body.strip():
+            synthetic_thread.append({"who": "lead", "subject": subject, "body": prior,
+                                     "at": _at(4), "from_name": first_name})
+            try:
+                prior_cls = classify({"subject": subject, "body": prior, "first_outbound": o_body,
+                                      "last_outbound": "", "email_domain": ""}, agent, owner_hints=mem_digest)
+                mid = draft_reply({"first_name": first_name, "subject": subject, "body": prior,
+                                   "first_outbound": o_body}, agent, prior_cls, [], "not_configured",
+                                  sender_first=_sender_first_for(agent), regen_feedback=mem_digest)
+                mid_text = clean_body(mid.get("html") or "")
+                if mid_text.strip():
+                    synthetic_thread.append({"who": "us", "subject": subject, "body": mid_text,
+                                             "at": _at(3.8), "from_name": ""})
+            except Exception:  # noqa: BLE001 - a failed mid-turn just yields a shorter thread
+                pass
+        synthetic_thread.append({"who": "lead", "subject": subject, "body": body,
+                                 "at": _at(1), "from_name": first_name})
+
         return _build_case_core(subject=subject, body=body, raw_body=raw_body, category=category,
                                 campaign_id=campaign_id, email_domain="",
-                                original_outreach={}, human_answer_history={},
+                                original_outreach=original_outreach, human_answer_history={},
                                 agent=agent, eff_settings=eff_settings, avail=avail, slot_status0=slot_status0,
-                                now=now, mem_digest=mem_digest, idx=idx, reply_id=None, synthetic=True)
+                                now=now, mem_digest=mem_digest, idx=idx, reply_id=None, synthetic=True,
+                                synthetic_thread=synthetic_thread, inbound_at=_at(1),
+                                lead_first_name=first_name)
     except Exception:  # noqa: BLE001 - a single bad scenario must never abort the whole batch
         return None
 
@@ -11413,9 +11698,14 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         except (TypeError, ValueError):
             confidence = 0.0
         is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
+        # Mirror the live wants_draft gate (owner rule 2026-08-16: every
+        # HUMAN reply gets a draft; only machine mail short-circuits) -
+        # same fix as _build_case_core, thread round 1 2026-08-17.
+        human_reply = primary not in ("ooo", "bounce_or_system")
+        wants_draft = (not is_clear_neg) or human_reply or (case.get("category") in POSITIVE_CATEGORIES)
 
         slots, slot_status = [], "not_configured"
-        if not is_clear_neg:
+        if wants_draft:
             if tz:
                 slot_status = slot_status0
                 if slot_status == "ok":
@@ -11432,12 +11722,13 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
 
         draft_html = None
         lint_ok, lint_reason = False, "No draft was produced."
-        if not is_clear_neg:
+        if wants_draft:
             try:
-                # No hydration in a retrain pass either - resolves to the
-                # agent's own configured identity via _sender_first_for (owner
-                # bug report 2026-07-14: this used to hardcode "Bjion").
-                d = draft_reply({"first_name": "", "subject": subject, "body": body,
+                # Sender identity via _sender_first_for (owner bug report
+                # 2026-07-14). Lead name from the case (owner verdict, round
+                # 1 2026-08-17: never "Hi there").
+                lead_first = _case_lead_first_name(case)
+                d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
                                  "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
                                 sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
                 draft_html = d.get("html")
@@ -11446,7 +11737,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     # lint checks the final, proofread text.
                     draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot))
                 lint_ok, lint_reason = lint_draft(draft_html, {
-                    "subject": d.get("subject"), "first_name": "",
+                    "subject": d.get("subject"), "first_name": lead_first,
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
                     "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                     "slot_labels": [s.get("label") for s in slots],
@@ -11533,9 +11824,14 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         except (TypeError, ValueError):
             confidence = 0.0
         is_clear_neg = primary in CLEAR_NEGATIVE_INTENTS and confidence >= 0.8
+        # Mirror the live wants_draft gate (owner rule 2026-08-16: every
+        # HUMAN reply gets a draft; only machine mail short-circuits) -
+        # same fix as _build_case_core, thread round 1 2026-08-17.
+        human_reply = primary not in ("ooo", "bounce_or_system")
+        wants_draft = (not is_clear_neg) or human_reply or (case.get("category") in POSITIVE_CATEGORIES)
 
         slots, slot_status = [], "not_configured"
-        if not is_clear_neg:
+        if wants_draft:
             if tz:
                 slot_status = slot_status0
                 if slot_status == "ok":
@@ -11552,12 +11848,15 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
 
         draft_html = None
         lint_ok, lint_reason = False, "No draft was produced."
-        if not is_clear_neg:
+        if wants_draft:
             try:
                 # No hydration in a recheck pass either - resolves to the
                 # agent's own configured identity via _sender_first_for (owner
                 # bug report 2026-07-14: this used to hardcode "Bjion").
-                d = draft_reply({"first_name": "", "subject": subject, "body": body,
+                # Lead name from the case (owner verdict, round 1
+                # 2026-08-17: never "Hi there").
+                lead_first = _case_lead_first_name(case)
+                d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
                                  "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
                                 sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
                 draft_html = d.get("html")
@@ -11566,7 +11865,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     # lint checks the final, proofread text.
                     draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot))
                 lint_ok, lint_reason = lint_draft(draft_html, {
-                    "subject": d.get("subject"), "first_name": "",
+                    "subject": d.get("subject"), "first_name": lead_first,
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
                     "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                     "slot_labels": [s.get("label") for s in slots],

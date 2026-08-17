@@ -232,6 +232,7 @@ body.share-mode #nav-jobs-tab, body.share-mode #nav-jobs-panel { display: none !
 </div>
 
 <script src="shell.js"></script>
+<script src="thread-render.js"></script>
 <script>
 /* ── Public share-link mode ────────────────────────────────────────────────
    A ?share=<token> URL param means a client opened this page WITHOUT logging
@@ -1241,6 +1242,20 @@ function renderCase(unanswered, i) {
         return `Round ${currentRoundNum()} &middot; rated ${ratedInRound} of ${ids.length || total} &middot; shortcuts: <b>C</b> correct, <b>N</b> needs work, <b>Enter</b> save`;
       })()
     : `Rated ${answeredCount} of ${CASES.length} in this batch &middot; shortcuts: <b>Y</b>/<b>N</b> answer, <b>S</b> skip draft, <b>Enter</b> save`;
+  // Portal thread view (owner founding case 2026-08-17): when the case
+  // carries a thread, render it via the shared renderer — max 4 emails,
+  // we-sent / they-sent, lead always last. Pre-thread cases (generated
+  // before this shipped) keep the legacy outreach+reply layout.
+  const threadHtml = (typeof renderThreadHtml === "function") ? renderThreadHtml(c) : "";
+  const conversationHtml = threadHtml || `
+      <details class="tr-details" open>
+        <summary>The original outreach we sent</summary>
+        <div class="tr-details-body">${outreachBody}</div>
+      </details>
+      <div class="tr-block inbound">
+        <div class="tr-block-lab">Their reply</div>
+        <div class="tr-msg big">${inboundBody}</div>
+      </div>`;
   el.innerHTML = `
     <div class="train-progress">${progressLine}</div>
     <div class="retrain-notice" id="trRetrainNotice" style="display:${indicator.visible ? "" : "none"}">${esc(indicator.text)}</div>
@@ -1250,19 +1265,12 @@ function renderCase(unanswered, i) {
         <span class="pill n">${esc(category)}</span>
         ${c.synthetic ? `<span class="pill practice">Practice</span>` : ""}
       </div>
-      <details class="tr-details" open>
-        <summary>The original outreach we sent</summary>
-        <div class="tr-details-body">${hasOutreach ? outreachBody : outreachBody}</div>
-      </details>
+      ${conversationHtml}
       ${hasHumanHist ? `
       <details class="tr-details">
         <summary>How a human answered a similar moment</summary>
         <div class="tr-details-body">${humanHist.subject ? `<div class="tr-subj">${esc(humanHist.subject)}</div>` : ""}${msgText(humanHist.body)}</div>
       </details>` : ""}
-      <div class="tr-block inbound">
-        <div class="tr-block-lab">Their reply</div>
-        <div class="tr-msg big">${inboundBody === "<i>No message text.</i>" ? inboundBody : inboundBody}</div>
-      </div>
       <div class="tr-call ${call.cls}">${esc(call.text)}</div>
       ${hasDraft ? `
       <div class="tr-block">

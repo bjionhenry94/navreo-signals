@@ -472,9 +472,17 @@ class FakeHTTP:
                 else:
                     payload = json.loads(body["messages"][1]["content"])
                     plan = payload.get("scenario_plan") or []
+                    # outreach_body mirrors the real contract (2026-08-17):
+                    # the model always writes an outreach when the payload
+                    # says outreach_needed - without one, a synthetic
+                    # scenario yields no case at all.
+                    needs_outreach = bool(payload.get("outreach_needed"))
                     data = {"scenarios": [
                         {"lead_first_name": "Pat", "lead_company": "Acme Co",
-                         "subject": "Re: our email", "body": f"Synthetic {cat} reply body #{i}. Thanks."}
+                         "subject": "Re: our email", "body": f"Synthetic {cat} reply body #{i}. Thanks.",
+                         "prior_lead_reply": "",
+                         "outreach_subject": "our email" if needs_outreach else "",
+                         "outreach_body": "Hi Pat, sharing our breakdown. Bjion" if needs_outreach else ""}
                         for i, cat in enumerate(plan)
                     ]}
                 return {"choices": [{"message": {"content": json.dumps(data)}}]}
@@ -4455,6 +4463,273 @@ def test_training_case_includes_original_outreach_and_human_answer_when_present(
          case2["original_outreach"] == {}, case2["original_outreach"])
     check("training case: blank-canvas when no human answer exists",
          case2["human_answer_history"] == {}, case2["human_answer_history"])
+
+
+# ── portal thread view (owner founding case 2026-08-17): structural
+# invariants live in deterministic code, so they get deterministic tests —
+# <= THREAD_RENDER_MAX emails, chronological, the lead ALWAYS last. ─────────
+
+def _th(t, time, body="Body text here.", subj="Subj", name=""):
+    return {"type": t, "time": time, "subject": subj, "body": body, "from_name": name}
+
+
+def test_assemble_case_thread_invariants():
+    A = setter._assemble_case_thread
+
+    # Out-of-order input renders chronological; trailing SENT is dropped so
+    # the lead is last (founding case: they are always the last to respond).
+    raw = [_th("SENT", "2026-08-13T10:00:00+00:00", body="Follow-up two."),
+           _th("REPLY", "2026-08-12T10:00:00+00:00", body="Their answer."),
+           _th("SENT", "2026-08-10T10:00:00+00:00", body="First email."),
+           _th("SENT", "2026-08-11T10:00:00+00:00", body="Follow-up one.")]
+    t, earlier = A(raw)
+    check("thread assemble: chronological regardless of input order",
+         [e["body"] for e in t] == ["First email.", "Follow-up one.", "Their answer."], t)
+    check("thread assemble: trailing us-side dropped - lead is always last",
+         t and t[-1]["who"] == "lead", t)
+    check("thread assemble: nothing cut here means earlier_count 0", earlier == 0, earlier)
+
+    # A 9-email alternating history cuts to the most recent 4, still ending
+    # on the lead, and reports how many older emails were hidden.
+    raw9 = []
+    for i in range(9):
+        who = "SENT" if i % 2 == 0 else "REPLY"
+        raw9.append(_th(who, f"2026-08-0{(i // 2) + 1}T1{i % 10}:00:00+00:00", body=f"Message {i}."))
+    t9, earlier9 = A(raw9)
+    check("thread assemble: 9-email history keeps at most THREAD_RENDER_MAX",
+         len(t9) == setter.THREAD_RENDER_MAX, t9)
+    check("thread assemble: truncated thread still ends on the lead",
+         t9[-1]["who"] == "lead", t9)
+    check("thread assemble: earlier count reports the hidden emails",
+         earlier9 == 9 - 1 - setter.THREAD_RENDER_MAX, earlier9)  # one trailing SENT dropped first
+
+    # cutoff_at hides messages newer than the reply the case is about.
+    rawc = [_th("SENT", "2026-08-10T10:00:00+00:00", body="First."),
+            _th("REPLY", "2026-08-11T10:00:00+00:00", body="Reply one."),
+            _th("SENT", "2026-08-12T10:00:00+00:00", body="Our later send."),
+            _th("REPLY", "2026-08-13T10:00:00+00:00", body="Newer reply.")]
+    tc, _ = A(rawc, cutoff_at="2026-08-11T10:00:00+00:00")
+    check("thread assemble: cutoff drops messages newer than the case's reply",
+         [e["body"] for e in tc] == ["First.", "Reply one."], tc)
+
+    # Us-only history (nobody ever replied) yields no thread - callers fall back.
+    tu, eu = A([_th("SENT", "2026-08-10T10:00:00+00:00")])
+    check("thread assemble: us-only history yields no thread", tu == [] and eu == 0, (tu, eu))
+
+    # Raw HTML junk is cleaned by clean_body before rendering.
+    th, _ = A([_th("SENT", "2026-08-10T10:00:00+00:00", body="<div>Hi <b>there</b>.</div>"),
+               _th("REPLY", "2026-08-11T10:00:00+00:00", body="<p>Sounds good.</p><style>.x{}</style>")])
+    check("thread assemble: bodies are cleaned of raw HTML",
+         "<" not in th[0]["body"] and "<" not in th[1]["body"], th)
+
+
+def test_training_case_thread_from_queue_row_and_fallback():
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    campaign_id = 9301
+    email = "thread@example.com"
+    sb.queue.append({
+        "id": 501, "workspace": "navreo", "smartlead_campaign_id": campaign_id,
+        "lead_email": email, "message_id": "<m1>", "status": "needs_review",
+        "thread": [
+            _th("SENT", "2026-06-01T09:00:00+00:00", body="Our outreach."),
+            _th("SENT", "2026-06-04T09:00:00+00:00", body="Our follow-up."),
+            _th("REPLY", "2026-06-10T09:00:00+00:00", body="Sounds great, send more info please."),
+        ],
+    })
+    reply_row = {"id": 9310, "smartlead_campaign_id": campaign_id, "email": email,
+                "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+                "reply_subject": "Re: our email", "reply_body": "Sounds great, send more info please."}
+    agent = {"id": "agent-thread01", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    case = setter._build_training_case(reply_row, agent, {}, [], "not_configured", now, "", idx=0)
+
+    check("thread case: real case carries the queue thread",
+         len(case.get("thread") or []) == 3 and case["thread"][0]["body"] == "Our outreach.", case.get("thread"))
+    check("thread case: the case's own inbound is the final entry",
+         case["thread"][-1]["who"] == "lead" and case["thread"][-1]["body"].startswith("Sounds great"), case["thread"])
+
+    # No queue row -> falls back to outreach + inbound as a 2-email thread.
+    sb.sent_messages.append({
+        "smartlead_campaign_id": 9302, "email": "fallback@example.com", "email_seq_number": 1,
+        "is_manual_reply": False, "subject": "Our first email", "body": "Hi, wanted to share our breakdown.",
+        "sent_at": "2026-06-01T09:00:00+00:00",
+    })
+    reply_row2 = {"id": 9311, "smartlead_campaign_id": 9302, "email": "fallback@example.com",
+                 "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+                 "reply_subject": "Re: our email", "reply_body": "Tell me more."}
+    case2 = setter._build_training_case(reply_row2, agent, {}, [], "not_configured", now, "", idx=1)
+    check("thread case: no queue row falls back to outreach+inbound (2 emails, lead last)",
+         len(case2.get("thread") or []) == 2 and case2["thread"][0]["who"] == "us"
+         and case2["thread"][-1]["who"] == "lead", case2.get("thread"))
+
+
+def test_synthetic_case_thread_real_outreach_and_drafted_mid_turn():
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi Priya, happy to explain. Best, Bjion"}
+
+    campaign_id = 9401
+    sb.sent_messages.append({
+        "smartlead_campaign_id": campaign_id, "email": "someone@real.com", "email_seq_number": 1,
+        "is_manual_reply": False, "subject": "Quick idea", "body": "Hi Someone, quick idea for your team.",
+        "sent_at": "2026-06-01T09:00:00+00:00",
+    })
+    agent = {"id": "agent-synthread", "campaign_ids": [campaign_id], "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+
+    # 2-email synthetic: real outreach (greeting renamed) + invented reply.
+    scen = {"category": "Interested", "lead_first_name": "Priya", "lead_company": "Fictitious Co",
+            "subject": "Re: Quick idea", "body": "This could be relevant - how does it work?",
+            "prior_lead_reply": "", "outreach_subject": "", "outreach_body": ""}
+    case = setter._build_synthetic_training_case(scen, agent, {}, [], "not_configured", now, "", idx=0,
+                                                 campaign_id=campaign_id)
+    t = case.get("thread") or []
+    check("synthetic thread: opens with REAL outreach, greeting renamed to the invented lead",
+         len(t) == 2 and t[0]["who"] == "us" and t[0]["body"].startswith("Hi Priya,"), t)
+    check("synthetic thread: invented reply is last (lead last)",
+         t[-1]["who"] == "lead" and t[-1]["body"].startswith("This could be relevant"), t)
+
+    # 4-email synthetic: prior lead turn -> OUR real drafted mid reply -> final reply.
+    scen4 = dict(scen, prior_lead_reply="Sounds interesting, what is it exactly?")
+    case4 = setter._build_synthetic_training_case(scen4, agent, {}, [], "not_configured", now, "", idx=1,
+                                                  campaign_id=campaign_id)
+    t4 = case4.get("thread") or []
+    check("synthetic thread: prior turn deepens to 4 emails us/lead/us/lead",
+         [e["who"] for e in t4] == ["us", "lead", "us", "lead"], t4)
+    check("synthetic thread: mid us-turn is the REAL drafter's output",
+         "happy to explain" in (t4[2]["body"] if len(t4) == 4 else ""), t4)
+
+
+def test_display_clean_spintax_merge_tokens_and_control_chars():
+    D = setter._display_clean
+    check("display clean: spintax resolves to its first option",
+         D("{Hi|Hey} there, {this|that} works") == "Hi there, this works",
+         D("{Hi|Hey} there, {this|that} works"))
+    check("display clean: known merge tokens fill from the lead",
+         D("{{FirstName}} at {{Company}}", first_name="Ray", company="Copperfield") == "Ray at Copperfield",
+         D("{{FirstName}} at {{Company}}", first_name="Ray", company="Copperfield"))
+    check("display clean: unknown merge tokens drop without leaving braces",
+         "{" not in D("Hello {{WeirdToken}} friend") and "  " not in D("Hello {{WeirdToken}} friend"),
+         D("Hello {{WeirdToken}} friend"))
+    check("display clean: control characters strip",
+         D("I\x00d like this") == "Id like this", D("I\x00d like this"))
+
+
+def test_case_thread_display_cleans_spintax_at_choke_point():
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi Ray, sure. Best, Bjion"}
+    agent = {"id": "agent-spintax", "campaign_ids": [], "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    scen = {"category": "Interested", "lead_first_name": "Ray", "lead_company": "Copperfield HVAC",
+            "subject": "Re: {{Company}} pipeline", "body": "Sure, send more info.",
+            "prior_lead_reply": "", "outreach_subject": "{{Company}} pipeline",
+            "outreach_body": "{Hi|Hey} {{FirstName}},\n\nWe run outbound for trades businesses.\n\nBjion"}
+    case = setter._build_synthetic_training_case(scen, agent, {}, [], "not_configured", now, "", idx=0)
+    t = case.get("thread") or []
+    joined = " ".join((e.get("body") or "") + " " + (e.get("subject") or "") for e in t)
+    check("thread choke point: no raw spintax or merge braces reach the render",
+         t and "{" not in joined and "}" not in joined, t)
+    check("thread choke point: greeting resolved with the lead's name",
+         t and t[0]["body"].startswith("Hi Ray,"), t and t[0]["body"][:40])
+
+
+def test_training_case_drafts_greet_the_lead_by_name():
+    """Owner verdict, round 1 (2026-08-17): training drafts said 'Hi there'
+    because the case builders passed first_name='' - the lead's real name
+    must reach the drafter (queue lead_first_name for real cases, the
+    invented name for synthetic ones)."""
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    seen_names = []
+
+    def draft_fn(body):
+        seen_names.append(json.dumps(body))
+        return {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+    http.draft_fn = draft_fn
+
+    campaign_id = 9501
+    email = "named@example.com"
+    sb.queue.append({
+        "id": 601, "workspace": "navreo", "smartlead_campaign_id": campaign_id,
+        "lead_email": email, "lead_first_name": "Jennifer", "message_id": "<n1>", "status": "needs_review",
+        "thread": [_th("SENT", "2026-06-01T09:00:00+00:00", body="Our outreach."),
+                   _th("REPLY", "2026-06-10T09:00:00+00:00", body="Sounds great.", name="Jennifer Park")],
+    })
+    reply_row = {"id": 9510, "smartlead_campaign_id": campaign_id, "email": email,
+                "replied_at": "2026-06-10T09:00:00+00:00", "category": "Interested",
+                "reply_subject": "Re: our email", "reply_body": "Sounds great."}
+    agent = {"id": "agent-named01", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    case = setter._build_training_case(reply_row, agent, {}, [], "not_configured", now, "", idx=0)
+    check("lead name: real case passes the queue row's first name to the drafter",
+         seen_names and "Jennifer" in seen_names[-1], seen_names[-1][:200] if seen_names else None)
+    check("lead name: the case stores lead_first_name for retrain/recheck passes",
+         case.get("lead_first_name") == "Jennifer", case.get("lead_first_name"))
+
+    seen_names.clear()
+    sb.sent_messages.append({
+        "smartlead_campaign_id": 9502, "email": "x@real.com", "email_seq_number": 1,
+        "is_manual_reply": False, "subject": "Quick idea", "body": "Hi X, quick idea.",
+        "sent_at": "2026-06-01T09:00:00+00:00",
+    })
+    scen = {"category": "Interested", "lead_first_name": "Priya", "lead_company": "Fictitious Co",
+            "subject": "Re: Quick idea", "body": "How does it work?",
+            "prior_lead_reply": "", "outreach_subject": "", "outreach_body": ""}
+    setter._build_synthetic_training_case(scen, agent, {}, [], "not_configured", now, "", idx=1,
+                                          campaign_id=9502)
+    check("lead name: synthetic case passes the invented first name to the drafter",
+         seen_names and "Priya" in seen_names[-1], seen_names[-1][:200] if seen_names else None)
+
+
+def test_training_case_drafts_human_negatives_but_not_machine_mail():
+    """Owner rule 2026-08-16 ('always say something'), mirrored into the
+    training builders 2026-08-17 after the Carl question: a clear HUMAN
+    negative still gets a draft; OOO/bounce machine mail stays draft-less."""
+    sb, http = fresh_setter()
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi Troy, understood - thanks. Best, Bjion"}
+
+    def classify_neg(_b):
+        return {"primary_intent": "not_interested", "all_intents": ["not_interested"], "simple_ask": False,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "declines", "rationale": ""}
+    http.classify_fn = classify_neg
+    agent = {"id": "agent-neg01", "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    reply_row = {"id": 9601, "smartlead_campaign_id": 9601, "email": "troy@example.com",
+                "replied_at": "2026-06-10T09:00:00+00:00", "category": "Not Interested",
+                "reply_subject": "Re: our email", "reply_body": "Not interested, please remove me."}
+    case = setter._build_training_case(reply_row, agent, {}, [], "not_configured", now, "", idx=0)
+    check("always-say-something: a clear HUMAN negative training case still carries a draft",
+         bool(case.get("draft_html")), case.get("draft_html"))
+
+    def classify_ooo(_b):
+        return {"primary_intent": "ooo", "all_intents": ["ooo"], "simple_ask": False,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "away", "rationale": ""}
+    http.classify_fn = classify_ooo
+    reply_row2 = dict(reply_row, id=9602, category="Out Of Office",
+                      reply_body="I am out of the office until Monday with limited email access.")
+    case2 = setter._build_training_case(reply_row2, agent, {}, [], "not_configured", now, "", idx=1)
+    check("always-say-something: OOO machine mail keeps the no-draft short-circuit",
+         not case2.get("draft_html"), case2.get("draft_html"))
+
+
+def test_synthetic_scenario_with_no_buildable_outreach_yields_no_case():
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there. Best, Bjion"}
+    agent = {"id": "agent-noout", "campaign_ids": [], "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    scen = {"category": "Interested", "lead_first_name": "Ana", "lead_company": "Nowhere Co",
+            "subject": "Re: hello", "body": "Tell me more.",
+            "prior_lead_reply": "", "outreach_subject": "", "outreach_body": ""}
+    case = setter._build_synthetic_training_case(scen, agent, {}, [], "not_configured", now, "", idx=0)
+    check("synthetic guard: no reusable send AND no invented outreach -> no case (never a thread with no us-side)",
+         case is None, case)
 
 
 def test_training_generate_memory_digest_reaches_classify():
@@ -8556,7 +8831,10 @@ def test_proofread_wired_into_build_training_case_real_and_synthetic():
          and "Thankyou thankyou" not in (real_case.get("draft_html") or ""), real_case.get("draft_html"))
 
     order.clear()
-    scenario = {"category": "Interested", "subject": "Re: our email", "body": "Sounds great, tell me more please."}
+    # outreach_body required since the portal thread view (2026-08-17): a
+    # synthetic scenario with no buildable us-side email yields no case.
+    scenario = {"category": "Interested", "subject": "Re: our email", "body": "Sounds great, tell me more please.",
+                "outreach_subject": "our email", "outreach_body": "Hi, sharing our breakdown. Bjion"}
     synth_case = setter._build_synthetic_training_case(scenario, agent, {}, [], "not_configured", now, "", idx=1)
     check("proofread wiring (synthetic training case): draft ran before proofread",
          order[:2] == ["draft", "proofread"], order)
@@ -10045,6 +10323,14 @@ if __name__ == "__main__":
     test_training_generate_weighted_excludes_used_and_batch_cap()
     test_training_generate_stores_real_bodies_verbatim()
     test_training_case_includes_original_outreach_and_human_answer_when_present()
+    test_assemble_case_thread_invariants()
+    test_training_case_thread_from_queue_row_and_fallback()
+    test_synthetic_case_thread_real_outreach_and_drafted_mid_turn()
+    test_display_clean_spintax_merge_tokens_and_control_chars()
+    test_case_thread_display_cleans_spintax_at_choke_point()
+    test_training_case_drafts_greet_the_lead_by_name()
+    test_training_case_drafts_human_negatives_but_not_machine_mail()
+    test_synthetic_scenario_with_no_buildable_outreach_yields_no_case()
     test_training_generate_memory_digest_reaches_classify()
     test_training_generate_concurrent_preserves_selection_order()
     test_training_generate_one_worker_failure_drops_only_that_case()
