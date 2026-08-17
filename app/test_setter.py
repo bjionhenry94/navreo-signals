@@ -2699,6 +2699,80 @@ def test_dismiss_sweeps_conversation_siblings():
     check("dismiss sweep: other lead untouched", by_id[923]["status"] == "needs_review", by_id[923])
 
 
+def test_unresolved_tray_collapses_to_one_row_per_conversation():
+    """Owner ruling 2026-08-15 ("there should only ever be one row in the
+    whole system"): the tray shows ONE row per (workspace, campaign, lead)
+    conversation — the newest sent row — and that representative's own state
+    decides whether the conversation appears. William marketplaceofficer had
+    6 reply-rows; five one-by-one dismissals each admitted the next."""
+    sb, http = fresh_setter()
+    recent = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=2)).isoformat(timespec="seconds")
+    older = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=9)).isoformat(timespec="seconds")
+    oldest = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=20)).isoformat(timespec="seconds")
+    def q(rid, **kw):
+        row = {"id": rid, "workspace": "navreo", "smartlead_campaign_id": 111,
+               "lead_email": "w@x.com", "message_id": f"m{rid}", "status": "sent",
+               "sent_at": recent, "added_to_subsequence": False,
+               "subsequence_decision": None, "category": "Interested"}
+        row.update(kw)
+        sb.queue.append(row)
+    # One conversation, three reply-rows: two older undecided, newest undecided.
+    q(931, sent_at=oldest)
+    q(932, sent_at=older)
+    q(933, sent_at=recent)
+    # A second conversation whose NEWEST row is dismissed but whose older
+    # sibling is still undecided — must NOT appear at all.
+    q(934, lead_email="done@x.com", sent_at=older)
+    q(935, lead_email="done@x.com", sent_at=recent, subsequence_decision="dismissed")
+    st, resp = setter.route_subsequence_unresolved({})
+    ids = {r["id"] for r in resp.get("rows", [])}
+    check("tray collapse: 200", st == 200, (st, resp))
+    check("tray collapse: exactly the newest row of the open conversation",
+          933 in ids and 931 not in ids and 932 not in ids, ids)
+    check("tray collapse: a conversation whose newest row is resolved is gone entirely",
+          934 not in ids and 935 not in ids, ids)
+
+
+def test_tray_dismiss_sweeps_followup_siblings():
+    """Owner ruling 2026-08-15: a tray decision applies to the CONVERSATION.
+    Dismissing (or marking no-follow-up on) any reply-row stamps the same
+    subsequence_decision onto every sent/auto_sent sibling of that
+    (workspace, campaign, lead) thread, so a resolved conversation can never
+    resurface through an older reply-row."""
+    sb, http = fresh_setter()
+    def q(rid, **kw):
+        row = {"id": rid, "workspace": "navreo", "smartlead_campaign_id": 222,
+               "lead_email": "w@x.com", "message_id": f"m{rid}", "status": "sent",
+               "added_to_subsequence": False, "subsequence_decision": None}
+        row.update(kw)
+        sb.queue.append(row)
+    q(941)
+    q(942, status="auto_sent")
+    q(943)
+    q(944, lead_email="other@x.com")            # different lead: untouched
+    q(945, smartlead_campaign_id=333)           # same lead, other campaign: untouched
+    st, resp = setter.route_queue_action({"id": 943, "action": "subsequence_dismiss"})
+    by_id = {r["id"]: r for r in sb.queue}
+    check("tray sweep: dismiss succeeds", st == 200 and resp.get("ok") is True, (st, resp))
+    check("tray sweep: both siblings dismissed too",
+          by_id[941]["subsequence_decision"] == "dismissed"
+          and by_id[942]["subsequence_decision"] == "dismissed", by_id)
+    check("tray sweep: other lead and other campaign untouched",
+          by_id[944]["subsequence_decision"] is None
+          and by_id[945]["subsequence_decision"] is None, by_id)
+    # 'No follow-up' marks the whole conversation too, but never weakens a
+    # sibling already dismissed.
+    q(951, lead_email="n@x.com")
+    q(952, lead_email="n@x.com", subsequence_decision="dismissed")
+    q(953, lead_email="n@x.com")
+    st2, resp2 = setter.route_queue_action({"id": 953, "action": "subsequence_none"})
+    by_id = {r["id"]: r for r in sb.queue}
+    check("tray sweep: none marks undecided sibling",
+          st2 == 200 and by_id[951]["subsequence_decision"] == "none", (st2, by_id))
+    check("tray sweep: none never weakens a dismissed sibling",
+          by_id[952]["subsequence_decision"] == "dismissed", by_id)
+
+
 def test_collapse_degrade_serves_stale_rep_ids():
     """Ghost fix 2026-08-09: when the light scan is unavailable (a peer holds
     the single-flight lock, or the fetch fails) the collapse must serve the
@@ -10294,6 +10368,8 @@ if __name__ == "__main__":
     test_send_gate_push_stamps_pushing_before_the_worker_runs()
     test_subsequence_dismiss_is_idempotent()
     test_dismiss_sweeps_conversation_siblings()
+    test_unresolved_tray_collapses_to_one_row_per_conversation()
+    test_tray_dismiss_sweeps_followup_siblings()
     test_collapse_degrade_serves_stale_rep_ids()
     test_pick_slots_honours_exclude_and_not_before()
     test_time_feedback_plan_reads_the_ask()

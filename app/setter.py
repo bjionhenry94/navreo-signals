@@ -6857,6 +6857,33 @@ def route_subsequence_unresolved(_params):
             # exactly when a transient Supabase timeout hits). A failure must
             # LOOK like a failure so the client keeps its last good rows.
             return 503, {"error": "Couldn't load the unresolved list right now."}
+        # One row per CONVERSATION (owner ruling 2026-08-15: "there should
+        # only ever be one row in the whole system"): collapse to the newest
+        # sent row per (workspace, campaign, lead) BEFORE any decision gate,
+        # so the representative's own state decides whether the conversation
+        # appears — an older undecided reply-row can never resurrect a thread
+        # whose newest send was already resolved (William marketplaceofficer
+        # had 6 rows; five one-by-one dismissals each admitted the next).
+        # Same thread key as the queue's read-time collapse; rows with no
+        # lead_email pass through uncollapsed rather than clumping into one
+        # fake thread.
+        best, no_email = {}, []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            email = str(r.get("lead_email") or "").strip().lower()
+            if not email:
+                no_email.append(r)
+                continue
+            key = (str(r.get("workspace") or ""),
+                   str(r.get("smartlead_campaign_id") or ""), email)
+            cur = best.get(key)
+            if (cur is None
+                    or (r.get("sent_at") or "") > (cur.get("sent_at") or "")
+                    or ((r.get("sent_at") or "") == (cur.get("sent_at") or "")
+                        and (r.get("id") or 0) > (cur.get("id") or 0))):
+                best[key] = r
+        rows = no_email + list(best.values())
         candidates = []
         if isinstance(rows, list):
             for r in rows:
@@ -9347,6 +9374,42 @@ def route_queue_action(payload):
                                     str(ident.get("message_id") or ""))
         if not row:
             return 404, {"error": "Queue row not found."}
+        def _sweep_followup_siblings(patch: dict, skip_decisions=("dismissed",)):
+            """One conversation = ONE row everywhere (owner ruling 2026-08-15):
+            a follow-up decision made on any reply-row applies to the whole
+            thread — same workspace + campaign + lead email, status
+            sent/auto_sent — so a resolved conversation can never resurface
+            through an older sibling reply-row. Values in existing columns
+            only (setter_queue is schema-frozen). Best-effort: a failed sweep
+            never fails the action the reviewer actually took — the tray's
+            read-time collapse hides siblings regardless, this just keeps the
+            stored backlog honest. Siblings already enrolled
+            (added_to_subsequence) or carrying a decision in skip_decisions
+            keep their stronger/equal state."""
+            try:
+                email = str(row.get("lead_email") or "").strip()
+                cid = row.get("smartlead_campaign_id")
+                if not email or cid in (None, "") or not _SB or row.get("id") is None:
+                    return
+                wsq = (f"workspace=eq.{quote(str(row.get('workspace')), safe='')}"
+                       if row.get("workspace") else _list_ws_filter())
+                sibs = _SB("GET", f"{QUEUE_TABLE}?{wsq}"
+                                  f"&smartlead_campaign_id=eq.{quote(str(cid), safe='')}"
+                                  f"&lead_email=ilike.{quote(email, safe='')}"
+                                  f"&status=in.(sent,auto_sent)"
+                                  f"&id=neq.{quote(str(row['id']), safe='')}"
+                                  f"&select=id,subsequence_decision,added_to_subsequence")
+                for s in (sibs if isinstance(sibs, list) else []):
+                    if not isinstance(s, dict) or s.get("id") is None:
+                        continue
+                    if s.get("added_to_subsequence") and not patch.get("added_to_subsequence"):
+                        continue
+                    if str(s.get("subsequence_decision") or "") in skip_decisions:
+                        continue
+                    _apply_patch(s, patch)
+            except Exception:  # noqa: BLE001 - sweep is belt-and-braces, never the action
+                pass
+
         if action == "subsequence":
             if _is_monitor_ws(row.get("workspace")):
                 return 403, {"error": "This workspace is monitor-only — subsequence pushes write "
@@ -9370,6 +9433,10 @@ def route_queue_action(payload):
                             "error": detail if isinstance(detail, str) else "Smartlead rejected the request.",
                             "detail": detail}
             _apply_patch(row, {"added_to_subsequence": True, "subsequence_decision": "pushed"})
+            # The lead is enrolled per-campaign in Smartlead, so the mark is
+            # factually true for every reply-row of this conversation.
+            _sweep_followup_siblings({"added_to_subsequence": True, "subsequence_decision": "pushed"},
+                                     skip_decisions=("dismissed", "pushed"))
             return 200, {"ok": True, "added_to_subsequence": True, "subsequence_id": sub_id, "detail": detail}
         if action == "subsequence_none":
             # Tray's "No follow-up needed" - a MARK, not a removal (owner ruling
@@ -9380,6 +9447,8 @@ def route_queue_action(payload):
             if row.get("added_to_subsequence"):
                 return 409, {"error": "This lead was already added to a subsequence."}
             _apply_patch(row, {"subsequence_decision": "none"})
+            _sweep_followup_siblings({"subsequence_decision": "none"},
+                                     skip_decisions=("dismissed", "pushed", "pushing", "none"))
             return 200, {"ok": True, "subsequence_decision": "none"}
         if action == "subsequence_dismiss":
             # The ONLY thing that removes a thread from the follow-up reminder
@@ -9394,8 +9463,14 @@ def route_queue_action(payload):
             # the "restart"; the honest answer is that the row is where the
             # reviewer wanted it.
             if row.get("subsequence_decision") == "dismissed":
+                # Still sweep: the representative may have been dismissed in a
+                # past life while older reply-rows kept resurfacing the thread
+                # (the exact William case) — an idempotent re-dismiss is the
+                # reviewer saying "this CONVERSATION is done".
+                _sweep_followup_siblings({"subsequence_decision": "dismissed"})
                 return 200, {"ok": True, "subsequence_decision": "dismissed", "already": True}
             _apply_patch(row, {"subsequence_decision": "dismissed"})
+            _sweep_followup_siblings({"subsequence_decision": "dismissed"})
             return 200, {"ok": True, "subsequence_decision": "dismissed"}
         if action == "save_draft":
             # Auto-save (owner ask 2026-07-16): a hand-edited draft used to live
