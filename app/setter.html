@@ -708,8 +708,6 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-disp-btn { font-size: 10px; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 999px; padding: 2px 8px; cursor: pointer; color: var(--ink-3); }
 .lp-disp-btn:hover { color: var(--ink-1, inherit); }
 .lp-disp-btn.on { background: var(--ink-1, #222); color: var(--bg-1, #fff); border-color: var(--ink-1, #222); }
-.lp-undo-btn { font-size: 11px; font-weight: 700; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 5px; padding: 1px 8px; cursor: pointer; margin-left: 4px; }
-.lp-cat-actions .arming { opacity: 0.55; }
 .dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -4205,42 +4203,23 @@ function wireOneClickCat(block, sel, catName) {
   const el = block.querySelector(sel);
   if (!el) return;
   el.addEventListener("click", async () => {
-    // Undo grace (SDR panel 2026-08-15): a fat-thumb tap on a moving train
-    // must not write straight to Smartlead. The click arms a 5s countdown
-    // shown in the hint line; Undo cancels it, silence commits it. The
-    // server write itself is untouched - this only defers WHEN it fires.
-    if (el._armTimer) return;  // already counting down
-    const cats = await fetchCategories();
-    const hit = (cats || []).find((c) => String(c.name || "").trim().toLowerCase() === catName.toLowerCase());
-    const hint = block.querySelector(".lp-cat-hint");
-    if (!hit) {
-      if (hint) { hint.textContent = `"${catName}" isn't in this workspace's Smartlead categories - use the dropdown instead.`; hint.classList.add("lp-hint-err"); }
-      return;
-    }
-    let left = 5;
-    el.classList.add("arming");
-    const paint = () => {
-      if (hint) hint.innerHTML = `Filing as <b>${esc(hit.name)}</b> in ${left}s… <button type="button" class="lp-undo-btn">Undo</button>`;
-      const u = hint && hint.querySelector(".lp-undo-btn");
-      if (u) u.addEventListener("click", () => {
-        clearInterval(el._armTimer); el._armTimer = null;
-        el.classList.remove("arming");
-        if (hint) hint.textContent = "";
-        protoNote("Cancelled - nothing filed");
-      });
-    };
-    paint();
-    el._armTimer = setInterval(() => {
-      left -= 1;
-      if (left <= 0) {
-        clearInterval(el._armTimer); el._armTimer = null;
-        el.classList.remove("arming");
-        if (hint) hint.textContent = "";
-        applyCategory(block, { id: hit.id, name: hit.name, btnSel: sel });
+    // Instant filing (Bjion 2026-08-17): the click files straight away -
+    // the 5s Undo countdown from the 2026-08-15 SDR panel is removed.
+    if (el._filing) return;  // guard double-clicks while the write is in flight
+    el._filing = true;
+    try {
+      const cats = await fetchCategories();
+      const hit = (cats || []).find((c) => String(c.name || "").trim().toLowerCase() === catName.toLowerCase());
+      const hint = block.querySelector(".lp-cat-hint");
+      if (!hit) {
+        if (hint) { hint.textContent = `"${catName}" isn't in this workspace's Smartlead categories - use the dropdown instead.`; hint.classList.add("lp-hint-err"); }
         return;
       }
-      paint();
-    }, 1000);
+      if (hint) hint.textContent = "";
+      await applyCategory(block, { id: hit.id, name: hit.name, btnSel: sel });
+    } finally {
+      el._filing = false;
+    }
   });
 }
 function wireLeadPanelEvents(root, row) {
