@@ -3689,10 +3689,9 @@ function leadQuickLinksHtml(row) {
   const wcPh = ((wcSticky.phone_meta || {}).status === "bad") ? "" : String(wcSticky.phone || "").trim();
   const callBtn = wcPh
     ? `<a class="lp-qbtn lp-call-btn" href="tel:${esc(wcPh.replace(/[^+\d]/g, ""))}" title="Call ${esc(wcPh)}"><span>📞 ${esc(wcPh)}</span></a>` : "";
-  const crmUrl = (wcSticky.client || {}).crm_url || "";
-  const crmBtn = crmUrl
-    ? `<a class="lp-qbtn" href="${esc(crmUrl)}" target="_blank" rel="noopener" title="All campaign responses in the client's portal">${ICON_EXTERNAL}<span>CRM</span></a>` : "";
-  return callBtn + websiteBtn + linkedinBtn + smartleadBtn + crmBtn;
+  // No CRM button here (owner 2026-08-17): the sidebar's "Open in CRM" link
+  // is the one entry point - the bar keeps lead-level links only.
+  return callBtn + websiteBtn + linkedinBtn + smartleadBtn;
 }
 /* Colour tone for the current-category pill: green for a positive, red for a
    clear negative, amber for uncategorised, neutral grey for everything else
