@@ -1,10 +1,8 @@
 {
-  "amplifyy": {
-    "display": "Amplifyy",
-    "notion_database_id": "342a5f09137b4af780a003eb19542ff0",
+  "_defaults": {
+    "_comment": "Shared Bjion rulings 2026-08-16/17. reverse_map: SL category name -> Notion Status. forward_map: Notion Status -> SL category id or null (null = pause-only, no category write). status_rank: one-way ladder. auto_create: positive categories create missing rows (2h Make-first grace).",
     "email_prop": "Email",
     "status_prop": "Status",
-    "_comment_maps": "Bjion mapping ruling 2026-08-16. reverse_map: Smartlead category name -> Notion Status. forward_map: Notion Status -> Smartlead category id (2=Meeting Request, 83039=Call Booked, 86206=Contact In Future, 84259=Not a qualified lead; SL has no literal Disqualified). pause_values: statuses that also pause the lead everywhere. status_rank: the ladder - reverse only ever moves a row UP it.",
     "reverse_map": {
       "Call Booked": "Meeting-Booked",
       "Meeting Request": "Meeting-Ready",
@@ -13,18 +11,18 @@
       "Contact In Future": "Contact in the future",
       "Not a qualified lead": "Disqualified"
     },
-    "forward_map": {
-      "Meeting-Ready": 2,
-      "Meeting-Booked": 83039,
-      "No-Showed": 83039,
-      "Call Attended": 83039,
-      "Paid": 83039,
-      "Contact in the future": 86206,
-      "Disqualified": 84259
-    },
-    "pause_values": ["Meeting-Booked", "No-Showed", "Call Attended", "Paid"],
-    "_comment_autocreate": "Bjion ruling 2026-08-16: leads with a POSITIVE Smartlead category and no Notion row are auto-added; non-positive (Not a qualified lead, Contact In Future) are never created.",
-    "auto_create_categories": ["Call Booked", "Meeting Request", "Interested", "Information Request"],
+    "pause_values": [
+      "Meeting-Booked",
+      "No-Showed",
+      "Call Attended",
+      "Paid"
+    ],
+    "auto_create_categories": [
+      "Call Booked",
+      "Meeting Request",
+      "Interested",
+      "Information Request"
+    ],
     "status_rank": {
       "Not responded": 0,
       "No response (after 14 days)": 0,
@@ -38,11 +36,117 @@
       "Call Attended": 5,
       "Paid": 6
     },
-    "human_only_values": ["Called", "No-Showed", "Call Attended", "Paid"],
+    "human_only_values": [
+      "Called",
+      "No-Showed",
+      "Call Attended",
+      "Paid"
+    ]
+  },
+  "amplifyy": {
+    "display": "Amplifyy",
+    "notion_database_id": "342a5f09137b4af780a003eb19542ff0",
+    "forward_map": {
+      "Meeting-Ready": 2,
+      "Meeting-Booked": 83039,
+      "No-Showed": 83039,
+      "Call Attended": 83039,
+      "Paid": 83039,
+      "Contact in the future": 86206,
+      "Disqualified": 84259
+    },
     "smartlead_key_env": "SMARTLEAD_API_KEY",
     "smartlead_client_id": 429350,
     "scorecard_client": "Amplifyy",
     "supabase_client_id": "amplifyy",
     "call_booked_category_id": 83039
+  },
+  "arnic": {
+    "display": "Arnic",
+    "notion_database_id": "2ec3333429d54ebf9a5dba33f1402561",
+    "forward_map": {
+      "Meeting-Ready": 2,
+      "Meeting-Booked": 83039,
+      "No-Showed": 83039,
+      "Call Attended": 83039,
+      "Paid": 83039,
+      "Contact in the future": 86206,
+      "Disqualified": 84259
+    },
+    "smartlead_key_env": "SMARTLEAD_API_KEY",
+    "smartlead_client_id": 366437,
+    "scorecard_client": "Arnic",
+    "supabase_client_id": "arnic",
+    "call_booked_category_id": 83039
+  },
+  "krg": {
+    "display": "KRG Advisors",
+    "notion_database_id": "8d3cea4110414b94ba12e6965af411c1",
+    "_comment_cat": "KRG workspace has NO Call Booked category yet (no API to create) \u2014 booked tier is pause-only until Bjion adds it in the KRG Smartlead UI",
+    "forward_map": {
+      "Meeting-Ready": 2,
+      "Meeting-Booked": null,
+      "No-Showed": null,
+      "Call Attended": null,
+      "Paid": null
+    },
+    "smartlead_key_env": "KRG_SMARTLEAD_API_KEY",
+    "smartlead_client_id": null,
+    "scorecard_client": "KRG",
+    "supabase_client_id": "krg",
+    "call_booked_category_id": null
+  },
+  "thunderbird": {
+    "display": "Thunderbird Leadership",
+    "notion_database_id": "3bf6e75598d981c18ec0da46b7950415",
+    "forward_map": {
+      "Meeting-Ready": 2,
+      "Meeting-Booked": 83039,
+      "No-Showed": 83039,
+      "Call Attended": 83039,
+      "Paid": 83039,
+      "Contact in the future": 86206,
+      "Disqualified": 84259
+    },
+    "smartlead_key_env": "SMARTLEAD_API_KEY",
+    "smartlead_client_id": null,
+    "scorecard_client": "ThunderBird",
+    "supabase_client_id": "thunderbird",
+    "call_booked_category_id": 83039
+  },
+  "touchpoint": {
+    "display": "Touchpoint PPC",
+    "notion_database_id": "3bf6e75598d981b595baec1b044c57be",
+    "forward_map": {
+      "Meeting-Ready": 2,
+      "Meeting-Booked": 83039,
+      "No-Showed": 83039,
+      "Call Attended": 83039,
+      "Paid": 83039,
+      "Contact in the future": 86206,
+      "Disqualified": 84259
+    },
+    "smartlead_key_env": "SMARTLEAD_API_KEY",
+    "smartlead_client_id": null,
+    "scorecard_client": "TouchPoint",
+    "supabase_client_id": "touchpoint",
+    "call_booked_category_id": 83039
+  },
+  "grout": {
+    "display": "Grout",
+    "notion_database_id": "3bf6e75598d98138a569fbf1a58f9db9",
+    "_comment_cat": "Grout workspace has NO Call Booked category yet \u2014 booked tier is pause-only until created in the Grout Smartlead UI",
+    "forward_map": {
+      "Meeting-Ready": 2,
+      "Meeting-Booked": null,
+      "No-Showed": null,
+      "Call Attended": null,
+      "Paid": null
+    },
+    "smartlead_key_env": "GROUT_SMARTLEAD_API_KEY",
+    "smartlead_client_id": null,
+    "scorecard_client": "Grout",
+    "supabase_client_id": "grout",
+    "call_booked_category_id": null
   }
 }

@@ -11,8 +11,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from sync_booked import plan_categories, plan_pauses, plan_reverse, rank_of  # noqa: E402
 
-CFG = json.loads((Path(__file__).resolve().parent / "booked_sync_clients.json"
-                  ).read_text())["amplifyy"]
+_raw = json.loads((Path(__file__).resolve().parent / "booked_sync_clients.json"
+                   ).read_text())
+CFG = {**_raw["_defaults"], **_raw["amplifyy"]}
 CLIENT_ID = CFG["smartlead_client_id"]
 
 

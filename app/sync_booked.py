@@ -320,10 +320,14 @@ def rank_of(status: str | None, cfg: dict) -> int:
     return cfg["status_rank"].get(status or "", -1)
 
 
-def _is_client_membership(m: dict, client_id: int, campaign_ids: set[int]) -> bool:
+def _is_client_membership(m: dict, client_id, campaign_ids: set[int]) -> bool:
     """A lead_campaign_data entry belongs to this client if Smartlead says so
-    directly, or (client_id null on old rows) the campaign is in our known set."""
+    directly, or (client_id null on old rows) the campaign is in our known set.
+    Config client_id None (own-workspace / name-token clients) must NEVER match
+    Smartlead's null client_id — only the known campaign set counts there."""
     cid = m.get("campaign_id")
+    if client_id is None:
+        return cid in campaign_ids
     return m.get("client_id") == client_id or (m.get("client_id") is None
                                                and cid in campaign_ids)
 
@@ -515,9 +519,9 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
             # legacy shape: category_set was a list of cids set to Call Booked
             for cid in marks.get("category_set") or []:
                 cat_map.setdefault(str(cid), cfg["call_booked_category_id"])
-            cat_targets = plan_categories(memberships, reply_camps.get(email, set()),
-                                          target_cat, cfg["smartlead_client_id"],
-                                          camp_ids, cat_map)
+            cat_targets = [] if target_cat is None else plan_categories(
+                memberships, reply_camps.get(email, set()),
+                target_cat, cfg["smartlead_client_id"], camp_ids, cat_map)
             for cid in cat_targets:
                 if not DRY:
                     sl_json("POST", f"/campaigns/{cid}/leads/{lead_id}/category",
@@ -726,7 +730,18 @@ def main() -> int:
         log("NOTION_API_KEY missing — booked-sync idle (add it to the navreo-secrets "
             "env group; see booked-sync-orchestrator skill Step 0). Exiting 0.")
         return 0
-    cfgs = json.loads(CONFIG_PATH.read_text())
+    raw = json.loads(CONFIG_PATH.read_text())
+    defaults = raw.pop("_defaults", {})
+    only = {c.strip() for c in os.environ.get("BOOKED_SYNC_ONLY", "").split(",") if c.strip()}
+    cfgs = {}
+    for client, entry in raw.items():
+        if only and client not in only:
+            continue
+        merged = {**defaults, **entry}
+        if merged.get("notion_database_id", "").startswith("PENDING"):
+            log(f"[{client}] skipped — notion_database_id not provisioned yet")
+            continue
+        cfgs[client] = merged
     now = datetime.now(timezone.utc)
     full_verify = os.environ.get("BOOKED_SYNC_FULL", "") == "1" or (
         now.hour % 6 == 0 and now.minute < 30)
