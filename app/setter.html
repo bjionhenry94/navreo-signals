@@ -695,6 +695,10 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-tz-dot.good { background: #2e8b57; }
 .lp-tz-dot.off { background: #e8930c; }
 .lp-crm-link { font-weight: 600; }
+.lp-crm-top { margin-bottom: 12px; font-size: 12px; }
+.lp-desc { margin: 6px 0 2px; }
+.lp-desc summary { cursor: pointer; font-size: 11px; font-weight: 600; color: var(--ink-3); }
+.lp-desc .lp-company-desc { margin-top: 6px; }
 .lp-call-btn span { white-space: nowrap; }
 .lp-phone-bad { color: var(--ink-3); }
 .lp-kind-bad { background: #f7e8e4; color: #a33b25; }
@@ -3518,18 +3522,20 @@ function decisionFacts(row, opts) {
   facts.push({ label: "Intent", value: `${intentLabel(cls.primary_intent)}${cls.confidence != null ? ` (${Math.round(cls.confidence * 100)}% sure)` : ""}` });
   // Do the clock math for the caller (SDR panel 2026-08-15): the raw IANA
   // name made every rep compute "is it dinner time there?" in their head.
+  // The dot IS the verdict (owner 2026-08-17: no "good time to call"
+  // commentary) - green in their working hours, orange outside.
   let tzShown = tz || "unknown";
+  let tzTone = "";
   if (tz) {
     try {
       const now = new Date();
       const t = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(now);
       const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
-      const hint = (h >= 9 && h < 18) ? "good time to call" : (h >= 18 && h < 21 ? "evening for them" : "outside work hours");
-      tzShown = `${t} for them — ${hint}`;
+      tzTone = (h >= 9 && h < 18) ? "good" : "off";
+      tzShown = `${t} for them`;
     } catch { /* bad tz name - keep the raw value */ }
   }
-  facts.push({ label: "Timezone", value: tzShown,
-               tone: tz ? (/good time to call/.test(tzShown) ? "good" : "off") : "" });
+  facts.push({ label: "Timezone", value: tzShown, tone: tzTone });
   if (!opts.hideEmpty || lexHits.length) facts.push({ label: "Opt-out hits", value: lexHits.length ? lexHits.join(", ") : "none" });
   if (!opts.hideEmpty || redFlags.length) facts.push({ label: "AI flags", value: redFlags.length ? redFlags.join(", ") : "none" });
   facts.push({ label: "Call slots", value: slotSituationText(row) });
@@ -3777,20 +3783,11 @@ function leadPanelHtml(row) {
   // Warm-call order (owner ask 2026-08-15): category -> company breakdown with
   // the qualified chip (the "should I call?" facts) -> decision block -> the
   // client's own context, collapsed at the bottom.
-  // "In their words" (SDR panel round 2, 2026-08-15, mobile ask): on phones
-  // the panel stacks ABOVE the reply, so the lead's actual ask lives below
-  // the fold - one quoted line keeps the verdict and their words together.
-  // This is the lead's own text, not the AI intent label the owner removed
-  // from the sidebar 2026-08-11.
-  const saidLines = String(row.reply_body || "")
-    .replace(/<(br|\/p|\/div)[^>]*>/gi, "\n").replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">").replace(/&#39;|&apos;/gi, "'").replace(/&quot;/gi, '"')
-    .split(/\n+/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const saidRaw = saidLines[0] || "";
-  const saidHtml = saidRaw ? `<div class="lp-said">“${esc(saidRaw.length > 110 ? saidRaw.slice(0, 107).replace(/\s+\S*$/, "") + "…" : saidRaw)}”</div>` : "";
+  // Top of the panel: the client's CRM link (owner 2026-08-17 - replaced
+  // the "in their words" quote line; the reply text already sits in the
+  // adjacent pane). Always rendered as a container so hydration can swap it.
   return `
-    ${saidHtml}
+    ${crmTopHtml(row)}
     ${catSectionHtml}
     ${phoneDispositionHtml(row)}
     ${noAgentHtml}
@@ -3834,6 +3831,11 @@ function wirePhoneDisposition(scope, row) {
     });
   });
 }
+function crmTopHtml(row) {
+  const cl = warmcallFor(row).client || row.client_info || {};
+  if (!cl.crm_url) return `<div class="lp-crm-top" id="lpCrmTop" style="display:none"></div>`;
+  return `<div class="lp-crm-top" id="lpCrmTop"><a href="${esc(cl.crm_url)}" target="_blank" rel="noopener" class="lp-crm-link">Open in CRM ↗</a> <span class="muted small">all campaign responses</span></div>`;
+}
 function companySectionHtml(row) {
   // ONE profile, not "person" vs "company" (owner redesign 2026-08-17): who
   // they are and where they work in clear rows, then a single verdict that
@@ -3850,7 +3852,7 @@ function companySectionHtml(row) {
   const name = c.name || row.company_name || "";
   const site = (row.company_website || "").replace(/^https?:\/\//, "");
   const desc = c.description ? String(c.description) : "";
-  const descShown = desc.length > 220 ? desc.slice(0, 217).replace(/\s+\S*$/, "") + "…" : desc;
+  const descShown = desc.length > 700 ? desc.slice(0, 697).replace(/\s+\S*$/, "") + "…" : desc;
   const chipLabel = q.verdict === "likely" ? "Likely qualified"
     : q.verdict === "unlikely" ? "Unlikely fit"
     : wc.done ? "Fit unknown" : "";
@@ -3868,7 +3870,7 @@ function companySectionHtml(row) {
       ${fact("Location", loc ? esc(loc) : dash)}
       ${fact("Industry", c.industry ? esc(c.industry) : dash)}
     </dl>
-    ${descShown ? `<div class="lp-company-desc">${esc(descShown)}</div>` : ""}
+    ${descShown ? `<details class="lp-desc"><summary>What they do</summary><div class="lp-company-desc">${esc(descShown)}</div></details>` : ""}
     ${verdictHtml}
   </div>`;
 }
@@ -4015,6 +4017,8 @@ async function hydrateLeadContact(row) {
     if (clEl) { clEl.outerHTML = clientSectionHtml(row); wireClientToggle(document); }
     const dEl = document.getElementById("lpDisp");
     if (dEl) { dEl.outerHTML = phoneDispositionHtml(row); wirePhoneDisposition(document, row); }
+    const crmEl = document.getElementById("lpCrmTop");
+    if (crmEl) crmEl.outerHTML = crmTopHtml(row);
   }
   // First-ever open of a pre-enrichment row: the server kicks its one-time
   // enrichment ON this fetch, so the data lands seconds AFTER this response.
