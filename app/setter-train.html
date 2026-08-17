@@ -106,6 +106,10 @@
 .grade-btns { display: flex; gap: 10px; }
 .grade-btns .btn { flex: 1; justify-content: center; padding: 12px 14px; font-size: 13.5px; }
 .grade-btns .btn.sel.big-yes { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
+/* Owner refinement 2026-08-17: the client portal's Correct button is solid
+   green so the affirmative action is unmissable. */
+body.share-mode .grade-btns .btn.big-yes { background: var(--green, #2E7D5B); border-color: var(--green, #2E7D5B); color: #fff; }
+body.share-mode .grade-btns .btn.sel.big-yes { background: var(--green, #2E7D5B); border-color: var(--green, #2E7D5B); color: #fff; box-shadow: 0 0 0 2px var(--green-line, #C4E2D3); }
 .grade-btns .btn.sel.big-no { background: var(--red-bg); border-color: var(--red-line); color: #861E10; }
 .grade-btns .btn.sel.big-skip { background: var(--bg-sunken); border-color: var(--line-2); color: var(--ink-2); }
 .grade-btns.tr-3btn .btn { flex: 1; }
@@ -871,6 +875,37 @@ function renderReadinessPanel(animate) {
     ? `<div class="rp-review-link"><a id="panelReviewBtn" role="button">Review what it's learned &rarr;</a></div>`
     : "";
 
+  // Owner ruling 2026-08-17: the CLIENT portal shows just the running
+  // score toward 90 - no formula, no stat tiles, no memory accordion.
+  // The full diagnostic panel stays owner-only.
+  if (SHARE_MODE) {
+    host.innerHTML = `
+      <div class="readiness-panel rp-compact">
+        <div class="rp-top">
+          <div class="rp-num-wrap"><span class="rp-num ${ready ? "ready" : ""}" id="rpNum">0</span><span class="rp-num-max">/ 90</span></div>
+          <div class="rp-headline">
+            <div class="rp-label">${ready ? "Trained" : "Getting to 90"}</div>
+            <div class="rp-explain">${ready
+              ? "Your AI is trained and ready. Keep going if you'd like to sharpen it further."
+              : "Every rating moves this score. At 90, your AI is trained."}</div>
+          </div>
+        </div>
+        <div class="rp-bar-wrap">
+          <div class="rp-bar-track">
+            <div class="rp-bar-fill ${ready ? "ready" : ""}" id="rpBarFill" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+    `;
+    const numElC = document.getElementById("rpNum");
+    if (animate) animateNumber(numElC, lastRenderedScore, score, 550);
+    else numElC.textContent = String(score);
+    const fillElC = document.getElementById("rpBarFill");
+    requestAnimationFrame(() => { fillElC.style.width = Math.max(0, Math.min(100, (score / 90) * 100)) + "%"; });
+    lastRenderedScore = score;
+    return;
+  }
+
   host.innerHTML = `
     <div class="readiness-panel">
       <div class="rp-top">
@@ -991,15 +1026,15 @@ function renderRoundDone() {
 
   let msg, buttons;
   if (trained) {
-    msg = `Your AI has reached ${score}/100 - it's trained and ready. Everything you've taught it is saved. `
+    msg = `Your AI has reached ${score} - past the 90 goal, so it's trained and ready. Everything you've taught it is saved. `
         + `You can stop here${capped ? "." : " - or keep going if you'd like to sharpen it further."}`;
     buttons = capped ? "" : `<button class="btn" id="doneGenerateBtn" type="button">Keep training (optional)</button>`;
   } else if (capped) {
-    msg = `That's a lot for one sitting - thank you! Your AI is at ${score}/100 (it's fully trained at 90). `
+    msg = `That's a lot for one sitting - thank you! Your AI is at ${score} of the 90 goal. `
         + `We'll take it from here; come back any time with this same link to keep going.`;
     buttons = "";
   } else {
-    msg = `Your AI is at ${score}/100 - it's fully trained at 90. Another round will get it closer.`;
+    msg = `Your AI is at ${score} of the 90 goal. Another round will get it closer.`;
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
   }
 

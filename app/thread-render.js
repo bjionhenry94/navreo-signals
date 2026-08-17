@@ -24,10 +24,15 @@
     ".th-email { border: 1px solid var(--line, #E7E5E0); border-radius: 10px; padding: 10px 14px; max-width: 88%; box-sizing: border-box; background: var(--card, #fff); }",
     ".th-email.us { align-self: flex-start; background: var(--bg-sunken, #F7F7F6); }",
     ".th-email.lead { align-self: flex-end; }",
-    ".th-email.latest { border-left: 3px solid var(--orange, #E56A1F); }",
+    /* Owner refinement 2026-08-17: the LATEST reply — the thing being
+       answered — sits on solid orange with white writing so it's the first
+       thing the eye finds. Everything else stays neutral. */
+    ".th-email.latest { background: var(--orange, #FF4D00); border-color: var(--orange, #FF4D00); }",
     ".th-label { font-size: 11px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--ink-3, #8A8578); margin-bottom: 5px; display: flex; gap: 6px; align-items: baseline; }",
+    ".th-email.latest .th-label { color: rgba(255,255,255,0.85); }",
     ".th-label .th-when { font-weight: 400; text-transform: none; letter-spacing: 0; }",
     ".th-body { font-size: 13px; line-height: 1.55; color: var(--ink, #1F1D1A); white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow-y: auto; }",
+    ".th-email.latest .th-body { color: #fff; }",
   ].join("\n");
 
   function ensureStyles() {
