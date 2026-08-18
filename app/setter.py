@@ -1991,17 +1991,33 @@ def normalize_greeting(html: str, sender_first: str = "") -> str:
         return html or ""
 
 
-_RTF_ESC_RE = re.compile(r"\\'([0-9a-fA-F]{2})")
+_RTF_ESC_RE = re.compile(r"\\?'([cdefCDEF][0-9a-fA-F])")
 
 
 def repair_rtf_escapes(html: str) -> str:
     """Decodes RTF-style hex escapes leaked from a lead's reply encoding
-    (judge finding 2026-08-18: a draft shipped "Hi D\\'e9bora" - \\'e9 is an
-    RTF-encoded e-acute the drafter copied verbatim). The \\'XX sequence never
-    occurs in legitimate email prose, so decoding is safe. cp1252 covers the
-    RTF default charset."""
+    (judge finding 2026-08-18: drafts shipped "Hi D'e9bora" - 'e9 is an
+    RTF-encoded e-acute the drafter copied verbatim; the leading backslash is
+    stripped upstream, so match it optionally). Restricting the first hex
+    nibble to c-f targets the Latin-1 accented range (0xC0-0xFF) and never
+    touches decade forms like "the '90s" (0x90) or ordinary apostrophes.
+    cp1252 covers the RTF default charset."""
     try:
         return _RTF_ESC_RE.sub(lambda m: bytes([int(m.group(1), 16)]).decode("cp1252", "replace"), html or "")
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
+_HERE_IS_ANCHOR_RE = re.compile(r"\bHere is\s+(<a\b[^>]*>\s*grab a slot here\s*</a>)", re.I)
+
+
+def repair_here_is_graft(html: str) -> str:
+    """Fixes 'Here is <a>grab a slot here</a>' where the imperative anchor
+    label got grafted after 'Here is', reading 'Here is grab a slot here'
+    (judge finding 2026-08-18). Rewrites the stem to 'You can ...' so the
+    anchor's own label reads naturally."""
+    try:
+        return _HERE_IS_ANCHOR_RE.sub(r"You can \1", html or "")
     except Exception:  # noqa: BLE001
         return html or ""
 
@@ -2069,7 +2085,7 @@ def proofread_draft(html: str, sender_first: str = ""):
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
     original = dedupe_adjacent_blocks(normalize_greeting(strip_deadend_ask(destack_same_block(destack_call_ask(
-        repair_timeless_ask(repair_markdown_links(repair_rtf_escapes(html or "")))))), sender_first))
+        repair_timeless_ask(repair_here_is_graft(repair_markdown_links(repair_rtf_escapes(html or ""))))))), sender_first))
     if not original.strip():
         return original, False
     try:
