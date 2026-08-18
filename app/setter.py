@@ -318,15 +318,12 @@ def _booking_link(agent: dict) -> str:
     Derived from calendly_event_url (trailing slash stripped) unless an
     explicit legacy booking_link is still set on the doc.
 
-    The Navreo brand retired its standalone backup booking link (owner ruling
-    2026-08-17): the two offered call-time slot links stay (those come from
-    calendly_event_url via _slot_link, not from here), but there is no separate
-    "book a call here" fallback link. Returning "" here makes every downstream
-    surface (draft payload, lint ctx) see Navreo as having no backup link, and
-    the drafter/lint then fall back to asking the lead to suggest times."""
+    Owner ruling 2026-08-18 REVERSES the 2026-08-17 Navreo no-backup-link
+    decision: every appointment-setter SDR now offers a hyperlinked backup
+    ("see my availability here and book in directly"), Navreo included. So
+    Navreo is no longer special-cased - it uses its calendly_event_url as the
+    backup like every other agent."""
     agent = agent or {}
-    if _is_navreo_agent(agent):
-        return ""
     explicit = str(agent.get("booking_link") or "").strip()
     if explicit:
         return explicit
@@ -1422,16 +1419,16 @@ DRAFT_SYSTEM = """You write the reply for a cold-email appointment-setter agent,
 These are REAL replies the team sent. Match this voice, structure, and exact phrasing precisely (swap in the actual name, resource link, times, and booking link you are given):
 
 RESOURCE + CALL:
-<div>Hi Donald,</div><br><div><a href="RESOURCE_LINK">Here's the breakdown I prepared.</a></div><br><div>Would you be free for a call on <a href="SLOT_1">Wednesday, 14th July at 2:00 PM BST</a> or <a href="SLOT_2">Thursday, 15th July at 2:30 PM BST</a>, where I could share how I would implement our strategy for you?</div><br><div>If those times aren't suitable, feel free to <a href="BOOKING_LINK">book a call here</a>.</div><br><div>Bjion</div>
+<div>Hi Donald,</div><br><div><a href="RESOURCE_LINK">Here's the breakdown I prepared.</a></div><br><div>Would you be free for a call on <a href="SLOT_1">Wednesday, 14th July at 2:00 PM BST</a> or <a href="SLOT_2">Thursday, 15th July at 2:30 PM BST</a>, where I could share how I would implement our strategy for you?</div><br><div>If those times aren't suitable, feel free to <a href="BOOKING_LINK">see my availability here</a> and book in directly.</div><br><div>Bjion</div>
 
 PRICING (quote the instructions verbatim). Shown here with no live slots - when slot_status is "ok" this same reply also carries the two call-time paragraph and the booking-link paragraph:
 <div>Hi Parag,</div><br><div>Our pay-per-lead pricing has two parts:</div><br><div>1. Setup and infrastructure: $1,000 (at cost). This covers everything needed to run your campaigns: enterprise Microsoft (Azure) mailboxes plus Gmail mailboxes giving you up to 50,000 sends per month, email enrichment, verification of that data, and personalisation plus intent and signal data. All billed at cost, no markup.</div><br><div>2. Performance: $300 per qualified meeting attended. You only pay when a genuinely qualified prospect actually shows up to the meeting.</div><br><div>Bjion</div>
 
-A QUESTION WE CAN'T FULLY ANSWER IN AN EMAIL. Shown here with no live slots - when slot_status is "ok", replace the "book a call here" paragraph with the two call-time paragraph plus the "If those times aren't suitable" booking-link paragraph:
-<div>Hi Gustavo,</div><br><div>That's exactly what I'd walk you through on a quick call, where I could show how it applies to you.</div><br><div>If you're open to it, feel free to <a href="BOOKING_LINK">book a call here</a>.</div><br><div>Bjion</div>
+A QUESTION WE CAN'T FULLY ANSWER IN AN EMAIL. Shown here with no live slots - when slot_status is "ok", replace the "see my availability here and book in directly" paragraph with the two call-time paragraph plus the "If those times aren't suitable" booking-link paragraph:
+<div>Hi Gustavo,</div><br><div>That's exactly what I'd walk you through on a quick call, where I could show how it applies to you.</div><br><div>If you're open to it, feel free to <a href="BOOKING_LINK">see my availability here</a> and book in directly.</div><br><div>Bjion</div>
 
 CALL ASK, NO LIVE SLOTS BUT THE INSTRUCTIONS LIST CONCRETE AVAILABLE TIMES (fallback ladder step ONE-A - slot_status is anything but "ok" AND the instructions contain a concrete list of available times or time ranges, e.g. an auto-updated "Current Available Times" block):
-<div>Hi Priya,</div><br><div>Would you be free for a call on Wednesday, 16th July at 1:00 PM EST or Thursday, 17th July at 10:30 AM EST, where I could share how I would implement our strategy for you?</div><br><div>If those times aren't suitable, you're welcome to <a href="INSTRUCTIONS_CALENDAR_LINK">grab a slot here</a>.</div><br><div>Bjion</div>
+<div>Hi Priya,</div><br><div>Would you be free for a call on Wednesday, 16th July at 1:00 PM EST or Thursday, 17th July at 10:30 AM EST, where I could share how I would implement our strategy for you?</div><br><div>If those times aren't suitable, you're welcome to <a href="INSTRUCTIONS_CALENDAR_LINK">see my availability here</a> and book in directly.</div><br><div>Bjion</div>
 
 CALL ASK, NO LIVE SLOTS BUT THE INSTRUCTIONS GIVE ONLY A GENERAL WINDOW (fallback ladder step ONE-B - slot_status is anything but "ok" AND the instructions state only a general availability window or a scheduling/calendar link, with no concrete times listed):
 <div>Hi Priya,</div><br><div>Would love to find a time that works for you.</div><br><div>I'm generally free WINDOW_FROM_INSTRUCTIONS, or you're welcome to grab a slot directly on <a href="INSTRUCTIONS_CALENDAR_LINK">my calendar</a>.</div><br><div>Bjion</div>
@@ -1442,7 +1439,7 @@ CALL ASK, NO TIMES AVAILABLE ANYWHERE (fallback ladder step TWO - slot_status is
 Rules:
 - WHERE A CALL TIME MAY COME FROM (read this before proposing any day or clock time). There are exactly two sources of a time: the slots you were given, and only while slot_status is "ok"; or a literal list of dates or times written out in the instructions as data (for example an auto-updated "Current Available Times" block). Nothing else is a source. In particular, a rule in the instructions that tells you HOW to write or choose a time is a FORMAT, not availability: a template ("Weekday, Dth Month at H:MM AM/PM EDT"), an example time shown to illustrate that template, a placeholder like [first specific time], a timezone rule, or an instruction to "take the slots from real availability on our calendar" all describe how to render a time you already have, and never mean that you have one. So when slot_status is anything but "ok" AND the instructions hold no literal list of times, you have NO times at all: ask for the lead's availability by the fallback ladder below, and do not name a weekday, a date, or a clock time anywhere in the draft. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions. This rule outranks the agent's instructions and any example in them: instructions written on the assumption that two call times exist do not authorise you to manufacture one when they don't. In particular, when the instructions mandate a fixed reply TEMPLATE that contains a time placeholder ("[first specific time]", "[second specific time]", or similar) and you have no time to put in it, you must NOT fill that placeholder with a time you worked out yourself, and you must NOT leave the placeholder in the draft. Instead keep every other block of that template exactly as the instructions demand, and swap the single line holding the placeholders for the availability ask from the fallback ladder below. Filling a template's time placeholder from a calendar you cannot see is inventing a time, no matter how firmly the template says to keep its blocks as written.
 - Every draft must be built from short <div> paragraphs separated by <br>, exactly like the examples above. A single-line reply with no paragraph breaks will be rejected.
-- Use the team's exact recurring phrases where they fit: the resource anchor is "Here's the breakdown I prepared." (or "Here's a case study I put together." when it's a case study); the call ask, ONLY when you have actual times to name, is "Would you be free for a call on {day, date at time TZ} or {day2, date2 at time2 TZ}, where I could share how I would implement our strategy for you?"; the fallback is "If those times aren't suitable, feel free to book a call here." with the link on "book a call here".
+- Use the team's exact recurring phrases where they fit: the resource anchor is "Here's the breakdown I prepared." (or "Here's a case study I put together." when it's a case study); the call ask, ONLY when you have actual times to name, is "Would you be free for a call on {day, date at time TZ} or {day2, date2 at time2 TZ}, where I could share how I would implement our strategy for you?"; the fallback is "If those times aren't suitable, feel free to see my availability here and book in directly." with the link on "see my availability here".
 - ONE ASK, EVER (owner rule 2026-08-17: "You're asking for a call twice, don't do that"). A draft asks for the call at most once. The two-times call ask, a general-window proposal, and the "When would be a good time for us to talk?" availability ask are three ALTERNATIVES: exactly one may appear in a draft, never two. Each fallback-ladder step REPLACES the call ask, it never adds a second ask on top. A draft containing both "Would you be free for a call" and "When would be a good time" is invalid. Never write the call-ask sentence at all when you have no times to put in it. And never write the same sentence or phrase twice anywhere in one draft. A lead who has already said yes to a call, booked one, or shared THEIR OWN booking/scheduling link has chosen the path: confirm it (for their link: say you'll grab a time on it) and make ZERO fresh asks.
 - The names in the examples above (Donald, Parag, Priya, and the sign-off) are placeholders from OTHER teams' threads. Sign ONLY {SenderFirst} - never copy "Bjion" or any example name into a draft.
 - No em dashes anywhere, ever - use a comma or period instead.
@@ -1461,7 +1458,7 @@ Rules:
 - If a question's answer is NOT in the instructions or the resource, do not improvise one - but never dodge the question either. FIRST answer it with everything you truly have: any fact the LEAD themselves stated in this thread (their team size, their CRM, their stack, their constraints) must be named and used ("For a 12-person team running your own LinkedIn outbound..."; "Since you run everything through HubSpot..."), and anything the instructions DO answer must be answered plainly. Only THEN, for the specific part you genuinely cannot answer, make that named gap the reason for the call ("exactly how it would sit alongside HubSpot is what I'd walk you through on a quick call") - unless a stated channel or timing constraint applies (see constraint_directive), which always wins over this - never a bare "That's exactly what I'd walk you through on a quick call" that ignores the lead's own stated facts; that reads as not having read their email. Engaging their facts NEVER licenses asserting a mechanism: if the instructions don't state how something works (an integration, a data mapping, a process, a guarantee), do not describe it as if it exists ("we would map our outbound data into your CRM" is an invented claim unless the instructions say so) - name their fact, put the HOW behind the call. One carve-out (owner rule 2026-08-16): a question about PROCESS - "what would the first month look like?", "what happens after we start?" - may be answered with a natural plain-English description of how an engagement typically runs, even when the instructions don't spell it out; hard facts (prices, numbers, dates, guarantees, integrations) stay instruction-only. Answer ONLY what they asked: never bolt on an unasked section, and never write "you asked for X" / "here is the X you asked for" about something their message did not ask for. Guessing at policies, capabilities, or processes is still worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
 - Whenever slots are supplied and slot_status is "ok" you MUST include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. This is the DEFAULT and does not depend on the intent: a resource send, a pricing answer, or a question we can't fully answer all still get the two call times when live slots exist. Three things, and only these three, override that default. FIRST, a stated constraint: the lead's stated timing or channel constraint (see the constraint rule below) suppresses call times and booking links entirely - it always wins. SECOND, call_ask: when call_ask is "avoid" the lead is already sorted for a call (a time is agreed, they have booked, or they have just told you when they are free) or has asked something that a fresh call pitch would talk straight past - answer THAT message on its own terms and do not propose times again; when call_ask is "only_if_relevant" a call has already been offered earlier in this thread and their latest message is not about scheduling, so lead with the actual answer and only reach for times if the answer genuinely needs a call; when call_ask is "required" or absent, the default above stands. Never re-propose times a lead has already turned down or already accepted. THIRD, reviewer_feedback about WHICH times to offer ("offer different times", "offer next week"): the slots you have been given have ALREADY been re-picked from the real calendar to match that request, so propose exactly the slots in front of you and do not apologise for or refer to the times a previous draft proposed. You still never invent a time: if the feedback asks for times the calendar cannot supply, say so in feedback_note and use the fallback ladder instead of making one up. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), meaning real dates or times written out as data and never a formatting template, an example time, or a rule about where times come from, pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone - converting means changing the clock time itself, never just swapping the timezone label; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
-- NO BACKUP BOOKING LINK. When booking_link is empty, there is NO standalone backup booking link, so you must NOT output a "book a call here" paragraph, a "my availability" booking-link paragraph, or ANY standalone booking/scheduling link anywhere in the draft. The two call-time paragraph (each time its own per-slot link) is unchanged when live slots exist. Wherever the examples show the "If those times aren't suitable, feel free to book a call here" booking-link fallback paragraph, write instead this plain-text paragraph with NO link: "If those times aren't suitable, feel free to suggest some times that work for you." And when there are no call times at all, ask for the lead's availability with that same plain-text sentence, never a booking or calendar link. This overrides the RESOURCE + CALL example's fallback line and every fallback-ladder step that would otherwise carry BOOKING_LINK.
+- NO BACKUP BOOKING LINK. When booking_link is empty, there is NO standalone backup booking link, so you must NOT output a "see my availability here" paragraph, a "my availability" booking-link paragraph, or ANY standalone booking/scheduling link anywhere in the draft. The two call-time paragraph (each time its own per-slot link) is unchanged when live slots exist. Wherever the examples show the "If those times aren't suitable, feel free to see my availability here and book in directly" booking-link fallback paragraph, write instead this plain-text paragraph with NO link: "If those times aren't suitable, feel free to suggest some times that work for you." And when there are no call times at all, ask for the lead's availability with that same plain-text sentence, never a booking or calendar link. This overrides the RESOURCE + CALL example's fallback line and every fallback-ladder step that would otherwise carry BOOKING_LINK.
 - If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you. Never claim a resource covers a specific topic (a fix, a policy, a category, a mechanism) unless the instructions state that it does - "here's the breakdown, it covers exactly how we'd handle your verification issue" is an invented claim when the instructions never say so.
@@ -1613,11 +1610,11 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     # above), so it overrides the RESOURCE + CALL exemplar in DRAFT_SYSTEM.
     if not payload["booking_link"]:
         payload["no_backup_link_directive"] = (
-            "There is NO backup booking link for this agent. Never output a \"book a call here\" "
+            "There is NO backup booking link for this agent. Never output a \"see my availability here\" "
             "paragraph, a \"my availability\" booking-link paragraph, or any standalone booking or "
             "calendar link anywhere in the draft. When live slots exist, keep the two call-time "
             "paragraph exactly as required, each time carrying its own per-slot link, then replace "
-            "the \"If those times aren't suitable, feel free to book a call here\" booking-link "
+            "the \"If those times aren't suitable, feel free to see my availability here and book in directly\" booking-link "
             "paragraph with exactly this plain-text paragraph, containing NO link: \"If those times "
             "aren't suitable, feel free to suggest some times that work for you.\""
         )
@@ -1933,10 +1930,37 @@ def humanize_availability_fallback(html: str) -> str:
     def _sub(m):
         attrs = m.group(1)
         if attrs is not None:
-            return f'You can <a{attrs}>grab a time that suits you here</a>.'
+            return f'You can <a{attrs}>see my availability here</a> and book in directly.'
         return "Just let me know a couple of times that suit you and I'll set it up."
     try:
         return _AVAIL_FALLBACK_RE.sub(_sub, html or "")
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
+_BACKUP_LABELS = frozenset({
+    "book a call here", "grab a slot here", "grab a time here",
+    "grab a time that suits you here", "my availability",
+})
+_BACKUP_ANCHOR_RE = re.compile(r'<a\b([^>]*)>([^<]+)</a>((?:\s+and book in directly)?\s*\.?)', re.I)
+
+
+def standardize_backup_link(html: str) -> str:
+    """One backup-link phrasing across every appointment-setter SDR (owner
+    ruling 2026-08-18): the fallback booking link always reads 'see my
+    availability here and book in directly', with the link on 'see my
+    availability here'. Relabels any known backup CTA anchor (book a call
+    here / grab a slot here / my availability / etc.) to that standard.
+    Idempotent: an anchor already labelled 'see my availability here' with
+    'and book in directly' after it is left alone, and per-slot call-time
+    anchors (dated labels) are never touched."""
+    def _sub(m):
+        attrs, label, tail = m.group(1), m.group(2), m.group(3)
+        if label.strip().lower().rstrip(".") in _BACKUP_LABELS:
+            return f'<a{attrs}>see my availability here</a> and book in directly.'
+        return m.group(0)
+    try:
+        return _BACKUP_ANCHOR_RE.sub(_sub, html or "")
     except Exception:  # noqa: BLE001
         return html or ""
 
@@ -2139,8 +2163,8 @@ def proofread_draft(html: str, sender_first: str = ""):
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
     _repaired = strip_deadend_ask(destack_same_block(destack_call_ask(
-        humanize_availability_fallback(repair_timeless_ask(repair_here_is_graft(
-            dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(html or "")))))))))
+        standardize_backup_link(humanize_availability_fallback(repair_timeless_ask(repair_here_is_graft(
+            dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(html or ""))))))))))
     original = dedupe_adjacent_blocks(normalize_greeting(_repaired, sender_first))
     if not original.strip():
         return original, False
@@ -2346,6 +2370,26 @@ def _thread_sender_first(campaign_id, thread) -> str:
                     return parts[0]
                 if first and len(first) >= 4 and local.startswith(first):
                     return parts[0]
+    # Last resort (owner ruling 2026-08-18, reply signs as the outreach
+    # sender): the outreach body itself usually names the sender in its
+    # sign-off ("Best,\nJane"). Extract a first name from the tail of the
+    # earliest SENT body, but ONLY accept it when it matches a persona the
+    # campaign actually sends as - so this can never invent a name, only
+    # recover a real sender the from_name/from_email path missed.
+    import html as _htmlmod
+    mp2 = _campaign_sender_map(campaign_id)
+    known_firsts = {v.split()[0].lower() for v in mp2.values() if v and v.split()}
+    if known_firsts:
+        for m in (thread or []):
+            if not isinstance(m, dict) or str(m.get("type") or "").upper() != "SENT":
+                continue
+            body = _htmlmod.unescape(re.sub(r"<[^>]+>", "\n", str(m.get("body") or "")))
+            lines = [ln.strip(" ,.-") for ln in body.splitlines() if ln.strip()]
+            for ln in reversed(lines[-6:]):
+                mm = re.match(r"^([A-Z][a-z]{1,15})(?:\s+[A-Z][a-z]+)?$", ln)
+                if mm and mm.group(1).lower() in known_firsts:
+                    return mm.group(1)
+            break
     return ""
 
 

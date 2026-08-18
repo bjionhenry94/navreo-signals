@@ -1094,20 +1094,21 @@ def test_lint_draft_calendly_fallback_instructions_link():
          not ok and reason == "The draft doesn't link a calendar for the lead to pick a time.", reason)
 
 
-def test_booking_link_empty_for_navreo_brand():
-    """Owner ruling 2026-08-17: the Navreo brand retired its standalone backup
-    booking link. _booking_link returns "" for the exact-name Navreo agent (so
-    every downstream surface sees no backup link), while client agents and the
-    'Navreo copy'/dummy clones keep theirs."""
+def test_booking_link_for_every_agent_including_navreo():
+    """Owner ruling 2026-08-18 REVERSES the 2026-08-17 Navreo no-backup-link
+    decision: every appointment-setter SDR now offers a hyperlinked backup, so
+    Navreo is no longer special-cased - it uses its calendly_event_url as the
+    backup like every other agent."""
     fresh_setter()
     cal = "https://calendly.com/navreo/navreo-book-a-call-with-us-clone"
-    check("booking: the Navreo brand agent has no backup link",
-          setter._booking_link({"name": "Navreo", "calendly_event_url": cal}) == "",
+    check("booking: the Navreo brand agent now keeps its backup link (2026-08-18 reversal)",
+          setter._booking_link({"name": "Navreo", "calendly_event_url": cal}) == cal,
           setter._booking_link({"name": "Navreo", "calendly_event_url": cal}))
     check("booking: a client agent keeps its backup link",
           setter._booking_link({"name": "Amplifyy", "calendly_event_url": cal}) == cal, None)
-    check("booking: 'Navreo copy' is not the brand, keeps its link",
-          setter._booking_link({"name": "Navreo copy", "calendly_event_url": cal}) == cal, None)
+    check("booking: an explicit legacy booking_link still wins over calendly_event_url",
+          setter._booking_link({"name": "Navreo", "booking_link": "https://x/legacy",
+                                "calendly_event_url": cal}) == "https://x/legacy", None)
 
 
 def test_lint_no_backup_link_allows_plaintext_suggest_times():
@@ -10479,7 +10480,7 @@ if __name__ == "__main__":
     test_lint_draft_calendly_fallback_booking_link()
     test_calendly_availability_non_calendly_link_is_not_configured()
     test_lint_draft_calendly_fallback_instructions_link()
-    test_booking_link_empty_for_navreo_brand()
+    test_booking_link_for_every_agent_including_navreo()
     test_lint_no_backup_link_allows_plaintext_suggest_times()
     test_lint_draft_slot_status_ok_unchanged_by_fallback_rules()
     test_decide_matrix()
