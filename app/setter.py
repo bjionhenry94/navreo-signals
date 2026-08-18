@@ -1852,7 +1852,9 @@ PROOFREAD_SYSTEM = ("You are a meticulous copy editor for short sales emails. Fi
                     "Return the full corrected HTML.")
 
 
-_ASK_PHRASES = ("would you be free", "would it be worth", "are you free")
+_ASK_PHRASES = ("would you be free", "would it be worth", "are you free",
+                "would you be open", "would you be available", "are you available",
+                "do you have time")
 _AVAIL_Q = "when would be a good time"
 _DIV_BLOCK_RE = re.compile(r"<div\b[^>]*>.*?</div>", re.I | re.S)
 
