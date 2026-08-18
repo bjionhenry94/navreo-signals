@@ -11868,11 +11868,15 @@ def route_training_generate(payload):
         # campaigns (owner ruling 2026-07-14: an agent must never train on
         # campaigns it isn't assigned to). An unassigned agent still trains -
         # real selection comes back empty and the synthetic Practice top-up
-        # fills the batch. Share links additionally require an assignment so
-        # a client link is never minted for an unconfigured agent.
+        # fills the batch. A share link used to require a campaign so a client
+        # link was never minted for an unconfigured agent - but an agent WITH
+        # instructions and no campaign yet (a from-scratch AI-SDR trained
+        # before its campaign launches, owner ruling 2026-08-18) is configured
+        # enough to practise: the synthetic top-up builds the whole batch from
+        # the instructions alone. Only refuse a truly empty agent.
         allowed_campaign_ids = [str(c) for c in (agent.get("campaign_ids") or [])]
-        if is_share_mode and not allowed_campaign_ids:
-            return 400, {"error": "This agent has no campaigns to draw replies from yet."}
+        if is_share_mode and not allowed_campaign_ids and not (agent.get("instructions") or "").strip():
+            return 400, {"error": "Add some instructions to this agent before training it."}
 
         doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])

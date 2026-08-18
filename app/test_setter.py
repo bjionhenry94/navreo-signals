@@ -151,6 +151,14 @@ class FakeSB:
             return str(value) == op_value[3:]
         if op_value.startswith("neq."):
             return str(value) != op_value[4:]
+        if op_value.startswith("ilike."):
+            # The follow-up sibling sweep keys on `lead_email=ilike.<email>`.
+            # The real queries carry no wildcards, so ilike here means
+            # case-insensitive equality on the percent-decoded value - the
+            # same modelling the `replies` email filter uses. Without this the
+            # op fell through to `return True` and the sweep matched EVERY
+            # lead, dismissing/pushing unrelated conversations' rows.
+            return str(value).lower() == unquote(op_value[6:]).lower()
         if op_value.startswith("not.in."):
             inner = op_value[7:].strip("()")
             opts = [o.strip('"') for o in inner.split(",") if o != ""]
@@ -7685,12 +7693,32 @@ def test_training_generate_share_forces_agent_campaign_filter_and_400_on_no_camp
          "(the mechanism server.py uses to gate an unauthenticated caller)",
          status4 == 401, (status4, resp4))
 
+    # A truly empty agent (no campaigns AND no instructions) still refuses -
+    # nothing to draw real replies from and nothing to invent synthetic ones
+    # from either.
     agent2 = {"id": "agent-shr0007", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
     sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
     token2 = setter.mint_training_share(agent2["id"])
     status5, resp5 = setter.route_training_generate({"share": token2, "batch_size": 4})
-    check("training generate share: an agent with no campaigns assigned -> 400, plain-English",
-         status5 == 400 and "campaign" in str(resp5.get("error") or "").lower(), (status5, resp5))
+    check("training generate share: a truly empty agent (no campaigns, no instructions) -> 400, plain-English",
+         status5 == 400 and "instruction" in str(resp5.get("error") or "").lower(), (status5, resp5))
+
+    # But a from-scratch AI-SDR WITH instructions and no campaign yet trains on
+    # synthetic scenarios (owner ruling 2026-08-18) - the share link must not
+    # refuse it just because its campaign hasn't launched.
+    agent3 = {"id": "agent-shr0007b", "mode": "draft_only", "enabled": True,
+              "allowed_intents": ["send_resource", "scheduling"],
+              "instructions": "You book intro calls. Booking link: https://cal.com/x/demo. "
+                              "Send https://x.co/overview when asked how it works. Sign as Sam."}
+    sb.agents[agent3["id"]] = {"id": agent3["id"], "doc": agent3}
+    token3 = setter.mint_training_share(agent3["id"])
+    # The guard must NOT refuse (the pre-fix behaviour was a 400). Synthetic
+    # scenario CONTENT needs a live LLM (stubbed out here), so we only assert
+    # the request is accepted, not the case count - the "generates a full
+    # 8-case batch" test above already covers real content generation.
+    status6, resp6 = setter.route_training_generate({"share": token3, "batch_size": 4})
+    check("training generate share: an instructed agent with no campaigns is accepted, not refused (no 400)",
+         status6 == 200, (status6, resp6))
 
 
 def test_training_generate_share_unanswered_cap_is_tighter_than_owner():
