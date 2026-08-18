@@ -1443,7 +1443,7 @@ Rules:
 - WHERE A CALL TIME MAY COME FROM (read this before proposing any day or clock time). There are exactly two sources of a time: the slots you were given, and only while slot_status is "ok"; or a literal list of dates or times written out in the instructions as data (for example an auto-updated "Current Available Times" block). Nothing else is a source. In particular, a rule in the instructions that tells you HOW to write or choose a time is a FORMAT, not availability: a template ("Weekday, Dth Month at H:MM AM/PM EDT"), an example time shown to illustrate that template, a placeholder like [first specific time], a timezone rule, or an instruction to "take the slots from real availability on our calendar" all describe how to render a time you already have, and never mean that you have one. So when slot_status is anything but "ok" AND the instructions hold no literal list of times, you have NO times at all: ask for the lead's availability by the fallback ladder below, and do not name a weekday, a date, or a clock time anywhere in the draft. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions. This rule outranks the agent's instructions and any example in them: instructions written on the assumption that two call times exist do not authorise you to manufacture one when they don't. In particular, when the instructions mandate a fixed reply TEMPLATE that contains a time placeholder ("[first specific time]", "[second specific time]", or similar) and you have no time to put in it, you must NOT fill that placeholder with a time you worked out yourself, and you must NOT leave the placeholder in the draft. Instead keep every other block of that template exactly as the instructions demand, and swap the single line holding the placeholders for the availability ask from the fallback ladder below. Filling a template's time placeholder from a calendar you cannot see is inventing a time, no matter how firmly the template says to keep its blocks as written.
 - Every draft must be built from short <div> paragraphs separated by <br>, exactly like the examples above. A single-line reply with no paragraph breaks will be rejected.
 - Use the team's exact recurring phrases where they fit: the resource anchor is "Here's the breakdown I prepared." (or "Here's a case study I put together." when it's a case study); the call ask, ONLY when you have actual times to name, is "Would you be free for a call on {day, date at time TZ} or {day2, date2 at time2 TZ}, where I could share how I would implement our strategy for you?"; the fallback is "If those times aren't suitable, feel free to book a call here." with the link on "book a call here".
-- ONE ASK, EVER (owner rule 2026-08-17: "You're asking for a call twice, don't do that"). A draft asks for the call at most once. The two-times call ask, a general-window proposal, and the "When would be a good time for us to talk?" availability ask are three ALTERNATIVES: exactly one may appear in a draft, never two. Each fallback-ladder step REPLACES the call ask, it never adds a second ask on top. A draft containing both "Would you be free for a call" and "When would be a good time" is invalid. Never write the call-ask sentence at all when you have no times to put in it. And never write the same sentence or phrase twice anywhere in one draft.
+- ONE ASK, EVER (owner rule 2026-08-17: "You're asking for a call twice, don't do that"). A draft asks for the call at most once. The two-times call ask, a general-window proposal, and the "When would be a good time for us to talk?" availability ask are three ALTERNATIVES: exactly one may appear in a draft, never two. Each fallback-ladder step REPLACES the call ask, it never adds a second ask on top. A draft containing both "Would you be free for a call" and "When would be a good time" is invalid. Never write the call-ask sentence at all when you have no times to put in it. And never write the same sentence or phrase twice anywhere in one draft. A lead who has already said yes to a call, booked one, or shared THEIR OWN booking/scheduling link has chosen the path: confirm it (for their link: say you'll grab a time on it) and make ZERO fresh asks.
 - The names in the examples above (Donald, Parag, Priya, and the sign-off) are placeholders from OTHER teams' threads. Sign ONLY {SenderFirst} - never copy "Bjion" or any example name into a draft.
 - No em dashes anywhere, ever - use a comma or period instead.
 - No emoji.
@@ -1456,7 +1456,7 @@ Rules:
 - The ack paragraph must answer the SHAPE of the question. A yes/no question ("So you work on commission?") gets a direct, truthful opener grounded ONLY in the instructions ("It is a flat monthly fee rather than commission."), never "Of course."
 - NEVER open with "Good question", "Great question", or any equivalent - it reads as patronising (owner rule 2026-08-17). Just answer.
 - YOU are the person on this thread - own every answer in first person. Never say you will "escalate this to the team", "pass this to the team", or hand the question to some third party: when the exact terms aren't in the instructions, say it as yourself ("I'll confirm the exact terms and come back to you") - and that sentence is the WHOLE answer for a contract/legal/pricing question the instructions don't cover. First-person ownership NEVER licenses inventing the answer: "it is a standard engagement, not a lock-in, you can pause at the end of any month" is a fabricated contract claim unless the instructions state those exact terms (owner rule 2026-08-17: "Kevin is the person to answer this" - Kevin answers as himself, he does not make terms up).
-- BEFORE writing anything, decide the greeting name: FIRST look at the end of their reply for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly") - how the lead signed their LATEST message is ground truth and OUTRANKS lead_first_name whenever the two differ (signed "Stan Takahashi" with lead_first_name "Kathy" means greet "Hi Stan"); otherwise use lead_first_name if it is a real personal name (it is "" when we don't have one, "there" is a placeholder, and a company name or a word chopped off one - "Organic" from "Organic Beauty Transformation" - is never a personal name); otherwise LOOK AT THE GREETING LINE OF original_outreach, which opens "Hi <first name>," and names this same lead; only if no name exists in any of those three places use "Hi there". NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off. When the draft genuinely addresses two or more people (for example the lead just introduced a colleague), join the names with "and" - "Hi John and James" - never a comma list like "Hi John, James,".
+- BEFORE writing anything, decide the greeting name: FIRST look at the end of their reply for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly") - how the lead signed their LATEST message is ground truth and OUTRANKS lead_first_name whenever the two differ (signed "Stan Takahashi" with lead_first_name "Kathy" means greet "Hi Stan"); otherwise use lead_first_name if it is a real personal name (it is "" when we don't have one, "there" is a placeholder, and a company name or a word chopped off one - "Organic" from "Organic Beauty Transformation" - is never a personal name); otherwise LOOK AT THE GREETING LINE OF original_outreach, which opens "Hi <first name>," and names this same lead; only if no name exists in any of those three places use "Hi there". Always greet with the FIRST name alone - never a full name ("Hi Janos", never "Hi Janos Stegena") and never a quoted nickname from a signature block. NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off. When the draft genuinely addresses two or more people (for example the lead just introduced a colleague), join the names with "and" - "Hi John and James" - never a comma list like "Hi John, James,".
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one - but never dodge the question either. FIRST answer it with everything you truly have: any fact the LEAD themselves stated in this thread (their team size, their CRM, their stack, their constraints) must be named and used ("For a 12-person team running your own LinkedIn outbound..."; "Since you run everything through HubSpot..."), and anything the instructions DO answer must be answered plainly. Only THEN, for the specific part you genuinely cannot answer, make that named gap the reason for the call ("exactly how it would sit alongside HubSpot is what I'd walk you through on a quick call") - unless a stated channel or timing constraint applies (see constraint_directive), which always wins over this - never a bare "That's exactly what I'd walk you through on a quick call" that ignores the lead's own stated facts; that reads as not having read their email. Engaging their facts NEVER licenses asserting a mechanism: if the instructions don't state how something works (an integration, a data mapping, a process, a guarantee), do not describe it as if it exists ("we would map our outbound data into your CRM" is an invented claim unless the instructions say so) - name their fact, put the HOW behind the call. One carve-out (owner rule 2026-08-16): a question about PROCESS - "what would the first month look like?", "what happens after we start?" - may be answered with a natural plain-English description of how an engagement typically runs, even when the instructions don't spell it out; hard facts (prices, numbers, dates, guarantees, integrations) stay instruction-only. Answer ONLY what they asked: never bolt on an unasked section, and never write "you asked for X" / "here is the X you asked for" about something their message did not ask for. Guessing at policies, capabilities, or processes is still worse than not answering.
 - If SenderFirst is empty, end with no sign-off line at all.
@@ -1894,6 +1894,51 @@ def destack_call_ask(html: str) -> str:
         return html or ""
 
 
+_GREET_RE = re.compile(
+    r'^(\s*<div\b[^>]*>\s*)(Hi|Hey|Hello|Hola|Bonjour|Ciao|Ola|Hallo)([  ]+)([^,<]{2,60})(,?)', re.I)
+
+
+def normalize_greeting(html: str) -> str:
+    """First-name-only greeting repair (judge findings 2026-08-18: 'Hi Janos
+    Stegena' and 'Hi Dina "Desiree" Kotze,' read as mail-merge). Operates on
+    the FIRST div only: strips quoted nicknames, then truncates a multi-word
+    name to its first word - unless it is a team form ('... team'), a joint
+    greeting (' and '), or the 'there' fallback. Deterministic, never raises."""
+    text = html or ""
+    try:
+        m = _GREET_RE.match(text)
+        if not m:
+            return text
+        name = re.sub(r'\s*["“][^"”]*["”]\s*', " ", m.group(4)).strip()
+        low = name.lower()
+        if low == "there" or low.endswith(" team") or " and " in low:
+            return text if name == m.group(4).strip() else text[:m.start(4)] + name + text[m.end(4):]
+        first = name.split()[0] if name.split() else name
+        return text[:m.start(4)] + first + text[m.end(4):]
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
+def dedupe_adjacent_blocks(html: str) -> str:
+    """Drops a div block whose visible text exactly repeats the previous
+    block's (judge finding 2026-08-18: the same sentence pasted twice
+    back-to-back, an assembly glitch no human sends). Exact-match only after
+    whitespace/case normalisation - never touches near-duplicates."""
+    text = html or ""
+    try:
+        blocks = _DIV_BLOCK_RE.findall(text)
+        prev_norm = None
+        for b in blocks:
+            norm = re.sub(r"\s+", " ", _TAG_RE.sub(" ", b)).strip().lower()
+            if norm and norm == prev_norm:
+                text = text.replace("<br>" + b, "", 1) if ("<br>" + b) in text else text.replace(b, "", 1)
+            else:
+                prev_norm = norm
+        return text
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
 def _visible_digit_runs(html: str) -> set:
     """Digit runs found in the VISIBLE text only (tags/hrefs stripped first)
     - the same discipline lint_draft's own invented-number check uses, reused
@@ -1921,7 +1966,7 @@ def proofread_draft(html: str, sender_first: str = ""):
     original's length (a wildly shorter or longer result is a bad edit, not
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
-    original = destack_call_ask(html or "")
+    original = dedupe_adjacent_blocks(normalize_greeting(destack_call_ask(html or "")))
     if not original.strip():
         return original, False
     try:
