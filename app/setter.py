@@ -1912,6 +1912,31 @@ def repair_timeless_ask(html: str) -> str:
         return html or ""
 
 
+def strip_deadend_ask(html: str) -> str:
+    """Removes a call-ask block that carries NEITHER a concrete time NOR a
+    scheduling anchor (judge finding 2026-08-18: 'Would you be free for a
+    call, where I could share how I would implement our strategy for you?'
+    with the slots stripped out). Such an ask is actionless - a dead end -
+    so the block is dropped, leaving the resource line and sign-off. Only
+    fires when the block has no digit-time and no anchor at all."""
+    text = html or ""
+    try:
+        for b in _DIV_BLOCK_RE.findall(text):
+            low = _TAG_RE.sub(" ", b).lower()
+            if not any(p in low for p in _ASK_PHRASES):
+                continue
+            has_time = bool(re.search(r"\d{1,2}[:.]\d{2}\s*(?:am|pm)", low)) or \
+                bool(re.search(r"\b(?:mon|tues|wednes|thurs|fri|satur|sun)day\b", low))
+            has_anchor = "<a " in b.lower()
+            if not has_time and not has_anchor:
+                text = text.replace(b + "<br>", "", 1) if (b + "<br>") in text \
+                    else text.replace("<br>" + b, "", 1) if ("<br>" + b) in text \
+                    else text.replace(b, "", 1)
+        return text
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
 def destack_same_block(html: str) -> str:
     """Companion to destack_call_ask for the case where BOTH ask forms sit in
     the SAME div block (block-level dropping can't help there): removes the
@@ -2043,8 +2068,8 @@ def proofread_draft(html: str, sender_first: str = ""):
     original's length (a wildly shorter or longer result is a bad edit, not
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
-    original = dedupe_adjacent_blocks(normalize_greeting(destack_same_block(destack_call_ask(
-        repair_timeless_ask(repair_markdown_links(repair_rtf_escapes(html or ""))))), sender_first))
+    original = dedupe_adjacent_blocks(normalize_greeting(strip_deadend_ask(destack_same_block(destack_call_ask(
+        repair_timeless_ask(repair_markdown_links(repair_rtf_escapes(html or "")))))), sender_first))
     if not original.strip():
         return original, False
     try:
