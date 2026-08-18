@@ -1916,7 +1916,7 @@ def repair_timeless_ask(html: str) -> str:
 
 _AVAIL_FALLBACK_RE = re.compile(
     r"When would be a good time for us to talk\?\s*"
-    r"(?:Here is\s*(<a\b[^>]*>[^<]*</a>|my availability)\s*\.?)?"
+    r"(?:Here is\s*(?:<a\b([^>]*)>[^<]*</a>|my availability)\s*\.?)?"
     r"(?:\s*Feel free to suggest some times[^.<]*\.?)?",
     re.I)
 
@@ -1926,12 +1926,14 @@ def humanize_availability_fallback(html: str) -> str:
     for us to talk? Here is my availability.' into a warm human form. This
     phrasing was the single most-flagged template tell across the Amplifyy
     human-ness eval (2026-08-18); replacing it lifts human-ness for every
-    agent. Preserves a booking anchor when one is present; falls back to the
-    plain 'suggest some times' close when there is no link."""
+    agent. When a booking anchor is present its href is kept but the anchor
+    is RE-LABELLED ('grab a time that suits you here') so the sentence reads
+    grammatically whatever the original label was; with no link it closes on
+    the plain 'suggest some times' form."""
     def _sub(m):
-        anchor = m.group(1)
-        if anchor and anchor.lower() != "my availability":
-            return f"Grab whatever time suits you {anchor}."
+        attrs = m.group(1)
+        if attrs is not None:
+            return f'You can <a{attrs}>grab a time that suits you here</a>.'
         return "Just let me know a couple of times that suit you and I'll set it up."
     try:
         return _AVAIL_FALLBACK_RE.sub(_sub, html or "")
