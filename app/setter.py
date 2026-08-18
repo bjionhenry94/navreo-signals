@@ -400,11 +400,23 @@ _MONITOR_SURFACE_POSITIVE = {c.lower() for c in POSITIVE_CATEGORIES} | {
 }
 
 
-def _monitor_should_surface(category) -> bool:
+def _monitor_should_surface(category, body=None) -> bool:
     """True iff a client monitor reply is worth a human's attention: a
     positive, or still uncategorised. Everything else (clear non-positive)
-    is skipped so it never clutters Needs review."""
+    is skipped so it never clutters Needs review.
+
+    Still-uncategorised replies normally surface for triage (they could be a
+    positive the categoriser missed), but when the body is available and reads
+    as plain automated machine mail - out-of-office, left-company / wrong
+    person, a bounce, or a bare opt-out with NO positive-intent signal - it is
+    skipped too: the per-client categoriser leaves ~15% of replies
+    uncategorised and most of those misses are exactly this auto-reply mail
+    (Bjion 2026-08-18: Grout OOOs going uncategorised were clogging Needs
+    review). A real positive is never hidden - any positive signal in the body
+    vetoes the skip (see _autoreply_needs_no_human)."""
     if _is_uncategorised_value(category):
+        if body is not None and _autoreply_needs_no_human(body):
+            return False
         return True
     return str(category).strip().lower() in _MONITOR_SURFACE_POSITIVE
 
@@ -494,6 +506,90 @@ def clean_body(body: str) -> str:
     text = re.sub(r" ?\n ?", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
+
+
+# ── auto-reply detection for uncategorised client-monitor replies ───────────
+# The per-client categoriser (Make) leaves a slice of replies uncategorised
+# whenever its GPT step rate-limits, times out, or balks at a terse body. In
+# the client MONITOR path those still-uncategorised replies are surfaced for
+# triage (they COULD be a positive the categoriser missed). In practice most of
+# the misses are plain machine mail - out-of-office, "no longer here" / wrong
+# person, delivery bounces, and one-line opt-outs - which need no human and only
+# clutter client Needs review. This deterministic detector recognises exactly
+# those so the monitor gate can skip them. It reads the lead's OWN new message
+# (clean_body strips HTML + quoted history) so a quoted outbound pitch never
+# trips it, and ANY positive-intent signal vetoes the skip: a wrongly hidden
+# positive costs a deal, a wrongly surfaced auto-reply costs one human glance,
+# so the tie always breaks toward surfacing.
+_AR_POSITIVE_SIGNAL = re.compile(
+    r"\b(interest(ed)?|keen|call|meeting|meet|demo|pricing|price|cost|charge|"
+    r"quote|budget|book|schedule|calendar|avail|chat|talk|speak|connect|"
+    r"proposal|how much|send me|tell me more|more info|sounds good|happy to|"
+    r"let'?s|worth a|set(\s|-)?up a|jump on)\b", re.IGNORECASE)
+
+# Out-of-office / away auto-responders (EN + common DE/FR/ES phrasings).
+_AR_OOO = re.compile(
+    r"\b(out of (the )?office|out of office|ooo\b|"
+    r"on (annual |maternity |paternity |sick |medical |parental |personal )?leave|"
+    r"on (holiday|vacation|pto|sabbatical)|"
+    r"away from (the |my )?(office|desk|email)|will be away|am away|currently away|"
+    r"automatic reply|auto[-\s]?reply|autoresponder|"
+    r"nicht erreichbar|abwesend|im urlaub|"
+    r"en cong[eé]|absent[e]? du bureau|de vacaciones|fuera de la oficina)\b",
+    re.IGNORECASE)
+
+# Left-company / wrong-person auto-replies.
+_AR_WRONGPERSON = re.compile(
+    r"\b(no longer (with|at|employed|works? (here|at|for)|part of)|"
+    r"i have left|i'?ve left|(has|have) left (the |our )?(company|business|team|organi)|"
+    r"is no longer (with|employed|here)|no longer monitored|"
+    r"inbox is no longer|left the (company|business|organi))\b", re.IGNORECASE)
+
+# Delivery failures / bounces that slipped past bounce categorisation.
+_AR_BOUNCE = re.compile(
+    r"\b(undeliverable|delivery (has )?failed|delivery status notification|"
+    r"(was|were) not delivered|wasn'?t delivered|could not be delivered|"
+    r"mailbox (is )?full|address not found|recipient .{0,20}not found|"
+    r"message blocked|quarantined)\b", re.IGNORECASE)
+
+# Bare opt-outs: the lead's whole (unquoted) reply is essentially just the
+# opt-out phrase.
+_AR_BARE_OPTOUT = re.compile(
+    r"^\W{0,10}(unsubscribe|remove me|please remove|remove|not interested|"
+    r"no thanks?|no thank you|stop|take me off|opt[-\s]?out|leave me alone)"
+    r"[\s.!,]*$", re.IGNORECASE)
+
+# Negated interest ("not interested", "no longer interested") reads as a
+# negative - it must not trip the positive-signal veto via the word "interest".
+_AR_NEGATED_INTEREST = re.compile(
+    r"\b(not|no longer|isn'?t|aren'?t|never|n'?t)\s+(interest\w*|keen)\b",
+    re.IGNORECASE)
+
+
+def _autoreply_needs_no_human(body) -> bool:
+    """True iff a still-uncategorised client reply is plainly automated / a
+    clear non-positive that needs no human - out-of-office, left-company /
+    wrong person, a bounce, or a bare opt-out - AND carries no positive-intent
+    signal. Used ONLY to keep such replies out of client Needs review; a
+    genuine positive is never hidden because any positive signal vetoes the
+    skip. Reads the lead's own new message (clean_body strips HTML + quoted
+    history) so a quoted outbound pitch never trips it."""
+    lead = clean_body(body or "")
+    if not lead:
+        return False
+    # A bare opt-out (the whole reply is just the opt-out phrase) is
+    # unambiguous - decide it before the positive-signal veto so "not
+    # interested" is not rescued by the word "interested" inside it.
+    if _AR_BARE_OPTOUT.match(lead.strip()):
+        return True
+    # Neutralise negated interest before the veto so it does not read positive.
+    probe = _AR_NEGATED_INTEREST.sub(" ", lead)
+    if _AR_POSITIVE_SIGNAL.search(probe):
+        return False                      # tie breaks toward surfacing
+    head = lead[:400]                     # auto-replies announce themselves up top
+    return bool(_AR_OOO.search(head) or _AR_WRONGPERSON.search(lead)
+                or _AR_BOUNCE.search(lead))
+
 
 # Same-day scheduling asks ("can we chat today / in an hour?") can't be
 # answered by two fixed future slots - deterministic veto, judged from the
@@ -6164,9 +6260,10 @@ def _poll_monitor_workspaces(since: str, summary: dict) -> None:
             if not cid or not email or not mid:
                 continue
             # Only surface positives + still-uncategorised; skip clear
-            # non-positives so they never land in Needs review. Skipped rows
+            # non-positives (including uncategorised auto-replies the body
+            # gives away) so they never land in Needs review. Skipped rows
             # don't count against the 15-per-tick blast radius.
-            if not _monitor_should_surface(r.get("category")):
+            if not _monitor_should_surface(r.get("category"), r.get("reply_body")):
                 summary["skipped_nonpositive"] = summary.get("skipped_nonpositive", 0) + 1
                 continue
             reply = {

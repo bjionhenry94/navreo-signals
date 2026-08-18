@@ -10424,6 +10424,75 @@ def test_monitor_surface_gate_positives_and_uncategorised_only():
           surface("Not Interested") is False, "substring guard")
 
 
+def test_monitor_surface_skips_uncategorised_autoreplies():
+    """Grout fix 2026-08-18: the per-client categoriser leaves ~15% of replies
+    uncategorised and most are plain auto-replies (OOO, left-company / wrong
+    person, bounce, bare opt-out). The monitor gate now skips those when the
+    body gives them away - but NEVER hides a real positive (any positive signal
+    vetoes the skip) and stays byte-for-byte backward-compatible when no body is
+    supplied."""
+    surface = setter._monitor_should_surface
+    detect = setter._autoreply_needs_no_human
+
+    # Backward-compatible: no body => uncategorised still surfaces for triage.
+    for uncat in (None, "", "Uncategorizable by Ai"):
+        check(f"no-body uncategorised {uncat!r} surfaces", surface(uncat) is True, uncat)
+        check(f"body=None uncategorised {uncat!r} surfaces", surface(uncat, None) is True, uncat)
+
+    # Real Grout auto-reply bodies that arrived uncategorised => skipped.
+    autoreplies = {
+        "bare unsubscribe": "unsubscribe",
+        "left company": "Hello, and thank you for your email! Please be advised "
+                        "that I am no longer with Mercaux.",
+        "maternity": "Dear sender, Thank you for your email. I'm on maternity "
+                     "leave and will be away till summer 2026.",
+        "wrong person": "We regret to inform you that Patrick Tedesco is no longer "
+                        "employed here. Please direct correspondence to Megan.",
+        "left inbox": "Thank you for your email. I have left Artlogic and this "
+                      "inbox is no longer monitored.",
+        "ooo dates": "Hello and thank you for your message. I'm currently out of "
+                     "the office from Thursday, August 6th through Wednesday.",
+        "bare not interested": "not interested",
+        "ooo simple": "Thank you for your email. I am out of the office from "
+                      "August 17th through August 23rd.",
+        "german ooo": "Sehr geehrte Damen und Herren, vielen Dank fuer Ihre "
+                      "Nachricht. Ich bin vom 14.08. - 21.08. nicht erreichbar.",
+        "ooo day": "Hi! Thank you for your message. I am out of office for the "
+                   "day and will return on Monday.",
+        "html ooo": "<div dir=\"ltr\">I am currently out of the office and will "
+                    "reply on my return.</div>",
+        "not-interested + left": "I'm not interested at this time. I have left "
+                                 "the company anyway.",
+        "bounce": "Delivery has failed to these recipients. The mailbox is full.",
+    }
+    for label, body in autoreplies.items():
+        check(f"detector flags auto-reply: {label}", detect(body) is True, body[:60])
+        check(f"uncategorised auto-reply skipped: {label}", surface("", body) is False, body[:60])
+
+    # Uncategorised BUT genuinely positive => must still surface (never hidden).
+    positives = {
+        "interested": "hey, i'm interested in you auditing our account and letting "
+                      "me know what you would fix.",
+        "send link": "Hi Roman. Happy to chat. Send me a meeting link. Marc",
+        "pricing": "how much do u charge?",
+        "positive w/ ooo mention": "Yes I'm interested but I'm out of office till "
+                                   "Monday - let's talk after?",
+        "ambiguous question": "Which Google Ads account are you referring to?",
+        "not-interested but asks": "not interested in the audit, but send me your "
+                                   "pricing for ongoing management.",
+    }
+    for label, body in positives.items():
+        check(f"detector spares positive: {label}", detect(body) is False, body[:60])
+        check(f"uncategorised positive still surfaces: {label}", surface("", body) is True, body[:60])
+
+    # A body never rescues a clearly-categorised non-positive nor demotes a
+    # categorised positive - the stored category wins outright.
+    check("categorised OOO stays skipped even with positive-sounding body",
+          surface("Out Of Office", "actually I'm very interested, call me") is False, "category wins")
+    check("categorised positive stays surfaced regardless of body",
+          surface("Interested", "out of office") is True, "category wins")
+
+
 def test_attach_campaign_names():
     """Identification fix 2026-08-11: queue rows carry campaign_name resolved
     CROSS-WORKSPACE from the campaigns mirror, so the UI never depends on the
@@ -10776,6 +10845,7 @@ if __name__ == "__main__":
     test_agent_adoption_busts_the_read_caches()
     test_redraft_async_job_returns_immediately_and_reports_its_result()
     test_monitor_surface_gate_positives_and_uncategorised_only()
+    test_monitor_surface_skips_uncategorised_autoreplies()
     test_attach_campaign_names()
 
     failed = run_report()
