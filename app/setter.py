@@ -5536,6 +5536,38 @@ EP_LOOKBACK_HOURS = 72        # scan window; the marker (not the window) stops r
 EP_NULL_GRACE_MIN = 45        # uncategorised rows younger than this are still in flight
 EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, loudly
 
+# Client campaigns HOSTED IN the navreo Smartlead workspace (TouchPoint,
+# ThunderBird, Altius Reach, …) carry no Smartlead client_id (client/save
+# 500s server-side), so their alerts used to masquerade as Navreo-own.
+# Ruling 2026-08-18: #interested-replies is Navreo-own ONLY — client-related
+# alerts go to #client-interested-replies. The Make categoriser (9251436,
+# modules 33/51) applies the same rule via campaign-name markers; this is
+# the sweep-side half.
+CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
+CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius")
+
+
+def _ep_channel_override(workspace, campaign_id):
+    """Return the client-internal Slack channel when this campaign belongs
+    to a client hosted in the navreo workspace — Supabase registry client_id
+    says so, or the campaign name carries a client marker. None -> the hook's
+    default (#interested-replies). Fails open to the default; never raises."""
+    if not campaign_id:
+        return None
+    try:
+        rows = _SB("GET", f"campaigns?workspace=eq.{workspace}"
+                          f"&smartlead_campaign_id=eq.{campaign_id}"
+                          f"&select=client_id,name&limit=1")
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            cid = (rows[0].get("client_id") or "").strip().lower()
+            name = (rows[0].get("name") or "").lower()
+            if cid not in ("", "navreo") or \
+                    any(m in name for m in CLIENT_NAME_MARKERS):
+                return CLIENT_INTERNAL_CHANNEL
+    except Exception:  # noqa: BLE001 — routing decoration, never load-bearing
+        pass
+    return None
+
 
 def _ep_stamp(row_id, kind: str):
     """Mark a replies row handled by this sweep (notify_kind says why)."""
@@ -5688,10 +5720,13 @@ def run_ever_positive_alerts() -> dict:
                 ws, [row.get("smartlead_campaign_id"),
                      prior.get("smartlead_campaign_id")])
             text = _ep_compose(row, prior, names)
+            payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
+            chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
+            if chan:
+                payload["channel"] = chan   # client campaign — default is #interested-replies
             posted = False
             try:
-                _HTTP("POST", EVER_POSITIVE_HOOK, {},
-                      {"event_type": "EVER_POSITIVE_ALERT", "text": text})
+                _HTTP("POST", EVER_POSITIVE_HOOK, {}, payload)
                 posted = True
             except ValueError:
                 posted = True   # Make answers a non-JSON 2xx ("Accepted") = success
