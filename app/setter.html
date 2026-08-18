@@ -7046,6 +7046,59 @@ async function refreshThreadFor(row, isRepoll) {
       renderDetail(live && String(live.id) === String(row.id) ? live : row);
     }
   }
+  watchAbsorbedRedraft(row, fresh);
+}
+
+/* Auto-redraft pickup (owner ask 2026-08-18: "when a new reply comes in,
+   there has to be a new draft which is automatically drafted"). When a
+   refreshed thread shows the LEAD spoke after the reply this row's draft
+   answers, the server absorbs that newer reply into the row and regenerates
+   the draft in the background (_absorb_newer_reply). This watcher polls the
+   row until that lands and grafts the fresh draft into the pane, so the
+   reviewer never sits on a draft the thread visibly outran. A reviewer's
+   own in-progress edit always wins: with an EDITED_DRAFTS entry the graft
+   updates the row data but never repaints over their typing. */
+const ABSORB_WATCH = new Set();
+function watchAbsorbedRedraft(row, fresh) {
+  if (!row || row.is_test || !row.agent_id || row.status !== "needs_review") return;
+  const tail = (fresh || []).filter((m) => m && String(m.body || "").trim()).pop();
+  if (!tail || String(tail.type || "").toUpperCase() === "SENT") return;
+  const mid = String(tail.message_id || tail.stats_id || "");
+  if (!mid || mid === String(row.message_id || "") || mid === String(row.source_message_id || "")) return;
+  const tTail = Date.parse(tail.time || ""), tRow = Date.parse(row.replied_at || "");
+  if (!isFinite(tTail) || !isFinite(tRow) || tTail - tRow < 30000) return;
+  const key = String(row.id);
+  if (ABSORB_WATCH.has(key)) return;
+  ABSORB_WATCH.add(key);
+  let polls = 0;
+  const poll = async () => {
+    polls++;
+    let done = polls >= 8;   // ~40s covers a slow redraft; then give up quietly
+    try {
+      const res = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(row.id)}`);
+      const got = res.ok && res.data && res.data.row;
+      if (got && (String(got.replied_at || "") !== String(row.replied_at || "")
+                  || String(got.draft_body || "") !== String(row.draft_body || ""))) {
+        done = true;
+        const FIELDS = ["message_id", "source_message_id", "reply_body", "reply_subject",
+                        "replied_at", "draft_body", "draft_subject", "original_draft_body",
+                        "decision", "decision_reason", "classification", "slots", "status"];
+        [row, currentDetailRowObj(),
+         ...[QUEUE_ROWS, ALL_ROWS].map((l) => (l || []).find((x) => x && String(x.id) === key))]
+          .forEach((r) => {
+            if (r && String(r.id) === key) FIELDS.forEach((f) => { r[f] = got[f]; });
+          });
+        if (String(selectedRowId) === key && !isTypingIn(row.id)
+            && EDITED_DRAFTS[row.id] === undefined) {
+          const live = currentDetailRowObj();
+          renderDetail(live && String(live.id) === key ? live : row);
+        }
+      }
+    } catch (e) { /* a blip never kills the watch - the next poll retries */ }
+    if (done) ABSORB_WATCH.delete(key);
+    else setTimeout(poll, 5000);
+  };
+  setTimeout(poll, 5000);
 }
 
 document.addEventListener("click", (e) => {

@@ -1017,6 +1017,98 @@ _DEFERRAL_RE = re.compile(
     r"(book|grab|find) (something|a (time|slot))[^.]{0,30}after)\b",
     re.IGNORECASE)
 
+# ── Bare-affirmation anchoring (Clare Skelton, 2026-08-18) ───────────────────
+# A one-word "Ok." answering OUR "I've shared an invite for 4pm, can you make
+# that?" is the lead CONFIRMING the meeting - but the classifier (mini)
+# anchors bare affirmations to the ORIGINAL outreach often enough that the
+# fresh draft re-sent the walkthrough links, which the reviewer reads as a
+# stale, out-of-sync draft. The guard below is deterministic: when the whole
+# unquoted, unsigned reply is nothing but agreement AND the last email we
+# sent proposed a concrete call time or says an invite went out, the intent
+# IS that confirmation - no model gets to overrule it.
+
+# OUR last outbound proposing/confirming a concrete meeting - the thing a
+# bare "Ok." is answering. Invite language alone is enough; a bare call
+# offer ("would you be free") only counts alongside an actual time token.
+_INVITE_SENT_RE = re.compile(
+    r"\b(shared? (an|the) invite|sen[dt] (an|the|you an) invite|invite (is |has been )?(sent|shared|on its way)|"
+    r"can you make (that|it)|does that (time )?work|see you (then|at)|"
+    r"booked (you|us) in|i'?ve booked|calendar invite)\b", re.IGNORECASE)
+
+# Vocabulary a pure agreement is built from. Deliberately excludes any word
+# that can carry a negation or a decline ("no", "not", "thanks" alone is
+# fine - "no thanks" fails on "no") so "no thanks" / "not interested" can
+# never trip the guard.
+_AFFIRMATION_WORDS = {
+    "ok", "okay", "yes", "yep", "yeah", "sure", "perfect", "great", "sounds",
+    "good", "that", "works", "for", "me", "i", "will", "be", "am", "do",
+    "thanks", "thank", "you", "fine", "done", "confirmed", "received", "got",
+    "it", "see", "then", "there", "lovely", "brilliant", "noted", "super",
+    "cool",
+}
+
+
+def _lead_ask_text(body_text: str, first_name: str = "", last_name: str = "") -> str:
+    """The part of the (already clean_body'd) reply that is the lead actually
+    talking: quoted history stripped, a leading greeting ("Hi William,")
+    dropped, and the signature cut off - at the lead's own full name when we
+    know it, else at a common sign-off marker.
+    'Ok. Clare Skelton T: 01403...' -> 'Ok.'."""
+    t = _strip_quoted(str(body_text or ""))
+    t = re.sub(r"^\W*(hi|hello|hey|dear)\b(\s+[A-Za-z]+)?\s*[,.!]?\s*", "", t, flags=re.IGNORECASE)
+    fn, ln = (first_name or "").strip(), (last_name or "").strip()
+    if fn and ln:
+        m = re.search(re.escape(fn) + r"\s+" + re.escape(ln), t, re.IGNORECASE)
+        if m and m.start() > 0:
+            t = t[:m.start()]
+    t = re.split(r"\b(?:kind regards|best regards|warm regards|many thanks|best wishes|"
+                 r"regards,|cheers,|sincerely)\b", t, 1, flags=re.IGNORECASE)[0]
+    return t.strip()
+
+
+def _is_bare_affirmation(ask_text: str, own_first_name: str = "") -> bool:
+    words = re.findall(r"[a-z']+", str(ask_text or "").lower())
+    # The lead signing off with their own first name ("Thanks, Clare") is
+    # signature, not content - ignore that token.
+    own = (own_first_name or "").strip().lower()
+    if own:
+        words = [w for w in words if w != own]
+    return 0 < len(words) <= 6 and all(w in _AFFIRMATION_WORDS for w in words)
+
+
+def _anchor_affirmation(classification: dict, body_text: str, last_outbound: str,
+                        first_name: str = "", last_name: str = "") -> bool:
+    """Rewrites a classification IN PLACE when the bare-affirmation guard
+    fires (see the block comment above). Returns True when it did. The
+    confirms_proposed_time flag it stamps is what call_ask_for reads to keep
+    the draft from re-proposing times the lead just agreed to."""
+    try:
+        if not isinstance(classification, dict) or not classification:
+            return False
+        if classification.get("confirms_proposed_time"):
+            return True
+        lo = str(last_outbound or "")
+        if not lo:
+            return False
+        settled = bool(_INVITE_SENT_RE.search(lo)
+                       or (_CALL_OFFERED_RE.search(lo) and _TIME_TOKEN_RE.search(lo)))
+        if not settled:
+            return False
+        if not _is_bare_affirmation(_lead_ask_text(body_text, first_name, last_name), first_name):
+            return False
+        classification["primary_intent"] = "scheduling"
+        classification["all_intents"] = ["scheduling"]
+        classification["simple_ask"] = False
+        classification["confirms_proposed_time"] = True
+        classification["wants"] = ("They're agreeing to the call time we proposed - "
+                                   "confirm that meeting, don't re-pitch or send resources.")
+        classification["rationale"] = (str(classification.get("rationale") or "")[:200]
+                                       + " | affirmation guard: bare agreement answers our "
+                                         "invite/time proposal, not the original outreach.")
+        return True
+    except Exception:  # noqa: BLE001 - the guard is a backstop, never worth crashing intake
+        return False
+
 
 def call_ask_for(classification: dict, body_text: str, thread_text: str, first_touch: bool = True) -> str:
     """"required" | "only_if_relevant" | "avoid" - how hard THIS draft should
@@ -1042,6 +1134,11 @@ def call_ask_for(classification: dict, body_text: str, thread_text: str, first_t
     # "required" and the prompt-level constraint had to out-argue the whole
     # slot machinery on every draft - it lost roughly 1 in 3).
     if _NO_CALL_CHANNEL_RE.search(body) or _DEFERRAL_RE.search(body):
+        return "avoid"
+    # The affirmation guard already established this reply is the lead
+    # CONFIRMING a time we proposed (see _anchor_affirmation) - two fresh
+    # slots here would talk straight past their "Ok.".
+    if classification.get("confirms_proposed_time"):
         return "avoid"
     # They have settled the call themselves (or it is happening right now) -
     # answering with two fresh times is the exact "out of touch" reply that
@@ -1429,7 +1526,7 @@ simple_ask is true ONLY if the ENTIRE reply is satisfiable by (a) sending the re
 
 Two further rules:
 - IGNORE the sender's own email signature when working out the ask: their phone numbers, their own booking/calendar links, social handles, follower counts, taglines, and legal footers are not part of the request. Never treat a link in THEIR signature as them asking us to schedule.
-- A bare one-word or near-bare affirmation ("Yes", "OK", "sure") is a simple send_resource ask ONLY when the last message WE sent (given to you as last_outbound below, when available) makes the referent unmistakable - e.g. we asked "want me to send the breakdown?" and they said "Yes". If last_outbound is missing or its ask is not unmistakable, set simple_ask=false.
+- A bare one-word or near-bare affirmation ("Yes", "OK", "sure") ALWAYS answers the LAST message we sent (last_outbound), never the original outreach - in an ongoing conversation the original offer was answered turns ago. It is a simple send_resource ask ONLY when last_outbound makes the referent unmistakable - e.g. we asked "want me to send the breakdown?" and they said "Yes". If last_outbound proposed a call time or says an invite was sent, the affirmation is the lead CONFIRMING that meeting: primary_intent=scheduling, simple_ask=false, and nothing should be re-sent or re-pitched. If last_outbound is missing or its ask is not unmistakable, set simple_ask=false.
 
 live_lead: true when a reply that is otherwise a negative still contains a real opening someone should act on - a named replacement contact or referral ("Nick left, contact wim@..."), an explicit later-date opening ("not a priority right now, try me in Q3", "maybe later"), or a request to follow up at some point. Plain "no", plain opt-outs, plain out-of-office autoreplies with generic reception redirects are live_lead=false.
 
@@ -1438,7 +1535,8 @@ red_flags: list any hostile/legal/opt-out language you notice (a second determin
 timezone_guess: your best educated guess of the lead's IANA timezone, the way a person would by glancing at their LinkedIn. Infer it from lead_email_domain (a ccTLD like .co.uk / .com.au / .de, or where a company with that domain or name is typically headquartered), company_location when given, the email signature (a phone country code, an address, a city), and the language used. Give an actual IANA name whenever you have ANY reasonable basis - only use null if you genuinely cannot tell at all. When only the country is clear, use that country's primary business timezone (US -> America/New_York, Canada -> America/Toronto, Australia -> Australia/Sydney, Germany -> Europe/Berlin). tz_confidence 0 to 1: 0.9+ for an explicit signal (a stated city, a +country-code phone, a ccTLD); 0.6-0.8 for a strong inference from a clearly-regional company; 0.3-0.5 for a weak lean.
 wants: one plain-English line - what the lead is actually asking for.
 rationale: one line - why you chose this intent.
-original_outreach is the first email we sent this lead - the offer their reply is answering. ALWAYS read it first: it tells you what "sure", "send it", "yes please", "how much", or "not interested" actually refers to. A bare "yes" is only a simple send_resource ask when the outreach (or last_outbound) offered exactly that one thing; if the outreach pitched a call, "yes" is scheduling; if it asked a question, "yes" answers that question and may need a person. When original_outreach is empty, judge from the reply alone and lean toward review on anything ambiguous.
+original_outreach is the first email we sent this lead - the offer that started the thread. On a FIRST reply it tells you what "sure", "send it", "yes please", "how much", or "not interested" actually refers to. But in an ONGOING conversation (recent_thread shows earlier exchanges, or last_outbound differs from original_outreach) the reply answers the LATEST message we sent - resolve it against last_outbound and recent_thread first; original_outreach is background context only, and re-reading a later-turn reply as if it answered the original offer is the single worst mistake you can make here. A bare "yes" is only a simple send_resource ask when the message it answers offered exactly that one thing; if it pitched a call, "yes" is scheduling; if it asked a question, "yes" answers that question and may need a person. When original_outreach is empty, judge from the reply alone and lean toward review on anything ambiguous.
+recent_thread, when present, is a transcript of this thread, oldest first: lines starting "US" are emails we sent, "LEAD" are the lead's replies, and the final LEAD line is the reply you are classifying. Read it before deciding - it shows what has already been offered, answered, agreed, or declined.
 owner_corrections, when present, are standing corrections the business owner has given while reviewing this tool's calls - apply them faithfully when judging intent and simple_ask (they refine, never loosen, the safety rules above).
 owner_corrections/feedback may contain a LATEST OWNER RULES block: those rules are the owner's newest teaching and take priority over everything else, including older instructions - obey them exactly.
 
@@ -1446,7 +1544,8 @@ Replies in ANY language get the same rules ("Oui pourquoi ne pas essayer, mais j
 
 Never invent facts. Examples of the exact reasoning to apply (do not copy their wording, just the logic):
 - "Wrong on all counts. Victoria Parkin is heading that division." -> wrong_person AND live_lead=true (a named better contact is an opening someone should act on).
-- "sure!" -> send_resource, simple_ask=true, high confidence.
+- "sure!" (first reply, outreach offered a breakdown) -> send_resource, simple_ask=true, high confidence.
+- last_outbound was "So sorry, that time just went - I've shared an invite for 4pm, can you make that?" and the reply is "Ok." -> scheduling (they are confirming the 4pm meeting), simple_ask=false. NEVER send_resource: the walkthrough the original outreach offered was answered turns ago, and re-sending it now reads as not having seen their confirmation.
 - "Kindly cease" -> unsubscribe_dnc, simple_ask=false, even though it is short and polite.
 - "No thanks, Bjion." -> not_interested.
 - "Can you share the video?" -> send_resource ONLY if the agent's instructions say the offered resource already is that video; otherwise bespoke_request.
@@ -1474,6 +1573,11 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
         # the last message WE sent before this reply - lets the model resolve
         # a bare "Yes" against what was actually offered
         "last_outbound": (reply.get("last_outbound") or "")[:800],
+        # the whole conversation so far (when the caller has a thread) - a
+        # later-turn reply is un-interpretable from first+last outbound alone
+        # (Clare Skelton 2026-08-18: "Ok." after a 4pm invite classified as
+        # accepting the ORIGINAL walkthrough offer)
+        "recent_thread": _thread_transcript(reply.get("thread") or []) or "",
         "agent": {
             # The single brain: pricing, resource links, and when-to-send
             # rules all live in the instructions text, passed in full so the
@@ -1495,7 +1599,13 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
         raise RuntimeError("OpenAI: empty response")
     if r.get("error"):
         raise RuntimeError(f"OpenAI: {str(r['error'].get('message', r['error']))[:200]}")
-    return json.loads(r["choices"][0]["message"]["content"])
+    out = json.loads(r["choices"][0]["message"]["content"])
+    # Deterministic backstop over the model's verdict: a bare agreement to an
+    # invite/time we proposed is a meeting confirmation whatever the model
+    # anchored it to (see _anchor_affirmation).
+    _anchor_affirmation(out, reply.get("body") or "", reply.get("last_outbound") or "",
+                        reply.get("first_name") or "", reply.get("last_name") or "")
+    return out
 
 
 DRAFT_SCHEMA = {
@@ -4114,6 +4224,9 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                     mem_hints = _prefix_latest_rules(_latest_owner_rules(snapshot), _agent_memory_digest(snapshot))
                     classification = classify({"subject": row.get("reply_subject"), "body": body_text,
                                                "last_outbound": last_outbound, "first_outbound": first_outbound,
+                                               "thread": row.get("thread") or [],
+                                               "first_name": row.get("lead_first_name"),
+                                               "last_name": row.get("lead_last_name"),
                                                "email_domain": domain, "company_location": company_location},
                                               snapshot, owner_hints=mem_hints)
                     now = _dt.datetime.now(_dt.timezone.utc)
@@ -4628,6 +4741,9 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     try:
         classification = classify({"subject": row["reply_subject"], "body": body_text,
                                    "last_outbound": last_outbound, "first_outbound": first_outbound,
+                                   "thread": row.get("thread") or [],
+                                   "first_name": row.get("lead_first_name"),
+                                   "last_name": row.get("lead_last_name"),
                                    "email_domain": domain, "company_location": company_location},
                                   agent, owner_hints=mem_digest)
     except Exception as e:  # noqa: BLE001 - a classify outage must degrade to review, never crash
@@ -9345,6 +9461,87 @@ def route_smartlead_thread_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+_ABSORB_INFLIGHT: set = set()
+_ABSORB_LOCK = threading.Lock()
+
+
+def _absorb_newer_reply(row: dict) -> bool:
+    """When a refreshed thread shows the LEAD spoke again after the reply this
+    row's draft answers, absorb that newer reply into the row - reply fields
+    move to the new message, the stored classification is cleared so the
+    redraft re-reads intent - and regenerate the draft in place (owner ask
+    2026-08-18: 'when a new reply comes in, there has to be a new draft which
+    is automatically drafted, because otherwise it looks out of sync').
+
+    Normal intake still creates a fresh sibling row for most new replies
+    within minutes (the thread collapse then surfaces it); this path covers
+    the window where that hasn't happened yet - categoriser latency, a
+    category outside the sweep, or an outage - so an open conversation never
+    shows a thread the draft visibly doesn't answer. If a sibling already
+    owns the newer message, intake won: stand down and let the collapse
+    surface it. Returns True when an absorb+redraft ran. Never raises."""
+    rid = row.get("id")
+    try:
+        if (not rid or row.get("is_test") or not row.get("agent_id")
+                or row.get("status") != "needs_review"):
+            return False
+        thread = row.get("thread") or []
+        tail = next((m for m in reversed(thread)
+                     if isinstance(m, dict) and str(m.get("body") or "").strip()), None)
+        if not tail or str(tail.get("type") or "").upper() == "SENT":
+            return False
+        mid = str(tail.get("message_id") or tail.get("stats_id") or "")
+        if not mid or mid in (str(row.get("message_id") or ""), str(row.get("source_message_id") or "")):
+            return False
+        try:
+            if not row.get("replied_at") or not tail.get("time"):
+                return False
+            # 30s slack: the same reply's timestamp drifts across intake paths.
+            if (_parse_iso(str(tail["time"])) - _parse_iso(str(row["replied_at"]))
+                    ).total_seconds() < 30:
+                return False
+        except (ValueError, TypeError):
+            return False
+        body = str(tail.get("body") or "")
+        # Machine mail (OOO, bounce, bare opt-out) is not a conversation turn
+        # worth a regenerated draft - leave the row exactly as it is.
+        if _autoreply_needs_no_human(clean_body(body)):
+            return False
+        other = _existing_row(row.get("workspace"), row.get("smartlead_campaign_id"),
+                              row.get("lead_email"), mid)
+        if other and other.get("id") != rid:
+            return False
+        with _ABSORB_LOCK:
+            if rid in _ABSORB_INFLIGHT:
+                return False
+            _ABSORB_INFLIGHT.add(rid)
+        try:
+            # message_id moves to the newer reply, so a later intake of the
+            # same message finds this row via _existing_row and stands down
+            # instead of drafting it twice; source_message_id keeps the
+            # original key the row was claimed under.
+            patch = {"message_id": mid, "reply_body": body,
+                     "reply_subject": tail.get("subject") or row.get("reply_subject") or "",
+                     "replied_at": tail.get("time"), "classification": None,
+                     "decision_reason": "New reply from the lead - drafting a fresh answer."}
+            if not _apply_patch(row, patch):
+                return False   # a racing sibling owns the key - intake won
+            status, _body = _redraft_sync({"id": rid})
+            if status != 200:
+                _apply_patch(row, {"decision_reason":
+                                   "New reply from the lead - the automatic redraft failed, "
+                                   "hit Regenerate to answer it."})
+            print(f"[setter] absorbed newer reply {mid} into row {rid} "
+                  f"(redraft {'ok' if status == 200 else status})", file=sys.stderr)
+            return True
+        finally:
+            with _ABSORB_LOCK:
+                _ABSORB_INFLIGHT.discard(rid)
+    except Exception as e:  # noqa: BLE001 - absorb is best-effort, never sink a refresh
+        print(f"[setter] absorb failed for row {rid}: {e}", file=sys.stderr)
+        return False
+
+
 def _kick_thread_rehydrate(row: dict):
     """Live-refresh one row's thread OFF the request path (cache-first open,
     2026-07-30). Per-row single-flight; the refreshed thread persists via the
@@ -9377,6 +9574,7 @@ def _kick_thread_rehydrate(row: dict):
                 thread = hyd.get("thread") or []
                 if thread:
                     _apply_patch(row, {"thread": thread})
+                    _absorb_newer_reply(row)
         except Exception:  # noqa: BLE001 - background refresh must never raise
             pass
         finally:
@@ -9438,6 +9636,10 @@ def route_thread_get(params):
         thread = hyd.get("thread") or []
         try:
             _apply_patch(row, {"thread": thread})
+            # Off the request path - the absorb runs a full redraft when the
+            # lead spoke after the reply this row's draft answers.
+            threading.Thread(target=_absorb_newer_reply, args=(dict(row),),
+                             daemon=True, name="setter-absorb").start()
         except Exception:  # noqa: BLE001 - persisting is best-effort; the response is what matters
             pass
         return 200, {"thread": thread, "refreshed": True}
@@ -10531,6 +10733,19 @@ def _redraft_sync(payload):
         _settings_th.join(timeout=10)
         settings = _settings_box.get("v") or {}
         classification = row.get("classification") or {}
+        # The affirmation guard also heals a STORED classification (Clare
+        # Skelton 2026-08-18: intake classified her "Ok." to our 4pm invite as
+        # send_resource; without this a Regenerate faithfully reused that
+        # verdict and re-attached the resource links). Persist the rewrite via
+        # fresh_classification below so the heal sticks.
+        anchor_last_outbound = ""
+        for _m in reversed(row.get("thread") or []):
+            if str(_m.get("type") or "").upper() == "SENT":
+                anchor_last_outbound = _TAG_RE.sub(" ", str(_m.get("body") or ""))[:800]
+                break
+        anchor_healed = classification and _anchor_affirmation(
+            classification, clean_body(row.get("reply_body") or ""), anchor_last_outbound,
+            row.get("lead_first_name") or "", row.get("lead_last_name") or "")
         tz = row.get("timezone")
         # A stored timezone was already vetted at intake; only a fresh
         # resolve below can downgrade confidence.
@@ -10581,6 +10796,9 @@ def _redraft_sync(payload):
                 classification = classify({"subject": row.get("reply_subject"), "body": body_text,
                                            "last_outbound": last_outbound,
                                            "first_outbound": row.get("first_outbound") or "",
+                                           "thread": row.get("thread") or [],
+                                           "first_name": row.get("lead_first_name"),
+                                           "last_name": row.get("lead_last_name"),
                                            "email_domain": domain, "company_location": company_location},
                                           agent, owner_hints=mem_hints)
                 fresh_classification = classification
@@ -10703,6 +10921,10 @@ def _redraft_sync(payload):
             # line updates and the next Regenerate doesn't re-classify.
             patch["classification"] = fresh_classification
             patch["first_outbound"] = row.get("first_outbound") or ""
+        elif anchor_healed:
+            # The affirmation guard rewrote the stored verdict - persist it so
+            # the Intent line and any later Regenerate see the healed intent.
+            patch["classification"] = classification
         if tz and not row.get("timezone"):
             # Also covers the heal above (stored classification, empty
             # timezone) - without this stamp the next Regenerate re-resolves
