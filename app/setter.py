@@ -2066,6 +2066,31 @@ def repair_markdown_links(html: str) -> str:
         return html or ""
 
 
+_ANCHOR_WITH_TEXT_RE = re.compile(r"([^<>]*?)(<a\b[^>]*>([^<]+)</a>)")
+
+
+def dedupe_label_echo(html: str) -> str:
+    """Drops a plain-text lead-in that echoes the anchor it introduces, e.g.
+    'Here's a quick overview of how it works: <a>Here's a quick overview of
+    how it works.</a>' -> '<a>Here's a quick overview of how it works.</a>'
+    (judge finding 2026-08-18, three Verdant fails). Fires only when the
+    text right before the anchor ends with the anchor's own label."""
+    def _norm(s): return re.sub(r"[^a-z0-9 ]", "", s.lower()).strip()
+    def _sub(m):
+        lead, anchor, label = m.group(1), m.group(2), m.group(3)
+        nlead, nlabel = _norm(lead), _norm(label)
+        if nlabel and len(nlabel) >= 8 and nlead.endswith(nlabel):
+            keep = lead[:len(lead) - len(lead.rstrip())] if False else ""
+            # strip the echoed phrase + any trailing ": " / ", " separator
+            cut = re.sub(re.escape(label.rstrip(". ")) + r"\s*[:,-]?\s*$", "", lead, flags=re.I)
+            return cut + anchor
+        return m.group(0)
+    try:
+        return _ANCHOR_WITH_TEXT_RE.sub(_sub, html or "")
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
 def dedupe_adjacent_blocks(html: str) -> str:
     """Drops a div block whose visible text exactly repeats the previous
     block's (judge finding 2026-08-18: the same sentence pasted twice
@@ -2115,7 +2140,7 @@ def proofread_draft(html: str, sender_first: str = ""):
     only when the (guard-passed) result actually differs from the input."""
     _repaired = strip_deadend_ask(destack_same_block(destack_call_ask(
         humanize_availability_fallback(repair_timeless_ask(repair_here_is_graft(
-            repair_markdown_links(repair_rtf_escapes(html or ""))))))))
+            dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(html or "")))))))))
     original = dedupe_adjacent_blocks(normalize_greeting(_repaired, sender_first))
     if not original.strip():
         return original, False
