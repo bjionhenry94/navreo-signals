@@ -220,7 +220,7 @@
 .lp-cat-edit .btn.caution:hover { background: #7a5700; border-color: #7a5700; }
 .lp-cat-edit .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
 .lp-cat-edit .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
-/* One-click override row (Not qualified / Not interested) - its own row
+/* One-click override row (Not qualified / Out of office) - its own row
    BELOW the dropdown+Update row so two full-width labels never get squeezed
    into the same line as the select. WRAPS: when the panel is too narrow to
    hold both side by side they stack full-width instead of spilling past the
@@ -3812,10 +3812,12 @@ const CORE_FOUR_JS = ["Interested", "Information Request", "Meeting Request", "p
    hardcoded id; the button no-ops with an error hint if the label ever
    disappears from the workspace's master list. */
 const NQ_CATEGORY_NAME = "Not a qualified lead";
-/* One-click "Not interested" (owner ask 2026-08-04, mirrors NQ above) - files
-   the lead under Smartlead's own "Not Interested" category and clears it from
-   the queue in one click, no dropdown. */
-const NI_CATEGORY_NAME = "Not Interested";
+/* One-click "Out of office" (owner ask 2026-08-17, mirrors NQ above) - files
+   the lead under Smartlead's own "Out Of Office" category and clears it from
+   the queue in one click, no dropdown. Swapped in for the old "Not interested"
+   button: NQ + OOO are the two most-common one-click outcomes. Matching is
+   case-insensitive, so this resolves whatever casing the workspace uses. */
+const OOO_CATEGORY_NAME = "Out Of Office";
 const CAT_NEGATIVE_RE = /(not interested|do not contact|do-not-contact|unsubscrib|opt.?out|bounce|wrong|blacklist|spam|unqualif|invalid|junk|no longer|left the company)/i;
 function leadFirstNameOr(row, fallback) {
   const fn = String((row && row.lead_first_name) || "").trim();
@@ -3947,7 +3949,7 @@ function categoryControlInner(row, compact) {
             ? `Files this lead as '${esc(catName)}' in the tool and clears it from the queue - monitor workspaces are never written to the client's Smartlead.`
             : `Files this lead as '${esc(catName)}' in Smartlead and clears it from the queue - one click, no dropdown.`}">${label}</button>`;
         const actionsHtml = oneClickBtn(NQ_CATEGORY_NAME, "lp-cat-nq", "Not qualified")
-          + oneClickBtn(NI_CATEGORY_NAME, "lp-cat-ni", "Not interested");
+          + oneClickBtn(OOO_CATEGORY_NAME, "lp-cat-ooo", "Out of office");
         return `<div class="lp-cat-edit">
         <select class="lp-cat-sel" aria-label="Change lead category"><option value="">Loading…</option></select>
       </div>
@@ -4405,10 +4407,10 @@ function wireCategoryControls(root, row) {
     hydrateCategoryOptions(sel, row);
     sel.addEventListener("change", () => onCategoryPicked(block, row));
     wireOneClickCat(block, ".lp-cat-nq", NQ_CATEGORY_NAME);
-    wireOneClickCat(block, ".lp-cat-ni", NI_CATEGORY_NAME);
+    wireOneClickCat(block, ".lp-cat-ooo", OOO_CATEGORY_NAME);
   });
 }
-/* Wires a single one-click override button (Not qualified / Not interested):
+/* Wires a single one-click override button (Not qualified / Out of office):
    resolves the live Smartlead id for `catName` at click time - never a
    hardcoded id (ids differ per workspace; the master list is 1h-cached) -
    then files it via applyCategory. Shared by both buttons in .lp-cat-actions. */
