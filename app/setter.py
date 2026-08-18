@@ -1894,6 +1894,24 @@ def destack_call_ask(html: str) -> str:
         return html or ""
 
 
+_TIMELESS_ASK_RE = re.compile(
+    r"(?:would you be free|would it be worth|are you free)[^<]*?\bon\b\s*(<a\b[^>]*>.*?</a>)\s*\??",
+    re.I | re.S)
+
+
+def repair_timeless_ask(html: str) -> str:
+    """Repairs the no-slots merge glitch where the drafter drops the booking
+    anchor into the TIME slot of a call-ask sentence, e.g. 'Would you be free
+    for a call on <a>grab a slot here</a>?' (judge finding 2026-08-18, seen
+    twice). There is no time to recover, so rewrite the malformed ask into the
+    clean fallback invitation, preserving the anchor. Only fires when a
+    scheduling anchor sits immediately after 'on' with no time between."""
+    try:
+        return _TIMELESS_ASK_RE.sub(r"You're welcome to \1 whenever suits you.", html or "")
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
 def destack_same_block(html: str) -> str:
     """Companion to destack_call_ask for the case where BOTH ask forms sit in
     the SAME div block (block-level dropping can't help there): removes the
@@ -2026,7 +2044,7 @@ def proofread_draft(html: str, sender_first: str = ""):
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
     original = dedupe_adjacent_blocks(normalize_greeting(destack_same_block(destack_call_ask(
-        repair_markdown_links(repair_rtf_escapes(html or "")))), sender_first))
+        repair_timeless_ask(repair_markdown_links(repair_rtf_escapes(html or ""))))), sender_first))
     if not original.strip():
         return original, False
     try:
