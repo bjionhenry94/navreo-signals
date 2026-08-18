@@ -1070,6 +1070,12 @@ def lint_draft(html: str, ctx: dict):
         return False, "The draft still has an unfilled placeholder."
     if "—" in text:
         return False, "The draft uses an em dash, which house style forbids."
+    # One ask, ever (owner rule 2026-08-17): a draft may never combine a
+    # call-ask sentence with the open availability ask - destack_call_ask
+    # repairs this at draft time, so tripping here means a path skipped it.
+    _low_plain = _TAG_RE.sub(" ", text).lower()
+    if _AVAIL_Q in _low_plain and any(p in _low_plain for p in _ASK_PHRASES):
+        return False, "The draft asks for the call twice - one ask only."
     if ctx.get("subject") is not None and not str(ctx.get("subject") or "").strip():
         return False, "The draft has no subject line."
     first = (ctx.get("first_name") or "").strip()
@@ -1846,6 +1852,48 @@ PROOFREAD_SYSTEM = ("You are a meticulous copy editor for short sales emails. Fi
                     "Return the full corrected HTML.")
 
 
+_ASK_PHRASES = ("would you be free", "would it be worth", "are you free")
+_AVAIL_Q = "when would be a good time"
+_DIV_BLOCK_RE = re.compile(r"<div\b[^>]*>.*?</div>", re.I | re.S)
+
+
+def destack_call_ask(html: str) -> str:
+    """Deterministic one-ask enforcement (owner rule 2026-08-17: "You're
+    asking for a call twice, don't do that"; root-caused 2026-08-18). Despite
+    DRAFT_SYSTEM's one-ask law, gpt-5-mini still occasionally emits BOTH a
+    call-ask sentence AND the open "When would be a good time..." availability
+    ask in one draft (~15% of fallback-path drafts). Prompt bans alone don't
+    hold on a small model, so repair it in code: when both forms are present,
+    drop whichever block is the weaker ask - keep the block that carries a
+    concrete time or an anchor (a bookable ask), drop the other. Runs at the
+    top of proofread_draft so every draft call site gets it, model or no
+    model. Purely string-level, never a model call, never raises."""
+    text = html or ""
+    try:
+        low_plain = _TAG_RE.sub(" ", text).lower()
+        if _AVAIL_Q not in low_plain or not any(p in low_plain for p in _ASK_PHRASES):
+            return text
+        blocks = _DIV_BLOCK_RE.findall(text)
+        avail_blocks = [b for b in blocks if _AVAIL_Q in _TAG_RE.sub(" ", b).lower()]
+        ask_blocks = [b for b in blocks
+                      if any(p in _TAG_RE.sub(" ", b).lower() for p in _ASK_PHRASES)
+                      and b not in avail_blocks]
+        if not avail_blocks or not ask_blocks:
+            return text
+        def _bookable(b: str) -> bool:
+            return bool(re.search(r"\d{1,2}[:.]\d{2}\s*(?:AM|PM)", b, re.I)) or "<a " in b.lower()
+        # Keep the bookable ask; drop the other form. When the call-ask block
+        # has times or links it wins; otherwise the availability ask (which
+        # carries the booking link) is the one real ask and the bare call-ask
+        # sentence goes.
+        drop = avail_blocks if any(_bookable(b) for b in ask_blocks) else ask_blocks
+        for b in drop:
+            text = text.replace(b + "<br>", "", 1) if (b + "<br>") in text else text.replace("<br>" + b, "", 1) if ("<br>" + b) in text else text.replace(b, "", 1)
+        return text
+    except Exception:  # noqa: BLE001 - a repair helper must never break drafting
+        return html or ""
+
+
 def _visible_digit_runs(html: str) -> set:
     """Digit runs found in the VISIBLE text only (tags/hrefs stripped first)
     - the same discipline lint_draft's own invented-number check uses, reused
@@ -1873,7 +1921,7 @@ def proofread_draft(html: str, sender_first: str = ""):
     original's length (a wildly shorter or longer result is a bad edit, not
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
-    original = html or ""
+    original = destack_call_ask(html or "")
     if not original.strip():
         return original, False
     try:
