@@ -5868,9 +5868,10 @@ def run_client_positive_alerts() -> dict:
             link = _cp_smartlead_link(cid, email)
             text = _cp_compose(row, cname, link)
             payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
-            chan = CLIENT_ALERT_CHANNELS.get(ws)
-            if chan:
-                payload["channel"] = chan   # else the hook defaults to #interested-replies
+            # Mapped workspace -> its own channel; every other client workspace
+            # -> #client-interested-replies (ruling 2026-08-18: the hook's
+            # #interested-replies default is Navreo-own only).
+            payload["channel"] = CLIENT_ALERT_CHANNELS.get(ws) or CLIENT_INTERNAL_CHANNEL
             posted = False
             try:
                 _HTTP("POST", EVER_POSITIVE_HOOK, {}, payload)
