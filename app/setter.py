@@ -1894,11 +1894,33 @@ def destack_call_ask(html: str) -> str:
         return html or ""
 
 
+def destack_same_block(html: str) -> str:
+    """Companion to destack_call_ask for the case where BOTH ask forms sit in
+    the SAME div block (block-level dropping can't help there): removes the
+    'When would be a good time...' sentence and a trailing availability
+    sentence from a block that also carries a real ask phrase."""
+    text = html or ""
+    try:
+        for b in _DIV_BLOCK_RE.findall(text):
+            low = _TAG_RE.sub(" ", b).lower()
+            if _AVAIL_Q in low and any(p in low for p in _ASK_PHRASES):
+                nb = re.sub(r"[^.?!<>]*[Ww]hen would be a good time[^.?!]*[.?!]\s*", "", b)
+                nb = re.sub(r"\s*[^.?!<>]*[Hh]ere is (?:<a[^>]*>)?my availability(?:</a>)?[^.?!]*[.?!]", "", nb)
+                if _TAG_RE.sub(" ", nb).strip():
+                    text = text.replace(b, nb, 1)
+        return text
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
 _GREET_RE = re.compile(
     r'^(\s*<div\b[^>]*>\s*)(Hi|Hey|Hello|Hola|Bonjour|Ciao|Ola|Hallo)([  ]+)([^,<]{2,60})(,?)', re.I)
 
 
-def normalize_greeting(html: str) -> str:
+_TITLE_TOKENS = {"dr", "mr", "mrs", "ms", "prof", "amb", "eng", "rev", "sir", "madam"}
+
+
+def normalize_greeting(html: str, sender_first: str = "") -> str:
     """First-name-only greeting repair (judge findings 2026-08-18: 'Hi Janos
     Stegena' and 'Hi Dina "Desiree" Kotze,' read as mail-merge). Operates on
     the FIRST div only: strips quoted nicknames, then truncates a multi-word
@@ -1914,7 +1936,29 @@ def normalize_greeting(html: str) -> str:
         if low == "there" or low.endswith(" team") or " and " in low:
             return text if name == m.group(4).strip() else text[:m.start(4)] + name + text[m.end(4):]
         first = name.split()[0] if name.split() else name
+        # Title globs from signature blocks ("Dr.Amb.Diplomat") and the
+        # sender's own persona name are never the lead's name - fall back to
+        # "there" (judge findings 2026-08-18).
+        head = first.split(".")[0].lower().rstrip(".")
+        if head in _TITLE_TOKENS or "." in first.rstrip(".") or (
+                sender_first and first.lower() == sender_first.strip().lower()):
+            first = "there"
         return text[:m.start(4)] + first + text[m.end(4):]
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
+_RTF_ESC_RE = re.compile(r"\\'([0-9a-fA-F]{2})")
+
+
+def repair_rtf_escapes(html: str) -> str:
+    """Decodes RTF-style hex escapes leaked from a lead's reply encoding
+    (judge finding 2026-08-18: a draft shipped "Hi D\\'e9bora" - \\'e9 is an
+    RTF-encoded e-acute the drafter copied verbatim). The \\'XX sequence never
+    occurs in legitimate email prose, so decoding is safe. cp1252 covers the
+    RTF default charset."""
+    try:
+        return _RTF_ESC_RE.sub(lambda m: bytes([int(m.group(1), 16)]).decode("cp1252", "replace"), html or "")
     except Exception:  # noqa: BLE001
         return html or ""
 
@@ -1981,7 +2025,8 @@ def proofread_draft(html: str, sender_first: str = ""):
     original's length (a wildly shorter or longer result is a bad edit, not
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
-    original = dedupe_adjacent_blocks(normalize_greeting(destack_call_ask(repair_markdown_links(html or ""))))
+    original = dedupe_adjacent_blocks(normalize_greeting(destack_same_block(destack_call_ask(
+        repair_markdown_links(repair_rtf_escapes(html or "")))), sender_first))
     if not original.strip():
         return original, False
     try:
