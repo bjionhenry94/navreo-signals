@@ -2135,6 +2135,30 @@ def dedupe_adjacent_blocks(html: str) -> str:
         return html or ""
 
 
+_PLAIN_AVAIL_RE = re.compile(r"(?<!>)see my availability here(?!</a>)", re.I)
+
+
+def hyperlink_backup_phrase(html: str, booking_link: str = "") -> str:
+    """Ensures the backup phrase 'see my availability here' is a real link to
+    the agent's calendar (owner ruling 2026-08-18). The drafter often writes
+    the phrase as plain text; when a booking link exists, wrap the unlinked
+    phrase in an anchor. Never touches a phrase that is already inside an
+    anchor, and does nothing when there is no booking link."""
+    link = str(booking_link or "").strip()
+    if not link:
+        return html or ""
+    try:
+        # Only wrap occurrences that are NOT already an anchor's inner text.
+        # Split on existing anchors so we never rewrite inside one.
+        parts = re.split(r"(<a\b[^>]*>.*?</a>)", html or "", flags=re.I | re.S)
+        for i in range(0, len(parts), 2):  # even indices are outside anchors
+            parts[i] = _PLAIN_AVAIL_RE.sub(
+                f'<a href="{link}">see my availability here</a>', parts[i])
+        return "".join(parts)
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
 def _visible_digit_runs(html: str) -> set:
     """Digit runs found in the VISIBLE text only (tags/hrefs stripped first)
     - the same discipline lint_draft's own invented-number check uses, reused
@@ -2144,7 +2168,7 @@ def _visible_digit_runs(html: str) -> set:
     return set(re.findall(r"\d+", plain))
 
 
-def proofread_draft(html: str, sender_first: str = ""):
+def proofread_draft(html: str, sender_first: str = "", booking_link: str = ""):
     """Second sweep (owner brief 2026-07-14: "drafts need a second sweep so
     they read correctly without errors") - one extra gpt-5-mini call that
     proofreads an already-drafted email body for grammar, spelling,
@@ -2165,6 +2189,7 @@ def proofread_draft(html: str, sender_first: str = ""):
     _repaired = strip_deadend_ask(destack_same_block(destack_call_ask(
         standardize_backup_link(humanize_availability_fallback(repair_timeless_ask(repair_here_is_graft(
             dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(html or ""))))))))))
+    _repaired = hyperlink_backup_phrase(_repaired, booking_link)
     original = dedupe_adjacent_blocks(normalize_greeting(_repaired, sender_first))
     if not original.strip():
         return original, False
@@ -4020,7 +4045,7 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                         sender_first=_sender_first_for(snapshot))
                     draft_html = d.get("html")
                     if draft_html:
-                        draft_html, _changed = proofread_draft(draft_html, _sender_first_for(snapshot))
+                        draft_html, _changed = proofread_draft(draft_html, _sender_first_for(snapshot), _booking_link(snapshot))
                     patch = {"agent_id": agent.get("id"), "classification": classification,
                              "draft_subject": d.get("subject"), "draft_body": draft_html,
                              "original_draft_body": draft_html, "slots": slots,
@@ -4597,7 +4622,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             if draft_body:
                 # Second sweep (owner brief 2026-07-14): proofread the draft
                 # BEFORE lint_draft below, so lint checks the final text.
-                draft_body, _proofread_changed = proofread_draft(draft_body, sender_first)
+                draft_body, _proofread_changed = proofread_draft(draft_body, sender_first, _booking_link(agent))
         except Exception as e:  # noqa: BLE001 - a draft outage falls back to no draft -> lint fails -> review
             if not row.get("error"):
                 row["error"] = f"draft failed: {type(e).__name__}"
@@ -10531,7 +10556,7 @@ def _redraft_sync(payload):
             # Second sweep (owner brief 2026-07-14): proofread before this
             # regenerated draft is saved.
             _t = _time.time()
-            draft_html, _proofread_changed = proofread_draft(draft_html, sender_first)
+            draft_html, _proofread_changed = proofread_draft(draft_html, sender_first, _booking_link(agent))
             _stage("proofread", _t)
         # Re-stamped, not preserved: the baseline for an Approve-time diff is
         # the LATEST thing the agent wrote, not its first attempt. Edits the
@@ -11547,7 +11572,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                 # lint_draft below, so lint checks the final text. Shared by
                 # both real (_build_training_case) and synthetic
                 # (_build_synthetic_training_case) cases.
-                draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent))
+                draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent), _booking_link(agent))
             lint_ok, lint_reason = lint_draft(draft_html, {
                 "subject": d.get("subject"), "first_name": lead_first_name,
                 "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
@@ -12418,7 +12443,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 if draft_html:
                     # Second sweep (owner brief 2026-07-14) - BEFORE lint so
                     # lint checks the final, proofread text.
-                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot))
+                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot), _booking_link(agent_snapshot))
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": lead_first,
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
@@ -12545,7 +12570,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 if draft_html:
                     # Second sweep (owner brief 2026-07-14) - BEFORE lint so
                     # lint checks the final, proofread text.
-                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot))
+                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot), _booking_link(agent_snapshot))
                 lint_ok, lint_reason = lint_draft(draft_html, {
                     "subject": d.get("subject"), "first_name": lead_first,
                     "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
