@@ -1914,6 +1914,31 @@ def repair_timeless_ask(html: str) -> str:
         return html or ""
 
 
+_AVAIL_FALLBACK_RE = re.compile(
+    r"When would be a good time for us to talk\?\s*"
+    r"(?:Here is\s*(<a\b[^>]*>[^<]*</a>|my availability)\s*\.?)?"
+    r"(?:\s*Feel free to suggest some times[^.<]*\.?)?",
+    re.I)
+
+
+def humanize_availability_fallback(html: str) -> str:
+    """Rewrites the robotic no-slots fallback ask 'When would be a good time
+    for us to talk? Here is my availability.' into a warm human form. This
+    phrasing was the single most-flagged template tell across the Amplifyy
+    human-ness eval (2026-08-18); replacing it lifts human-ness for every
+    agent. Preserves a booking anchor when one is present; falls back to the
+    plain 'suggest some times' close when there is no link."""
+    def _sub(m):
+        anchor = m.group(1)
+        if anchor and anchor.lower() != "my availability":
+            return f"Grab whatever time suits you {anchor}."
+        return "Just let me know a couple of times that suit you and I'll set it up."
+    try:
+        return _AVAIL_FALLBACK_RE.sub(_sub, html or "")
+    except Exception:  # noqa: BLE001
+        return html or ""
+
+
 def strip_deadend_ask(html: str) -> str:
     """Removes a call-ask block that carries NEITHER a concrete time NOR a
     scheduling anchor (judge finding 2026-08-18: 'Would you be free for a
@@ -2086,8 +2111,10 @@ def proofread_draft(html: str, sender_first: str = ""):
     original's length (a wildly shorter or longer result is a bad edit, not
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
-    original = dedupe_adjacent_blocks(normalize_greeting(strip_deadend_ask(destack_same_block(destack_call_ask(
-        repair_timeless_ask(repair_here_is_graft(repair_markdown_links(repair_rtf_escapes(html or ""))))))), sender_first))
+    _repaired = strip_deadend_ask(destack_same_block(destack_call_ask(
+        humanize_availability_fallback(repair_timeless_ask(repair_here_is_graft(
+            repair_markdown_links(repair_rtf_escapes(html or ""))))))))
+    original = dedupe_adjacent_blocks(normalize_greeting(_repaired, sender_first))
     if not original.strip():
         return original, False
     try:
