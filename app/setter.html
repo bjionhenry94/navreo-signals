@@ -289,11 +289,11 @@
 .lead-panel .lp-notes-input {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px;
   padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 10px;
-  background: var(--bg-sunken); color: var(--ink);
+  background: var(--bg, #fff); color: var(--ink);
   font: inherit; font-size: 13px; line-height: 1.5;
   transition: border-color 0.12s, box-shadow 0.12s;
 }
-.lead-panel .lp-notes-input::placeholder { color: var(--ink-3); }
+.lead-panel .lp-notes-input::placeholder { color: var(--ink-3); font-style: italic; }
 .lead-panel .lp-notes-input:hover { border-color: var(--ink-3); }
 .lead-panel .lp-notes-input:focus-visible,
 .lead-panel .lp-notes-input:focus { outline: none; border-color: var(--orange); box-shadow: var(--focus); }
