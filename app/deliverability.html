@@ -1388,6 +1388,15 @@ function renderTrend() {
       sub += " You used " + Math.round(sBarsTot / capTot * 100) + "% of sending capacity here — " +
         fmtN(sBarsTot) + " of " + fmtN(capTot) + " possible. The left axis reads in capacity; reply / interested / meeting lines keep their own scale.";
       if (capEstimated()) sub += " " + escq(state.client) + " shares the Navreo pool, so its capacity is an estimated split of the fleet's — the same basis as its sent bars.";
+      // Capacity-used pill in the legend chip row (renderLegend already built it).
+      var lc = $("ah-lchips");
+      if (lc) lc.insertAdjacentHTML("beforeend",
+        '<span class="lchip cap-pill" style="cursor:default" title="' +
+        fmtN(sBarsTot) + " of " + fmtN(capTot) + " capacity over the " + rangeLabel() +
+        (capEstimated() ? " — estimated split for " + escq(state.client) : "") + '">' +
+        '<i class="sw" style="background:linear-gradient(to top,' + COL.sent + ' 0 55%,var(--line-2) 55% 100%)"></i>' +
+        "Capacity used <b class=\"num\">" + Math.round(sBarsTot / capTot * 100) + "%</b>" +
+        (capEstimated() ? '<span class="totpill">est</span>' : "") + "</span>");
     }
   }
   if (state.on.sent && sentFull && sentDailyEstimated()) {
