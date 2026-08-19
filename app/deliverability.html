@@ -961,10 +961,11 @@ function sentDailyEstimated() {
   return !!(CW && CW.series && !(CW.series[key] && CW.series[key].sent) && sentDailyFull());
 }
 // ── Sending CAPACITY (P1 headroom bars) ──────────────────────────────────
-// Which workspace's capacity series backs the selected client. Exact for the
-// all-clients sum and the own-workspace clients; null for navreo-workspace
-// clients (Navreo/Amplifyy/Arnic/…) — they share one pool that boxes aren't
-// tagged into, so a per-client ceiling isn't separable (Bjion 2026-08-19).
+// Which capacity series backs the selected client. EXACT for the all-clients
+// sum and the own-workspace clients (Asteri/KRG/Grout). navreo-workspace clients
+// (Navreo/Amplifyy/Arnic/…) share one untagged pool, so capacityDailyFull splits
+// that pool by the client's share of navreo-workspace sends — the same estimate
+// the sent bars already use, so capacity shows on EVERY client (Bjion 2026-08-19).
 function capWsKey() {
   if (state.client === "All") return "__all";
   var k = state.client.toLowerCase();
@@ -977,11 +978,27 @@ function alignCap(arr, srcDays) {   // re-key a capacity series onto the chart a
   for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = arr[i];
   return ax.map(function (d) { return (m[d] == null ? null : m[d]); });
 }
+// client's share of navreo-workspace sends over the window (mirrors sentDailyFull)
+function navreoShare() {
+  var wsS = CW && CW.series && CW.series["__navreo_ws"];
+  var cw = cwFor(state.client);
+  if (!wsS || !wsS.sent || !cw || !(cw.sent > 0)) return null;
+  var wsWin = wsS.sent.slice(Math.max(0, wsS.sent.length - state.range))
+                      .reduce(function (a, b) { return a + (b || 0); }, 0);
+  return wsWin > 0 ? cw.sent / wsWin : null;
+}
+// true when the client's capacity is an apportioned split of the navreo pool
+function capEstimated() {
+  return state.client !== "All" && !capWsKey() && !!(CAP && CAP.capacity && CAP.capacity.navreo);
+}
 function capacityDailyFull() {   // full 30-day capacity array for the client, or null
+  if (!CAP || !CAP.capacity || !CAP.days) return null;
   var k = capWsKey();
-  if (!k || !CAP || !CAP.capacity || !CAP.days) return null;
-  var arr = CAP.capacity[k];
-  return arr ? alignCap(arr, CAP.days) : null;
+  if (k) return alignCap(CAP.capacity[k], CAP.days);          // All + own-workspace: exact
+  // shared navreo-workspace client: split the pool capacity by its sent share
+  var navCap = alignCap(CAP.capacity.navreo, CAP.days), share = navreoShare();
+  if (!navCap || share == null) return null;
+  return navCap.map(function (v) { return v == null ? null : Math.round(v * share); });
 }
 function niceCeil(x) {   // round a max up to a 1/2/5·10ⁿ axis ceiling
   if (x <= 0) return 1;
@@ -1368,6 +1385,7 @@ function renderTrend() {
     if (capTot > 0) {
       sub += " You used " + Math.round(sBarsTot / capTot * 100) + "% of sending capacity here — " +
         fmtN(sBarsTot) + " of " + fmtN(capTot) + " possible. The left axis reads in capacity; reply / interested / meeting lines keep their own scale.";
+      if (capEstimated()) sub += " " + escq(state.client) + " shares the Navreo pool, so its capacity is an estimated split of the fleet's — the same basis as its sent bars.";
     }
   }
   if (state.on.sent && sentFull && sentDailyEstimated()) {
