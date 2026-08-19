@@ -17018,6 +17018,11 @@ def _fleet_capacity_build(days: int) -> dict:
     # pull a week of extra history so carry-forward can seed the first axis day
     rows = sb("POST", "rpc/fleet_capacity_daily",
               {"p_start": (startd - _dtmod.timedelta(days=7)).isoformat()}) or []
+    if not rows:
+        # sb() returned None/[] (cold-start DB hiccup, timeout) — raise so the
+        # caller serves stale / 502s and RETRIES, never caching an all-null
+        # window as a valid build for the full TTL.
+        raise RuntimeError("fleet_capacity_daily returned no rows")
     per_ws: dict = {}
     for r in rows:
         if not isinstance(r, dict):
