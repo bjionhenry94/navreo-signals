@@ -10205,6 +10205,91 @@ _LEAD_CONTACT_CACHE = {}          # email(lower) -> (fetched_at, {linkedin, webs
 _LEAD_CONTACT_TTL = 3600.0        # a lead's profile/website changes ~never; 1h cache
 
 
+# ── "Open in CRM" deep link (team feedback 2026-08-19) ─────────────────────
+# The sidebar's "Open in CRM" landed on the client's whole "All Campaign
+# Responses" Notion database, so the SDR still had to hunt for the prospect's
+# row before logging notes. This resolves the lead's OWN row (a Notion page)
+# by the Email property so the link opens the card directly. Read-only Notion
+# query, cached per email; the database-root link stays the fallback whenever
+# the row can't be found yet (e.g. the categoriser hasn't written it).
+_NOTION_BASE = "https://api.notion.com/v1"
+_NOTION_VERSION = "2022-06-28"
+_CRM_LINK_CACHE = {}              # email(lower) -> (fetched_at, url)
+_CRM_LINK_TTL = 1800.0           # 30 min - a row's page url never changes once made
+
+
+def _notion_db_id(url_or_id: str) -> str:
+    """The 32-char Notion database id from a stored CRM url (or a bare id).
+    Handles both the dashed-UUID and the compact 32-hex forms Notion uses."""
+    s = str(url_or_id or "")
+    m = re.search(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                  r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}", s)
+    if m:
+        return m.group(0).replace("-", "")
+    m = re.search(r"[0-9a-fA-F]{32}", s)
+    return m.group(0) if m else ""
+
+
+def _crm_lead_page_url(db_id: str, email: str) -> str:
+    """The Notion page url for this lead's row in the client CRM (matched on
+    the Email property), or "" when there is no such row yet. Cached per email;
+    short timeout; never raises - a miss just leaves the database-root link."""
+    email = (email or "").strip().lower()
+    if not db_id or not email:
+        return ""
+    now = _time.time()
+    hit = _CRM_LINK_CACHE.get(email)
+    if hit and (now - hit[0]) < _CRM_LINK_TTL:
+        return hit[1]
+    url = ""
+    try:
+        key = _KEYS.get("NOTION_API_KEY") or os.environ.get("NOTION_API_KEY") or ""
+        if key:
+            resp = _HTTP("POST", f"{_NOTION_BASE}/databases/{db_id}/query",
+                         {"Authorization": f"Bearer {key}",
+                          "Notion-Version": _NOTION_VERSION},
+                         {"filter": {"property": "Email", "email": {"equals": email}},
+                          "page_size": 1}, timeout=12)
+            res = resp.get("results") if isinstance(resp, dict) else None
+            if isinstance(res, list) and res:
+                url = str(res[0].get("url") or "")
+    except Exception:  # noqa: BLE001 - a Notion hiccup keeps the DB-root link
+        url = ""
+    _CRM_LINK_CACHE[email] = (now, url)
+    return url
+
+
+def route_setter_crm_link_get(params):
+    """GET /api/setter/crm-link?id=<queue_id> - resolve the lead's OWN row in
+    the client's "All Campaign Responses" Notion CRM so the sidebar's
+    "Open in CRM" lands on the prospect card, ready to log notes, instead of
+    the database root (team feedback 2026-08-19). Returns {url, db_url}: url is
+    "" when the row isn't there yet, and the sidebar keeps the db_url link.
+    Cheap Supabase lookup + one cached Notion query; never raises."""
+    try:
+        qid = _qp(params, "id", "")
+        if not qid:
+            return 400, {"error": "id is required"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(str(qid), safe='')}"
+                          f"&{_list_ws_filter()}"
+                          "&select=lead_email,is_test,smartlead_campaign_id,workspace") if _SB else None
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row:
+            return 404, {"error": "Queue row not found."}
+        email = (row.get("lead_email") or "").strip().lower()
+        if not email or row.get("is_test"):
+            return 200, {"url": "", "db_url": ""}
+        workspace = (row.get("workspace") or WORKSPACE or "navreo").lower()
+        slug = _client_slug_for(row.get("smartlead_campaign_id"), workspace)
+        crm_url = (_client_context(slug).get("crm_url") or "").strip()
+        if not crm_url:
+            return 200, {"url": "", "db_url": ""}
+        url = _crm_lead_page_url(_notion_db_id(crm_url), email)
+        return 200, {"url": url, "db_url": crm_url}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:200]}
+
+
 def route_lead_contact_get(params):
     """GET /api/setter/lead-contact?id=<queue_id> - the lead's personal
     LinkedIn, real company website, and Smartlead conversation id for the
@@ -14028,6 +14113,7 @@ GET_ROUTES = {
     "/api/setter/categories": route_categories_get,
     "/api/setter/thread": route_thread_get,
     "/api/setter/lead-contact": route_lead_contact_get,
+    "/api/setter/crm-link": route_setter_crm_link_get,
     "/api/setter/training": route_training_get,
     "/api/setter/training/share-info": route_training_share_info,
     "/api/setter/edit-lesson": route_edit_lesson_get,

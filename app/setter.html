@@ -3666,6 +3666,7 @@ function renderDetail(row) {
   // matched nothing and was pure dead work on every repaint.
   wireCategoryControls(panelEl, row);
   hydrateLeadContact(row);
+  hydrateCrmLink(row);
   reapplyEditedDraft(row.id);
   refreshThreadFor(row);
   // Cache hit already painted real chips synchronously above - wire them now.
@@ -4045,8 +4046,18 @@ function wirePhoneDisposition(scope, row) {
 }
 function crmTopHtml(row) {
   const cl = warmcallFor(row).client || row.client_info || {};
-  if (!cl.crm_url) return `<div class="lp-crm-top" id="lpCrmTop" style="display:none"></div>`;
-  return `<div class="lp-crm-top" id="lpCrmTop"><a href="${esc(cl.crm_url)}" target="_blank" rel="noopener" class="lp-crm-link">Open in CRM ↗</a> <span class="muted small">all campaign responses</span></div>`;
+  const email = String(row.lead_email || "").toLowerCase();
+  const dbUrl = cl.crm_url || CRM_DB[email] || "";
+  if (!dbUrl) return `<div class="lp-crm-top" id="lpCrmTop" style="display:none"></div>`;
+  // Deep link straight to this lead's row when we've resolved it; otherwise the
+  // database root (current behaviour), with "all responses" always reachable.
+  const leadUrl = CRM_LEAD[email] || "";
+  const href = leadUrl || dbUrl;
+  const title = leadUrl ? "Opens this lead's card - ready to log notes" : "Opens the campaign-responses database";
+  const tail = leadUrl
+    ? ` <span class="muted small">· <a href="${esc(dbUrl)}" target="_blank" rel="noopener" class="lp-crm-all">all responses</a></span>`
+    : ` <span class="muted small">all campaign responses</span>`;
+  return `<div class="lp-crm-top" id="lpCrmTop"><a href="${esc(href)}" target="_blank" rel="noopener" class="lp-crm-link" title="${title}">Open in CRM ↗</a>${tail}</div>`;
 }
 function companySectionHtml(row) {
   // ONE profile, not "person" vs "company" (owner redesign 2026-08-17): who
@@ -4095,8 +4106,11 @@ function clientSectionHtml(row) {
   const label = cl.label || clientForRow(row) || "the client";
   const key = `setterClientOpen:${esc((cl.slug || row.workspace || "navreo"))}`;
   let open = false; try { open = localStorage.getItem(key) === "1"; } catch { /* ignore */ }
-  const crm = cl.crm_url
-    ? `<div class="lp-client-line"><a href="${esc(cl.crm_url)}" target="_blank" rel="noopener" class="lp-crm-link">Open in CRM ↗</a> <span class="muted small">— all campaign responses in ${esc(label)}'s portal</span></div>` : "";
+  const email = String(row.lead_email || "").toLowerCase();
+  const dbUrl = cl.crm_url || CRM_DB[email] || "";
+  const leadUrl = CRM_LEAD[email] || "";
+  const crm = dbUrl
+    ? `<div class="lp-client-line"><a href="${esc(leadUrl || dbUrl)}" target="_blank" rel="noopener" class="lp-crm-link">Open in CRM ↗</a> <span class="muted small">— ${leadUrl ? `this lead's card` : `all campaign responses`} in ${esc(label)}'s portal</span></div>` : "";
   return `<details class="lp-section lp-client" id="lpClient" data-open-key="${key}"${open ? " open" : ""}>
     <summary>About ${esc(label)} (the client)</summary>
     ${cl.about ? `<div class="lp-client-line">${esc(cl.about)}</div>` : `<div class="lp-client-line muted">No client notes saved yet.</div>`}
@@ -4173,6 +4187,38 @@ const LEAD_CONTACT_TRIED = new Set();
 const WARMCALL = {};
 function warmcallFor(row) {
   return WARMCALL[String((row && row.lead_email) || "").toLowerCase()] || {};
+}
+/* "Open in CRM" deep link, keyed by EMAIL (same stable-key reasoning as
+   WARMCALL). CRM_LEAD holds the lead's OWN Notion row url (so the link opens
+   the prospect card, ready for notes - team feedback 2026-08-19); CRM_DB holds
+   the database-root url so the block can render even before warm-call fills
+   client.crm_url. Both empty = no CRM known → link stays hidden. */
+const CRM_LEAD = {};
+const CRM_DB = {};
+const CRM_LINK_TRIED = new Set();
+/* Resolve the lead's own CRM row (by email) so "Open in CRM" opens the card,
+   not the whole database. Runs alongside hydrateLeadContact when a lead panel
+   opens; independent of it (its own endpoint, own cache) so a slow/empty
+   warm-call never blocks the link, and a Notion miss silently keeps the
+   database-root link. Re-renders only the CRM blocks, only for the open row -
+   never the whole panel (a category pick in progress must survive). */
+async function hydrateCrmLink(row) {
+  if (!row || row.is_test) return;
+  const email = String(row.lead_email || "").toLowerCase();
+  if (!email || CRM_LEAD[email]) return;      // resolved already
+  if (CRM_LINK_TRIED.has(email)) return;      // once per email per page-life
+  CRM_LINK_TRIED.add(email);
+  const res = await fetchJson(`/api/setter/crm-link?id=${encodeURIComponent(row.id)}`, { _retries: 1 });
+  if (!res.ok || !res.data) { CRM_LINK_TRIED.delete(email); return; }
+  if (res.data.db_url) CRM_DB[email] = String(res.data.db_url);
+  const url = String(res.data.url || "");
+  if (url) CRM_LEAD[email] = url;
+  if ((url || CRM_DB[email]) && String(selectedRowId) === String(row.id)) {
+    const crmEl = document.getElementById("lpCrmTop");
+    if (crmEl) crmEl.outerHTML = crmTopHtml(row);
+    const clEl = document.getElementById("lpClient");
+    if (clEl) { clEl.outerHTML = clientSectionHtml(row); wireClientToggle(document); }
+  }
 }
 async function hydrateLeadContact(row) {
   if (!row || row.is_test) return;
