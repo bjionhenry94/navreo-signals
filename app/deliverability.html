@@ -1000,10 +1000,12 @@ function capacityDailyFull() {   // full 30-day capacity array for the client, o
   if (!navCap || share == null) return null;
   return navCap.map(function (v) { return v == null ? null : Math.round(v * share); });
 }
-function niceCeil(x) {   // round a max up to a 1/2/5·10ⁿ axis ceiling
-  if (x <= 0) return 1;
-  var p = Math.pow(10, Math.floor(Math.log10(x))), f = x / p;
-  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 5 ? 5 : 10) * p;
+function niceCeil(x) {   // ceiling with clean quarter-ticks: 4 × a nice quarter step,
+  if (x <= 0) return 1;  // so per-client axes (2k … 50k) all fill tight and label round
+  var q = x / 4, p = Math.pow(10, Math.floor(Math.log10(q))), f = q / p;
+  var steps = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  for (var i = 0; i < steps.length; i++) if (f <= steps[i]) return 4 * steps[i] * p;
+  return 40 * p;
 }
 function capLabel(v) {   // compact axis label: 24000 -> "24k", 12500 -> "12.5k"
   v = Math.round(v);
