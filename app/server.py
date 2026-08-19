@@ -17064,21 +17064,77 @@ def _fleet_capacity_build(days: int) -> dict:
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
 
 
+_CLIENT_CAP = {"data": {}, "ts": 0.0}
+_CLIENT_CAP_TTL_S = 600
+
+
+def _client_capacity_now() -> dict:
+    """Current per-client sending capacity for the shared navreo workspace:
+    Σ message_per_day of the mailboxes on that client's ACTIVE campaigns
+    (restore-sweep membership joined to campaign_scorecard.client — the same
+    attribution the Mailboxes filter uses). REAL caps, not a sent-share estimate
+    (that badly mis-sized clients who under-send their dedicated infra, e.g.
+    TouchPoint/Altius). {} until the sweep warms; a box on several of a client's
+    campaigns counts once for that client. Own 10-min cache so it refreshes as
+    soon as the sweep lands, independent of the 1h capacity-series TTL."""
+    if _CLIENT_CAP["data"] and (time.time() - _CLIENT_CAP["ts"]) < _CLIENT_CAP_TTL_S:
+        return _CLIENT_CAP["data"]
+    sweep = None
+    with _RESTORE_SWEEP_LOCK:
+        if _RESTORE_SWEEP["data"] is not None:
+            sweep = _RESTORE_SWEEP["data"]
+    if sweep is None:
+        _restore_sweep_start()
+        return {}
+    try:
+        score = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,client,workspace") or []
+    except Exception:  # noqa: BLE001 — capacity map is an enhancement, never a 500
+        return _CLIENT_CAP["data"] or {}
+    cl_of = {}
+    for r in score:
+        if (r.get("workspace") or "navreo") != "navreo":
+            continue
+        cl = (r.get("client") or "").strip()
+        if cl and not cl.startswith("__"):
+            cl_of[str(r.get("smartlead_campaign_id"))] = cl
+    caps: dict = {}
+    for _email, rec in (sweep.get("accounts") or {}).items():
+        cap = rec.get("cap") or 0
+        if not cap:
+            continue
+        seen = set()
+        for cid in rec.get("camps") or []:
+            cl = cl_of.get(str(cid))
+            if cl and cl not in seen:
+                seen.add(cl)
+                caps[cl] = caps.get(cl, 0) + cap
+    if caps:
+        _CLIENT_CAP.update(data=caps, ts=time.time())
+    return caps
+
+
 def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
     days = max(7, min(90, days))
     with _FLEET_CAP_LOCK:
         ent = _FLEET_CAP.get(days)
     if ent and (time.time() - ent["ts"]) < _FLEET_CAP_TTL_S:
-        return ent["data"], 200
-    try:
-        data = _fleet_capacity_build(days)
-    except Exception as e:  # noqa: BLE001
-        if ent:
-            return ent["data"], 200      # serve stale on a transient DB hiccup
-        return {"error": "capacity_unavailable", "message": str(e)[:200]}, 502
-    with _FLEET_CAP_LOCK:
-        _FLEET_CAP[days] = {"data": data, "ts": time.time()}
-    return data, 200
+        base = ent["data"]
+    else:
+        try:
+            base = _fleet_capacity_build(days)
+        except Exception as e:  # noqa: BLE001
+            if ent:
+                base = ent["data"]      # serve stale on a transient DB hiccup
+            else:
+                return {"error": "capacity_unavailable", "message": str(e)[:200]}, 502
+        else:
+            with _FLEET_CAP_LOCK:
+                _FLEET_CAP[days] = {"data": base, "ts": time.time()}
+    # per-client caps ride outside the 1h series cache so they populate as soon
+    # as the restore sweep warms (own 10-min cache).
+    out = dict(base)
+    out["client_caps"] = _client_capacity_now()
+    return out, 200
 
 
 # ── Client windows: per-client sent/replies/bounces for 7/14/30 days ────────

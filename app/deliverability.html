@@ -978,27 +978,30 @@ function alignCap(arr, srcDays) {   // re-key a capacity series onto the chart a
   for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = arr[i];
   return ax.map(function (d) { return (m[d] == null ? null : m[d]); });
 }
-// client's share of navreo-workspace sends over the window (mirrors sentDailyFull)
-function navreoShare() {
-  var wsS = CW && CW.series && CW.series["__navreo_ws"];
-  var cw = cwFor(state.client);
-  if (!wsS || !wsS.sent || !cw || !(cw.sent > 0)) return null;
-  var wsWin = wsS.sent.slice(Math.max(0, wsS.sent.length - state.range))
-                      .reduce(function (a, b) { return a + (b || 0); }, 0);
-  return wsWin > 0 ? cw.sent / wsWin : null;
+// per-client capacity for a navreo-workspace client = Σ REAL caps of the boxes on
+// its ACTIVE campaigns (CAP.client_caps, from the campaign-membership map).
+// Replaces the old sent-share split, which mis-sized clients that under-send
+// their dedicated infra (TouchPoint 50k/mo, Altius 20k/mo).
+function clientCapValue() {
+  var cc = CAP && CAP.client_caps;
+  if (!cc) return null;
+  if (cc[state.client] != null) return cc[state.client];
+  var lc = state.client.toLowerCase();
+  for (var key in cc) if (key.toLowerCase() === lc) return cc[key];
+  return null;
 }
-// true when the client's capacity is an apportioned split of the navreo pool
+// shared navreo-workspace client shown against its own current-capacity flat line
 function capEstimated() {
-  return state.client !== "All" && !capWsKey() && !!(CAP && CAP.capacity && CAP.capacity.navreo);
+  return state.client !== "All" && !capWsKey() && clientCapValue() != null;
 }
 function capacityDailyFull() {   // full 30-day capacity array for the client, or null
   if (!CAP || !CAP.capacity || !CAP.days) return null;
   var k = capWsKey();
   if (k) return alignCap(CAP.capacity[k], CAP.days);          // All + own-workspace: exact
-  // shared navreo-workspace client: split the pool capacity by its sent share
-  var navCap = alignCap(CAP.capacity.navreo, CAP.days), share = navreoShare();
-  if (!navCap || share == null) return null;
-  return navCap.map(function (v) { return v == null ? null : Math.round(v * share); });
+  var v = clientCapValue();                                    // navreo-workspace client
+  if (v == null) return null;
+  var ax = chartAxisDays();
+  return ax.length ? ax.map(function () { return v; }) : null; // flat real-capacity ceiling
 }
 function niceCeil(x) {   // ceiling with clean quarter-ticks: 4 × a nice quarter step,
   if (x <= 0) return 1;  // so per-client axes (2k … 50k) all fill tight and label round
@@ -1007,9 +1010,10 @@ function niceCeil(x) {   // ceiling with clean quarter-ticks: 4 × a nice quarte
   for (var i = 0; i < steps.length; i++) if (f <= steps[i]) return 4 * steps[i] * p;
   return 40 * p;
 }
-function capLabel(v) {   // compact axis label: 24000 -> "24k", 12500 -> "12.5k"
+function capLabel(v) {   // compact axis label: 1.1M / 66k / 12.5k / 600
   v = Math.round(v);
-  if (v >= 1000) { var k = v / 1000; return (k % 1 === 0 ? k : k.toFixed(1)) + "k"; }
+  if (v >= 1e6) { var m = v / 1e6; return (m % 1 === 0 ? m : +m.toFixed(1)) + "M"; }
+  if (v >= 1000) { var k = v / 1000; return (k % 1 === 0 ? k : +k.toFixed(1)) + "k"; }
   return fmtN(v);
 }
 function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none exists
@@ -1313,7 +1317,7 @@ function renderTrend() {
       s += '<line x1="' + xb.toFixed(1) + '" y1="' + yCap.toFixed(1) + '" x2="' + (xb + bwc).toFixed(1) +
         '" y2="' + yCap.toFixed(1) + '" stroke="var(--ink-3)" stroke-width="1.25"/>';
     });
-    s += '<text x="' + (L + 2) + '" y="' + (T + 10) + '" font-size="10" fill="' + COL.sent + '" opacity="0.8">bars: emails sent vs capacity · solid sent, ghost idle</text>';
+    s += '<text x="' + (L + 2) + '" y="' + (T + 10) + '" font-size="10" fill="' + COL.sent + '" opacity="0.8">bars: sent vs capacity per day · left axis = total for the period</text>';
   } else if (sentBars) {
     var bw = n > 1 ? Math.max(3, Math.min(24, pw / (n - 1) * 0.55)) : 40;
     sentBars.forEach(function (v, ii) {
@@ -1327,7 +1331,7 @@ function renderTrend() {
   for (i = 0; i <= 4; i++) {
     var gv = ymax * i / 4, gy = Y(gv);
     s += '<line x1="' + L + '" y1="' + gy.toFixed(1) + '" x2="' + (W - R) + '" y2="' + gy.toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
-    s += '<text x="' + (L - 7) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">' + (capMode ? capLabel(AXCAP * i / 4) : fmtN(gv)) + "</text>";
+    s += '<text x="' + (L - 7) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">' + (capMode ? capLabel(AXCAP * i / 4 * n) : fmtN(gv)) + "</text>";
     if (hasRate) {
       var rv = rmax * i / 4;
       s += '<text x="' + (W - 8) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="' + COL.rate + '" text-anchor="end" class="num">' + (rmax < 4 ? rv.toFixed(1) : Math.round(rv)) + "%</text>";
@@ -1386,17 +1390,15 @@ function renderTrend() {
     capBars.forEach(function (v, ii) { if (v) { capTot += v; sBarsTot += (sentBars[ii] || 0); } });
     if (capTot > 0) {
       sub += " You used " + Math.round(sBarsTot / capTot * 100) + "% of sending capacity here — " +
-        fmtN(sBarsTot) + " of " + fmtN(capTot) + " possible. The left axis reads in capacity; reply / interested / meeting lines keep their own scale.";
-      if (capEstimated()) sub += " " + escq(state.client) + " shares the Navreo pool, so its capacity is an estimated split of the fleet's — the same basis as its sent bars.";
+        fmtN(sBarsTot) + " of " + fmtN(capTot) + " possible. The left axis reads the period total; reply / interested / meeting lines keep their own scale.";
+      if (capEstimated()) sub += " " + escq(state.client) + "'s capacity is the current cap of the mailboxes on its campaigns, held level across the period.";
       // Capacity-used pill in the legend chip row (renderLegend already built it).
       var lc = $("ah-lchips");
       if (lc) lc.insertAdjacentHTML("beforeend",
         '<span class="lchip cap-pill" style="cursor:default" title="' +
-        fmtN(sBarsTot) + " of " + fmtN(capTot) + " capacity over the " + rangeLabel() +
-        (capEstimated() ? " — estimated split for " + escq(state.client) : "") + '">' +
+        fmtN(sBarsTot) + " of " + fmtN(capTot) + " capacity over the " + rangeLabel() + '">' +
         '<i class="sw" style="background:linear-gradient(to top,' + COL.sent + ' 0 55%,var(--line-2) 55% 100%)"></i>' +
-        "Capacity used <b class=\"num\">" + Math.round(sBarsTot / capTot * 100) + "%</b>" +
-        (capEstimated() ? '<span class="totpill">est</span>' : "") + "</span>");
+        "Capacity used <b class=\"num\">" + Math.round(sBarsTot / capTot * 100) + "%</b></span>");
     }
   }
   if (state.on.sent && sentFull && sentDailyEstimated()) {
