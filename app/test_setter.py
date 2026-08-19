@@ -10493,6 +10493,104 @@ def test_monitor_surface_skips_uncategorised_autoreplies():
           surface("Interested", "out of office") is True, "category wins")
 
 
+def test_autoreply_category_labels_and_signature_veto():
+    """The deterministic client categoriser (2026-08-19) labels auto-reply mail
+    into the Smartlead taxonomy and returns None for real positives. Regression
+    guards for the Grout misses: a signature 'Book a meeting' CTA must NOT rescue
+    an OOO/decline from being labelled, and foreign / hyphenated OOO is caught."""
+    cat = setter._autoreply_category
+    cases = {
+        "Out Of Office": [
+            "Hello, I'm on vacation. I'll be back Monday.\n--\nGiulia\nBook a meeting",
+            "I'm currently out-of-the-office and will be back on Monday.",
+            "Bonjour, Je suis en congé paternité, sans accès au mail.",
+            "Sehr geehrte Damen und Herren, vielen Dank fuer Ihre Nachricht. "
+            "Ich bin ab dem 21. wieder im Buero.",
+            "I am working part-time with variable hours. There will be a delay in responding.",
+        ],
+        "Wrong Person": [
+            "The person you are attempting to contact is no longer an employee of Acme.",
+            "Thanks for reaching out. Please direct your message to Christen at c@x.com.",
+        ],
+        "Do Not Contact": [
+            "Please remove us from your list, thank you. Tara, VP of Growth",
+            "unsubscribe",
+        ],
+        "Not Interested": [
+            "No thank you.\nCarol, Director of Marketing",
+            "I'm not interested at this time.\nBook a meeting",
+        ],
+        "Sender Originated Bounce": ["Delivery has failed to these recipients. Mailbox is full."],
+    }
+    for want, bodies in cases.items():
+        for b in bodies:
+            check(f"category {want!r}: {b[:36]!r}", cat(b) == want, cat(b))
+    for pos in ("Yes I'm interested, how much do you charge?",
+                "Sounds good - let's book a call, send me a time.",
+                "We are currently working with someone but check back in 5 months."):
+        check(f"positive/soft stays None: {pos[:36]!r}", cat(pos) is None, cat(pos))
+
+
+def test_sweep_client_uncategorised_categorises_and_resolves():
+    """Grout durable fix 2026-08-19: a client campaign missing its categoriser
+    webhook lands every reply uncategorised. The client sweep deterministically
+    labels the auto-reply mail at SOURCE (replies.category) AND resolves rows
+    already surfaced into the Setter - dismissing clear non-positives, labelling
+    but KEEPING a Do Not Contact opt-out surfaced, and never touching a real
+    positive (which stays surfaced, uncategorised, for a human). navreo rows are
+    out of scope for the client sweep."""
+    import time as _t
+    sb = FakeSB()
+    real_sb, real_cache = setter._SB, dict(setter._WS_IDS_CACHE)
+    try:
+        setter._SB = sb
+        setter._WS_IDS_CACHE.update(ids=["navreo", "grout"], at=_t.time())
+        sb.replies = [
+            {"id": 1, "workspace": "grout", "smartlead_campaign_id": 900, "email": "a@x.com",
+             "smartlead_message_id": "m1", "category": None,
+             "reply_body": "I am out of the office until Monday."},
+            {"id": 2, "workspace": "grout", "smartlead_campaign_id": 900, "email": "b@x.com",
+             "smartlead_message_id": "m2", "category": None,
+             "reply_body": "Please remove us from your list, thank you. Jane, VP"},
+            {"id": 3, "workspace": "grout", "smartlead_campaign_id": 900, "email": "c@x.com",
+             "smartlead_message_id": "m3", "category": None,
+             "reply_body": "Yes I'm interested - how much do you charge?"},
+        ]
+        sb.queue = [
+            {"id": 10, "workspace": "grout", "status": "needs_review", "category": None,
+             "reply_body": "I am on maternity leave until March.", "is_test": False},
+            {"id": 11, "workspace": "grout", "status": "needs_review", "category": None,
+             "reply_body": "please remove me from your list", "is_test": False},
+            {"id": 12, "workspace": "grout", "status": "needs_review", "category": None,
+             "reply_body": "Yes let's book a call - send me a time.", "is_test": False},
+            {"id": 13, "workspace": "navreo", "status": "needs_review", "category": None,
+             "reply_body": "I am out of office.", "is_test": False},
+        ]
+        summary = {"errors": 0}
+        setter._sweep_client_uncategorised("2026-08-19T00:00:00+00:00", summary)
+        rep = {r["id"]: r for r in sb.replies}
+        q = {r["id"]: r for r in sb.queue}
+        check("source OOO categorised", rep[1].get("category") == "Out Of Office", rep[1])
+        check("source opt-out -> Do Not Contact", rep[2].get("category") == "Do Not Contact", rep[2])
+        check("source positive left uncategorised",
+              setter._is_uncategorised_value(rep[3].get("category")), rep[3])
+        check("queue OOO dismissed + labelled",
+              q[10].get("status") == "dismissed" and q[10].get("category") == "Out Of Office", q[10])
+        check("queue opt-out kept surfaced + labelled Do Not Contact",
+              q[11].get("status") == "needs_review" and q[11].get("category") == "Do Not Contact", q[11])
+        check("queue positive untouched (surfaced, uncategorised)",
+              q[12].get("status") == "needs_review"
+              and setter._is_uncategorised_value(q[12].get("category")), q[12])
+        check("navreo queue row NOT touched by client sweep",
+              q[13].get("status") == "needs_review"
+              and setter._is_uncategorised_value(q[13].get("category")), q[13])
+        check("client sweep never raised", summary["errors"] == 0, summary)
+    finally:
+        setter._SB = real_sb
+        setter._WS_IDS_CACHE.clear()
+        setter._WS_IDS_CACHE.update(real_cache)
+
+
 def test_attach_campaign_names():
     """Identification fix 2026-08-11: queue rows carry campaign_name resolved
     CROSS-WORKSPACE from the campaigns mirror, so the UI never depends on the
@@ -10846,6 +10944,8 @@ if __name__ == "__main__":
     test_redraft_async_job_returns_immediately_and_reports_its_result()
     test_monitor_surface_gate_positives_and_uncategorised_only()
     test_monitor_surface_skips_uncategorised_autoreplies()
+    test_autoreply_category_labels_and_signature_veto()
+    test_sweep_client_uncategorised_categorises_and_resolves()
     test_attach_campaign_names()
 
     failed = run_report()

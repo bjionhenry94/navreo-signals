@@ -281,6 +281,9 @@ UNCAT_GRACE_HOURS = 2
 # At most this many uncategorised intakes per poll tick - the positive sweep's
 # own 15-cap must never be starved by a straggler backlog.
 UNCAT_PER_TICK = 10
+# Per-workspace cap on the client-workspace deterministic categorise pass (a
+# missing-webhook backlog drains over a few ticks instead of one heavy tick).
+CLIENT_UNCAT_PER_TICK = 40
 
 
 def _is_uncategorised_value(v) -> bool:
@@ -508,56 +511,109 @@ def clean_body(body: str) -> str:
     return text.strip()
 
 
-# ── auto-reply detection for uncategorised client-monitor replies ───────────
-# The per-client categoriser (Make) leaves a slice of replies uncategorised
-# whenever its GPT step rate-limits, times out, or balks at a terse body. In
-# the client MONITOR path those still-uncategorised replies are surfaced for
-# triage (they COULD be a positive the categoriser missed). In practice most of
-# the misses are plain machine mail - out-of-office, "no longer here" / wrong
-# person, delivery bounces, and one-line opt-outs - which need no human and only
-# clutter client Needs review. This deterministic detector recognises exactly
-# those so the monitor gate can skip them. It reads the lead's OWN new message
-# (clean_body strips HTML + quoted history) so a quoted outbound pitch never
-# trips it, and ANY positive-intent signal vetoes the skip: a wrongly hidden
-# positive costs a deal, a wrongly surfaced auto-reply costs one human glance,
-# so the tie always breaks toward surfacing.
+# ── auto-reply CATEGORISER for uncategorised client-monitor replies ─────────
+# The per-client categoriser (Make/GPT) leaves a slice of replies uncategorised
+# whenever its GPT step rate-limits, times out, balks at a terse/foreign body,
+# or (the 2026-08-18 Grout root cause) a launched campaign is missing its
+# reply-categoriser webhook so its replies never reach the categoriser at all.
+# Almost all of those misses are plain machine mail - out-of-office, left-company
+# / wrong person, delivery bounces, redirects, one-line opt-outs and flat
+# declines - which need no human and only clutter client Needs review.
+# `_autoreply_category` deterministically LABELS exactly those (so the client
+# sweep can categorise them at source, not merely hide them), returning the
+# Smartlead-taxonomy category or None to surface for a human. It reads the lead's
+# OWN new message (clean_body strips HTML + quoted history) so a quoted outbound
+# pitch never trips it, and any STRONG buying signal vetoes: a wrongly hidden
+# positive costs a deal, a wrongly surfaced auto-reply costs one human glance, so
+# the tie always breaks toward surfacing.
+#
+# STRONG buying signals only. Weak/ambiguous tokens that recur in auto-reply
+# bodies and email signatures (call, meeting, chat, talk, connect, "happy to
+# help", a "Book a meeting" footer link) are deliberately NOT bare tokens here:
+# precision comes primarily from the specific auto-reply patterns below; this
+# veto is a secondary guard for a positive that also happens to match one.
 _AR_POSITIVE_SIGNAL = re.compile(
-    r"\b(interest(ed)?|keen|call|meeting|meet|demo|pricing|price|cost|charge|"
-    r"quote|budget|book|schedule|calendar|avail|chat|talk|speak|connect|"
-    r"proposal|how much|send me|tell me more|more info|sounds good|happy to|"
-    r"let'?s|worth a|set(\s|-)?up a|jump on)\b", re.IGNORECASE)
+    r"\b(interested|keen\b|pricing|price\b|quote\b|budget|"
+    r"demo\b|proposal|how much|tell me more|more info(rmation)?|send me|"
+    r"sounds good|worth a|set(\s|-)?up a (call|meeting|time)|jump on a call|"
+    r"book(ing)? a (call|meeting|time|slot)|schedule a (call|meeting|time)|"
+    r"let'?s (chat|talk|connect|set|schedule|find)|happy to (chat|talk|jump|hop))\b",
+    re.IGNORECASE)
 
-# Out-of-office / away auto-responders (EN + common DE/FR/ES phrasings).
+# Signature / boilerplate CTA lines dropped before the positive-veto so a
+# "Book a meeting" link in a footer never rescues an auto-reply from the skip.
+_SIG_DELIM = re.compile(r"\n-{2,}\s*\n|\n--\s*$|\n[—–]{2,}\s*\n", re.MULTILINE)
+_SIG_CTA_LINE = re.compile(
+    r"^.{0,40}\b((book|schedule|grab|pick)\s+(a\s+|your\s+|some\s+)?"
+    r"(meeting|call|time|slot|demo)|calendly\.com|cal\.com/|savvycal|"
+    r"hubspot\.com/meetings|meetings\.|book a time)\b.*$", re.IGNORECASE | re.MULTILINE)
+
+def _strip_signature(text: str) -> str:
+    m = _SIG_DELIM.search(text)
+    if m:
+        text = text[:m.start()]
+    return _SIG_CTA_LINE.sub(" ", text)
+
+# Out-of-office / away / leave / limited-availability (EN + DE/FR/ES/IT).
 _AR_OOO = re.compile(
-    r"\b(out of (the )?office|out of office|ooo\b|"
-    r"on (annual |maternity |paternity |sick |medical |parental |personal )?leave|"
-    r"on (holiday|vacation|pto|sabbatical)|"
+    r"\b(out[-\s]of[-\s](the[-\s])?office|out of office|\booo\b|"
+    r"on\s+(\w+\s+){0,2}leave\b|on (a )?(holiday|vacation|pto|sabbatical|break)|"
     r"away from (the |my )?(office|desk|email)|will be away|am away|currently away|"
+    r"back (in the office|on|from) |wieder (im b(?:[uü]|ue)ro|erreichbar)|"
+    r"working part[-\s]?time|variable hours|delay in (responding|replying)|"
+    r"limited access to (my |the )?(e?mail|inbox|correo)|access to (my )?e?mail is limited|"
     r"automatic reply|auto[-\s]?reply|autoresponder|"
-    r"nicht erreichbar|abwesend|im urlaub|"
-    r"en cong[eé]|absent[e]? du bureau|de vacaciones|fuera de la oficina)\b",
+    r"nicht erreichbar|abwesend|im urlaub|vielen dank f(?:[uü]|ue)r ihre nachricht|"
+    r"en cong[eé]s?|cong[eé] (de )?(maternit|paternit)|absent[e]? du bureau|"
+    r"acc[eè]s (très |tres )?limit[eé]|je quitte mon clavier|de retour le|"
+    r"de vacaciones|fuera de la oficina|de baja( (de|por))?|acceso limitado|"
+    r"sono (in ferie|assente)|risposta automatica)\b",
     re.IGNORECASE)
 
 # Left-company / wrong-person auto-replies.
 _AR_WRONGPERSON = re.compile(
-    r"\b(no longer (with|at|employed|works? (here|at|for)|part of)|"
+    r"\b(no longer (with|at|employed|works? (here|at|for)|part of|an? employee|"
+    r"contactable|monitored)|is no longer|"
     r"i have left|i'?ve left|(has|have) left (the |our )?(company|business|team|organi)|"
-    r"is no longer (with|employed|here)|no longer monitored|"
-    r"inbox is no longer|left the (company|business|organi))\b", re.IGNORECASE)
+    r"person you are (attempting|trying) to (contact|reach)|no longer monitored|"
+    r"inbox is no longer|left the (company|business|organi)|"
+    r"n'?est plus|ya no (trabaja|est[aá]))\b", re.IGNORECASE)
+
+# Redirect-to-someone-else ("please contact X / forward your message to Y").
+_AR_REDIRECT = re.compile(
+    r"\b(please (direct|forward|send) your (message|e?mail|inquir\w+|enquir\w+|request)"
+    r"|please (contact|reach out to|speak with|email)\s+(?!me\b|us\b)[A-Z]?\w+"
+    r"|(kindly |please )?(forward|redirect) (your |this )?(message|e?mail|inquir\w+|enquir\w+)"
+    r"|reach out to \w+ (instead|directly|at))\b", re.IGNORECASE)
 
 # Delivery failures / bounces that slipped past bounce categorisation.
 _AR_BOUNCE = re.compile(
     r"\b(undeliverable|delivery (has )?failed|delivery status notification|"
     r"(was|were) not delivered|wasn'?t delivered|could not be delivered|"
     r"mailbox (is )?full|address not found|recipient .{0,20}not found|"
-    r"message blocked|quarantined)\b", re.IGNORECASE)
+    r"message blocked|quarantined|550 |mail delivery)\b", re.IGNORECASE)
 
-# Bare opt-outs: the lead's whole (unquoted) reply is essentially just the
-# opt-out phrase.
+# Loose opt-out: a removal / unsubscribe request at the START of the reply (a
+# signature after it is fine). Decided BEFORE the positive-veto so a booking
+# link in the footer can't rescue an opt-out.
+_AR_LOOSE_OPTOUT = re.compile(
+    r"^\W{0,12}(please\s+|pls\s+|kindly\s+|can you\s+|could you\s+)?"
+    r"(unsubscribe|remove (me|us|my|our)|take (me|us) off|opt[-\s]?out|"
+    r"do not (contact|email)|delete (me|my|our))\b", re.IGNORECASE)
+# Bare opt-out: the whole reply is essentially just the phrase. Declines
+# ("not interested", "no thanks") are NOT here - those are Not Interested, not
+# Do Not Contact, and are caught by _AR_DECLINE below.
 _AR_BARE_OPTOUT = re.compile(
-    r"^\W{0,10}(unsubscribe|remove me|please remove|remove|not interested|"
-    r"no thanks?|no thank you|stop|take me off|opt[-\s]?out|leave me alone)"
-    r"[\s.!,]*$", re.IGNORECASE)
+    r"^\W{0,10}(unsubscribe|remove me|please remove|remove us|remove|"
+    r"stop|take me off|opt[-\s]?out|leave me alone)[\s.!,]*$", re.IGNORECASE)
+
+# Explicit decline -> Not Interested. Kept NARROW so a soft "check back later"
+# (a nurture / weak positive) is not swept up.
+_AR_DECLINE = re.compile(
+    r"(^\W{0,6}no,? thank(s| you)\b|\bnot interested\b|\bno thank you\b|"
+    r"\bwe'?re all set\b|\bwe are all set\b|\bnot (a |the )?(good )?fit\b|"
+    r"\bplease stop\b|\bnot at this time\b(?!.{0,20}\b(but|however)\b))",
+    re.IGNORECASE)
 
 # Negated interest ("not interested", "no longer interested") reads as a
 # negative - it must not trip the positive-signal veto via the word "interest".
@@ -565,30 +621,58 @@ _AR_NEGATED_INTEREST = re.compile(
     r"\b(not|no longer|isn'?t|aren'?t|never|n'?t)\s+(interest\w*|keen)\b",
     re.IGNORECASE)
 
+# Deterministic categories the client sweep AUTO-RESOLVES (dismisses from the
+# Setter). "Do Not Contact" is deliberately excluded: a client opt-out is
+# categorised but LEFT surfaced so a human honours it - client workspaces have
+# no router / DNC auto-suppression (see [[client-positive-pipeline-map]]).
+_CLIENT_AUTO_DISMISS = frozenset({
+    "Out Of Office", "Wrong Person", "Sender Originated Bounce", "Not Interested"})
 
-def _autoreply_needs_no_human(body) -> bool:
-    """True iff a still-uncategorised client reply is plainly automated / a
-    clear non-positive that needs no human - out-of-office, left-company /
-    wrong person, a bounce, or a bare opt-out - AND carries no positive-intent
-    signal. Used ONLY to keep such replies out of client Needs review; a
-    genuine positive is never hidden because any positive signal vetoes the
-    skip. Reads the lead's own new message (clean_body strips HTML + quoted
-    history) so a quoted outbound pitch never trips it."""
+
+def _autoreply_category(body):
+    """Deterministic Smartlead-taxonomy category for a plainly-automated / clear
+    non-positive client reply, or None to surface for a human. One of:
+    "Out Of Office" | "Wrong Person" | "Sender Originated Bounce" |
+    "Do Not Contact" | "Not Interested". Reads the lead's own new message
+    (clean_body strips HTML + quoted history). Any STRONG buying signal (footer
+    CTAs excluded) vetoes to None - a real positive is never mislabelled."""
     lead = clean_body(body or "")
     if not lead:
-        return False
-    # A bare opt-out (the whole reply is just the opt-out phrase) is
-    # unambiguous - decide it before the positive-signal veto so "not
-    # interested" is not rescued by the word "interested" inside it.
-    if _AR_BARE_OPTOUT.match(lead.strip()):
-        return True
-    # Neutralise negated interest before the veto so it does not read positive.
-    probe = _AR_NEGATED_INTEREST.sub(" ", lead)
-    if _AR_POSITIVE_SIGNAL.search(probe):
-        return False                      # tie breaks toward surfacing
+        return None
+    stripped = lead.strip()
     head = lead[:400]                     # auto-replies announce themselves up top
-    return bool(_AR_OOO.search(head) or _AR_WRONGPERSON.search(lead)
-                or _AR_BOUNCE.search(lead))
+    # 1) opt-out decided first (a footer booking link must not rescue it).
+    if _AR_LOOSE_OPTOUT.search(head) or _AR_BARE_OPTOUT.match(stripped):
+        return "Do Not Contact"
+    # 2) strong-positive veto, on signature-stripped + negation-neutralised text.
+    probe = _AR_NEGATED_INTEREST.sub(" ", _strip_signature(lead))
+    if _AR_POSITIVE_SIGNAL.search(probe):
+        return None                       # tie breaks toward surfacing
+    # 3) clear machine / non-positive classes. Order matters: an explicit
+    # left-company signal is Wrong Person, but an out-of-office that merely
+    # redirects to a colleague in the sender's absence is still Out Of Office,
+    # so OOO is checked BEFORE the weaker redirect -> Wrong Person rule.
+    if _AR_BOUNCE.search(lead):
+        return "Sender Originated Bounce"
+    if _AR_WRONGPERSON.search(lead):
+        return "Wrong Person"
+    if _AR_OOO.search(head):
+        return "Out Of Office"
+    if _AR_REDIRECT.search(head):
+        return "Wrong Person"
+    if _AR_DECLINE.search(lead):
+        return "Not Interested"
+    return None
+
+
+def _autoreply_needs_no_human(body) -> bool:
+    """True iff a still-uncategorised client reply is plainly automated / a clear
+    non-positive that needs no human (out-of-office, left-company / wrong person,
+    a bounce, a redirect, an opt-out or a flat decline) AND carries no strong
+    buying signal. Thin wrapper over _autoreply_category; used by the monitor
+    gate to keep such replies out of Needs review. No body => False (backward
+    compatible: a caller with no body cannot judge, so it does not skip)."""
+    return _autoreply_category(body) is not None
 
 
 # Same-day scheduling asks ("can we chat today / in an hour?") can't be
@@ -6360,6 +6444,92 @@ def _redrive_stranded_claims(agents: list, settings: dict, summary: dict) -> Non
             print(f"[setter] redrive: row {qid} failed: {e}", file=sys.stderr)
 
 
+def _sweep_client_uncategorised(since_iso: str, summary: dict) -> None:
+    """Deterministically categorise the auto-reply mail the per-client GPT
+    categoriser left blank - the durable net behind the 2026-08-18 Grout fix
+    (two launched campaigns were missing their categoriser webhook, so every
+    reply landed uncategorised; the webhooks are re-attached, this catches
+    whatever still slips: GPT rate-limits, foreign bodies, edge phrasing).
+
+    Two bounded passes per enabled non-navreo (monitor) workspace, never raising:
+      A) SOURCE - write `replies.category` for still-uncategorised auto-replies
+         `_autoreply_category` recognises, so the reply leaves 'uncategorised' at
+         source (the tray + queue re-derive their pill from `replies`, see
+         _fresh_categories_for).
+      B) QUEUE - resolve rows already surfaced into the Setter: dismiss the clear
+         non-positives (_CLIENT_AUTO_DISMISS); a Do Not Contact is categorised
+         but LEFT surfaced so the opt-out is actioned (client workspaces have no
+         DNC auto-suppression). A genuine positive is never touched -
+         _autoreply_category returns None for it and it stays surfaced.
+    Monitor-only workspaces; poll/cron path only (512MB web box)."""
+    if not SETTER_MONITOR_ALL_WS or not _SB:
+        return
+    for ws in [w for w in _enabled_workspace_ids() if w != "navreo"]:
+        # ── pass A: categorise still-uncategorised SOURCE replies ──
+        try:
+            done, seen = 0, set()
+            for filt in ("is.null", "eq.", "eq." + quote(UNCATEGORISED_LEGACY, safe="")):
+                if done >= CLIENT_UNCAT_PER_TICK:
+                    break
+                rows = _SB("GET", f"replies?workspace=eq.{ws}&category={filt}"
+                                  f"&replied_at=gte.{quote(since_iso, safe='')}"
+                                  f"&order=replied_at.desc&limit=100"
+                                  f"&select=id,smartlead_campaign_id,email,reply_body,"
+                                  f"smartlead_message_id,category")
+                for r in (rows if isinstance(rows, list) else []):
+                    if done >= CLIENT_UNCAT_PER_TICK:
+                        break
+                    if not isinstance(r, dict) or not _is_uncategorised_value(r.get("category")):
+                        continue
+                    cid = r.get("smartlead_campaign_id")
+                    mid = str(r.get("smartlead_message_id") or "")
+                    key = (cid, mid)
+                    if not cid or not mid or key in seen:
+                        continue
+                    seen.add(key)
+                    cat = _autoreply_category(r.get("reply_body"))
+                    if not cat:
+                        continue
+                    try:
+                        _SB("PATCH", f"replies?workspace=eq.{ws}"
+                                     f"&smartlead_campaign_id=eq.{cid}"
+                                     f"&smartlead_message_id=eq.{quote(mid, safe='')}",
+                            {"category": cat}, "return=minimal")
+                        summary["client_categorised"] = summary.get("client_categorised", 0) + 1
+                        done += 1
+                    except Exception as e:  # noqa: BLE001 - one bad row never stops the sweep
+                        summary["errors"] += 1
+                        print(f"[setter] client categorise error {ws}/{cid}/{mid}: {e}",
+                              file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 - the source pass must never break the poll
+            summary["errors"] += 1
+            print(f"[setter] client source-sweep failed for {ws}: {e}", file=sys.stderr)
+        # ── pass B: resolve already-surfaced QUEUE rows ──
+        try:
+            queued = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{ws}&status=eq.needs_review"
+                                f"&order=created_at.desc&limit=200"
+                                f"&select=id,category,category_source,reply_body,status,is_test")
+            for q in (queued if isinstance(queued, list) else []):
+                if not isinstance(q, dict) or q.get("is_test"):
+                    continue
+                if not _is_uncategorised_value(q.get("category")) or q.get("category_source"):
+                    continue
+                cat = _autoreply_category(q.get("reply_body"))
+                if not cat:
+                    continue
+                if cat in _CLIENT_AUTO_DISMISS:
+                    _apply_patch(q, {"category": cat, "category_source": "auto",
+                                     "status": "dismissed",
+                                     "decision_reason": f"Auto-resolved: automated {cat.lower()} "
+                                                        f"reply - categorised and removed from the Setter."})
+                else:  # Do Not Contact: categorise but keep surfaced for action
+                    _apply_patch(q, {"category": cat, "category_source": "auto"})
+                summary["client_resolved"] = summary.get("client_resolved", 0) + 1
+        except Exception as e:  # noqa: BLE001 - the queue pass must never break the poll
+            summary["errors"] += 1
+            print(f"[setter] client queue-sweep failed for {ws}: {e}", file=sys.stderr)
+
+
 def _poll_monitor_workspaces(since: str, summary: dict) -> None:
     """MONITOR intake for every non-navreo enabled workspace (federation gate).
 
@@ -6592,6 +6762,12 @@ def run_poll() -> dict:
         # before intake started resolving the archive label to the lead's
         # real category (owner ask 2026-08-17). Converges to one empty GET.
         _sweep_re_reply_labels(summary)
+        # Client-workspace deterministic categorise: label + resolve the
+        # auto-reply mail the per-client GPT categoriser left uncategorised
+        # (the Grout missing-webhook backlog, and any residual GPT miss). Runs
+        # BEFORE the monitor sweep so freshly-categorised replies don't
+        # re-surface. Never sends.
+        _sweep_client_uncategorised(since, summary)
         # Federation MONITOR sweep: pull every non-navreo enabled workspace's
         # recent replies into the queue as review-only rows (see the function
         # docstring). Last, so the navreo positive sweep always spends its cap
@@ -6606,7 +6782,8 @@ def run_poll() -> dict:
     # and rows (perf pass 2026-07-16). A no-change sweep keeps caches warm.
     if summary.get("queued") or summary.get("needs_review") or summary.get("auto_sent") \
             or summary.get("no_action") or summary.get("uncategorised") or summary.get("auto_resolved") \
-            or summary.get("redriven"):
+            or summary.get("redriven") or summary.get("client_resolved") \
+            or summary.get("client_categorised"):
         _bust_read_caches()
     return summary
 
