@@ -1255,6 +1255,22 @@ _FB_IN_WEEKS_RE = re.compile(r"\bin\s+(\d+|a|one|two|three)\s+weeks?\b", re.IGNO
 _WEEK_WORDS = {"a": 1, "one": 1, "two": 2, "three": 3}
 _FB_WEEKDAYS = ("monday", "tuesday", "wednesday", "thursday", "friday")
 
+# The LEAD (not the reviewer) rejecting the offered times or asking for more/
+# other times - "none of these work", "any other times?", "more slots".
+_LEAD_REJECT_TIMES_RE = re.compile(
+    r"\b(?:none|neither)\b[^.]*\b(?:times?|slots?|work)\b"
+    r"|\b(?:times?|slots?)\b[^.]*\b(?:do(?:n'?t| not)|does(?:n'?t| not)|won'?t|would\s+not)\s+work\b"
+    r"|\b(?:any|some|other|more|different|new|another)\s+(?:times?|slots?|availabilit\w*|options?)\b"
+    r"|\bcan'?t\s+(?:do|make)\b",
+    re.IGNORECASE)
+# Other ways a lead signals they want a DIFFERENT time than the ones offered -
+# so a bare accepted weekday ("Monday at 2 works") never shifts the slots.
+_LEAD_RESCHEDULE_CUE_RE = re.compile(
+    r"\b(instead|rather|re-?schedule|another day|other day|different day|"
+    r"later in the (?:day|week)|move (?:it|the call|the meeting))\b"
+    r"|\bpush (?:it |them |the call |the meeting )?(?:back|out)\b",
+    re.IGNORECASE)
+
 
 def time_feedback_plan(feedback: str, tz: str, now_utc):
     """Reads reviewer feedback for a request about WHEN to offer, and returns
@@ -1315,6 +1331,45 @@ def time_feedback_plan(feedback: str, tz: str, now_utc):
         said.append("different times")
     return {"want_change": True, "not_before_utc": not_before, "horizon": horizon,
             "said": " and ".join(said) or "different times"}
+
+
+def lead_time_plan(reply_text: str, classification: dict, tz: str, now_utc):
+    """Same idea as time_feedback_plan, but reads the LEAD's own reply instead
+    of the reviewer's typed feedback. Fires ONLY when the lead is CHANGING times
+    - a scheduling reply that rejects the offered times, asks for "next week" or
+    a named weekday "instead", or asks for other/more times. Returns the same
+    {want_change, not_before_utc, horizon, said} plan (or None), so a fresh
+    intake draft AND a plain Regenerate re-pick real slots for what the lead
+    asked for instead of re-offering the times they just turned down. Never
+    invents a time - it only narrows/shifts the real calendar, exactly like
+    time_feedback_plan. Applies to every SDR (owner ruling 2026-08-19)."""
+    cls = classification or {}
+    intents = set(cls.get("all_intents") or [])
+    if "scheduling" not in intents and cls.get("primary_intent") != "scheduling":
+        return None
+    text = _strip_quoted(str(reply_text or "")).strip()
+    if not text:
+        return None
+    # Only when the lead is CHANGING the offered times, never when accepting one
+    # - a bare weekday ("Monday at 2 works") must not shift the slots. Require an
+    # explicit reject / "next week" / "instead"-style cue first.
+    if not (_LEAD_REJECT_TIMES_RE.search(text) or _FB_NEXT_WEEK_RE.search(text)
+            or _FB_IN_WEEKS_RE.search(text) or _FB_DIFFERENT_RE.search(text)
+            or _LEAD_RESCHEDULE_CUE_RE.search(text)):
+        return None
+    # Never override a lead who has asked us NOT to pitch a call (deferral /
+    # "keep it to email") - call_ask_for owns that judgement.
+    if call_ask_for(cls, text, "", first_touch=False) == "avoid":
+        return None
+    plan = time_feedback_plan(text, tz, now_utc)
+    if plan:
+        plan = dict(plan)
+        plan["_from_lead"] = True
+        return plan
+    # A reject with no parseable window (e.g. "those don't work, anything
+    # else?"): offer DIFFERENT times (redraft excludes the ones already sent).
+    return {"want_change": True, "not_before_utc": None, "horizon": None,
+            "said": "different times", "_from_lead": True}
 
 
 # ── draft lint ────────────────────────────────────────────────────────────
@@ -4889,8 +4944,23 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         # couldn't place them. _slot_label stamps each time with its zone
         # (ET etc.), so an assumed zone is visible, never silent.
         slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
+        # When the LEAD asks to reschedule (rejects our times / "next week" /
+        # names a day), re-pick real slots for that window on THIS first draft,
+        # so we never open by re-offering the times they just turned down
+        # (owner ruling 2026-08-19, every SDR). None => unchanged default pick.
+        _lead_plan = lead_time_plan(body_text, classification, tz, now)
         if slot_status == "ok":
-            slots = pick_slots(avail, tz, eff_settings, now)
+            if _lead_plan:
+                slots = pick_slots(avail, tz, eff_settings, now,
+                                   not_before_utc=_lead_plan.get("not_before_utc"),
+                                   horizon_days_override=_lead_plan.get("horizon"))
+                if not slots:
+                    # Calendar can't fill the asked-for window; fall back to the
+                    # normal pick and let the drafter say so, never pretend.
+                    slots = pick_slots(avail, tz, eff_settings, now)
+                    _lead_plan["_unfilled"] = True
+            else:
+                slots = pick_slots(avail, tz, eff_settings, now)
             if not slots:
                 slot_status = "none_available"
         if serr and not row.get("error"):
@@ -4906,14 +4976,30 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             # two-call-times paragraph is no longer unconditional.
             _inbound_turns = sum(1 for m in (row.get("thread") or [])
                                  if isinstance(m, dict) and str(m.get("type") or "").upper() != "SENT")
+            _call_ask = call_ask_for(classification, body_text, thread_text,
+                                     first_touch=_inbound_turns <= 1)
+            _regen_fb = mem_digest
+            if _lead_plan:
+                # The lead asked for these times: force the call ask, and when
+                # we have real slots tell the drafter they already match the
+                # request so it never re-offers the times they turned down.
+                _call_ask = "required"
+                if slots:
+                    _marker = (f"COULD NOT MATCH THE LEAD'S TIME REQUEST: the calendar has no free "
+                               f"slot in the {_lead_plan.get('said') or 'requested'} window; acknowledge "
+                               f"that and offer the closest real times instead."
+                               if _lead_plan.get("_unfilled")
+                               else f"TIMES MATCHED TO THE LEAD'S REQUEST: the slots provided are the "
+                                    f"{_lead_plan.get('said') or 'different times'} the lead asked for - "
+                                    f"propose exactly these and do not re-offer or mention the earlier times.")
+                    _regen_fb = (_marker + "\n" + (mem_digest or "")).strip()
             d = draft_reply(
                 {"first_name": row["lead_first_name"], "subject": row["reply_subject"], "body": body_text,
                  "first_outbound": first_outbound, "thread_text": thread_text,
                  "thread": row.get("thread"),
                  "timezone": row.get("timezone"),
-                 "call_ask": call_ask_for(classification, body_text, thread_text,
-                                          first_touch=_inbound_turns <= 1)},
-                agent, classification, slots, slot_status, sender_first, regen_feedback=mem_digest)
+                 "call_ask": _call_ask},
+                agent, classification, slots, slot_status, sender_first, regen_feedback=_regen_fb)
             draft_subject, draft_body = d.get("subject"), d.get("html")
             if draft_body:
                 # Second sweep (owner brief 2026-07-14): proofread the draft
@@ -11000,7 +11086,8 @@ def _redraft_sync(payload):
         # timezone (and a classify outage skips the re-resolve above) -
         # assume Eastern rather than skip the slot build. tz_unknown is dead.
         tz = tz or "America/New_York"
-        time_plan = time_feedback_plan(feedback_text, tz, now)
+        time_plan = time_feedback_plan(feedback_text, tz, now) or lead_time_plan(
+            clean_body(row.get("reply_body") or ""), classification, tz, now)
         slots, slot_status, serr = [], "not_configured", ""
         slot_note = ""
         slot_status, avail, serr = get_calendly_availability(agent, eff_settings, now)
@@ -11044,8 +11131,8 @@ def _redraft_sync(payload):
         # of the feedback: without it the drafter can read "offer next week"
         # beside a next-week slot list and still hedge about the old times.
         if time_plan:
-            marker = (f"TIMES ALREADY RE-PICKED: the slots below are the {time_plan['said']} you "
-                      f"asked for. Propose exactly these and do not mention the previous times."
+            marker = (f"TIMES ALREADY RE-PICKED: the slots below are the {time_plan['said']} "
+                      f"requested. Propose exactly these and do not mention the previous times."
                       if not slot_note else f"COULD NOT RE-PICK TIMES: {slot_note}")
             combined_feedback = marker + "\n" + combined_feedback
         combined_feedback = _prefix_latest_rules(rules_block, combined_feedback)
