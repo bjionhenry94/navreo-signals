@@ -284,7 +284,8 @@
 .lead-panel .lp-fact dd { margin: 0; color: var(--ink); text-align: right; word-break: break-word; }
 .lead-panel .lp-note { font-size: 12px; color: var(--ink-3); margin-top: 8px; line-height: 1.45; }
 /* Notes: a shared, team-visible free-text scratchpad on the lead (owner ask
-   2026-08-19), auto-saved as they type. Sits just below the Timezone row. */
+   2026-08-19), auto-saved as they type. Sits at the top of the panel, directly
+   under the "Lead details" header. */
 .lead-panel .lp-notes-input {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px;
   padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 10px;
@@ -4017,6 +4018,7 @@ function leadPanelHtml(row) {
   // adjacent pane). Always rendered as a container so hydration can swap it.
   return `
     ${crmTopHtml(row)}
+    ${notesSectionHtml(row)}
     ${catSectionHtml}
     ${phoneDispositionHtml(row)}
     ${noAgentHtml}
@@ -4024,16 +4026,16 @@ function leadPanelHtml(row) {
     <div class="lp-section">
       ${leadDecisionHtml(row)}
     </div>
-    ${notesSectionHtml(row)}
     ${clientSectionHtml(row)}
   `;
 }
 /* Notes: a SHARED, team-visible free-text scratchpad on this lead (owner ask
    2026-08-19: "they should be shared") - one note per lead, stored unscoped by
    user on the lead's row, so every teammate sees and edits the same note (it's
-   internal only, never sent to the client). Shown just below the decision
-   block's Timezone row and saved automatically as they type (see
-   wireLeadNotes). Pre-fills from the value hydrateLeadContact stashes on
+   internal only, never sent to the client). Shown at the TOP of the panel,
+   directly under the "Lead details" header (owner ask 2026-08-19), and saved
+   automatically as they type (see wireLeadNotes). Pre-fills from the value
+   hydrateLeadContact stashes on
    WARMCALL; empty before hydration. The block is NEVER swapped by a background
    re-render (unlike the company/client blocks) so in-progress typing is never
    clobbered - hydration fills it only when empty. */

@@ -10372,8 +10372,8 @@ def route_lead_contact_get(params):
         try:
             enr = _enrichment_row(email)
             # The team's SHARED free-text note on this lead (owner ask
-            # 2026-08-19) - one per lead, surfaced in the sidebar just below
-            # Timezone. Empty (or no row yet) reads as "".
+            # 2026-08-19) - one per lead, surfaced at the top of the sidebar
+            # under the "Lead details" header. Empty (or no row yet) reads as "".
             out["notes"] = str((enr or {}).get("notes") or "")
             if enr and (enr.get("phone") or "").strip():
                 out["phone"] = str(enr["phone"]).strip()
