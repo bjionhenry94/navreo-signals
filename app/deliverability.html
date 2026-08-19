@@ -998,11 +998,18 @@ function capEstimated() {
 function capacityDailyFull() {   // full 30-day capacity array for the client, or null
   if (!CAP || !CAP.capacity || !CAP.days) return null;
   var k = capWsKey();
-  if (k) return alignCap(CAP.capacity[k], CAP.days);          // All + own-workspace: exact
-  var v = clientCapValue();                                    // navreo-workspace client
-  if (v == null) return null;
-  var ax = chartAxisDays();
-  return ax.length ? ax.map(function () { return v; }) : null; // flat real-capacity ceiling
+  if (k) return alignCap(CAP.capacity[k], CAP.days);          // All + own-workspace: exact per-day
+  // shared navreo-workspace client: scale the navreo per-day series (its real
+  // warm-up ramp) to the client's CURRENT capacity, so the daily SHAPE varies
+  // like the fleet while the level matches the client's campaign-attached caps —
+  // not a flat line (Bjion: capacity changes day-to-day).
+  var navCap = alignCap(CAP.capacity.navreo, CAP.days), clientCur = clientCapValue();
+  if (!navCap || clientCur == null) return null;
+  var navCur = null;
+  for (var i = navCap.length - 1; i >= 0; i--) if (navCap[i] != null) { navCur = navCap[i]; break; }
+  if (!navCur) return null;
+  var ratio = clientCur / navCur;
+  return navCap.map(function (v) { return v == null ? null : Math.round(v * ratio); });
 }
 function niceCeil(x) {   // ceiling with clean quarter-ticks: 4 × a nice quarter step,
   if (x <= 0) return 1;  // so per-client axes (2k … 50k) all fill tight and label round
@@ -1391,7 +1398,7 @@ function renderTrend() {
     if (capTot > 0) {
       sub += " You used " + Math.round(sBarsTot / capTot * 100) + "% of sending capacity here — " +
         fmtN(sBarsTot) + " of " + fmtN(capTot) + " possible. The left axis reads the period total; reply / interested / meeting lines keep their own scale.";
-      if (capEstimated()) sub += " " + escq(state.client) + "'s capacity is the current cap of the mailboxes on its campaigns, held level across the period.";
+      if (capEstimated()) sub += " " + escq(state.client) + "'s capacity is the cap of the mailboxes on its campaigns, tracking the fleet's daily warm-up.";
       // Capacity-used pill in the legend chip row (renderLegend already built it).
       var lc = $("ah-lchips");
       if (lc) lc.insertAdjacentHTML("beforeend",
