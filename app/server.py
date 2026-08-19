@@ -17016,13 +17016,22 @@ def _fleet_capacity_build(days: int) -> dict:
     end = _dtmod.date.today()
     startd = end - _dtmod.timedelta(days=days - 1)
     # pull a week of extra history so carry-forward can seed the first axis day
-    rows = sb("POST", "rpc/fleet_capacity_daily",
-              {"p_start": (startd - _dtmod.timedelta(days=7)).isoformat()}) or []
-    if not rows:
-        # sb() returned None/[] (cold-start DB hiccup, timeout) — raise so the
-        # caller serves stale / 502s and RETRIES, never caching an all-null
-        # window as a valid build for the full TTL.
-        raise RuntimeError("fleet_capacity_daily returned no rows")
+    # The RPC can return None or a PostgREST error OBJECT (not rows) on the app's
+    # first cold DB connection at boot — a truthy non-list that must NOT be shaped
+    # into an all-null window and cached for the TTL (that once blanked the
+    # ceiling). Retry a few times (the pool warms within a second or two) and
+    # require a non-empty LIST; raise otherwise so the caller serves stale / 502s
+    # and the next request retries.
+    body = {"p_start": (startd - _dtmod.timedelta(days=7)).isoformat()}
+    rows, resp = None, None
+    for _attempt in range(3):
+        resp = sb("POST", "rpc/fleet_capacity_daily", body)
+        if isinstance(resp, list) and resp:
+            rows = resp
+            break
+        time.sleep(0.8)
+    if rows is None:
+        raise RuntimeError(f"fleet_capacity_daily: no rows after retries ({type(resp).__name__})")
     per_ws: dict = {}
     for r in rows:
         if not isinstance(r, dict):
