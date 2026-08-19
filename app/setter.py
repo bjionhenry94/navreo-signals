@@ -10284,30 +10284,7 @@ def route_setter_crm_link_get(params):
         crm_url = (_client_context(slug).get("crm_url") or "").strip()
         if not crm_url:
             return 200, {"url": "", "db_url": ""}
-        db_id = _notion_db_id(crm_url)
-        if _qp(params, "debug", "") == "1":
-            import hashlib as _hl
-            key = _KEYS.get("NOTION_API_KEY") or os.environ.get("NOTION_API_KEY") or ""
-            dbg = {"has_key": bool(key),
-                   "key_fp": _hl.sha256(key.encode()).hexdigest()[:8] if key else "",
-                   "db_id": db_id, "email": email, "slug": slug}
-            try:
-                resp = _HTTP("POST", f"{_NOTION_BASE}/databases/{db_id}/query",
-                             {"Authorization": f"Bearer {key}",
-                              "Notion-Version": _NOTION_VERSION},
-                             {"filter": {"property": "Email", "email": {"equals": email}},
-                              "page_size": 1}, timeout=12)
-                if isinstance(resp, dict):
-                    dbg["notion_object"] = resp.get("object")
-                    dbg["notion_code"] = resp.get("code")
-                    dbg["notion_message"] = str(resp.get("message") or "")[:200]
-                    dbg["results_n"] = len(resp.get("results") or [])
-                else:
-                    dbg["notion_raw_type"] = str(type(resp))
-            except Exception as e:  # noqa: BLE001
-                dbg["exc"] = str(e)[:200]
-            return 200, {"db_url": crm_url, "_debug": dbg}
-        url = _crm_lead_page_url(db_id, email)
+        url = _crm_lead_page_url(_notion_db_id(crm_url), email)
         return 200, {"url": url, "db_url": crm_url}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:200]}
