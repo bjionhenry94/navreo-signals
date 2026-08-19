@@ -10319,7 +10319,7 @@ def route_lead_contact_get(params):
         domain = (row.get("company_domain") or "").strip().lower()
         workspace = (row.get("workspace") or WORKSPACE or "navreo").lower()
         empty = {"linkedin": "", "website": "", "company_name": "", "phone": "", "lead_map": "",
-                 "phone_kind": "", "person": {}, "company": {}, "qualified": {}, "client": {}}
+                 "phone_kind": "", "person": {}, "company": {}, "qualified": {}, "client": {}, "notes": ""}
         if not email or row.get("is_test"):
             return 200, empty
         now = _time.time()
@@ -10371,6 +10371,10 @@ def route_lead_contact_get(params):
         # before this shipped still fill in on first open.
         try:
             enr = _enrichment_row(email)
+            # The rep's private free-text note on this lead (owner ask
+            # 2026-08-19) - stored on the same per-lead row, surfaced in the
+            # sidebar just below Timezone. Empty (or no row yet) reads as "".
+            out["notes"] = str((enr or {}).get("notes") or "")
             if enr and (enr.get("phone") or "").strip():
                 out["phone"] = str(enr["phone"]).strip()
                 # Number type for the dial decision (SDR panel 2026-08-15):
@@ -10454,6 +10458,43 @@ def route_phone_status_post(payload):
         for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
             _LEAD_CONTACT_CACHE.pop(k, None)
         return 200, {"ok": True, "status": status}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+# The sidebar's free-text note per lead is capped so a runaway paste can't bloat
+# a row; well past anything a rep types by hand.
+_LEAD_NOTE_MAX = 8000
+
+
+def route_lead_note_post(payload):
+    """POST /api/setter/lead-note {email, notes} - the rep's private, free-text
+    note on a lead (owner ask 2026-08-19), auto-saved from the sidebar as they
+    type. Lives on the SAME setter_lead_enrichment row as the warm-call phone /
+    disposition (OUR table, never Smartlead), keyed by lead_email.
+
+    UPSERTs (not PATCH like phone-status): a rep may jot a note the moment the
+    panel opens, before the one-time background enrichment has written a row -
+    an insert with just {lead_email, notes} must then create it, and a later
+    enrichment merges its phone in beside the note (both are merge-duplicates)."""
+    try:
+        email = str((payload or {}).get("email") or "").strip().lower()
+        notes = str((payload or {}).get("notes") or "")
+        if not email:
+            return 400, {"error": "email is required"}
+        if len(notes) > _LEAD_NOTE_MAX:
+            return 413, {"error": f"note too long (max {_LEAD_NOTE_MAX} characters)"}
+        if not _SB:
+            return 503, {"error": "storage unavailable"}
+        now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        # Empty note stores NULL (a cleared field reads the same as "never
+        # written"), and clears notes_at so the row carries no stale timestamp.
+        _SB("POST", "setter_lead_enrichment?on_conflict=lead_email",
+            {"lead_email": email, "notes": notes or None, "notes_at": now_iso if notes else None},
+            prefer="resolution=merge-duplicates,return=minimal")
+        for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
+            _LEAD_CONTACT_CACHE.pop(k, None)
+        return 200, {"ok": True, "notes_at": now_iso if notes else ""}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -14144,4 +14185,5 @@ POST_ROUTES = {
     "/api/setter/test/inject": route_test_inject,
     "/api/setter/edit-lesson/undo": route_edit_lesson_undo,
     "/api/setter/phone-status": route_phone_status_post,
+    "/api/setter/lead-note": route_lead_note_post,
 }

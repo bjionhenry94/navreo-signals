@@ -283,6 +283,21 @@
 .lead-panel .lp-fact dt { color: var(--ink-3); flex-shrink: 0; }
 .lead-panel .lp-fact dd { margin: 0; color: var(--ink); text-align: right; word-break: break-word; }
 .lead-panel .lp-note { font-size: 12px; color: var(--ink-3); margin-top: 8px; line-height: 1.45; }
+/* Notes: a rep's private free-text scratchpad on the lead (owner ask
+   2026-08-19), auto-saved as they type. Sits just below the Timezone row. */
+.lead-panel .lp-notes-input {
+  width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px;
+  padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 10px;
+  background: var(--bg-sunken); color: var(--ink);
+  font: inherit; font-size: 13px; line-height: 1.5;
+  transition: border-color 0.12s, box-shadow 0.12s;
+}
+.lead-panel .lp-notes-input::placeholder { color: var(--ink-3); }
+.lead-panel .lp-notes-input:hover { border-color: var(--ink-3); }
+.lead-panel .lp-notes-input:focus-visible,
+.lead-panel .lp-notes-input:focus { outline: none; border-color: var(--orange); box-shadow: var(--focus); }
+.lead-panel .lp-notes-status { font-size: 11px; color: var(--ink-3); margin-top: 5px; min-height: 14px; line-height: 1.2; }
+.lead-panel .lp-notes-status.err { color: #b42318; }
 /* "What this agent may share" (pricing) - shared with the Try-it drawer. The
    heading needs an explicit size or it renders as a 16px browser-default bold,
    louder than the lead's own name. In the narrow sidebar the note is also
@@ -3584,6 +3599,7 @@ function renderDetail(row) {
     panelEl.innerHTML = `<div class="lp-panel-head"><span>Lead details</span></div>` + leadPanelHtml(row);
     wireClientToggle(panelEl);
     wirePhoneDisposition(panelEl, row);
+    wireLeadNotes(panelEl, row);
   }
   // Wire the top-bar button that hides/shows the entire lead-details column,
   // and apply the remembered state (default shown on desktop, hidden on phones).
@@ -4008,8 +4024,76 @@ function leadPanelHtml(row) {
     <div class="lp-section">
       ${leadDecisionHtml(row)}
     </div>
+    ${notesSectionHtml(row)}
     ${clientSectionHtml(row)}
   `;
+}
+/* Notes: the rep's private, free-text scratchpad on this lead (owner ask
+   2026-08-19), shown just below the decision block's Timezone row and saved
+   automatically as they type (see wireLeadNotes). Pre-fills from the value
+   hydrateLeadContact stashes on WARMCALL; empty before hydration. The block is
+   NEVER swapped by a background re-render (unlike the company/client blocks) so
+   in-progress typing is never clobbered - hydration fills it only when empty. */
+function notesSectionHtml(row) {
+  const notes = String(warmcallFor(row).notes || "");
+  return `<div class="lp-section lp-notes" id="lpNotes">
+    <div class="lp-label">Notes</div>
+    <textarea class="lp-notes-input" id="lpNotesInput" rows="3"
+      placeholder="Private note on this lead — saves as you type"
+      aria-label="Private note on this lead"
+      data-email="${esc(String(row.lead_email || ""))}">${esc(notes)}</textarea>
+    <div class="lp-notes-status" id="lpNotesStatus" aria-live="polite"></div>
+  </div>`;
+}
+const NOTES_SAVE_DEBOUNCE_MS = 700;
+function wireLeadNotes(scope, row) {
+  const ta = (scope || document).querySelector("#lpNotesInput");
+  if (!ta || ta._wired) return;
+  ta._wired = true;
+  // The last value confirmed saved to the server - guards against a redundant
+  // POST that just echoes unchanged text (typing, then blur; or a hydration
+  // fill). Seeded from what rendered (WARMCALL's already-saved notes).
+  if (ta._lastSaved == null) ta._lastSaved = ta.value;
+  const statusEl = (scope || document).querySelector("#lpNotesStatus");
+  const setStatus = (t, err) => {
+    if (!statusEl) return;
+    statusEl.textContent = t;
+    statusEl.classList.toggle("err", !!err);
+  };
+  let timer = null;
+  const save = async () => {
+    if (timer) { clearTimeout(timer); timer = null; }
+    const val = ta.value;
+    if (val === ta._lastSaved) return;
+    const email = ta.getAttribute("data-email") || row.lead_email || "";
+    if (!email) return;
+    setStatus("Saving…", false);
+    const res = await fetchJson("/api/setter/lead-note", {
+      method: "POST", body: JSON.stringify({ email, notes: val }) });
+    // The field may have changed again while the request was in flight; only
+    // bank THIS value, and re-schedule if the live text has moved on.
+    if (res.ok) {
+      ta._lastSaved = val;
+      const key = String(email).toLowerCase();
+      (WARMCALL[key] || (WARMCALL[key] = {})).notes = val;
+      if (ta.value === val) {
+        setStatus("Saved", false);
+        setTimeout(() => { if (statusEl && statusEl.textContent === "Saved") setStatus("", false); }, 1500);
+      } else {
+        timer = setTimeout(save, NOTES_SAVE_DEBOUNCE_MS);
+      }
+    } else {
+      setStatus("Couldn’t save — will retry", true);
+      timer = setTimeout(save, 3000);
+    }
+  };
+  ta.addEventListener("input", () => {
+    setStatus("", false);
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(save, NOTES_SAVE_DEBOUNCE_MS);
+  });
+  // A quick tab-away must always persist - flush the pending debounce now.
+  ta.addEventListener("blur", () => { save(); });
 }
 /* Warm-call sideboard blocks (owner ask 2026-08-15). All three render from
    fields hydrateLeadContact stashes on the row (lead_phone / company_info /
@@ -4256,7 +4340,10 @@ async function hydrateLeadContact(row) {
     person_title: String((res.data.person || {}).title || ""),
     company: res.data.company || {},
     qualified: res.data.qualified || {},
-    client: res.data.client || {} };
+    client: res.data.client || {},
+    // Server's saved note wins when present; else keep anything the rep just
+    // typed/saved this session (guards the in-flight retry race).
+    notes: (res.data.notes != null && res.data.notes !== "") ? String(res.data.notes) : (wcPrev.notes || "") };
   [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
     const r = (list || []).find((x) => String(x.id) === String(row.id));
     if (r) {
@@ -4279,6 +4366,14 @@ async function hydrateLeadContact(row) {
     if (dEl) { dEl.outerHTML = phoneDispositionHtml(row); wirePhoneDisposition(document, row); }
     const crmEl = document.getElementById("lpCrmTop");
     if (crmEl) crmEl.outerHTML = crmTopHtml(row);
+    // The Notes box is deliberately NOT in the swapped blocks (typing must
+    // survive a background enrichment repaint), so fill it here from the saved
+    // note - only when it's empty and the rep isn't in it, never over an edit.
+    const naEl = document.getElementById("lpNotesInput");
+    if (naEl && document.activeElement !== naEl && !naEl.value && WARMCALL[wcKey].notes) {
+      naEl.value = WARMCALL[wcKey].notes;
+      naEl._lastSaved = naEl.value;
+    }
   }
   // First-ever open of a pre-enrichment row: the server kicks its one-time
   // enrichment ON this fetch, so the data lands seconds AFTER this response.
