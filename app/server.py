@@ -16996,6 +16996,77 @@ def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
     return data, 200
 
 
+# ── Fleet sending CAPACITY (per-day, per-workspace) ─────────────────────────
+# Capacity for a day = summed per-box daily cap (message_per_day, snapshotted in
+# mailbox_stats_daily that day) over mailboxes ATTACHED TO A CAMPAIGN
+# (campaign_count>0) — boxes on no campaign can't send, so they don't count
+# (Bjion 2026-08-19). The join+sum runs in the DB (fleet_capacity_daily RPC;
+# PostgREST has aggregates disabled). Boxes aren't client-tagged inside the
+# shared navreo workspace, so capacity is exact per WORKSPACE and for the
+# all-clients sum; the chart maps client -> workspace (navreo-workspace clients
+# share one pool, so they omit the ceiling). Fast RPC (~one call), so a plain
+# TTL cache — no background-rebuild machinery.
+_FLEET_CAP = {}  # days -> {"data":…, "ts":…}
+_FLEET_CAP_LOCK = threading.Lock()
+_FLEET_CAP_TTL_S = 3600
+_FLEET_CAP_WS = ("navreo", "asteri", "krg", "grout")
+
+
+def _fleet_capacity_build(days: int) -> dict:
+    end = _dtmod.date.today()
+    startd = end - _dtmod.timedelta(days=days - 1)
+    # pull a week of extra history so carry-forward can seed the first axis day
+    rows = sb("POST", "rpc/fleet_capacity_daily",
+              {"p_start": (startd - _dtmod.timedelta(days=7)).isoformat()}) or []
+    per_ws: dict = {}
+    for r in rows:
+        if not isinstance(r, dict):
+            continue
+        ws, d = r.get("workspace"), r.get("stat_date")
+        if ws and d:
+            per_ws.setdefault(ws, {})[str(d)[:10]] = int(r.get("cap") or 0)
+    axis, cur = [], startd
+    while cur <= end:
+        axis.append(cur.isoformat())
+        cur += _dtmod.timedelta(days=1)
+    cap: dict = {}
+    total = [0] * len(axis)
+    seen = [False] * len(axis)
+    for ws in _FLEET_CAP_WS:
+        m = per_ws.get(ws, {})
+        prior = [d for d in m if d < axis[0]]
+        last = m[max(prior)] if prior else None   # carry-forward seed from before the window
+        arr = []
+        for i, d in enumerate(axis):
+            if d in m:
+                last = m[d]
+            arr.append(last)
+            if last:
+                total[i] += last
+                seen[i] = True
+        cap[ws] = arr
+    cap["__all"] = [total[i] if seen[i] else None for i in range(len(axis))]
+    return {"days": axis, "capacity": cap,
+            "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
+
+
+def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
+    days = max(7, min(90, days))
+    with _FLEET_CAP_LOCK:
+        ent = _FLEET_CAP.get(days)
+    if ent and (time.time() - ent["ts"]) < _FLEET_CAP_TTL_S:
+        return ent["data"], 200
+    try:
+        data = _fleet_capacity_build(days)
+    except Exception as e:  # noqa: BLE001
+        if ent:
+            return ent["data"], 200      # serve stale on a transient DB hiccup
+        return {"error": "capacity_unavailable", "message": str(e)[:200]}, 502
+    with _FLEET_CAP_LOCK:
+        _FLEET_CAP[days] = {"data": data, "ts": time.time()}
+    return data, 200
+
+
 # ── Client windows: per-client sent/replies/bounces for 7/14/30 days ────────
 # The analytics hub's date+client filters need SENT split by client and window,
 # and no store has it (sent_messages archives repliers only; day-wise stats are
@@ -21600,6 +21671,15 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 days = 30
             body, status = deliv_trends_get(days)
+            return self._json(body, status)
+        if path == "/api/fleet-capacity":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                days = int((q.get("days") or ["30"])[0])
+            except ValueError:
+                days = 30
+            body, status = fleet_capacity_get(days)
             return self._json(body, status)
         if path == "/api/client-windows":
             from urllib.parse import parse_qs, urlparse
