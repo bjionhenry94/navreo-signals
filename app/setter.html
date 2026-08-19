@@ -297,8 +297,14 @@
 .lead-panel .lp-notes-input:hover { border-color: var(--ink-3); }
 .lead-panel .lp-notes-input:focus-visible,
 .lead-panel .lp-notes-input:focus { outline: none; border-color: var(--orange); box-shadow: var(--focus); }
-.lead-panel .lp-notes-status { font-size: 11px; color: var(--ink-3); margin-top: 5px; min-height: 14px; line-height: 1.2; }
+/* Empty status reserves NO block height (min-height:0) so there's no dead gap
+   under the box; it only takes space while "Saving…/Saved" is showing. And the
+   notes section hugs the next one tighter than the default 20px (owner ask
+   2026-08-19: "reduce the whitespace"). */
+.lead-panel .lp-notes-status { font-size: 11px; color: var(--ink-3); margin-top: 4px; min-height: 0; line-height: 1.2; }
+.lead-panel .lp-notes-status:empty { margin-top: 0; }
 .lead-panel .lp-notes-status.err { color: #b42318; }
+.lead-panel .lp-notes { margin-bottom: 12px; }
 /* "What this agent may share" (pricing) - shared with the Try-it drawer. The
    heading needs an explicit size or it renders as a 16px browser-default bold,
    louder than the lead's own name. In the narrow sidebar the note is also
