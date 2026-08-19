@@ -10371,9 +10371,9 @@ def route_lead_contact_get(params):
         # before this shipped still fill in on first open.
         try:
             enr = _enrichment_row(email)
-            # The rep's private free-text note on this lead (owner ask
-            # 2026-08-19) - stored on the same per-lead row, surfaced in the
-            # sidebar just below Timezone. Empty (or no row yet) reads as "".
+            # The team's SHARED free-text note on this lead (owner ask
+            # 2026-08-19) - one per lead, surfaced in the sidebar just below
+            # Timezone. Empty (or no row yet) reads as "".
             out["notes"] = str((enr or {}).get("notes") or "")
             if enr and (enr.get("phone") or "").strip():
                 out["phone"] = str(enr["phone"]).strip()
@@ -10468,10 +10468,12 @@ _LEAD_NOTE_MAX = 8000
 
 
 def route_lead_note_post(payload):
-    """POST /api/setter/lead-note {email, notes} - the rep's private, free-text
-    note on a lead (owner ask 2026-08-19), auto-saved from the sidebar as they
-    type. Lives on the SAME setter_lead_enrichment row as the warm-call phone /
-    disposition (OUR table, never Smartlead), keyed by lead_email.
+    """POST /api/setter/lead-note {email, notes} - the team's SHARED, free-text
+    note on a lead (owner ask 2026-08-19: "they should be shared"), auto-saved
+    from the sidebar as they type. Stored UNSCOPED by user (one note per lead),
+    so every teammate sees and edits the same note. Lives on the SAME
+    setter_lead_enrichment row as the warm-call phone / disposition (OUR table,
+    never Smartlead), keyed by lead_email.
 
     UPSERTs (not PATCH like phone-status): a rep may jot a note the moment the
     panel opens, before the one-time background enrichment has written a row -

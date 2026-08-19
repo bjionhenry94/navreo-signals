@@ -283,7 +283,7 @@
 .lead-panel .lp-fact dt { color: var(--ink-3); flex-shrink: 0; }
 .lead-panel .lp-fact dd { margin: 0; color: var(--ink); text-align: right; word-break: break-word; }
 .lead-panel .lp-note { font-size: 12px; color: var(--ink-3); margin-top: 8px; line-height: 1.45; }
-/* Notes: a rep's private free-text scratchpad on the lead (owner ask
+/* Notes: a shared, team-visible free-text scratchpad on the lead (owner ask
    2026-08-19), auto-saved as they type. Sits just below the Timezone row. */
 .lead-panel .lp-notes-input {
   width: 100%; box-sizing: border-box; resize: vertical; min-height: 64px;
@@ -4028,19 +4028,22 @@ function leadPanelHtml(row) {
     ${clientSectionHtml(row)}
   `;
 }
-/* Notes: the rep's private, free-text scratchpad on this lead (owner ask
-   2026-08-19), shown just below the decision block's Timezone row and saved
-   automatically as they type (see wireLeadNotes). Pre-fills from the value
-   hydrateLeadContact stashes on WARMCALL; empty before hydration. The block is
-   NEVER swapped by a background re-render (unlike the company/client blocks) so
-   in-progress typing is never clobbered - hydration fills it only when empty. */
+/* Notes: a SHARED, team-visible free-text scratchpad on this lead (owner ask
+   2026-08-19: "they should be shared") - one note per lead, stored unscoped by
+   user on the lead's row, so every teammate sees and edits the same note (it's
+   internal only, never sent to the client). Shown just below the decision
+   block's Timezone row and saved automatically as they type (see
+   wireLeadNotes). Pre-fills from the value hydrateLeadContact stashes on
+   WARMCALL; empty before hydration. The block is NEVER swapped by a background
+   re-render (unlike the company/client blocks) so in-progress typing is never
+   clobbered - hydration fills it only when empty. */
 function notesSectionHtml(row) {
   const notes = String(warmcallFor(row).notes || "");
   return `<div class="lp-section lp-notes" id="lpNotes">
     <div class="lp-label">Notes</div>
     <textarea class="lp-notes-input" id="lpNotesInput" rows="3"
-      placeholder="Private note on this lead — saves as you type"
-      aria-label="Private note on this lead"
+      placeholder="Shared note on this lead — the team sees this. Saves as you type"
+      aria-label="Shared team note on this lead"
       data-email="${esc(String(row.lead_email || ""))}">${esc(notes)}</textarea>
     <div class="lp-notes-status" id="lpNotesStatus" aria-live="polite"></div>
   </div>`;
