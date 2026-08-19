@@ -2881,14 +2881,19 @@ function loadHub() {
     if (++_hubPolls <= 10) setTimeout(loadHub, 15000);
   }).catch(function () { if (++_hubPolls <= 10) setTimeout(loadHub, 15000); });
 }
-// fleet-capacity can 502 once on a cold boot (it no longer caches errors) —
-// retry so the capacity ceiling self-heals instead of waiting on a reload
+// fleet-capacity: retry on a cold-boot 502 AND until the per-client caps land.
+// The restore sweep that backs client_caps warms a few minutes after a deploy;
+// without polling for it, a page that fetched an empty client_caps keeps shared
+// clients on faint bars until a manual reload.
 var _capPolls = 0;
 function loadCAP() {
   j("/api/fleet-capacity?days=30").then(function (d) {
-    if (d && !d.error) { CAP = d; renderAll(); return; }
-    if (++_capPolls <= 10) setTimeout(loadCAP, 15000);
-  }).catch(function () { if (++_capPolls <= 10) setTimeout(loadCAP, 15000); });
+    if (d && !d.error) {
+      CAP = d; renderAll();
+      if (CAP.client_caps && Object.keys(CAP.client_caps).length) return;   // per-client caps landed
+    }
+    if (++_capPolls <= 25) setTimeout(loadCAP, 15000);
+  }).catch(function () { if (++_capPolls <= 25) setTimeout(loadCAP, 15000); });
 }
 // Incremental boot: paint each section the instant its OWN endpoint lands,
 // instead of waiting on the slowest of nine (the analytics-hub RPC and the
@@ -2928,7 +2933,7 @@ function boot() {
   j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
     .then(function () { criticalSettled(); scheduleRender(); });
   jShared("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; scheduleRender(); }, function () {});
-  jShared("/api/fleet-capacity?days=30").then(function (d) { CAP = d && !d.error ? d : null; scheduleRender(); if (!CAP) setTimeout(loadCAP, 12000); }, function () { setTimeout(loadCAP, 12000); });
+  jShared("/api/fleet-capacity?days=30").then(function (d) { CAP = d && !d.error ? d : null; scheduleRender(); if (!CAP || !(CAP.client_caps && Object.keys(CAP.client_caps).length)) setTimeout(loadCAP, 12000); }, function () { setTimeout(loadCAP, 12000); });
   jShared("/api/cockpit/insights").then(function (d) { INS = d; scheduleRender(); }, function () {});
   j("/api/campaigns-unified").then(function (d) { UNI = d; scheduleRender(); }, function () {});
   jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
