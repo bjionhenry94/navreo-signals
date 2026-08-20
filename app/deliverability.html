@@ -2888,9 +2888,11 @@ function loadHub() {
   }).catch(function () { if (++_hubPolls <= 10) setTimeout(loadHub, 15000); });
 }
 // fleet-capacity: retry on a cold-boot 502 AND until the per-client caps land.
-// The restore sweep that backs client_caps warms a few minutes after a deploy;
-// without polling for it, a page that fetched an empty client_caps keeps shared
-// clients on faint bars until a manual reload.
+// The restore sweep that backs client_caps warms ~7-8 min after a cold Render
+// boot; the retry budget below (60 × 15s = 15 min) MUST outlast that, or shared
+// clients (Arnic/Amplifyy/TouchPoint/…) keep faint sent bars with no capacity
+// fill until a manual reload. The old 25-poll (~6 min) budget lost that race —
+// it gave up ~30-90s before the sweep landed, so capacity looked broken.
 var _capPolls = 0;
 function loadCAP() {
   j("/api/fleet-capacity?days=30").then(function (d) {
@@ -2898,8 +2900,8 @@ function loadCAP() {
       CAP = d; renderAll();
       if (CAP.client_caps && Object.keys(CAP.client_caps).length) return;   // per-client caps landed
     }
-    if (++_capPolls <= 25) setTimeout(loadCAP, 15000);
-  }).catch(function () { if (++_capPolls <= 25) setTimeout(loadCAP, 15000); });
+    if (++_capPolls <= 60) setTimeout(loadCAP, 15000);
+  }).catch(function () { if (++_capPolls <= 60) setTimeout(loadCAP, 15000); });
 }
 // Incremental boot: paint each section the instant its OWN endpoint lands,
 // instead of waiting on the slowest of nine (the analytics-hub RPC and the
