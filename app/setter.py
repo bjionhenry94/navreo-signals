@@ -13081,6 +13081,8 @@ def _finish_training_generation(agent_id: str, status: str, error: str | None = 
         # still sees it, even when the batch itself failed or found nothing.
         if (doc.get("generating") or {}).get("retrain_queued"):
             marker["retrain_queued"] = True
+        if (doc.get("generating") or {}).get("generate_queued"):
+            marker["generate_queued"] = (doc.get("generating") or {}).get("generate_queued")
         doc["generating"] = marker
         _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001 - never raise out of a background thread
@@ -13319,9 +13321,12 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         }
         # Carry retrain_queued forward if a "remember" answer set it while
         # this batch was building - see _finish_training_generation's own
-        # matching comment and _maybe_run_queued_retrain.
+        # matching comment and _maybe_run_queued_retrain. Same carry for a
+        # queued generate (fastloop 2026-08-20).
         if (fresh_doc.get("generating") or {}).get("retrain_queued"):
             gen_marker["retrain_queued"] = True
+        if (fresh_doc.get("generating") or {}).get("generate_queued"):
+            gen_marker["generate_queued"] = (fresh_doc.get("generating") or {}).get("generate_queued")
         fresh_doc["generating"] = gen_marker
         _save_training(agent_id, fresh_doc)
 
@@ -14248,9 +14253,17 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             if cases is not None:
                 fresh["cases"] = cases
             queued = bool((fresh.get("generating") or {}).get("retrain_queued"))
+            # A generate queued while THIS retrain held the lock must survive
+            # the marker overwrite (fastloop live-verify bug 2026-08-20: the
+            # clobber here silently dropped the portal's first-round batch) -
+            # _maybe_run_queued_generate reads it right after this worker
+            # returns.
+            gen_queued = (fresh.get("generating") or {}).get("generate_queued")
             finished_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
             fresh["generating"] = {"status": "idle", "kind": "retrain", "started_at": started_at,
                                    "finished_at": finished_at, "updated": updated}
+            if gen_queued:
+                fresh["generating"]["generate_queued"] = gen_queued
             _save_training(agent_id, fresh)
 
             if not queued:

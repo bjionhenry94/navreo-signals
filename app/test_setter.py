@@ -6273,6 +6273,59 @@ def test_generate_queued_behind_retrain_lock_runs_after():
         lock.release()
 
 
+def test_generate_queued_survives_retrain_marker_overwrite():
+    """Live-verify regression (2026-08-20): a generate queued while a REAL
+    retrain worker runs must survive that worker's final generating-marker
+    overwrite and actually run before the lock releases. The first live run
+    dropped the portal's first-round batch exactly here."""
+    import time as _time
+    sb, http = fresh_setter()
+    agent = {"id": "agent-genq02", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-gq-00")], "answers": {}, "used_reply_ids": [],
+           "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Ada"}
+
+    def slow_merge(_b):
+        _time.sleep(1.0)  # keep the retrain worker busy while the generate arrives
+        return {"instructions": "We sell widgets. Never discount.", "general_rule": "Never discount."}
+    http.merge_fn = slow_merge
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = setter.route_training_answer({
+        "share": token, "case_id": "case-gq-00", "decision_ok": False, "reply_ok": False,
+        "note": "Never discount.", "scope": "remember", "round_ids": ["case-gq-00"],
+    })
+    check("queued survives: answer kicked the retrain", status == 200 and resp.get("retrain") == "started",
+         (status, resp))
+    deadline = _time.time() + 5
+    while not setter._get_training_gen_lock(agent["id"]).locked() and _time.time() < deadline:
+        _time.sleep(0.01)
+    check("queued survives: retrain worker holds the lock",
+         setter._get_training_gen_lock(agent["id"]).locked(), None)
+
+    status2, resp2 = setter.route_training_generate({"share": token, "batch_size": 3})
+    check("queued survives: generate during the retrain answers queued",
+         status2 == 200 and resp2.get("status") == "queued", (status2, resp2))
+    flagger = setter._TRAINING_GEN_THREADS.get(f"{agent['id']}:genflag")
+    if flagger is not None:
+        flagger.join(timeout=10)
+    worker = setter._TRAINING_GEN_THREADS.get(agent["id"])
+    if worker is not None:
+        worker.join(timeout=30)
+
+    saved = setter._load_training(agent["id"])
+    check("queued survives: the queued batch ran after the retrain (cases grew past the seed)",
+         len(saved.get("cases") or []) > 1, {"n_cases": len(saved.get("cases") or []),
+                                             "generating": saved.get("generating")})
+    check("queued survives: flag cleared after the run",
+         not (saved.get("generating") or {}).get("generate_queued"), saved.get("generating"))
+
+
 def test_training_interview_questions_and_answers_merge():
     """Offer interview (owner ruling 2026-08-20): action='questions' serves a
     5-question set (static fallback here - the FakeHTTP returns {} for the
@@ -11568,6 +11621,7 @@ if __name__ == "__main__":
     test_training_answer_unchanged_edit_is_not_feedback()
     test_share_pool_redraft_refreshes_spares_never_the_round()
     test_generate_queued_behind_retrain_lock_runs_after()
+    test_generate_queued_survives_retrain_marker_overwrite()
     test_training_interview_questions_and_answers_merge()
     test_route_training_get_exposes_fastloop_fields()
 
