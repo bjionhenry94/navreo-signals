@@ -4134,7 +4134,7 @@ function companySectionHtml(row) {
   const role = String(wc.person_title || "").trim();
   const loc = [c.city, c.state, c.country].filter(Boolean).join(", ");
   const hc = c.employee_count ? `~${c.employee_count} staff` : (c.employee_range ? `${c.employee_range} staff` : "");
-  const name = c.name || row.company_name || "";
+  const name = c.name || wc.company_name || row.company_name || "";
   const siteUrl = String(row.company_website || "").trim();
   const site = siteUrl.replace(/^https?:\/\//, "");
   const siteHref = siteUrl ? (/^https?:\/\//i.test(siteUrl) ? siteUrl : `https://${siteUrl}`) : "";
@@ -4168,7 +4168,7 @@ function companySectionHtml(row) {
       ${fact("Role", role ? esc(role) : dash)}
       ${fact("Personal Location", personalLoc)}
       ${fact("Local time", localTime)}
-      ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a></span>` : ""}` : dash)}
+      ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a></span>` : ""}` : (site ? `<a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a>` : dash))}
       ${fact("Size", hc ? esc(hc) : dash)}
       ${fact("Company HQ", loc ? esc(loc) : dash)}
     </dl>
@@ -4331,6 +4331,10 @@ async function hydrateLeadContact(row) {
     phone_kind: String(res.data.phone_kind || ""),
     person_title: String((res.data.person || {}).title || ""),
     company: res.data.company || {},
+    // Smartlead's own company_name, kept as a name fallback so the Profile's
+    // Company row still fills when the deeper company enrichment is empty
+    // (owner 2026-08-20: we had the website but showed a bare dash).
+    company_name: String(res.data.company_name || ""),
     qualified: res.data.qualified || {},
     client: res.data.client || {},
     // Server's saved note wins when present; else keep anything the rep just
