@@ -60,6 +60,12 @@ FIXTURES_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setter
 
 RESULTS = []  # (name, passed: bool, detail: str, xfail: bool)
 
+# Real-campaigns-only gate (owner ruling 2026-08-20): synthetic training needs
+# a real email 1 behind it. Test agents with no seeded sent_messages carry this
+# stored campaign-copy pool - the smallest grounding that satisfies the gate.
+TEST_TRAINING_OUTREACH = [{"angle": "test", "subject": "Our outreach",
+                          "body": "Hi {first}, quick idea about your pipeline. Best, Bjion"}]
+
 
 def check(name, condition, detail=""):
     RESULTS.append((name, bool(condition), detail, False))
@@ -4925,6 +4931,7 @@ def test_training_generate_memory_digest_reaches_classify():
 
     agent = {
         "id": "agent-train0004", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH,
         "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
         "memory": [{"text": "Never promise a specific onboarding date.", "source": "manual",
                    "scope": "remember", "at": "2026-07-01T00:00:00+00:00"}],
@@ -5163,6 +5170,7 @@ def test_training_generate_owner_mode_no_campaign_ids_is_fully_synthetic():
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
     agent = {"id": "agent-scope-none", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH,
              "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r"}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
@@ -5182,6 +5190,79 @@ def test_training_generate_owner_mode_no_campaign_ids_is_fully_synthetic():
          all(c.get("synthetic") is True and c.get("reply_id") is None for c in cases), cases)
     check("owner-mode unassigned: used_reply_ids stays empty - no real reply was ever drawn",
          (doc.get("used_reply_ids") or []) == [], doc.get("used_reply_ids"))
+
+
+def test_training_generate_refuses_without_real_outreach():
+    """Real-campaigns-only gate (owner ruling 2026-08-20: "You should never,
+    ever give training based on campaigns which don't exist"): an agent with
+    no sent outreach anywhere AND no stored campaign copy must not get
+    invented scenarios - generation fails loudly, telling the owner exactly
+    what to supply."""
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+    agent = {"id": "agent-nogrounding1", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    doc = setter._load_training(agent["id"])
+    gen = doc.get("generating") or {}
+    check("no-grounding gate: generation fails, never invents a campaign",
+         gen.get("status") == "failed" and "campaign" in (gen.get("error") or "").lower(), gen)
+    check("no-grounding gate: the error tells the owner what to supply (training_outreach)",
+         "training_outreach" in (gen.get("error") or ""), gen)
+    check("no-grounding gate: zero cases were built", (doc.get("cases") or []) == [], doc.get("cases"))
+
+
+def test_training_outreach_pool_used_verbatim_for_synthetic():
+    """Stored campaign copy (training_outreach) IS email 1 of every synthetic
+    scenario, verbatim with {first}/{Company} resolved per invented lead - the
+    model is told outreach_needed false and its own outreach fields are
+    ignored on this path (owner ruling 2026-08-20)."""
+    sb, http = fresh_setter()
+    seen_payload = {}
+
+    def invent_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        seen_payload.update(payload)
+        plan = payload.get("scenario_plan") or []
+        return {"scenarios": [
+            {"lead_first_name": f"Lead{i}", "lead_company": f"Comp{i}", "subject": "Re: hi",
+             "body": f"Reply {i}.", "prior_lead_reply": "",
+             "outreach_subject": "MODEL WROTE THIS", "outreach_body": "MODEL WROTE THIS TOO"}
+            for i, _ in enumerate(plan)]}
+
+    http.invent_fn = invent_fn
+    agent = {"id": "agent-pool01", "campaign_ids": [],
+             "training_outreach": [{"angle": "a", "subject": "the cloud bill",
+                                    "body": "Hi {first},\n\n{icebreaker}\n\nWe cut waste at {Company}. Best,"}]}
+    scens = setter._invent_training_scenarios(agent, {"cases": [], "answers": {}}, 3)
+    check("pool verbatim: model told outreach_needed false, copy passed per slot",
+         seen_payload.get("outreach_needed") is False and len(seen_payload.get("campaign_outreach_by_slot") or []) == 3,
+         seen_payload)
+    check("pool verbatim: every scenario carries the stored subject, model outreach ignored",
+         len(scens) == 3 and all(s["outreach_subject"] == "the cloud bill"
+                                 and "MODEL WROTE" not in s["outreach_body"] for s in scens), scens)
+    check("pool verbatim: {first}/{Company} resolved per invented lead",
+         all(f"Hi Lead{i}," in s["outreach_body"] and f"Comp{i}" in s["outreach_body"]
+             for i, s in enumerate(scens)), scens)
+    check("pool verbatim: an unresolved {icebreaker} token line is dropped whole",
+         all("{icebreaker}" not in s["outreach_body"] for s in scens), scens)
+
+
+def test_staged_scenarios_use_training_outreach_pool():
+    """Staged standing questions open with the agent's stored campaign copy
+    when it exists - never the generic fallback pitch (owner ruling
+    2026-08-20, real-campaigns-only)."""
+    agent = {"id": "agent-poolstaged", "training_outreach": [
+        {"angle": "a", "subject": "subj A", "body": "Hi {first}, angle A."}]}
+    pending = setter._pending_staged_scenarios(agent, [])
+    check("staged pool: every staged question opens with the stored copy",
+         bool(pending) and all(p["outreach_subject"] == "subj A" and "angle A" in p["outreach_body"]
+                               for p in pending), pending)
+    check("staged pool: greeting token resolved (no raw {first} in any thread)",
+         all("{first}" not in p["outreach_body"] for p in pending), pending)
 
 
 def test_training_generate_refuses_over_40_unanswered():
@@ -5334,6 +5415,7 @@ def test_training_generate_shortfall_top_up_real_plus_synthetic():
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
     agent = {"id": "agent-synth0001", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH,
              "allowed_intents": ["send_resource"], "campaign_ids": ["9500"]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
@@ -5441,7 +5523,8 @@ def test_training_generate_synthetic_only_preserves_existing_used_reply_ids():
     http.classify_fn = _training_classify_fn
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
-    agent = {"id": "agent-synth0003", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    agent = {"id": "agent-synth0003", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH, "allowed_intents": ["send_resource"]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     existing_doc = {"cases": [{"id": "case-0000", "reply_id": 101, "category": "Interested",
@@ -5518,6 +5601,7 @@ def test_training_staged_questions_seeded_on_share_and_deduped():
     STAGED = ["ask_booking_link", "ask_case_studies", "ask_phone", "ask_price"]
 
     agent = {"id": "agent-staged0001", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH,
              "allowed_intents": ["send_resource", "pricing", "scheduling"],
              "instructions": "We help teams book more meetings.", "campaign_ids": [8300]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
@@ -5639,7 +5723,8 @@ def test_training_generate_synthetic_lost_update_protection_answer_survives():
     http.classify_fn = _training_classify_fn
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
-    agent = {"id": "agent-synth-lu1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    agent = {"id": "agent-synth-lu1", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH, "allowed_intents": ["send_resource"]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     existing_doc = {"cases": [{"id": "case-pre-0000"}], "answers": {}, "used_reply_ids": [],
@@ -5730,7 +5815,8 @@ def test_training_generate_synthetic_logs_provider_usage_and_failure_is_swallowe
     http.classify_fn = _training_classify_fn
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
-    agent = {"id": "agent-synth-usage1", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    agent = {"id": "agent-synth-usage1", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH, "allowed_intents": ["send_resource"]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
@@ -5752,7 +5838,8 @@ def test_training_generate_synthetic_logs_provider_usage_and_failure_is_swallowe
     http2.classify_fn = _training_classify_fn
     http2.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
     sb2.provider_usage_post_error = RuntimeError("simulated Supabase outage")
-    agent2 = {"id": "agent-synth-usage2", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    agent2 = {"id": "agent-synth-usage2", "mode": "draft_only", "enabled": True,
+              "training_outreach": TEST_TRAINING_OUTREACH, "allowed_intents": ["send_resource"]}
     sb2.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
 
     status2, resp2 = _generate_and_wait({"agent_id": agent2["id"], "batch_size": 4})
@@ -7859,6 +7946,7 @@ def test_training_generate_share_forces_agent_campaign_filter_and_400_on_no_camp
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
 
     agent = {"id": "agent-shr0006", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH,
              "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
              "campaign_ids": [7001]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
@@ -8938,6 +9026,7 @@ def test_latest_owner_rules_reaches_training_generation():
 
     agent = {
         "id": "agent-rules-gen", "mode": "draft_only", "enabled": True,
+             "training_outreach": TEST_TRAINING_OUTREACH,
         "allowed_intents": ["send_resource", "pricing", "scheduling"], "resource_link": "https://x.example/r",
         "instruction_edits": [
             {"note": "Generation rule: never quote a discount.", "at": "2026-07-14T00:00:00+00:00",
@@ -11017,6 +11106,9 @@ if __name__ == "__main__":
     test_draft_no_live_slots_directive()
     test_training_reset_clears_answers_keeps_used_ids()
     test_training_reset_full_wipes_whole_doc()
+    test_training_generate_refuses_without_real_outreach()
+    test_training_outreach_pool_used_verbatim_for_synthetic()
+    test_staged_scenarios_use_training_outreach_pool()
     test_training_get_route()
     test_training_get_self_heals_stale_running_marker()
     test_compute_readiness_pure_function()

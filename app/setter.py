@@ -11852,27 +11852,81 @@ _STAGED_FALLBACK_OUTREACH = (
 )
 
 
+def _training_outreach_pool(agent: dict) -> list:
+    """The agent's stored REAL campaign copy for training (owner ruling
+    2026-08-20: training scenarios must be built on the campaigns the agent
+    actually runs, NEVER invented ones). agent doc field `training_outreach`
+    = [{"angle": ..., "subject": ..., "body": ...}, ...] - typically the
+    strategy-board sequence copy for an agent whose campaigns run outside
+    this workspace's Smartlead (e.g. GreenShift via WingM). Bodies may carry
+    {first} / {Company} merge tokens; _resolve_outreach_tokens fills them per
+    invented lead. Entries with no body are dropped."""
+    pool = []
+    for o in list((agent or {}).get("training_outreach") or []):
+        if isinstance(o, dict) and str(o.get("body") or "").strip():
+            pool.append({"angle": str(o.get("angle") or ""),
+                         "subject": str(o.get("subject") or ""),
+                         "body": str(o.get("body") or "")})
+    return pool
+
+
+_OUTREACH_FIRST_TOKENS = ("{first}", "{First}", "{{first}}", "{{first_name}}", "{{First_Name}}",
+                          "{first_name}", "{FirstName}")
+_OUTREACH_COMPANY_TOKENS = ("{Company}", "{company}", "{{company}}", "{{Company}}",
+                            "{{company_name}}", "{CompanyName}")
+_LEFTOVER_TOKEN_LINE_RE = re.compile(r"^\s*\{\{?[a-zA-Z_ ]+\}?\}\s*$")
+
+
+def _resolve_outreach_tokens(text: str, first: str, company: str) -> str:
+    """Fills the common merge tokens in stored campaign copy with the
+    invented lead's own name/company, so a training thread reads as the real
+    send. Any line that is still JUST an unresolved token afterwards (e.g. a
+    bespoke {icebreaker} token the copy kept) is dropped whole - a raw
+    template token must never render in a training thread."""
+    out = str(text or "")
+    for tok in _OUTREACH_FIRST_TOKENS:
+        out = out.replace(tok, (first or "there"))
+    for tok in _OUTREACH_COMPANY_TOKENS:
+        out = out.replace(tok, (company or "your team"))
+    lines = [ln for ln in out.split("\n") if not _LEFTOVER_TOKEN_LINE_RE.match(ln)]
+    return "\n".join(lines)
+
+
 def _pending_staged_scenarios(agent: dict, existing_cases: list) -> list:
     """The standing staged questions (see _STAGED_TRAINING_QUESTIONS) this
     agent does not already carry, as synthetic scenario dicts ready for
     _build_synthetic_training_case. Deduped by the stable staged_key stamped
     on every staged case, so each question is seeded once per agent and never
-    re-asked on later rounds. Applies to every trainer (owner and client)."""
+    re-asked on later rounds. Applies to every trainer (owner and client).
+    Outreach side (owner ruling 2026-08-20, real-campaigns-only): when the
+    agent carries stored campaign copy (training_outreach) the staged
+    question's thread opens with THAT copy, rotated across entries - the
+    generic fallback outreach only remains for agents whose real sent email
+    replaces it downstream anyway (_build_synthetic_training_case prefers a
+    real send first)."""
     have = {(c or {}).get("staged_key") for c in (existing_cases or []) if isinstance(c, dict)}
+    pool = _training_outreach_pool(agent)
     pending = []
-    for q in _STAGED_TRAINING_QUESTIONS:
+    for i, q in enumerate(_STAGED_TRAINING_QUESTIONS):
         if q["key"] in have:
             continue
+        first = q.get("lead_first_name") or ""
+        if pool:
+            o = pool[i % len(pool)]
+            o_subject = o["subject"] or "A quick idea"
+            o_body = _resolve_outreach_tokens(o["body"], first, "")
+        else:
+            o_subject, o_body = "A quick idea", _STAGED_FALLBACK_OUTREACH
         pending.append({
             "staged_key": q["key"],
             "category": q["category"],
-            "lead_first_name": q.get("lead_first_name") or "",
+            "lead_first_name": first,
             "lead_company": "",
             "subject": q.get("subject") or "",
             "body": q["body"],
             "prior_lead_reply": "",
-            "outreach_subject": "A quick idea",
-            "outreach_body": _STAGED_FALLBACK_OUTREACH,
+            "outreach_subject": o_subject,
+            "outreach_body": o_body,
         })
     return pending
 
@@ -12274,6 +12328,8 @@ THREAD DEPTH: for roughly one scenario in three (spread across categories), also
 
 outreach_subject / outreach_body: the payload's outreach_needed flag decides. When outreach_needed is false, leave both empty (a real sent email will be reused). When outreach_needed is true, ALWAYS write them - the outreach email the lead is replying to, a faithful short rendition of what this agent sends, drawn ONLY from the agent context you were given (reference_replies tone, fallback_context instructions); never invent a price, link, or claim that isn't in that context, and never leave them empty when outreach_needed is true.
 
+campaign_outreach_by_slot, when given, lists for each scenario_plan position the REAL campaign email that scenario's lead is replying to. Scenario i's body (and prior_lead_reply) must read as a reply to campaign_outreach_by_slot[i] - react to that email's specific angle and content, never to a generic pitch. Leave outreach_subject and outreach_body empty on this path: the real email is attached verbatim in code and must never be paraphrased or rewritten.
+
 REALISM (how a real lead writes, learned from real replies): short sentences, sometimes fragments; typos and lowercase happen; specific practical questions ("does this work with outlook?", "what's the cost?"); mobile sign-offs ("Sent from my iPhone"); busy-person brevity ("Send it over.", "Not now - Q3 maybe."). Never bullet-pointed brochure prose, never perfectly parallel sentence structure.
 
 Output STRICT JSON: {"scenarios": [{"lead_first_name": "...", "lead_company": "...", "subject": "...", "body": "...", "prior_lead_reply": "...", "outreach_subject": "...", "outreach_body": "..."}, ...]}, one object per scenario_plan position, in the same order. subject and body should read like a short, real inbound email reply - plain text, a couple of sentences, the way a busy person actually replies, never polished marketing copy."""
@@ -12332,7 +12388,22 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
     _camp_ids_for_outreach = allowed_campaign_ids if allowed_campaign_ids is not None \
         else (agent.get("campaign_ids") or [])
     outreach_needed = not _fetch_agent_outreach_sample(_camp_ids_for_outreach, limit=1)
+    # Real-campaigns-only (owner ruling 2026-08-20): when the agent carries
+    # stored campaign copy (training_outreach), the model NEVER writes email 1
+    # - each scenario slot is assigned a real email up front (rotating across
+    # the pool so every angle gets rehearsed), the model writes the lead's
+    # reply TO that email, and the copy itself is stamped on verbatim below.
+    outreach_pool = _training_outreach_pool(agent)
+    slot_outreach = None
+    if outreach_needed and outreach_pool:
+        outreach_needed = False
+        slot_outreach = [outreach_pool[i % len(outreach_pool)] for i in range(count)]
     payload = {"scenario_plan": scenario_plan, "outreach_needed": outreach_needed}
+    if slot_outreach:
+        payload["campaign_outreach_by_slot"] = [
+            {"slot": i, "subject": o["subject"][:200], "body": o["body"][:1200]}
+            for i, o in enumerate(slot_outreach)
+        ]
     if reference:
         payload["reference_replies"] = [
             {"category": r.get("category") or "", "subject": clean_body(r.get("reply_subject") or "")[:200],
@@ -12387,15 +12458,25 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
         body = str(item.get("body") or "").strip()
         if not body:
             continue
+        first = str(item.get("lead_first_name") or "").strip()
+        company = str(item.get("lead_company") or "").strip()
+        if slot_outreach is not None:
+            # Real campaign copy, VERBATIM (tokens resolved per lead) - the
+            # model's own outreach fields are ignored on this path.
+            o_subject = slot_outreach[i]["subject"]
+            o_body = _resolve_outreach_tokens(slot_outreach[i]["body"], first, company)
+        else:
+            o_subject = str(item.get("outreach_subject") or "").strip()
+            o_body = str(item.get("outreach_body") or "").strip()
         scenarios.append({
             "category": cat,
-            "lead_first_name": str(item.get("lead_first_name") or "").strip(),
-            "lead_company": str(item.get("lead_company") or "").strip(),
+            "lead_first_name": first,
+            "lead_company": company,
             "subject": str(item.get("subject") or "").strip(),
             "body": body,
             "prior_lead_reply": str(item.get("prior_lead_reply") or "").strip(),
-            "outreach_subject": str(item.get("outreach_subject") or "").strip(),
-            "outreach_body": str(item.get("outreach_body") or "").strip(),
+            "outreach_subject": o_subject,
+            "outreach_body": o_body,
         })
     # Outreach reuse (thread round 1, 2026-08-17): when outreach was needed
     # the model sometimes fills it for only part of the batch (the classic
@@ -13014,6 +13095,28 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         replies = _select_training_replies(doc, real_want, allowed_campaign_ids=allowed_campaign_ids)
 
         shortfall = real_want - len(replies)
+
+        # REAL-CAMPAIGNS-ONLY GATE (owner ruling 2026-08-20: "You should
+        # never, ever give training based on campaigns which don't exist").
+        # Any synthetic content (a staged question's thread, or an invented
+        # scenario) needs a real email 1 behind it: a genuine sent email from
+        # the agent's campaigns, or stored campaign copy (training_outreach,
+        # e.g. the strategy-board sequences). With NEITHER, generation fails
+        # loudly and tells the owner exactly what to supply - it never
+        # invents an outreach email the client never sent.
+        if staged_scenarios or shortfall > 0:
+            _gate_camp_ids = allowed_campaign_ids if allowed_campaign_ids is not None \
+                else (agent.get("campaign_ids") or [])
+            if not _fetch_agent_outreach_sample(_gate_camp_ids, limit=1) \
+                    and not _training_outreach_pool(agent):
+                _finish_training_generation(agent_id, "failed",
+                    error="This agent has no real campaign outreach to build scenarios on. "
+                          "Attach its live campaigns, or save its real campaign copy "
+                          "(training_outreach - e.g. the strategy-board sequences) to the "
+                          "agent, then generate again. Training is never built on "
+                          "invented campaigns.")
+                return
+
         scenarios = list(staged_scenarios)
         synthetic_trigger = None
         if shortfall > 0:
