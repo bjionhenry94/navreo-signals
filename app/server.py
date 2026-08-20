@@ -20013,6 +20013,10 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
                      "/api/setter/training/recheck", "/api/setter/agents/correction",
+                     # Offer interview (fastloop, owner ruling 2026-08-20): the
+                     # CLIENT answers these on the share page - share-token
+                     # verified inside the route like every training route.
+                     "/api/setter/training/interview",
                      # Portal revision 2 (owner ruling 2026-08-16): the CSM
                      # pre-trains the agent, so the client page is rating
                      # rounds only - /training/chat and /training/material

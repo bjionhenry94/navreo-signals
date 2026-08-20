@@ -6052,6 +6052,315 @@ def test_training_share_answer_does_not_redraft_current_round():
          gen.get("status") == "idle" and gen.get("kind") == "retrain" and gen.get("updated") == 0, gen)
 
 
+def test_training_answer_edit_teaches_via_lesson_from_edit():
+    """Fastloop (owner ruling 2026-08-20): a client rewriting the draft IS
+    feedback. The edited body rides the answer, queues an edit-kind merge,
+    and the retrain worker distils it through lesson_from_edit into the
+    instructions - audited in instruction_edits under
+    source 'training-edit:<case_id>'. The response echoes a pending learned
+    chip and the answer stores the edit for the digest."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-editfb01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Flat $400/mo.", "sender_first": "Ada"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-e-00"), _fixed_training_case("case-e-01")],
+           "answers": {}, "used_reply_ids": [], "readiness_history": [],
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    http.lesson_fn = lambda _b: {"is_lesson": True, "rule": "Keep replies under 80 words.", "reason": "style"}
+    http.merge_fn = lambda _b: {"instructions": "Flat $400/mo. Keep replies under 80 words.",
+                                "general_rule": "Keep replies under 80 words."}
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = _answer_and_wait({
+        "share": token, "case_id": "case-e-00", "decision_ok": False, "reply_ok": False,
+        "note": "", "scope": "remember", "edited_body": "<div>My way. Short and sharp.</div>",
+        "round_ids": ["case-e-00", "case-e-01"],
+    }, agent_id=agent["id"])
+    check("edit teach: 200 + retrain kicked", status == 200 and resp.get("retrain") == "started", (status, resp))
+    learned = resp.get("learned") or {}
+    check("edit teach: learned chip is a pending edit with a matchable source",
+         learned.get("kind") == "edit" and learned.get("pending") is True
+         and learned.get("source") == "training-edit:case-e-00", learned)
+    check("edit teach: response carries the server answer time", bool(resp.get("at")), resp)
+
+    saved_agent = setter._load_agent(agent["id"])
+    check("edit teach: instructions now carry the distilled rule",
+         "Keep replies under 80 words." in (saved_agent.get("instructions") or ""),
+         saved_agent.get("instructions"))
+    edits = saved_agent.get("instruction_edits") or []
+    check("edit teach: instruction_edits audited under training-edit:<case_id>",
+         any(e.get("source") == "training-edit:case-e-00" for e in edits), edits)
+
+    saved = setter._load_training(agent["id"])
+    ans = (saved.get("answers") or {}).get("case-e-00") or {}
+    check("edit teach: the answer stores the edited body for the digest",
+         "Short and sharp" in (ans.get("edited_body") or ""), ans)
+    digest = setter._training_session_feedback_digest(saved)
+    check("edit teach: the session digest carries the rewrite verbatim",
+         "Short and sharp" in digest, digest)
+    check("edit teach: no pending merge left behind", (saved.get("pending_merges") or []) == [],
+         saved.get("pending_merges"))
+
+
+def test_training_answer_edit_fallback_merges_worked_example():
+    """lesson_from_edit's None verdict (deliberately conservative) must never
+    mean a portal edit taught nothing: the drain falls back to merging the
+    rewrite as a worked example (append path here - no merge_fn), so the
+    instructions and audit trail always move."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-editfb02", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "Flat $400/mo.", "sender_first": "Ada"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-e-10"), _fixed_training_case("case-e-11")],
+           "answers": {}, "used_reply_ids": [], "readiness_history": [],
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    # lesson_fn stays None -> is_lesson False -> rule None -> fallback fires.
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = _answer_and_wait({
+        "share": token, "case_id": "case-e-10", "decision_ok": False, "reply_ok": False,
+        "edited_body": "<div>Here's exactly how I'd say it.</div>",
+        "round_ids": ["case-e-10", "case-e-11"],
+    }, agent_id=agent["id"])
+    check("edit fallback: 200 + retrain kicked", status == 200 and resp.get("retrain") == "started", (status, resp))
+    saved_agent = setter._load_agent(agent["id"])
+    check("edit fallback: worked-example rule landed in instructions (append path)",
+         "rewrote our draft" in (saved_agent.get("instructions") or "")
+         and "Here's exactly how I'd say it." in (saved_agent.get("instructions") or ""),
+         saved_agent.get("instructions"))
+    check("edit fallback: audit trail entry exists",
+         any(e.get("source") == "training-edit:case-e-10"
+             for e in (saved_agent.get("instruction_edits") or [])),
+         saved_agent.get("instruction_edits"))
+
+
+def test_training_answer_unchanged_edit_is_not_feedback():
+    """An edited_body whose text equals the stored draft teaches nothing: no
+    merge queued, no retrain, no learned chip - same contract as the owner
+    inbox's approved-as-written rule."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-editfb03", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "x", "sender_first": "Ada"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-e-20")], "answers": {}, "used_reply_ids": [],
+           "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = setter.route_training_answer({
+        "share": token, "case_id": "case-e-20", "decision_ok": True, "reply_ok": True,
+        "edited_body": "<div>old draft</div>",  # same text as the stored draft
+        "round_ids": ["case-e-20"],
+    })
+    check("unchanged edit: 200, no retrain, no learned chip",
+         status == 200 and resp.get("retrain") is None and resp.get("learned") is None, (status, resp))
+    saved = setter._load_training(agent["id"])
+    check("unchanged edit: nothing queued", (saved.get("pending_merges") or []) == [],
+         saved.get("pending_merges"))
+    ans = (saved.get("answers") or {}).get("case-e-20") or {}
+    check("unchanged edit: answer does not store an edited body", "edited_body" not in ans, ans)
+
+
+def test_share_pool_redraft_refreshes_spares_never_the_round():
+    """Fastloop pool redraft (owner ruling 2026-08-20): a share-mode feedback
+    answer rewrites the between-rounds POOL (unanswered cases outside the
+    round_ids the client sent) BEFORE the merges run, stamps redrafted_at on
+    each and brain_covers_at on the doc - and never touches the round's own
+    unanswered cards."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-pool01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"],
+             "instructions": "Flat $400/mo.", "sender_first": "Ada"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-p-00"), _fixed_training_case("case-p-01"),
+                     _fixed_training_case("case-p-02"), _fixed_training_case("case-p-03")],
+           "answers": {}, "used_reply_ids": [], "readiness_history": [],
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    http.classify_fn = lambda _b: {"primary_intent": "send_resource", "all_intents": ["send_resource"],
+                                   "simple_ask": True, "confidence": 0.9, "red_flags": [],
+                                   "timezone_guess": None, "tz_confidence": 0.0, "wants": "x", "rationale": ""}
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>REDRAFTED with fresh brain</div>"}
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = _answer_and_wait({
+        "share": token, "case_id": "case-p-00", "decision_ok": False, "reply_ok": False,
+        "note": "Never offer a discount.", "scope": "remember",
+        "round_ids": ["case-p-00", "case-p-01"],
+    }, agent_id=agent["id"])
+    check("pool redraft: 200 + retrain kicked", status == 200 and resp.get("retrain") == "started", (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("pool redraft: in-round unanswered card is untouched",
+         by_id["case-p-01"]["draft_html"] == "<div>old draft</div>"
+         and not by_id["case-p-01"].get("redrafted_at"), by_id.get("case-p-01"))
+    check("pool redraft: both pool cards were re-drafted and stamped",
+         all("REDRAFTED" in by_id[cid]["draft_html"] and by_id[cid].get("redrafted_at")
+             for cid in ("case-p-02", "case-p-03")), (by_id.get("case-p-02"), by_id.get("case-p-03")))
+    ans_at = ((saved.get("answers") or {}).get("case-p-00") or {}).get("at") or ""
+    check("pool redraft: brain_covers_at caught up with the answer",
+         (saved.get("brain_covers_at") or "") >= ans_at and bool(ans_at),
+         (saved.get("brain_covers_at"), ans_at))
+    check("pool redraft: the correction still merged into instructions afterwards",
+         "Never offer a discount." in (setter._load_agent(agent["id"]).get("instructions") or ""),
+         setter._load_agent(agent["id"]).get("instructions"))
+
+
+def test_generate_queued_behind_retrain_lock_runs_after():
+    """Fastloop fix (baseline bugs 2+3, 2026-08-20): a generate that lands
+    while a RETRAIN holds the shared lock is QUEUED (status 'queued', flag on
+    the doc), and _maybe_run_queued_generate runs it once the lock frees -
+    never the old silent 'already_running' drop. A real generate already
+    running still refuses to queue a second batch."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-genq01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    setter._save_training(agent["id"], {"cases": [], "answers": {}, "used_reply_ids": [],
+                                        "readiness_history": [],
+                                        "generating": {"status": "running", "kind": "retrain",
+                                                       "started_at": "2026-08-20T00:00:00+00:00"},
+                                        "created_at": "2026-01-01T00:00:00+00:00"})
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Ada"}
+
+    lock = setter._get_training_gen_lock(agent["id"])
+    lock.acquire()
+    try:
+        token = setter.mint_training_share(agent["id"])
+        status, resp = setter.route_training_generate({"share": token, "batch_size": 3})
+        check("generate queued: contended lock answers 'queued'",
+             status == 200 and resp.get("status") == "queued", (status, resp))
+        flagger = setter._TRAINING_GEN_THREADS.get(f"{agent['id']}:genflag")
+        if flagger is not None:
+            flagger.join(timeout=10)
+        saved = setter._load_training(agent["id"])
+        q = (saved.get("generating") or {}).get("generate_queued") or {}
+        check("generate queued: flag persisted with batch size + share",
+             q.get("batch_size") == 3 and q.get("share") is True, saved.get("generating"))
+    finally:
+        lock.release()
+
+    setter._maybe_run_queued_generate(agent["id"])
+    saved = setter._load_training(agent["id"])
+    check("generate queued: the queued batch actually ran once the lock freed",
+         len(saved.get("cases") or []) > 0, {"n_cases": len(saved.get("cases") or []),
+                                             "generating": saved.get("generating")})
+    check("generate queued: flag cleared",
+         not (saved.get("generating") or {}).get("generate_queued"), saved.get("generating"))
+
+    # A REAL generate running (no kind:"retrain") keeps the old idempotent
+    # already_running answer and never queues a second batch.
+    setter._save_training(agent["id"], {**saved, "generating": {"status": "running",
+                                                                "started_at": "2026-08-20T00:00:00+00:00"}})
+    setter._TRAINING_GEN_THREADS.pop(f"{agent['id']}:genflag", None)
+    lock.acquire()
+    try:
+        token = setter.mint_training_share(agent["id"])
+        status2, resp2 = setter.route_training_generate({"share": token, "batch_size": 3})
+        check("generate queued: real generate running answers already_running (old contract kept)",
+             status2 == 200 and resp2.get("status") == "already_running", (status2, resp2))
+        saved2 = setter._load_training(agent["id"])
+        check("generate queued: no flag persisted while a real generate runs",
+             not (saved2.get("generating") or {}).get("generate_queued"), saved2.get("generating"))
+    finally:
+        lock.release()
+
+
+def test_training_interview_questions_and_answers_merge():
+    """Offer interview (owner ruling 2026-08-20): action='questions' serves a
+    5-question set (static fallback here - the FakeHTTP returns {} for the
+    unknown schema) and re-serves it idempotently while unanswered;
+    action='answers' stores the answers, stamps answered_at, queues ONE
+    combined merge, kicks the pool retrain, and the Q&A reaches both the
+    instructions (merge) and the session digest (immediately)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-iview01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    setter._save_training(agent["id"], {"cases": [], "answers": {}, "used_reply_ids": [],
+                                        "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"})
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = setter.route_training_interview({"share": token, "action": "questions"})
+    qs = (resp or {}).get("questions") or []
+    check("interview: five questions served", status == 200 and len(qs) == 5, (status, resp))
+    check("interview: every question has an id and text",
+         all(q.get("id") and q.get("q") for q in qs), qs)
+
+    status2, resp2 = setter.route_training_interview({"share": token, "action": "questions"})
+    check("interview: unanswered set re-served idempotently (same ids, one stored round)",
+         status2 == 200 and [q.get("id") for q in (resp2.get("questions") or [])] == [q.get("id") for q in qs],
+         resp2)
+    saved = setter._load_training(agent["id"])
+    check("interview: exactly one interview round stored", len(saved.get("interviews") or []) == 1,
+         saved.get("interviews"))
+
+    answers = {qs[0]["id"]: "0161 555 0199", qs[1]["id"]: "Say pricing starts at $400/mo."}
+    status3, resp3 = setter.route_training_interview({"share": token, "action": "answers",
+                                                      "answers": answers})
+    check("interview answers: 200 + saved 2 + retrain kicked + server time returned",
+         status3 == 200 and resp3.get("saved") == 2 and bool(resp3.get("at"))
+         and resp3.get("retrain") in ("started", "queued"), (status3, resp3))
+    worker = setter._TRAINING_GEN_THREADS.get(agent["id"])
+    if worker is not None:
+        worker.join(timeout=10)
+
+    saved = setter._load_training(agent["id"])
+    interview = (saved.get("interviews") or [])[-1]
+    check("interview answers: stored on the round with answered_at",
+         interview.get("answers", {}).get(qs[0]["id"]) == "0161 555 0199"
+         and bool(interview.get("answered_at")), interview)
+    digest = setter._training_session_feedback_digest(saved)
+    check("interview answers: Q&A rides the session digest immediately",
+         "0161 555 0199" in digest and "pricing starts at $400/mo" in digest, digest)
+    instructions = setter._load_agent(agent["id"]).get("instructions") or ""
+    check("interview answers: merged into instructions (append path carries the Q&A)",
+         "0161 555 0199" in instructions, instructions)
+    check("interview answers: brain_covers_at caught up with answered_at",
+         (saved.get("brain_covers_at") or "") >= (interview.get("answered_at") or "x"),
+         (saved.get("brain_covers_at"), interview.get("answered_at")))
+    check("interview answers: no pending merge left behind",
+         (saved.get("pending_merges") or []) == [], saved.get("pending_merges"))
+
+    status4, _resp4 = setter.route_training_interview({"share": token, "action": "answers",
+                                                       "answers": {"q-nope": "x"}})
+    check("interview answers: unknown question ids -> 400", status4 == 400, status4)
+
+
+def test_route_training_get_exposes_fastloop_fields():
+    """The portal's snapshot must carry brain_covers_at, the interview rounds,
+    and instruction_edits entries with source+rule (the learned-chip match
+    key and text)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-fields01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "x", "sender_first": "Ada",
+             "instruction_edits": [{"note": "n", "how": "merged", "at": "2026-08-20T00:00:00+00:00",
+                                    "source": "training-edit:case-z", "rule": "Timeless rule."}]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    setter._save_training(agent["id"], {"cases": [], "answers": {}, "used_reply_ids": [],
+                                        "readiness_history": [], "brain_covers_at": "2026-08-20T10:00:00+00:00",
+                                        "interviews": [{"questions": [{"id": "q1", "q": "Phone?"}],
+                                                        "answers": {"q1": "555"}, "asked_at": "2026-08-20T09:00:00+00:00"}],
+                                        "created_at": "2026-01-01T00:00:00+00:00"})
+    status, resp = setter.route_training_get({"agent_id": agent["id"]})
+    check("fastloop fields: 200", status == 200, status)
+    check("fastloop fields: brain_covers_at exposed",
+         resp.get("brain_covers_at") == "2026-08-20T10:00:00+00:00", resp.get("brain_covers_at"))
+    check("fastloop fields: interviews exposed with answers",
+         (resp.get("interviews") or [{}])[0].get("answers", {}).get("q1") == "555", resp.get("interviews"))
+    edit = (resp.get("instruction_edits") or [{}])[0]
+    check("fastloop fields: instruction_edits carry source + rule",
+         edit.get("source") == "training-edit:case-z" and edit.get("rule") == "Timeless rule.", edit)
+
+
 def test_training_skip_is_neutral_and_leaves_stream():
     """Skip (owner ruling 2026-08-20): a skipped card is handled - it leaves the
     unanswered stream so it is never re-shown - but neutral: no retrain, and
@@ -7928,10 +8237,23 @@ def test_training_get_includes_minimal_agent_memory():
 
     edits = resp.get("instruction_edits") or []
     check("training get: instruction_edits (item 9) carries the one edit", len(edits) == 1, edits)
-    check("training get: instruction_edits rows are note+how+at only - source never leaks through here",
-         bool(edits) and set(edits[0].keys()) == {"note", "how", "at"}, edits)
+    # Fastloop (2026-08-20): rule + a training-family source joined the shape
+    # for the learned-chip; anything else (an owner-inbox edit's queue-row id)
+    # is still blanked - see the non-training row check below.
+    check("training get: instruction_edits rows are note+how+at+source+rule only",
+         bool(edits) and set(edits[0].keys()) == {"note", "how", "at", "source", "rule"}, edits)
+    check("training get: a training-family source passes through for the chip",
+         bool(edits) and edits[0]["source"] == "training:case-01", edits)
     check("training get: instruction_edits note/how match the agent's real edit",
          bool(edits) and edits[0]["note"] == "Always mention the trial." and edits[0]["how"] == "merged", edits)
+
+    agent["instruction_edits"].append({"note": "From the inbox.", "at": "2026-07-06T00:00:00+00:00",
+                                       "source": "q-row-8f2a11", "how": "merged"})
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    _status3, resp3 = setter.route_training_get({"agent_id": agent["id"]})
+    edits3 = resp3.get("instruction_edits") or []
+    check("training get: a NON-training source (inbox queue-row id) is still blanked",
+         len(edits3) == 2 and edits3[1]["source"] == "", edits3)
 
     status2, resp2 = setter.route_training_get({"agent_id": "does-not-exist"})
     check("training get: unknown agent -> 404", status2 == 404, (status2, resp2))
@@ -8042,7 +8364,11 @@ def test_training_answer_share_forces_agent_rejects_mismatch_and_response_stays_
     }, agent_id=agent["id"])
     check("training answer share: 200 - scope=remember still works from a share link", status == 200, (status, resp))
     check("training answer share: response carries only this session's own stats, no cross-agent data",
-         set(resp.keys()) <= {"ok", "readiness", "answered_count", "unanswered_count", "retrain"}, resp)
+         # learned + at joined the shape for the fastloop chip/gate
+         # (2026-08-20) - both echo the client's OWN answer, nothing
+         # cross-agent.
+         set(resp.keys()) <= {"ok", "readiness", "answered_count", "unanswered_count", "retrain",
+                              "learned", "at"}, resp)
     saved = setter._load_agent(agent["id"])
     check("training answer share: the client's note reached THIS agent's instructions (single living manual, "
          "owner ruling 2026-07-14 - remember no longer writes memory)",
@@ -11237,6 +11563,13 @@ if __name__ == "__main__":
     test_autoreply_category_labels_and_signature_veto()
     test_sweep_client_uncategorised_categorises_and_resolves()
     test_attach_campaign_names()
+    test_training_answer_edit_teaches_via_lesson_from_edit()
+    test_training_answer_edit_fallback_merges_worked_example()
+    test_training_answer_unchanged_edit_is_not_feedback()
+    test_share_pool_redraft_refreshes_spares_never_the_round()
+    test_generate_queued_behind_retrain_lock_runs_after()
+    test_training_interview_questions_and_answers_merge()
+    test_route_training_get_exposes_fastloop_fields()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

@@ -100,6 +100,51 @@
 .qc-draft div { min-height: 1em; }
 .qc-draft a { color: var(--orange-700); }
 
+/* Fastloop (owner ruling 2026-08-20): the client can edit the draft right on
+   the card - the editable state has to LOOK editable, and an edited draft has
+   to look changed. */
+body.share-mode .qc-draft[contenteditable="true"] { cursor: text; transition: border-color .15s, box-shadow .15s; }
+body.share-mode .qc-draft[contenteditable="true"]:hover { border-color: var(--orange-400, #E8A268); }
+body.share-mode .qc-draft[contenteditable="true"]:focus {
+  outline: none; border-color: var(--orange-500, #D97A2B);
+  box-shadow: 0 0 0 3px var(--orange-100, #FBEADB);
+}
+body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); background: var(--orange-50, #FDF6EF); }
+.tr-edit-hint { font-size: 12px; color: var(--ink-3); margin: 4px 0 0; }
+.tr-edit-hint a { color: var(--orange-700); cursor: pointer; }
+.correct-blocked-hint { font-size: 12px; color: var(--amber, #9A6A00); margin: 6px 0 0; }
+.grade-btns .btn.big-yes:disabled, body.share-mode .grade-btns .btn.big-yes:disabled {
+  background: var(--bg-sunken); border-color: var(--line-2); color: var(--ink-3);
+  cursor: not-allowed; opacity: .7;
+}
+
+/* Learned-chip: the one-line "here's what your AI just took in" confirmation. */
+.learned-chip {
+  display: flex; gap: 8px; align-items: baseline; font-size: 12.5px; line-height: 1.5;
+  background: var(--green-bg); color: #195C3F; border: 1px solid var(--green-line);
+  border-radius: 8px; padding: 8px 12px; margin: 0 0 12px;
+}
+.learned-chip.pending { background: var(--bg-sunken); color: var(--ink-2); border-color: var(--line-2); }
+.learned-chip .lc-ico { flex: none; }
+
+/* Between-rounds transition + offer interview */
+.round-updating { display: flex; gap: 10px; align-items: center; justify-content: center;
+  font-size: 13px; color: var(--ink-2); margin: 12px 0; }
+.round-updating .spin { width: 14px; height: 14px; border: 2px solid var(--line-2);
+  border-top-color: var(--orange-500, #D97A2B); border-radius: 50%;
+  animation: fastloop-spin .8s linear infinite; flex: none; }
+@keyframes fastloop-spin { to { transform: rotate(360deg); } }
+.interview { border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px; margin: 14px 0 0; text-align: left; }
+.interview h3 { font-size: 15px; margin: 0 0 4px; }
+.interview .iv-sub { font-size: 12.5px; color: var(--ink-2); margin: 0 0 14px; }
+.interview .iv-q { margin: 0 0 12px; }
+.interview .iv-q label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 5px; }
+.interview .iv-q input { width: 100%; box-sizing: border-box; font-size: 13px;
+  padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 8px; }
+.interview .iv-row { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
+.interview .iv-skip { font-size: 12.5px; color: var(--ink-3); cursor: pointer; }
+
 .train-verdict { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
 .grade-q { margin: 0 0 18px; }
 .grade-q-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
@@ -316,6 +361,39 @@ let generating = false; // guards the POST /training/generate and /training/rech
 let ROUND_IDS = null;
 const ROUND_SIZE = 3;   // owner ruling 2026-08-20: rounds of 3, was 5
 const ROUND_CAP = 12;           // rounds per sitting - then "we'll take it from here"
+
+/* ── Fastloop state (owner ruling 2026-08-20) ─────────────────────────────
+   The portal must never show a draft written BEFORE the client's latest
+   teaching (the stale-prefetch race, see baseline). Every answer/interview
+   response returns a server timestamp; the server stamps brain_covers_at on
+   the doc whenever a generate/pool-redraft pass has incorporated everything
+   saved up to some moment. The next round opens only when the brain has
+   caught up. All comparisons are server-time vs server-time - the client's
+   own clock is never consulted. */
+let BRAIN_COVERS_AT = "";
+let INTERVIEWS = [];
+let LEARNED_CHIP = null;      // {kind, text, pending, source} - newest teach echo
+let chipPollHandle = null;
+let transitionPollHandle = null;
+let transitionStartedAt = 0;
+let lastFeedbackAt = "";      // server-time of MY newest teaching this sitting
+try { lastFeedbackAt = sessionStorage.getItem("trainLastFeedbackAt") || ""; } catch { /* ignore */ }
+
+function bumpLastFeedbackAt(at) {
+  if (!at || at <= lastFeedbackAt) return;
+  lastFeedbackAt = at;
+  try { sessionStorage.setItem("trainLastFeedbackAt", at); } catch { /* ignore */ }
+}
+function poolFresh() {
+  return !lastFeedbackAt || (BRAIN_COVERS_AT && BRAIN_COVERS_AT >= lastFeedbackAt);
+}
+/* A single case is fresh when it was drafted (or re-drafted) after my last
+   teaching - or when the whole pool has been swept since. */
+function caseFresh(c) {
+  if (!lastFeedbackAt) return true;
+  const stamp = String((c && (c.redrafted_at || c.generated_at)) || "");
+  return (stamp && stamp >= lastFeedbackAt) || poolFresh();
+}
 
 /* ── Background-generation polling state ──────────────────────────────────
    Scenario generation runs on the server in a background thread (see
@@ -539,6 +617,8 @@ function trainingQS() {
 async function loadTraining() {
   stopGeneratingPoll();
   stopRetrainNotice();
+  stopTransitionPoll();
+  stopChipPoll();
   view = "loading"; render();
   const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
   if (!res.ok) {
@@ -571,6 +651,8 @@ function applyCasesSnapshot(data) {
   AGENT_MEMORY = (data && data.agent_memory) || [];
   INSTRUCTION_EDITS = (data && data.instruction_edits) || [];
   GENERATING = (data && data.generating) || GENERATING;
+  BRAIN_COVERS_AT = (data && data.brain_covers_at) || BRAIN_COVERS_AT;
+  INTERVIEWS = (data && data.interviews) || INTERVIEWS;
   applyReadiness((data && data.readiness) || READINESS, { animate: false });
 }
 
@@ -1051,6 +1133,46 @@ function render() {
 
 function renderEmpty() {
   const el = document.getElementById("trainApp");
+  // First visit, share mode (owner ruling 2026-08-20): five quick offer
+  // questions BEFORE the first scenarios, so the very first drafts are built
+  // from real facts instead of guesses. Skippable; an already-answered
+  // interview goes straight to the normal generate button.
+  const answeredInterview = INTERVIEWS.some((i) => Object.keys((i && i.answers) || {}).length);
+  if (SHARE_MODE && !answeredInterview) {
+    el.innerHTML = `
+      <div class="empty-flow">
+        <p>Before we write anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
+        <div id="ivFirstHost"><div class="round-updating"><span class="spin"></span><span>Getting your questions ready…</span></div></div>
+      </div>
+    `;
+    fetchInterviewQuestions().then((iv) => {
+      const host = document.getElementById("ivFirstHost");
+      if (!host) return;
+      if (!iv || !(iv.questions || []).length) {
+        host.innerHTML = `<button class="btn primary" id="emptyGenerateBtn" type="button">Get scenarios to rate</button>`;
+        const b = document.getElementById("emptyGenerateBtn");
+        if (b) b.addEventListener("click", () => generateMore());
+        return;
+      }
+      INTERVIEWS.push(iv);
+      host.innerHTML = interviewFormHtml(iv, {
+        title: "Five quick questions",
+        sub: "One line each - we use these in every reply we draft for you.",
+        cta: "Save answers & show me scenarios",
+        skip: "Skip - just show me scenarios",
+      });
+      const firstGenSpinner = () => {
+        const h = document.getElementById("ivFirstHost");
+        if (h) h.innerHTML = `<div class="round-updating"><span class="spin"></span><span>Writing your first scenarios - under a minute…</span></div>`;
+        generateMore();
+      };
+      const submitBtn = document.getElementById("ivSubmitBtn");
+      if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, firstGenSpinner));
+      const skipBtn = document.getElementById("ivSkipBtn");
+      if (skipBtn) skipBtn.addEventListener("click", firstGenSpinner);
+    });
+    return;
+  }
   el.innerHTML = `
     <div class="empty-flow">
       <p>No scenarios to rate yet. You'll get a batch drawn from real replies your campaigns have received, topped up with practice ones when real replies run out - for each, we show the reply we'd send and you say whether it's right. Nothing here ever emails a lead.</p>
@@ -1097,7 +1219,14 @@ function renderRoundDone() {
        <div class="db-msg">Round ${roundNum} done - we got ${right} of ${total} right this round.</div>`
     : "";
 
-  let msg, buttons;
+  // Fastloop gate (2026-08-20): the next round opens only with cards drafted
+  // AFTER everything taught this round (caseFresh) - never the old stale
+  // pool. While the brain catches up (a few seconds), say so honestly and
+  // keep a fast poll running; the offer interview below fills the wait.
+  const freshSpares = CASES.filter((c) => !isAnswered(c.id) && caseFresh(c));
+  const ready = freshSpares.length > 0;
+
+  let msg, buttons, updating = "";
   if (trained) {
     msg = `We're at ${score}, past the 90 goal - we've got your voice down and can reply for you. Everything you've shown us is saved. `
         + `You can stop here${capped ? "." : " - or keep going to sharpen it further."}`;
@@ -1106,9 +1235,13 @@ function renderRoundDone() {
     msg = `That's a lot for one sitting - thank you! We're at ${score} of the 90 goal. `
         + `We'll take it from here; come back any time with this same link to keep going.`;
     buttons = "";
-  } else {
-    msg = `We're at ${score} of the 90 goal. Another round will get us closer.`;
+  } else if (ready) {
+    msg = `We're at ${score} of the 90 goal. The next round was drafted with everything you just taught us.`;
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
+  } else {
+    msg = `We're at ${score} of the 90 goal.`;
+    updating = `<div class="round-updating" id="roundUpdating"><span class="spin"></span><span>Updating your AI with what you just taught it - the next round will already know…</span></div>`;
+    buttons = "";
   }
 
   el.innerHTML = `
@@ -1116,14 +1249,196 @@ function renderRoundDone() {
       <div class="db-icon">${trained ? "🎉" : "✓"}</div>
       ${scoreLine}
       <div class="db-msg">${msg}</div>
+      ${updating}
       ${buttons}
       ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what we've learned</button>` : ""}
     </div>
+    <div id="interviewHost"></div>
   `;
   const genBtn = document.getElementById("doneGenerateBtn");
   if (genBtn) genBtn.addEventListener("click", () => startNextRoundOrGenerate());
   const reviewBtn = document.getElementById("doneReviewBtn");
   if (reviewBtn) reviewBtn.addEventListener("click", () => startReview());
+  if (!trained && !capped) {
+    if (!ready) startTransitionPoll();
+    maybeRenderInterview(roundNum);
+  }
+}
+
+/* ── Round-transition poll (fastloop 2026-08-20): 1s, not 4s - the old
+   4000ms poll was most of the 5-second budget on its own. Replaces stale
+   unanswered pool cases with their redrafted versions (safe here - nothing
+   is on screen mid-transition), appends fresh ones, and re-renders the
+   round-done screen the moment the gate opens. After 45s of no progress it
+   falls back to the visible generate path rather than spinning forever. */
+function stopTransitionPoll() {
+  if (transitionPollHandle) { clearInterval(transitionPollHandle); transitionPollHandle = null; }
+}
+function startTransitionPoll() {
+  if (transitionPollHandle) return;
+  transitionStartedAt = Date.now();
+  transitionPollHandle = setInterval(async () => {
+    if (view !== "done") { stopTransitionPoll(); return; }
+    if (Date.now() - transitionStartedAt > 45 * 1000) {
+      stopTransitionPoll();
+      const spare = CASES.filter((c) => !isAnswered(c.id));
+      if (!spare.length) { generateMore(); }
+      else { render(); } // open with what exists rather than blocking forever
+      return;
+    }
+    const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+    if (!res.ok) {
+      if (SHARE_MODE && res.status === 401) { stopTransitionPoll(); renderShareExpired(); }
+      return;
+    }
+    mergeCasesSnapshot(res.data, { replaceUnanswered: true });
+    const freshSpares = CASES.filter((c) => !isAnswered(c.id) && caseFresh(c));
+    if (freshSpares.length) { stopTransitionPoll(); if (view === "done") unlockRoundDoneButton(); }
+  }, 1000);
+}
+
+/* Gate-open swap-in-place: replace the "updating…" spinner with the Start
+   button WITHOUT re-rendering the done screen - a half-typed interview
+   answer below must never be redrawn away (same law as the feedback box). */
+function unlockRoundDoneButton() {
+  const upd = document.getElementById("roundUpdating");
+  if (!upd) { render(); return; }
+  const roundNum = currentRoundNum();
+  upd.outerHTML = `<div class="db-msg">The next round was drafted with everything you just taught us.</div>
+    <button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
+  const genBtn = document.getElementById("doneGenerateBtn");
+  if (genBtn) genBtn.addEventListener("click", () => startNextRoundOrGenerate());
+}
+
+/* Refresh CASES from a poll snapshot without ever touching ANSWERS
+   (optimistic in-flight saves live there) or a card that is on screen:
+   replaces unanswered cases the server has newer versions of (pool
+   redrafts), appends unknown ones, and keeps round/generating/covers state
+   in sync. replaceUnanswered=false keeps today's append-only behaviour. */
+function mergeCasesSnapshot(data, opts) {
+  opts = opts || {};
+  const freshList = (data && data.cases) || [];
+  const freshById = {};
+  freshList.forEach((c) => { freshById[String(c.id)] = c; });
+  const inRound = new Set((ROUND_IDS || []).map(String));
+  CASES = CASES.map((c) => {
+    const f = freshById[String(c.id)];
+    if (!f) return c;
+    const replaceable = opts.replaceUnanswered && !isAnswered(c.id)
+      && (view !== "stream" || !inRound.has(String(c.id)));
+    return replaceable ? f : c;
+  });
+  const have = new Set(CASES.map((c) => String(c.id)));
+  freshList.forEach((c) => { if (!have.has(String(c.id))) CASES.push(c); });
+  GENERATING = (data && data.generating) || GENERATING;
+  BRAIN_COVERS_AT = (data && data.brain_covers_at) || BRAIN_COVERS_AT;
+  INSTRUCTION_EDITS = (data && data.instruction_edits) || INSTRUCTION_EDITS;
+  INTERVIEWS = (data && data.interviews) || INTERVIEWS;
+  growRoundIfShort();
+}
+
+/* Mid-round growth (fastloop): a round that had to open short (the pool was
+   still filling) absorbs freshly-landed cases up to ROUND_SIZE, so 1-card
+   rounds stop existing. Never rerenders - the progress line catches up on
+   the next natural render. */
+function growRoundIfShort() {
+  if (!SHARE_MODE || view !== "stream" || !ROUND_IDS || ROUND_IDS.length >= ROUND_SIZE) return;
+  if (!ROUND_IDS.some((id) => !isAnswered(id))) return; // round already over
+  const inRound = new Set(ROUND_IDS.map(String));
+  const extra = CASES.filter((c) => !isAnswered(c.id) && !inRound.has(String(c.id)) && caseFresh(c))
+    .slice(0, ROUND_SIZE - ROUND_IDS.length).map((c) => c.id);
+  if (!extra.length) return;
+  ROUND_IDS = ROUND_IDS.concat(extra);
+  try { sessionStorage.setItem("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
+}
+
+/* ── Offer interview (owner ruling 2026-08-20) ────────────────────────────
+   Five short offer questions before the first scenarios ever generate, then
+   five fresh follow-ups on every round-done screen - asked WHILE the next
+   round builds, so the wait does double duty. Always skippable; answers
+   merge into the agent's brain through the same correction door as
+   everything else and ride the digest into the very next drafts. */
+let ivShownForRound = 0;
+
+function interviewFormHtml(iv, opts) {
+  opts = opts || {};
+  const qs = (iv && iv.questions) || [];
+  return `
+    <div class="interview" id="ivForm">
+      <h3>${opts.title || "Quick questions about your offer"}</h3>
+      <div class="iv-sub">${opts.sub || "One line each - your answers go straight into how we reply."}</div>
+      ${qs.map((q) => `
+        <div class="iv-q">
+          <label for="iv-${esc(String(q.id))}">${esc(String(q.q || ""))}</label>
+          <input id="iv-${esc(String(q.id))}" data-qid="${esc(String(q.id))}" type="text" autocomplete="off">
+        </div>`).join("")}
+      <div class="iv-row">
+        <button class="btn primary" id="ivSubmitBtn" type="button">${opts.cta || "Send answers"}</button>
+        <a class="iv-skip" id="ivSkipBtn" role="button">${opts.skip || "Skip for now"}</a>
+      </div>
+    </div>`;
+}
+
+async function fetchInterviewQuestions() {
+  const body = { agent_id: selectedAgentId, action: "questions" };
+  if (SHARE_MODE) body.share = SHARE_TOKEN;
+  const res = await fetchJson("/api/setter/training/interview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (!res.ok) return null;
+  return { questions: (res.data && res.data.questions) || [], asked_at: (res.data && res.data.asked_at) || "" };
+}
+
+async function submitInterviewAnswers(iv, onDone) {
+  const answers = {};
+  let n = 0;
+  (iv.questions || []).forEach((q) => {
+    const inp = document.getElementById(`iv-${String(q.id)}`);
+    const val = inp ? inp.value.trim() : "";
+    if (val) { answers[String(q.id)] = val; n++; }
+  });
+  if (!n) { showError("Answer at least one question - or hit skip."); return; }
+  const body = { agent_id: selectedAgentId, action: "answers", answers };
+  if (SHARE_MODE) body.share = SHARE_TOKEN;
+  const btn = document.getElementById("ivSubmitBtn");
+  const restore = btn ? busyBtn(btn, "Teaching your AI…") : null;
+  const res = await fetchJson("/api/setter/training/interview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  });
+  if (restore) restore();
+  if (!res.ok) { showError("Couldn't save your answers: " + res.error); return; }
+  clearError();
+  iv.answers = answers;
+  bumpLastFeedbackAt((res.data && res.data.at) || "");
+  LEARNED_CHIP = { kind: "interview", text: "we'll use these answers in every reply from now on", pending: false };
+  if (onDone) onDone();
+}
+
+/* Round-done variant: fetch (or reuse) the latest question set and slot the
+   form under the score while the next round builds. */
+async function maybeRenderInterview(roundNum) {
+  const host = document.getElementById("interviewHost");
+  if (!host || ivShownForRound === roundNum) return;
+  let iv = INTERVIEWS.length ? INTERVIEWS[INTERVIEWS.length - 1] : null;
+  const unansweredSet = iv && (iv.questions || []).length && !Object.keys(iv.answers || {}).length;
+  if (!unansweredSet) {
+    iv = await fetchInterviewQuestions();
+    if (iv) INTERVIEWS.push(iv);
+  }
+  if (!iv || !(iv.questions || []).length || view !== "done") return;
+  ivShownForRound = roundNum;
+  host.innerHTML = interviewFormHtml(iv, {
+    title: "While that builds - a few quick questions",
+    sub: "Your answers go straight into the next replies. One line each, skip any.",
+  });
+  const submitBtn = document.getElementById("ivSubmitBtn");
+  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, () => {
+    const h = document.getElementById("interviewHost");
+    if (h) h.innerHTML = "";
+    if (view === "done") render();
+  }));
+  const skipBtn = document.getElementById("ivSkipBtn");
+  if (skipBtn) skipBtn.addEventListener("click", () => { host.innerHTML = ""; });
 }
 
 /* ── Review mode (owner request 2026-07-14) ────────────────────────────────
@@ -1301,8 +1616,11 @@ function maybePrefetchNextRound() {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   }).then((res) => {
+    // "queued" (fastloop 2026-08-20): a retrain holds the shared lock right
+    // now and the server will run this batch the moment it's free - the old
+    // "already_running" answer used to silently swallow it.
     const st = res.ok && res.data && res.data.status;
-    if (st === "started" || st === "already_running") startPrefetchPoll();
+    if (st === "started" || st === "already_running" || st === "queued") startPrefetchPoll();
   });
 }
 
@@ -1314,9 +1632,12 @@ function startPrefetchPoll() {
     if (Date.now() > deadline) { stopPrefetchPoll(); return; }
     const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
     if (!res.ok || !prefetchPollHandle) return;
-    const have = new Set(CASES.map((c) => String(c.id)));
-    const fresh = ((res.data && res.data.cases) || []).filter((c) => !have.has(String(c.id)));
-    if (fresh.length) { CASES = CASES.concat(fresh); appended += fresh.length; }
+    const before = CASES.length;
+    // mergeCasesSnapshot (fastloop): appends unknown cases AND swaps stale
+    // unanswered pool cases for their redrafted versions - never a card in
+    // the current round, never ANSWERS.
+    mergeCasesSnapshot(res.data, { replaceUnanswered: true });
+    appended += Math.max(0, CASES.length - before);
     const st = (res.data && res.data.generating && res.data.generating.status) || "idle";
     if (st !== "running" && appended > 0) {
       stopPrefetchPoll();
@@ -1335,6 +1656,15 @@ function startNextRoundOrGenerate() {
     const spare = CASES.filter((c) => !isAnswered(c.id));
     if (spare.length) {
       stopPrefetchPoll();
+      stopTransitionPoll();
+      // Fresh cards first (fastloop 2026-08-20): the round snapshot takes the
+      // head of the unanswered list, so cards drafted after this round's
+      // teaching lead and any straggler only fills a shortfall.
+      const freshIds = new Set(spare.filter(caseFresh).map((c) => String(c.id)));
+      if (freshIds.size && freshIds.size < spare.length) {
+        CASES = CASES.filter((c) => freshIds.has(String(c.id)))
+          .concat(CASES.filter((c) => !freshIds.has(String(c.id))));
+      }
       ROUND_IDS = null;
       try { sessionStorage.removeItem("trainRoundIds"); } catch { /* ignore */ }
       beginRoundIfNeeded();
@@ -1344,6 +1674,7 @@ function startNextRoundOrGenerate() {
       return;
     }
     stopPrefetchPoll();
+    stopTransitionPoll();
   }
   generateMore();
 }
@@ -1451,6 +1782,7 @@ function renderCase(unanswered, i) {
   el.innerHTML = `
     <div class="train-progress">${progressLine}</div>
     <div class="retrain-notice" id="trRetrainNotice" style="display:${indicator.visible ? "" : "none"}">${esc(indicator.text)}</div>
+    <div id="learnedChipHost">${renderLearnedChipHtml()}</div>
     <div class="train-card">
       <div class="tr-chips">
         <span class="pill n">${esc(campaignName)}</span>
@@ -1464,25 +1796,37 @@ function renderCase(unanswered, i) {
         <div class="tr-details-body">${humanHist.subject ? `<div class="tr-subj">${esc(humanHist.subject)}</div>` : ""}${msgText(humanHist.body)}</div>
       </details>` : ""}
       ${(SHARE_MODE && c.decision === "auto_send") ? "" : `<div class="tr-call ${call.cls}">${esc(call.text)}</div>`}
-      ${hasDraft ? `
+      ${hasDraft ? (SHARE_MODE ? `
+      <div class="tr-block">
+        <div class="tr-block-lab">The reply we'd send</div>
+        <div class="qc-draft${p.edited_body ? " edited" : ""}" id="trDraft" contenteditable="true">${p.edited_body || c.draft_html}</div>
+        <div class="tr-edit-hint" id="trEditHint">${p.edited_body
+          ? `You've rewritten our reply - we'll learn from your version. <a id="trEditRevert" role="button">Put it back how it was</a>`
+          : `✏️ Not quite right? Click the reply and rewrite it your way - we learn from your version.`}</div>
+      </div>` : `
       <div class="tr-block">
         <div class="tr-block-lab">The reply we'd send</div>
         <div class="qc-draft">${c.draft_html}</div>
-      </div>` : ""}
+      </div>`) : ""}
     </div>
 
     ${SHARE_MODE ? `
     <div class="train-verdict">
       <div class="grade-q">
-        <div class="grade-q-label">Is this how you'd handle it? <span class="grade-q-hint">The call and reply above, together.</span></div>
+        <div class="grade-q-label">Is this how you'd handle it? <span class="grade-q-hint">Correct = we send replies like this. Needs work = tell us or show us, and we learn right away.</span></div>
         <div class="grade-btns" id="clientVerdictBtns">
-          <button type="button" class="btn big-yes ${p.verdict === "correct" ? "sel" : ""}" data-v="correct">✓ Correct</button>
+          <button type="button" class="btn big-yes ${p.verdict === "correct" ? "sel" : ""}" data-v="correct" ${p.edited_body ? "disabled" : ""}>✓ Correct</button>
           <button type="button" class="btn big-no ${p.verdict === "needs_work" ? "sel" : ""}" data-v="needs_work">✍️ Needs work</button>
         </div>
+        <div class="correct-blocked-hint" id="correctBlockedHint" style="display:${p.edited_body ? "" : "none"}">You've changed the reply - pick Needs work so we learn from your version.</div>
       </div>
       <div class="field" id="clientReasonField">
-        <label>Something off? Tell us what you'd change (no need to write the whole reply)</label>
-        <textarea id="trNote" placeholder="Just say what you'd do differently. Word for word is a bonus, not needed. (Required for Needs work.)">${esc(p.note || "")}</textarea>
+        <label id="trNoteLabel">${p.edited_body
+          ? "Anything else? Your rewrite already teaches us - add a note only if you want."
+          : "Something off? Tell us what you'd change (no need to write the whole reply)"}</label>
+        <textarea id="trNote" placeholder="${p.edited_body
+          ? "Optional - your edited reply is the feedback."
+          : "Just say what you'd do differently. Word for word is a bonus, not needed. (Required for Needs work.)"}">${esc(p.note || "")}</textarea>
       </div>
       <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
       <div class="grade-nav">
@@ -1545,14 +1889,73 @@ function wireCaseEvents(c, unanswered, i) {
   const clientWrap = document.getElementById("clientVerdictBtns");
   if (clientWrap) {
     const hasDraft = !!(c.draft_html && String(c.draft_html).trim());
+
+    // Edit-as-feedback (owner ruling 2026-08-20): the draft is editable; the
+    // moment its text differs from the original, "Correct" greys out and
+    // Needs work is the only way forward - the edit IS the feedback.
+    // Reverting the text (or the revert link) re-enables Correct. All state
+    // lives in PENDING so browsing back and forth never loses a rewrite.
+    const draftEl = document.getElementById("trDraft");
+    const correctBtn = clientWrap.querySelector('button[data-v="correct"]');
+    const plainText = (html) => {
+      const d = document.createElement("div");
+      d.innerHTML = String(html || "");
+      return (d.textContent || "").replace(/\s+/g, " ").trim();
+    };
+    const originalPlain = plainText(c.draft_html);
+    const wireRevert = () => {
+      const rv = document.getElementById("trEditRevert");
+      if (rv) rv.addEventListener("click", () => {
+        if (draftEl) draftEl.innerHTML = c.draft_html;
+        delete p.edited_body;
+        syncEditState();
+      });
+    };
+    const syncEditState = () => {
+      const edited = !!p.edited_body;
+      if (correctBtn) correctBtn.disabled = edited;
+      const blockedHint = document.getElementById("correctBlockedHint");
+      if (blockedHint) blockedHint.style.display = edited ? "" : "none";
+      if (draftEl) draftEl.classList.toggle("edited", edited);
+      const editHint = document.getElementById("trEditHint");
+      if (editHint) {
+        editHint.innerHTML = edited
+          ? `You've rewritten our reply - we'll learn from your version. <a id="trEditRevert" role="button">Put it back how it was</a>`
+          : `✏️ Not quite right? Click the reply and rewrite it your way - we learn from your version.`;
+        wireRevert();
+      }
+      const noteLabel = document.getElementById("trNoteLabel");
+      const noteEl3 = document.getElementById("trNote");
+      if (noteLabel) noteLabel.textContent = edited
+        ? "Anything else? Your rewrite already teaches us - add a note only if you want."
+        : "Something off? Tell us what you'd change (no need to write the whole reply)";
+      if (noteEl3) noteEl3.placeholder = edited
+        ? "Optional - your edited reply is the feedback."
+        : "Just say what you'd do differently. Word for word is a bonus, not needed. (Required for Needs work.)";
+      if (edited && p.verdict === "correct") { p.verdict = undefined; clientWrap.querySelectorAll("button").forEach((b) => b.classList.remove("sel")); }
+    };
+    if (draftEl) {
+      draftEl.addEventListener("input", () => {
+        const now = plainText(draftEl.innerHTML);
+        if (now && now !== originalPlain) p.edited_body = draftEl.innerHTML;
+        else delete p.edited_body;
+        syncEditState();
+      });
+    }
+    wireRevert();
+
     clientWrap.querySelectorAll("button[data-v]").forEach((btn) => {
       btn.addEventListener("click", () => {
         const v = btn.getAttribute("data-v");
         hideNudge();
         const noteEl2 = document.getElementById("trNote");
         const noteVal = noteEl2 ? noteEl2.value.trim() : "";
-        if (v === "needs_work" && !noteVal) {
-          showNudge("Just tell us what you'd change in the box above - that's how we learn your voice.");
+        if (v === "correct" && p.edited_body) {
+          showNudge("You've changed the reply - pick Needs work so we learn from your version (or put the reply back).");
+          return;
+        }
+        if (v === "needs_work" && !noteVal && !p.edited_body) {
+          showNudge("Tell us what you'd change in the box above - or click the reply and rewrite it your way. Either one teaches us.");
           if (noteEl2) noteEl2.focus();
           return;
         }
@@ -1691,7 +2094,9 @@ function submitAndAdvance(c) {
     if (p.verdict === "needs_work") {
       const nEl = document.getElementById("trNote");
       if (nEl) p.note = nEl.value.trim();
-      if (!p.note) { showNudge("Just tell us what you'd change - that's how we learn."); return; }
+      // Edit-as-feedback (2026-08-20): a rewritten draft IS the reason - the
+      // note becomes optional when an edit is present.
+      if (!p.note && !p.edited_body) { showNudge("Tell us what you'd change - or rewrite the reply itself. Either one teaches us."); return; }
     }
   }
   if (p.decision_ok === undefined) { showNudge("Answer \"Right call?\" first."); return; }
@@ -1708,7 +2113,13 @@ function submitAndAdvance(c) {
     reply_ok: (p.reply_ok === true || p.reply_ok === false) ? p.reply_ok : null,
     note: p.note || "", scope: effectiveScope,
   };
-  if (SHARE_MODE) answerBody.share = SHARE_TOKEN;
+  if (SHARE_MODE) {
+    answerBody.share = SHARE_TOKEN;
+    // The server must know which cards are under my eyes right now - the
+    // pool-redraft pass refreshes everything EXCEPT these (fastloop).
+    if (ROUND_IDS && ROUND_IDS.length) answerBody.round_ids = ROUND_IDS;
+    if (p.verdict === "needs_work" && p.edited_body) answerBody.edited_body = p.edited_body;
+  }
   // Snapshot of exactly what the trainer picked, so a failure restores this
   // (not whatever happens to be on screen by the time the response lands).
   const restoreSnapshot = { decision_ok: p.decision_ok, reply_ok: p.reply_ok, note: p.note, scope: p.scope };
@@ -1746,17 +2157,74 @@ function submitAndAdvance(c) {
     // exactly as-is in the meantime, never fake-computed client-side.
     applyReadiness((res.data && res.data.readiness) || READINESS, { animate: true });
 
-    // Feature B: ANY feedback (a note, or a "No" on either question) kicks
-    // off a background retrain of the remaining unanswered scenarios.
-    // In the client Training Wizard the retrain is merge-only (owner ruling
-    // 2026-08-20): it never re-drafts the round's other cards, so there is
-    // nothing to poll for or refresh and the "updating scenarios" notice would
-    // be misleading - the brief "Saving…" indicator already covers it. The
-    // owner/CSM trainer still runs the usual notice+poll.
+    // Fastloop (2026-08-20): the server echoes what it just took in -
+    // `learned` is server state (the saved note, or a pending edit-lesson
+    // that upgrades from instruction_edits once distilled), and `at` is the
+    // server-time this teaching landed, which the round gate compares
+    // against brain_covers_at. Never invented client-side.
+    if (SHARE_MODE && res.data) {
+      const learned = res.data.learned;
+      if (learned) {
+        LEARNED_CHIP = { ...learned };
+        bumpLastFeedbackAt(res.data.at || "");
+        renderLearnedChip();
+        if (learned.pending) startChipPoll();
+      } else if (res.data.at && (answerBody.decision_ok === false || answerBody.reply_ok === false)) {
+        // A bare "wrong" mark still teaches through the digest - gate on it.
+        bumpLastFeedbackAt(res.data.at);
+      }
+    }
+
+    // Feature B: ANY feedback (a note, an edit, or a "No") kicks off a
+    // background retrain. In the client Training Wizard that pass rewrites
+    // the between-rounds POOL first (fastloop 2026-08-20) - never the
+    // round's own cards - so there is still nothing to refresh on screen;
+    // the round-done gate handles the rest. The owner/CSM trainer keeps the
+    // usual notice+poll.
     const retrainStatus = res.data && res.data.retrain;
     if (!SHARE_MODE && (retrainStatus === "started" || retrainStatus === "queued")) startRetrainNotice();
     maybePrefetchNextRound();
   });
+}
+
+/* ── Learned-chip (fastloop 2026-08-20): say back what the AI just took in ── */
+function renderLearnedChipHtml() {
+  if (!SHARE_MODE || !LEARNED_CHIP) return "";
+  const chip = LEARNED_CHIP;
+  if (chip.pending) {
+    return `<div class="learned-chip pending"><span class="lc-ico">✍️</span><span>Learning from your version…</span></div>`;
+  }
+  const text = String(chip.text || "").trim();
+  if (!text) return "";
+  return `<div class="learned-chip"><span class="lc-ico">✓</span><span>Got it - ${esc(text)}</span></div>`;
+}
+function renderLearnedChip() {
+  const host = document.getElementById("learnedChipHost");
+  if (host) host.innerHTML = renderLearnedChipHtml();
+}
+
+/* An edit's distilled lesson appears in instruction_edits (source
+   "training-edit:<case_id>") once the merge worker lands it - poll lightly
+   until it does, then upgrade the chip from server state. */
+function startChipPoll() {
+  stopChipPoll();
+  const deadline = Date.now() + 90 * 1000;
+  chipPollHandle = setInterval(async () => {
+    if (!LEARNED_CHIP || !LEARNED_CHIP.pending || Date.now() > deadline) { stopChipPoll(); return; }
+    const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+    if (!res.ok) return;
+    const edits = (res.data && res.data.instruction_edits) || [];
+    const hit = edits.slice().reverse().find((e) => e.source === LEARNED_CHIP.source);
+    if (hit) {
+      LEARNED_CHIP = { kind: "edit", text: hit.rule || hit.note || "we'll write it your way from now on", pending: false };
+      BRAIN_COVERS_AT = (res.data && res.data.brain_covers_at) || BRAIN_COVERS_AT;
+      renderLearnedChip();
+      stopChipPoll();
+    }
+  }, 3000);
+}
+function stopChipPoll() {
+  if (chipPollHandle) { clearInterval(chipPollHandle); chipPollHandle = null; }
 }
 
 /* Skip: record the current card as handled-but-neutral and move on (owner
@@ -1820,10 +2288,13 @@ const TUT_STEPS = [
     body: () => "We reply to your leads for you - here you show us how you'd handle them, so every reply sounds just like you. It takes about 10 minutes, you can stop any time, and nothing here ever emails a real person.",
     target: () => null },
   { title: "Rate our reply", cta: "Next", advanceOnVerdict: true,
-    body: () => "Each card shows a conversation and the reply we'd send for you - hit Correct if you'd send it too, or Needs work and just tell us what you'd change. Try one now, or hit Next.",
+    body: () => "Each card shows a conversation and the reply we'd send for you - hit Correct if you'd send it too, or Needs work and tell us what you'd change. Try one now, or hit Next.",
     target: () => document.querySelector(".train-verdict") || document.querySelector(".train-card") || document.getElementById("trainApp") },
+  { title: "Or just rewrite it", cta: "Next",
+    body: () => "The reply itself is editable - click into it and change anything, like you're fixing an email a colleague drafted. We learn from your version on the spot (you'll see \"Got it\" confirm what we took in), and once you've changed it, Needs work is the button to press.",
+    target: () => document.getElementById("trDraft") || document.querySelector(".train-card") },
   { title: "The finish line", cta: "Let's go",
-    body: () => `Cards come in rounds of ${ROUND_SIZE} - after each one we take in everything you've shown us and draw a fresh set. At 90 we've got your voice down, and everything you show us is saved so you can stop whenever you like.`,
+    body: () => `Cards come in rounds of ${ROUND_SIZE}, and between rounds we might ask a couple of quick questions about your offer - every answer and every rating goes into the very next drafts, within seconds. At 90 we've got your voice down; stop whenever you like, everything is saved as you go.`,
     target: () => document.getElementById("readinessPanelHost") },
 ];
 

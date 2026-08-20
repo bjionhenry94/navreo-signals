@@ -12871,7 +12871,17 @@ def route_training_get(params):
         # both owner and share mode; share mode is read-only anyway (no
         # "remove" affordance is ever wired up for it in the frontend).
         instruction_edits = [
-            {"note": e.get("note") or "", "how": e.get("how") or "", "at": e.get("at") or ""}
+            # source + rule joined the shape for the fastloop learned-chip
+            # (2026-08-20): the portal matches an edit-answer's chip to its
+            # distilled lesson by source ("training-edit:<case_id>") and shows
+            # the timeless rule. Privacy discipline unchanged in spirit: only
+            # training-family sources pass through (training:, training-edit:,
+            # review:, interview) - an owner-inbox edit's queue-row source
+            # still never leaks to a share token.
+            {"note": e.get("note") or "", "how": e.get("how") or "", "at": e.get("at") or "",
+             "source": (e.get("source") or "")
+                 if str(e.get("source") or "").startswith(("training", "review:", "interview")) else "",
+             "rule": e.get("rule") or ""}
             for e in (agent.get("instruction_edits") or []) if isinstance(e, dict)
         ]
 
@@ -12913,6 +12923,18 @@ def route_training_get(params):
                            "summary": m.get("summary") or "", "facts_count": m.get("facts_count") or 0,
                            "at": m.get("at") or ""}
                           for m in (doc.get("materials") or []) if isinstance(m, dict)],
+            # Fastloop (2026-08-20): the newest answer timestamp the last
+            # generate/pool-redraft pass incorporated - the portal opens the
+            # next round only once this has caught up with its own last
+            # feedback answer, which is the whole no-stale-drafts guarantee.
+            "brain_covers_at": str(doc.get("brain_covers_at") or ""),
+            # Offer interview (owner ruling 2026-08-20): question rounds the
+            # client has been asked, with their answers - the portal renders
+            # the latest unanswered set and skips ones already answered.
+            "interviews": [{"questions": list(i.get("questions") or []),
+                            "answers": dict(i.get("answers") or {}),
+                            "asked_at": i.get("asked_at") or ""}
+                           for i in (doc.get("interviews") or []) if isinstance(i, dict)],
         }
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -12974,9 +12996,27 @@ def route_training_generate(payload):
 
         lock = _get_training_gen_lock(agent_id)
         if not lock.acquire(blocking=False):
-            # Already generating for this agent - idempotent no-op, the
-            # page just keeps polling GET /api/setter/training.
-            return 200, {"ok": True, "status": "already_running"}
+            # The lock holder may be a RETRAIN pass, not a generate (they
+            # share the lock on purpose). The old blanket "already_running"
+            # answer silently DROPPED the batch in that case - the portal's
+            # prefetch then polled for cases that would never come (fastloop
+            # baseline 2026-08-20, bugs 2+3). A real generate already running
+            # keeps the old idempotent already_running answer (the doc was
+            # loaded just above for the unanswered check - its marker tells
+            # the two apart); anything else queues: a flagger thread persists
+            # generating.generate_queued off-request, and whichever
+            # threadmain holds the lock runs the batch before releasing
+            # (_maybe_run_queued_generate). The flagger re-checks the marker
+            # itself, so a race here degrades to a no-op flag, never a
+            # duplicate batch.
+            gen_now = doc.get("generating") or {}
+            if gen_now.get("status") == "running" and gen_now.get("kind") != "retrain":
+                return 200, {"ok": True, "status": "already_running"}
+            flagger = threading.Thread(target=_flag_training_generate_queued,
+                                       args=(agent_id, batch_size, is_share_mode), daemon=True)
+            _TRAINING_GEN_THREADS[f"{agent_id}:genflag"] = flagger
+            flagger.start()
+            return 200, {"ok": True, "status": "queued"}
 
         try:
             marker_doc = _load_training(agent_id)
@@ -13010,6 +13050,9 @@ def _training_generate_threadmain(agent_id, agent, allowed_campaign_ids, batch_s
         # run it now, still holding the same lock, so the two kinds of work
         # never overlap and no queued correction is silently dropped.
         _maybe_run_queued_retrain(agent_id)
+        # ...and that retrain may itself have had a fresh generate queued
+        # behind it (fastloop 2026-08-20) - same lock, same discipline.
+        _maybe_run_queued_generate(agent_id)
     finally:
         try:
             lock.release()
@@ -13161,6 +13204,11 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         session_digest = _training_session_feedback_digest(doc)
         mem_digest = "\n\n".join([x for x in (session_digest, _agent_memory_digest(train_agent)) if x])
         mem_digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc), mem_digest)
+        # Fastloop (2026-08-20): every case this batch builds carries the
+        # digest above, so the batch "covers" every answer saved at snapshot
+        # time - stamped into brain_covers_at on the success save below; the
+        # portal's round gate reads it.
+        brain_covers_at = _training_covers_at(doc)
 
         settings = _load_settings()
         now = _dt.datetime.now(_dt.timezone.utc)
@@ -13262,6 +13310,8 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         fresh_doc = _load_training(agent_id)
         fresh_doc["cases"] = list(fresh_doc.get("cases") or []) + new_cases + new_synthetic_cases
         fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
+        if brain_covers_at:
+            fresh_doc["brain_covers_at"] = max(brain_covers_at, str(fresh_doc.get("brain_covers_at") or ""))
         gen_marker = {
             "status": "idle",
             "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
@@ -13359,11 +13409,179 @@ def _flag_training_retrain_queued(agent_id: str):
 def _training_retrain_threadmain(agent_id, lock, redraft=True):
     try:
         _training_retrain_worker(agent_id, redraft=redraft)
+        # A generate that arrived while this retrain held the shared lock was
+        # QUEUED, not dropped (fastloop fix 2026-08-20 - the old
+        # "already_running" answer silently swallowed the batch and left the
+        # portal polling for cases that would never come). Run it now, still
+        # holding the same lock.
+        _maybe_run_queued_generate(agent_id)
     finally:
         try:
             lock.release()
         except RuntimeError:  # noqa: BLE001 - lock wasn't held (shouldn't happen); never crash a bg thread
             pass
+
+
+def _flag_training_generate_queued(agent_id: str, batch_size: int, is_share_mode: bool):
+    """Flagger-thread body for route_training_generate's lock-held branch
+    (same off-request pattern as _flag_training_retrain_queued): when the
+    lock holder is a RETRAIN pass (or a stale marker), persist
+    generating.generate_queued so the retrain's threadmain runs the batch
+    the moment it finishes. When a real generate already runs, do nothing -
+    a second identical batch on its heels is the old already_running
+    semantics, and correct."""
+    try:
+        doc = _load_training(agent_id)
+        gen = dict(doc.get("generating") or {})
+        is_real_generate = gen.get("status") == "running" and gen.get("kind") != "retrain"
+        if not is_real_generate:
+            gen["generate_queued"] = {"batch_size": int(batch_size), "share": bool(is_share_mode)}
+            doc["generating"] = gen
+            _save_training(agent_id, doc)
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _maybe_run_queued_generate(agent_id):
+    """Mirror of _maybe_run_queued_retrain, other direction: called by both
+    threadmains right before the lock is released - if a generate was queued
+    while a retrain (or an earlier batch) held the lock, run it now so no
+    prefetch is ever silently dropped."""
+    try:
+        doc = _load_training(agent_id)
+        gen = dict(doc.get("generating") or {})
+        queued = gen.get("generate_queued")
+        if not queued:
+            return
+        gen.pop("generate_queued", None)
+        doc["generating"] = gen
+        _save_training(agent_id, doc)
+        agent = _load_agent(agent_id)
+        if not agent:
+            return
+        batch_size = max(1, min(int((queued or {}).get("batch_size") or TRAINING_BATCH_DEFAULT),
+                                TRAINING_BATCH_MAX))
+        marker_doc = _load_training(agent_id)
+        marker_doc["generating"] = {
+            "status": "running",
+            "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+            "batch_size": batch_size,
+        }
+        _save_training(agent_id, marker_doc)
+        _training_generate_worker(agent_id, agent,
+                                  [str(c) for c in (agent.get("campaign_ids") or [])],
+                                  batch_size, is_share_mode=bool((queued or {}).get("share")))
+    except Exception:  # noqa: BLE001 - never raise out of a background thread
+        pass
+
+
+def _training_covers_at(doc: dict) -> str:
+    """The newest feedback timestamp a generation/redraft pass building its
+    digest from `doc` incorporates: case answers AND answered offer-interview
+    rounds (both ride _training_session_feedback_digest). Stamped into
+    brain_covers_at so the portal's round gate can compare like with like."""
+    doc = doc or {}
+    ats = [str((a or {}).get("at") or "") for a in (doc.get("answers") or {}).values()]
+    ats += [str((i or {}).get("answered_at") or "")
+            for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+    return max((a for a in ats if a), default="")
+
+
+def _merge_training_edit_entry(agent: dict, entry: dict):
+    """One queued edit-as-feedback entry (see route_training_answer) merged
+    into the agent's instructions. lesson_from_edit distils the diff into a
+    timeless rule when it can; its None verdict is deliberately conservative
+    (see its docstring), but on the portal a client's rewrite must NEVER
+    silently teach nothing (fastloop ruling 2026-08-20: silence reads as "it
+    isn't listening") - so None falls back to merging the rewrite as a worked
+    example, and merge_correction_into_instructions' own general_rule
+    guardrails handle the generalisation. Never raises."""
+    try:
+        entry = entry or {}
+        original = str(entry.get("original") or "")
+        edited = str(entry.get("edited") or "")
+        rule = lesson_from_edit(original, edited, {}, instructions=_agent_instructions(agent))
+        if not rule:
+            edited_text = _draft_text(edited).strip()
+            if not edited_text:
+                return
+            gist = str(entry.get("gist") or "").strip()
+            rule = (f"For a reply like '{gist}', the owner rewrote our draft. Learn the tone and "
+                    f"content of their version and write replies to similar messages the same "
+                    f"way: '{edited_text[:600]}'")
+        merge_correction_into_instructions(agent, rule, source=entry.get("source") or "training-edit")
+    except Exception:  # noqa: BLE001 - one bad edit must never sink the drain
+        pass
+
+
+def _redraft_training_pool(agent_id: str) -> int:
+    """Fastloop (owner ruling 2026-08-20): rewrite the between-rounds pool -
+    every UNANSWERED case that is NOT currently under the client's eyes
+    (doc['client_round_ids'], sent with every share-mode answer) - through
+    the freshest brain + session digest, and persist IMMEDIATELY, before the
+    slow instruction merges run. The digest already carries every saved
+    note, edit and interview answer verbatim (_training_session_feedback_
+    digest), so drafting ahead of the merge loses nothing - this is what
+    makes the portal's <=5s round hand-off honest. Stamps each rewritten
+    case's `redrafted_at` and the doc-level `brain_covers_at` (the newest
+    answer timestamp this pass incorporated); the portal opens the next
+    round only once brain_covers_at has caught up with its own last
+    feedback answer. Returns the number of cases rewritten. Never raises."""
+    try:
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 0
+        train_agent = {**agent, "mode": "autopilot", "enabled": True}
+        doc = _load_training(agent_id)
+        answers = dict(doc.get("answers") or {})
+        covers_at = _training_covers_at(doc)
+        cases = list(doc.get("cases") or [])
+        # Fail-safe: a client that has NEVER sent round_ids (stale page,
+        # third-party caller) gets the old merge-only contract - we cannot
+        # know which cards are under its eyes, so we redraft none of them.
+        in_round_raw = doc.get("client_round_ids")
+        if in_round_raw is None:
+            pool = []
+        else:
+            in_round = {str(x) for x in (in_round_raw or [])}
+            pool = [c for c in cases
+                    if not _is_case_answered(c.get("id"), answers) and str(c.get("id")) not in in_round]
+        updated = 0
+        if pool:
+            digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
+                                          _training_session_feedback_digest(doc))
+            settings = _load_settings()
+            now = _dt.datetime.now(_dt.timezone.utc)
+            eff = dict(settings)
+            eff["_agent"] = train_agent
+            slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+            if slot_status0 != "ok":
+                avail, slot_status0 = _synthetic_training_avail(now), "ok"
+            stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(pool))) as pool_exec:
+                futs = {pool_exec.submit(_retrain_one_training_case, c, train_agent, eff, avail,
+                                         slot_status0, now, digest): c for c in pool}
+                for fut in concurrent.futures.as_completed(futs):
+                    c = futs[fut]
+                    try:
+                        fut.result()
+                        c["redrafted_at"] = stamp
+                        updated += 1
+                    except Exception:  # noqa: BLE001 - one bad case must never sink the sweep
+                        pass
+        # Persist NOW (fresh reload, same lost-update discipline as the other
+        # workers): the pool must be visible to the portal's transition poll
+        # before the merges behind it start burning their 5-15s each. Only
+        # `cases` and `brain_covers_at` are ours to write here.
+        fresh = _load_training(agent_id)
+        if updated:
+            fresh["cases"] = cases
+        if covers_at:
+            fresh["brain_covers_at"] = max(covers_at, str(fresh.get("brain_covers_at") or ""))
+        _save_training(agent_id, fresh)
+        return updated
+    except Exception:  # noqa: BLE001 - never raise out of a background thread
+        return 0
 
 
 def _maybe_run_queued_retrain(agent_id):
@@ -13405,8 +13623,18 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str
     for case_id, ans in reversed(items):
         ans = ans or {}
         note = str(ans.get("note") or "").strip()
+        # Edit-as-feedback (fastloop 2026-08-20): the rewrite itself is the
+        # correction, carried here VERBATIM so a redraft that runs before the
+        # slow lesson-from-edit merge lands still obeys it.
+        edited = _draft_text(str(ans.get("edited_body") or "")).strip()
         if note:
             lines.append(f"- {note}")
+        if edited:
+            case = cases_by_id.get(str(case_id)) or {}
+            inbound_snip = str((case.get("inbound") or {}).get("body") or "")[:80]
+            lines.append(f"- For a reply like '{inbound_snip}', the owner rewrote our draft. "
+                         f"Write similar replies the way they did: '{edited[:220]}'")
+        if note or edited:
             continue
         if ans.get("decision_ok") is False or ans.get("reply_ok") is False:
             case = cases_by_id.get(str(case_id)) or {}
@@ -13417,6 +13645,23 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str
             else:
                 lines.append(f"- The owner disliked the draft written for: '{inbound_snip}'")
     digest = "\n".join(lines)
+
+    # Offer-interview answers (fastloop 2026-08-20) ride the digest too, so
+    # the very first generate - and every redraft - obeys them the moment
+    # they are given, without waiting on the slow instruction merge. Newest
+    # interview first, answered questions only, capped alongside everything
+    # else by the final limit_chars cut.
+    iv_lines = []
+    for interview in reversed(list(doc.get("interviews") or [])[-4:]):
+        interview = interview or {}
+        iv_answers = dict(interview.get("answers") or {})
+        for q in (interview.get("questions") or []):
+            a = str(iv_answers.get(str((q or {}).get("id"))) or "").strip()
+            if a:
+                iv_lines.append(f"- Q: {str((q or {}).get('q') or '').strip()} A: {a[:200]}")
+    if iv_lines and len(digest) < limit_chars:
+        iv_block = "The owner answered these questions about their offer - facts to use:\n" + "\n".join(iv_lines)
+        digest = (digest + "\n\n" + iv_block) if digest else iv_block
 
     confirmed = list(doc.get("confirmed_examples") or [])
     if confirmed and len(digest) < limit_chars:
@@ -13921,19 +14166,31 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             marker_doc["generating"] = {"status": "running", "kind": "retrain", "started_at": started_at}
             _save_training(agent_id, marker_doc)
 
+            updated = 0
+            cases = None
+            # Fastloop (owner ruling 2026-08-20): the share-mode pass rewrites
+            # the between-rounds pool FIRST - one fast draft sweep whose digest
+            # already carries every saved note/edit verbatim - and persists it
+            # immediately, so the portal's next round is ready in seconds. The
+            # slow gpt-5-mini merges below then make the same teaching
+            # permanent without anyone waiting on them.
+            if redraft == "pool":
+                updated = _redraft_training_pool(agent_id)
+
             for entry in _drain_pending_merges(agent_id):
-                note = str((entry or {}).get("note") or "").strip()
-                if not note:
-                    continue
                 merge_agent = _load_agent(agent_id)
                 if not merge_agent:
                     break
+                if (entry or {}).get("kind") == "edit":
+                    _merge_training_edit_entry(merge_agent, entry)
+                    continue
+                note = str((entry or {}).get("note") or "").strip()
+                if not note:
+                    continue
                 merge_correction_into_instructions(
                     merge_agent, note, source=(entry or {}).get("source") or "training")
 
-            updated = 0
-            cases = None
-            if redraft:
+            if redraft is True:
                 # Owner trainer (Feature B, 2026-07-14): re-run every remaining
                 # UNANSWERED case through the freshly-merged brain so one
                 # correction carries across the round. The CLIENT Training
@@ -14056,10 +14313,34 @@ def route_training_answer(payload):
             scope = payload.get("scope") or "one_off"
             at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
+            # Edit-as-feedback (owner ruling 2026-08-20, fastloop): the client
+            # may rewrite the draft to SHOW how they'd reply instead of telling
+            # us. The edited body rides the answer; a real text difference
+            # against the case's stored draft teaches through the same
+            # lesson-from-edit door the owner inbox already uses (queued below,
+            # merged by the retrain worker). Kept on the answer record too so
+            # the session digest can carry it into redrafts BEFORE the slow
+            # merge lands.
+            edited_body = "" if skipped else str(payload.get("edited_body") or "")[:6000]
+            case_for_edit = next((c for c in cases if str(c.get("id")) == case_id), None)
+            original_draft = str((case_for_edit or {}).get("draft_html") or "")
+            edit_is_real = bool(edited_body) and _draft_text(edited_body) != _draft_text(original_draft)
+
             answers = dict(doc.get("answers") or {})
             answers[case_id] = {"decision_ok": decision_ok, "reply_ok": reply_ok, "note": note,
                                 "scope": scope, "at": at, "skipped": skipped}
+            if edit_is_real:
+                answers[case_id]["edited_body"] = edited_body
             doc["answers"] = answers
+
+            # The client's CURRENT round ids (share mode sends them with every
+            # answer): the pool-redraft pass must never rewrite a card that is
+            # under the trainer's eyes (owner ruling 2026-08-20) - everything
+            # unanswered OUTSIDE this set is the between-rounds pool and may be
+            # refreshed freely.
+            round_ids = payload.get("round_ids")
+            if share_token and isinstance(round_ids, list):
+                doc["client_round_ids"] = [str(r) for r in round_ids][:12]
 
             # Thumbs-up teaches too (owner brief 2026-07-14: "when I give a
             # thumbs up it doesn't learn from it"): a confirmed decision_ok=True
@@ -14095,6 +14376,16 @@ def route_training_answer(payload):
                 doc["pending_merges"] = pending_merges
             elif note:
                 _append_agent_feedback_log(agent_id, note, source=f"training:{case_id}")
+            # A real edit teaches too - queued as its own kind so the drain can
+            # route it through lesson_from_edit (the merge worker handles both
+            # kinds in submission order; see _training_retrain_worker).
+            if edit_is_real:
+                inbound_gist = str(((case_for_edit or {}).get("inbound") or {}).get("body") or "").strip()[:80]
+                pending_merges = list(doc.get("pending_merges") or [])
+                pending_merges.append({"kind": "edit", "original": original_draft,
+                                       "edited": edited_body, "gist": inbound_gist,
+                                       "source": f"training-edit:{case_id}", "at": at})
+                doc["pending_merges"] = pending_merges
 
             readiness = compute_readiness(doc)
             history = list(doc.get("readiness_history") or [])
@@ -14113,17 +14404,33 @@ def route_training_answer(payload):
         # off AFTER the answer (and any queued pending_merges entry) are
         # saved, so the retrain worker's own drain-then-reload sees this
         # case as answered (excluded) and picks up the just-queued note.
-        triggers_retrain = bool(note) or decision_ok is False or reply_ok is False
+        triggers_retrain = bool(note) or edit_is_real or decision_ok is False or reply_ok is False
         # Client Training Wizard (share mode): feedback teaches the brain but
         # must NOT re-draft the round's other cards under the trainer's eyes
-        # (owner ruling 2026-08-20) - the learning shows up in the next round.
-        # The owner/CSM trainer keeps Feature B's cross-round redraft.
-        retrain = (_kick_off_training_retrain(agent_id, redraft=not bool(share_token))
+        # (owner ruling 2026-08-20). Fastloop (owner ruling 2026-08-20, later
+        # the same day): it DOES refresh the between-rounds pool - redraft
+        # "pool" rewrites only unanswered cases outside client_round_ids, fast
+        # and BEFORE the slow merges, so the next round always reflects this
+        # round's feedback. The owner/CSM trainer keeps Feature B's full
+        # cross-round redraft.
+        retrain = (_kick_off_training_retrain(agent_id, redraft="pool" if share_token else True)
                    if triggers_retrain else None)
+
+        # `learned` is the plain-English echo the portal shows on the next card
+        # (fastloop, owner ruling 2026-08-20) - ALWAYS the server's own stored
+        # state, never client-invented: a note echoes verbatim from the answer
+        # just saved; an edit is pending until the merge worker distils it
+        # (the chip upgrades from instruction_edits, matched by source).
+        learned = None
+        if edit_is_real:
+            learned = {"kind": "edit", "text": "", "pending": True,
+                       "source": f"training-edit:{case_id}"}
+        elif note and scope == "remember":
+            learned = {"kind": "note", "text": note, "pending": False}
 
         return 200, {"ok": True, "readiness": readiness,
                     "answered_count": answered_count, "unanswered_count": unanswered_count,
-                    "retrain": retrain}
+                    "retrain": retrain, "learned": learned, "at": at}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -14166,6 +14473,164 @@ def route_training_reset(payload):
         return 200, {"ok": True}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
+
+
+TRAINING_INTERVIEW_SCHEMA = {
+    "type": "object", "additionalProperties": False,
+    "properties": {"questions": {"type": "array", "items": {"type": "string"}}},
+    "required": ["questions"],
+}
+
+TRAINING_INTERVIEW_SYSTEM = """You prepare the next FIVE interview questions for a business owner who is training their AI email assistant to reply to leads in their voice. You are given the assistant's current instruction manual, every question the owner has already been asked (with their answers), and the owner's most recent training feedback.
+
+Your five questions gather the OPERATIONAL FACTS the manual still lacks - the concrete things the assistant needs when writing replies: phone number, what to say when someone asks the price, booking link, what never to promise, how to answer the most common objections, who the offer is and isn't for, guarantees, timelines, what to do with out-of-scope requests.
+
+Rules:
+- Each question must be answerable in ONE short line by a non-technical founder.
+- Never re-ask anything already answered or already stated in the manual.
+- Prefer questions the recent feedback suggests are missing (a correction about pricing means pricing details are unclear - dig there).
+- Plain 16-year-old-simple English. No jargon, no compound questions.
+- Exactly 5 questions.
+
+Output STRICT JSON: {"questions": ["...", "...", "...", "...", "..."]}"""
+
+# Deterministic first-visit fallback (no OpenAI key, or the call failed):
+# the five facts every offer needs before scenario one (owner ruling
+# 2026-08-20, the questionnaire brief).
+STATIC_FIRST_INTERVIEW = [
+    "What's the best phone number for leads to reach you (or say 'email only')?",
+    "If someone asks for a price, what should we say?",
+    "What link should people use to book a call with you?",
+    "What's one thing we should never say or promise in a reply?",
+    "What's the most common question leads ask - and what's your answer?",
+]
+
+
+def route_training_interview(payload):
+    """POST /api/setter/training/interview - the offer interview (owner
+    ruling 2026-08-20): 5 short offer-specific questions before the first
+    scenarios ever generate, then 5 fresh follow-ups between rounds, asked
+    while the next round builds. Share-token accessible (the client answers
+    them), same _resolve_share_scope discipline as every training route.
+
+    action="questions": returns the latest still-unanswered question set,
+    or generates a fresh one (one gpt-5-mini call over the manual + prior
+    Q&A + recent feedback; STATIC_FIRST_INTERVIEW when the call can't run).
+    action="answers": stores {question_id: answer}, stamps answered_at,
+    queues ONE combined instruction merge for every non-empty answer, and
+    kicks the pool retrain so the facts reach the very next drafts (the
+    session digest carries them immediately - see
+    _training_session_feedback_digest)."""
+    try:
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
+        share_token = payload.get("share") or ""
+        public = bool(payload.get("___public"))
+        agent_id, err = _resolve_share_scope(agent_id, share_token, public)
+        if err:
+            return err
+        agent = _load_agent(agent_id)
+        if not agent:
+            return 404, {"error": "Agent not found."}
+        action = str(payload.get("action") or "questions")
+        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+        if action == "questions":
+            doc = _load_training(agent_id)
+            interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+            latest = interviews[-1] if interviews else None
+            if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
+                # Idempotent: an unanswered set is re-served, never re-generated
+                # (a refresh mid-questionnaire must not burn tokens or shuffle
+                # the questions under the client).
+                return 200, {"questions": latest["questions"], "asked_at": latest.get("asked_at") or ""}
+            questions_text = _generate_interview_questions(agent, doc)
+            questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in questions_text]
+            with _get_training_doc_lock(agent_id):
+                doc = _load_training(agent_id)
+                interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+                interviews.append({"questions": questions, "answers": {}, "asked_at": at})
+                doc["interviews"] = interviews[-12:]
+                _save_training(agent_id, doc)
+            return 200, {"questions": questions, "asked_at": at}
+
+        if action == "answers":
+            raw = payload.get("answers")
+            if not isinstance(raw, dict) or not raw:
+                return 400, {"error": "answers is required"}
+            qa_lines = []
+            with _get_training_doc_lock(agent_id):
+                doc = _load_training(agent_id)
+                interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+                if not interviews:
+                    return 404, {"error": "No interview questions have been asked yet."}
+                latest = interviews[-1]
+                by_id = {str((q or {}).get("id")): str((q or {}).get("q") or "")
+                         for q in (latest.get("questions") or [])}
+                stored = dict(latest.get("answers") or {})
+                for qid, ans in raw.items():
+                    ans = str(ans or "").strip()[:500]
+                    if ans and str(qid) in by_id:
+                        stored[str(qid)] = ans
+                        qa_lines.append(f"Q: {by_id[str(qid)]}\nA: {ans}")
+                if not qa_lines:
+                    return 400, {"error": "No answers matched the current questions."}
+                latest["answers"] = stored
+                latest["answered_at"] = at
+                # ONE combined merge for the whole questionnaire - five
+                # separate gpt-5-mini merges would burn 5x the latency for the
+                # same manual (the digest already carries each Q&A verbatim in
+                # the meantime).
+                pending = list(doc.get("pending_merges") or [])
+                pending.append({"note": "The owner answered these questions about their offer. "
+                                        "Fold every fact in:\n\n" + "\n\n".join(qa_lines),
+                                "source": "interview", "at": at})
+                doc["pending_merges"] = pending
+                doc["interviews"] = interviews[-12:]
+                _save_training(agent_id, doc)
+            retrain = _kick_off_training_retrain(agent_id, redraft="pool" if share_token else True)
+            return 200, {"ok": True, "saved": len(qa_lines), "at": at, "retrain": retrain}
+
+        return 400, {"error": "Unknown action."}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def _generate_interview_questions(agent: dict, doc: dict) -> list:
+    """One gpt-5-mini call -> 5 fresh question strings; the static first-set
+    on any failure. Never raises, never returns an empty list."""
+    try:
+        key = _KEYS.get("OPENAI_API_KEY")
+        if not key:
+            return list(STATIC_FIRST_INTERVIEW)
+        prior = []
+        for interview in (doc.get("interviews") or []):
+            if not isinstance(interview, dict):
+                continue
+            ans = dict(interview.get("answers") or {})
+            for q in (interview.get("questions") or []):
+                qid = str((q or {}).get("id"))
+                prior.append({"q": str((q or {}).get("q") or ""),
+                              "a": str(ans.get(qid) or "")})
+        r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                 {"Authorization": f"Bearer {key}"},
+                 {"model": OPENAI_MODEL,
+                  "messages": [{"role": "system", "content": TRAINING_INTERVIEW_SYSTEM},
+                              {"role": "user", "content": json.dumps({
+                                  "instruction_manual": _agent_instructions(agent)[:8000],
+                                  "already_asked": prior[-40:],
+                                  "recent_feedback": _training_session_feedback_digest(doc, 1200)})}],
+                  "response_format": {"type": "json_schema", "json_schema": {
+                      "name": "setter_interview_questions", "strict": True,
+                      "schema": TRAINING_INTERVIEW_SCHEMA}}})
+        if isinstance(r, dict) and not r.get("error"):
+            data = json.loads(r["choices"][0]["message"]["content"])
+            out = [str(q).strip() for q in (data.get("questions") or []) if str(q).strip()]
+            if out:
+                return out[:5]
+    except Exception:  # noqa: BLE001 - fall through to the static set
+        pass
+    return list(STATIC_FIRST_INTERVIEW)
 
 
 def route_training_share(payload):
@@ -14550,6 +15015,7 @@ POST_ROUTES = {
     "/api/setter/training/answer": route_training_answer,
     "/api/setter/training/recheck": route_training_recheck,
     "/api/setter/training/reset": route_training_reset,
+    "/api/setter/training/interview": route_training_interview,
     "/api/setter/training/share": route_training_share,
     "/api/setter/training/chat": route_training_chat,
     "/api/setter/training/material": route_training_material,
