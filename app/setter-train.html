@@ -773,7 +773,12 @@ async function pollGeneratingOnce() {
     return; // transient fetch error - just try again on the next tick
   }
   const gen = (res.data && res.data.generating) || { status: "idle" };
-  if (gen.status === "running") return; // still working - keep polling
+  // A RETRAIN pass running behind a landed batch (fastloop: the deferred
+  // interview merge, or a pool sweep) must not hold the cards hostage -
+  // only an actual generate still building blocks the open.
+  if (gen.status === "running" && gen.kind !== "retrain") return; // still building - keep polling
+  if (gen.status === "running" && CASES.length >= pollBaselineCount
+      && !(((res.data && res.data.cases) || []).length > pollBaselineCount)) return;
 
   applyCasesSnapshot(res.data);
 
