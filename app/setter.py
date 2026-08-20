@@ -13020,11 +13020,18 @@ def route_training_generate(payload):
 
         try:
             marker_doc = _load_training(agent_id)
-            marker_doc["generating"] = {
+            # Merge-preserve (2026-08-20): keep a retrain_queued flag a
+            # concurrent answer may have just written; a generate_queued flag
+            # is consumed - this generate IS its fulfilment.
+            gen0 = dict(marker_doc.get("generating") or {})
+            gen0.pop("generate_queued", None)
+            gen0.pop("kind", None)
+            gen0.update({
                 "status": "running",
                 "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
                 "batch_size": batch_size,
-            }
+            })
+            marker_doc["generating"] = gen0
             _save_training(agent_id, marker_doc)
         except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
             lock.release()
@@ -13079,8 +13086,10 @@ def _finish_training_generation(agent_id: str, status: str, error: str | None = 
         # _kick_off_training_retrain) - carry it forward so
         # _maybe_run_queued_retrain (checked right after this worker returns)
         # still sees it, even when the batch itself failed or found nothing.
-        if (doc.get("generating") or {}).get("retrain_queued"):
-            marker["retrain_queued"] = True
+        _rq = (doc.get("generating") or {}).get("retrain_queued")
+        if _rq:
+            # VALUE carry - "pool" vs True encodes the redraft mode.
+            marker["retrain_queued"] = _rq
         if (doc.get("generating") or {}).get("generate_queued"):
             marker["generate_queued"] = (doc.get("generating") or {}).get("generate_queued")
         doc["generating"] = marker
@@ -13321,10 +13330,14 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         }
         # Carry retrain_queued forward if a "remember" answer set it while
         # this batch was building - see _finish_training_generation's own
-        # matching comment and _maybe_run_queued_retrain. Same carry for a
-        # queued generate (fastloop 2026-08-20).
-        if (fresh_doc.get("generating") or {}).get("retrain_queued"):
-            gen_marker["retrain_queued"] = True
+        # matching comment and _maybe_run_queued_retrain. Carry the VALUE,
+        # not a bare True - it encodes the redraft mode ("pool" vs owner) and
+        # flattening it once upgraded a share retrain to a full redraft over
+        # the client's round (fastloop 2026-08-20). Same carry for a queued
+        # generate.
+        _rq = (fresh_doc.get("generating") or {}).get("retrain_queued")
+        if _rq:
+            gen_marker["retrain_queued"] = _rq
         if (fresh_doc.get("generating") or {}).get("generate_queued"):
             gen_marker["generate_queued"] = (fresh_doc.get("generating") or {}).get("generate_queued")
         fresh_doc["generating"] = gen_marker
@@ -13387,24 +13400,28 @@ def _kick_off_training_retrain(agent_id: str, redraft: bool = True) -> str:
     # Already generating or retraining for this agent - flag another pass is
     # wanted once the current one finishes, via a tiny daemon thread so the
     # REQUEST thread itself never touches Supabase. Never starts a second
-    # worker.
-    flagger = threading.Thread(target=_flag_training_retrain_queued, args=(agent_id,), daemon=True)
+    # worker. The flag carries the redraft mode (see
+    # _flag_training_retrain_queued).
+    flagger = threading.Thread(target=_flag_training_retrain_queued, args=(agent_id, redraft), daemon=True)
     _TRAINING_GEN_THREADS[f"{agent_id}:flag"] = flagger
     flagger.start()
     return "queued"
 
 
-def _flag_training_retrain_queued(agent_id: str):
+def _flag_training_retrain_queued(agent_id: str, redraft=True):
     """The flagger thread's entire job (see _kick_off_training_retrain's
     lock-held branch): reload the training doc fresh and persist
-    generating.retrain_queued=True, so whichever pass is currently running
+    generating.retrain_queued, so whichever pass is currently running
     for this agent loops once more at the end of its current cycle (see
-    _training_retrain_worker's own queued check). Never raises out of a
-    background thread."""
+    _training_retrain_worker's own queued check). The flag VALUE carries the
+    redraft mode (fastloop 2026-08-20): "pool" for a share-mode pass, True
+    for the owner's full redraft - _maybe_run_queued_retrain honours it, so
+    a queued share retrain can never run an owner-style redraft over cards
+    under the client's eyes. Never raises out of a background thread."""
     try:
         doc = _load_training(agent_id)
         gen = dict(doc.get("generating") or {})
-        gen["retrain_queued"] = True
+        gen["retrain_queued"] = "pool" if redraft == "pool" else True
         doc["generating"] = gen
         _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001
@@ -13467,11 +13484,14 @@ def _maybe_run_queued_generate(agent_id):
         batch_size = max(1, min(int((queued or {}).get("batch_size") or TRAINING_BATCH_DEFAULT),
                                 TRAINING_BATCH_MAX))
         marker_doc = _load_training(agent_id)
-        marker_doc["generating"] = {
+        gen0 = dict(marker_doc.get("generating") or {})
+        gen0.pop("kind", None)
+        gen0.update({
             "status": "running",
             "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
             "batch_size": batch_size,
-        }
+        })
+        marker_doc["generating"] = gen0
         _save_training(agent_id, marker_doc)
         _training_generate_worker(agent_id, agent,
                                   [str(c) for c in (agent.get("campaign_ids") or [])],
@@ -13593,15 +13613,19 @@ def _maybe_run_queued_retrain(agent_id):
     """Called by _training_generate_threadmain right after a generate batch
     finishes, still holding the lock: if a 'remember' answer queued a
     retrain while the batch was building, run it now instead of leaving a
-    stale retrain_queued flag with no worker left to honour it."""
+    stale retrain_queued flag with no worker left to honour it. The flag's
+    VALUE is the redraft mode ("pool" = share-mode pool sweep; anything
+    truthy else = the owner's full redraft) - see
+    _flag_training_retrain_queued."""
     try:
         doc = _load_training(agent_id)
         gen = dict(doc.get("generating") or {})
-        if gen.get("retrain_queued"):
+        flag = gen.get("retrain_queued")
+        if flag:
             gen["retrain_queued"] = False
             doc["generating"] = gen
             _save_training(agent_id, doc)
-            _training_retrain_worker(agent_id)
+            _training_retrain_worker(agent_id, redraft=("pool" if flag == "pool" else True))
     except Exception:  # noqa: BLE001 - never raise out of a background thread
         pass
 
@@ -14098,11 +14122,15 @@ def route_training_recheck(payload):
 
         try:
             marker_doc = _load_training(agent_id)
-            marker_doc["generating"] = {
+            # Merge-preserve (2026-08-20): queued flags survive this marker
+            # write like every other one - see the retrain worker's loop-top.
+            gen0 = dict(marker_doc.get("generating") or {})
+            gen0.update({
                 "status": "running", "kind": "recheck",
                 "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
                 "count": count,
-            }
+            })
+            marker_doc["generating"] = gen0
             _save_training(agent_id, marker_doc)
         except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
             lock.release()
@@ -14168,7 +14196,16 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
         while True:
             started_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
             marker_doc = _load_training(agent_id)
-            marker_doc["generating"] = {"status": "running", "kind": "retrain", "started_at": started_at}
+            # MERGE into the existing generating dict, never replace it: a
+            # generate_queued flag written by the route's flagger milliseconds
+            # earlier must survive this pass (live-verify race 2026-08-20 -
+            # the wholesale replace here wiped the portal's queued first
+            # round). retrain_queued IS consumed: this pass is the queue's
+            # fulfilment.
+            gen0 = dict(marker_doc.get("generating") or {})
+            gen0.pop("retrain_queued", None)
+            gen0.update({"status": "running", "kind": "retrain", "started_at": started_at})
+            marker_doc["generating"] = gen0
             _save_training(agent_id, marker_doc)
 
             updated = 0
@@ -14574,6 +14611,7 @@ def route_training_interview(payload):
             qa_lines = []
             with _get_training_doc_lock(agent_id):
                 doc = _load_training(agent_id)
+                has_cases = bool(doc.get("cases"))
                 interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
                 if not interviews:
                     return 404, {"error": "No interview questions have been asked yet."}
@@ -14601,7 +14639,18 @@ def route_training_interview(payload):
                 doc["pending_merges"] = pending
                 doc["interviews"] = interviews[-12:]
                 _save_training(agent_id, doc)
-            retrain = _kick_off_training_retrain(agent_id, redraft="pool" if share_token else True)
+            if has_cases:
+                retrain = _kick_off_training_retrain(agent_id, redraft="pool" if share_token else True)
+            else:
+                # FIRST interview, empty doc (live-verify 2026-08-20): the very
+                # next thing the portal does is generate round 1, whose digest
+                # already carries every Q&A verbatim - starting the merge
+                # worker first made the client wait out a 60-90s manual
+                # rewrite before their first card. Flag the retrain instead:
+                # the generate grabs the free lock immediately and
+                # _maybe_run_queued_retrain merges right behind the batch.
+                _flag_training_retrain_queued(agent_id, "pool" if share_token else True)
+                retrain = "queued"
             return 200, {"ok": True, "saved": len(qa_lines), "at": at, "retrain": retrain}
 
         return 400, {"error": "Unknown action."}

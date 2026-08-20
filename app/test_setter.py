@@ -6326,6 +6326,144 @@ def test_generate_queued_survives_retrain_marker_overwrite():
          not (saved.get("generating") or {}).get("generate_queued"), saved.get("generating"))
 
 
+def test_generate_queued_survives_worker_loop_top_marker():
+    """Second live-verify regression (2026-08-20): the retrain worker's
+    LOOP-TOP running-marker write also replaced doc.generating wholesale -
+    a generate_queued flag written a beat earlier was wiped before anything
+    could honour it. The marker writes must merge, never replace."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-genq03", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+           "pending_merges": [{"note": "Never discount.", "source": "training:x",
+                               "at": "2026-08-20T00:00:00+00:00"}],
+           "generating": {"status": "idle", "generate_queued": {"batch_size": 3, "share": True}},
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Ada"}
+
+    setter._training_retrain_worker(agent["id"], redraft="pool")
+    saved = setter._load_training(agent["id"])
+    q = (saved.get("generating") or {}).get("generate_queued") or {}
+    check("loop-top preserve: generate_queued survived the whole retrain pass",
+         q.get("batch_size") == 3, saved.get("generating"))
+
+    setter._maybe_run_queued_generate(agent["id"])
+    saved2 = setter._load_training(agent["id"])
+    check("loop-top preserve: the queued batch then runs",
+         len(saved2.get("cases") or []) > 0, {"n": len(saved2.get("cases") or [])})
+
+
+def test_interview_first_answers_defer_merge_behind_generate():
+    """First interview on an EMPTY doc (live-verify 2026-08-20): answers must
+    NOT start the slow merge worker ahead of round 1 - they flag a pool
+    retrain and let the generate grab the free lock immediately; the merge
+    runs behind the batch via _maybe_run_queued_retrain. The digest carries
+    the Q&A either way, and the instructions still end up updated."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-ivdefer1", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    setter._save_training(agent["id"], {"cases": [], "answers": {}, "used_reply_ids": [],
+                                        "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"})
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Ada"}
+
+    token = setter.mint_training_share(agent["id"])
+    _s, qresp = setter.route_training_interview({"share": token, "action": "questions"})
+    qs = qresp.get("questions") or []
+    status, resp = setter.route_training_interview({"share": token, "action": "answers",
+                                                    "answers": {qs[0]["id"]: "0161 555 0199"}})
+    check("iv defer: answers on an empty doc report retrain queued (no worker started)",
+         status == 200 and resp.get("retrain") == "queued", (status, resp))
+    check("iv defer: the shared lock is FREE for the generate",
+         not setter._get_training_gen_lock(agent["id"]).locked(), None)
+    saved = setter._load_training(agent["id"])
+    check("iv defer: pool-mode retrain flag persisted",
+         (saved.get("generating") or {}).get("retrain_queued") == "pool", saved.get("generating"))
+    check("iv defer: the merge is still queued, not run", len(saved.get("pending_merges") or []) == 1,
+         saved.get("pending_merges"))
+
+    status2, resp2 = setter.route_training_generate({"share": token, "batch_size": 3})
+    check("iv defer: generate starts immediately", status2 == 200 and resp2.get("status") == "started",
+         (status2, resp2))
+    worker = setter._TRAINING_GEN_THREADS.get(agent["id"])
+    if worker is not None:
+        worker.join(timeout=30)
+
+    saved2 = setter._load_training(agent["id"])
+    check("iv defer: round 1 landed", len(saved2.get("cases") or []) > 0,
+         {"n": len(saved2.get("cases") or []), "generating": saved2.get("generating")})
+    check("iv defer: the merge ran BEHIND the batch (instructions carry the Q&A)",
+         "0161 555 0199" in (setter._load_agent(agent["id"]).get("instructions") or ""),
+         setter._load_agent(agent["id"]).get("instructions"))
+    check("iv defer: no flags left behind",
+         not (saved2.get("generating") or {}).get("retrain_queued")
+         and not (saved2.get("generating") or {}).get("generate_queued"), saved2.get("generating"))
+
+
+def test_queued_share_retrain_keeps_pool_mode():
+    """A share retrain flagged while a generate holds the lock must run in
+    POOL mode when the flag is honoured (_maybe_run_queued_retrain) - the
+    old bool flag silently upgraded it to the owner's full redraft, which
+    rewrites cards under the client's eyes."""
+    import time as _time
+    sb, http = fresh_setter()
+    agent = {"id": "agent-poolq01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-pq-00"), _fixed_training_case("case-pq-01")],
+           "answers": {}, "used_reply_ids": [], "readiness_history": [],
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    http.classify_fn = _training_classify_fn
+
+    slow_gate = {"done": False}
+    def slow_draft(_b):
+        if not slow_gate["done"]:
+            slow_gate["done"] = True
+            _time.sleep(1.2)  # keep the generate busy while the answer arrives
+        return {"subject": "Re: hi", "html": "Hi there, thanks. Best, Ada"}
+    http.draft_fn = slow_draft
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = setter.route_training_generate({"share": token, "batch_size": 2})
+    check("pool-mode flag: generate started", status == 200 and resp.get("status") == "started",
+         (status, resp))
+    deadline = _time.time() + 5
+    while not setter._get_training_gen_lock(agent["id"]).locked() and _time.time() < deadline:
+        _time.sleep(0.01)
+
+    status2, resp2 = setter.route_training_answer({
+        "share": token, "case_id": "case-pq-00", "decision_ok": False, "reply_ok": False,
+        "note": "Never discount.", "scope": "remember",
+        "round_ids": ["case-pq-00", "case-pq-01"],
+    })
+    check("pool-mode flag: answer during the batch reports retrain queued",
+         status2 == 200 and resp2.get("retrain") == "queued", (status2, resp2))
+    flagger = setter._TRAINING_GEN_THREADS.get(f"{agent['id']}:flag")
+    if flagger is not None:
+        flagger.join(timeout=10)
+    worker = setter._TRAINING_GEN_THREADS.get(agent["id"])
+    if worker is not None:
+        worker.join(timeout=30)
+
+    saved = setter._load_training(agent["id"])
+    by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("pool-mode flag: the queued retrain ran in POOL mode - the round's own "
+         "unanswered card was never redrafted",
+         by_id["case-pq-01"]["draft_html"] == "<div>old draft</div>"
+         and not by_id["case-pq-01"].get("updated_by_feedback"), by_id.get("case-pq-01"))
+    check("pool-mode flag: the correction still merged",
+         "Never discount." in (setter._load_agent(agent["id"]).get("instructions") or ""),
+         setter._load_agent(agent["id"]).get("instructions"))
+
+
 def test_training_interview_questions_and_answers_merge():
     """Offer interview (owner ruling 2026-08-20): action='questions' serves a
     5-question set (static fallback here - the FakeHTTP returns {} for the
@@ -6338,8 +6476,11 @@ def test_training_interview_questions_and_answers_merge():
              "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
              "sender_first": "Ada"}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
-    setter._save_training(agent["id"], {"cases": [], "answers": {}, "used_reply_ids": [],
-                                        "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"})
+    # One seeded case: a NON-empty doc takes the started-retrain path (the
+    # empty-doc defer path has its own test above).
+    setter._save_training(agent["id"], {"cases": [_fixed_training_case("case-iv-00")], "answers": {},
+                                        "used_reply_ids": [], "readiness_history": [],
+                                        "created_at": "2026-01-01T00:00:00+00:00"})
 
     token = setter.mint_training_share(agent["id"])
     status, resp = setter.route_training_interview({"share": token, "action": "questions"})
@@ -11622,6 +11763,9 @@ if __name__ == "__main__":
     test_share_pool_redraft_refreshes_spares_never_the_round()
     test_generate_queued_behind_retrain_lock_runs_after()
     test_generate_queued_survives_retrain_marker_overwrite()
+    test_generate_queued_survives_worker_loop_top_marker()
+    test_interview_first_answers_defer_merge_behind_generate()
+    test_queued_share_retrain_keeps_pool_mode()
     test_training_interview_questions_and_answers_merge()
     test_route_training_get_exposes_fastloop_fields()
 
