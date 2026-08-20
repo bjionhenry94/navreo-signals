@@ -654,6 +654,7 @@ function applyCasesSnapshot(data) {
   BRAIN_COVERS_AT = (data && data.brain_covers_at) || BRAIN_COVERS_AT;
   INTERVIEWS = (data && data.interviews) || INTERVIEWS;
   applyReadiness((data && data.readiness) || READINESS, { animate: false });
+  maybeUpgradeChipFromEdits();
 }
 
 function renderCasesOrEmpty() {
@@ -1340,6 +1341,7 @@ function mergeCasesSnapshot(data, opts) {
   BRAIN_COVERS_AT = (data && data.brain_covers_at) || BRAIN_COVERS_AT;
   INSTRUCTION_EDITS = (data && data.instruction_edits) || INSTRUCTION_EDITS;
   INTERVIEWS = (data && data.interviews) || INTERVIEWS;
+  maybeUpgradeChipFromEdits();
   growRoundIfShort();
 }
 
@@ -2207,6 +2209,19 @@ function renderLearnedChipHtml() {
 function renderLearnedChip() {
   const host = document.getElementById("learnedChipHost");
   if (host) host.innerHTML = renderLearnedChipHtml();
+}
+
+/* Upgrade a pending edit-chip from whatever instruction_edits the page just
+   fetched - called from EVERY snapshot apply, because a dedicated interval
+   dies under background-tab throttling (live-verify 2026-08-20). */
+function maybeUpgradeChipFromEdits() {
+  if (!LEARNED_CHIP || !LEARNED_CHIP.pending || !LEARNED_CHIP.source) return;
+  const hit = (INSTRUCTION_EDITS || []).slice().reverse().find((e) => e.source === LEARNED_CHIP.source);
+  if (hit) {
+    LEARNED_CHIP = { kind: "edit", text: hit.rule || hit.note || "we'll write it your way from now on", pending: false };
+    renderLearnedChip();
+    stopChipPoll();
+  }
 }
 
 /* An edit's distilled lesson appears in instruction_edits (source
