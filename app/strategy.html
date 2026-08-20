@@ -69,7 +69,11 @@ body.solo .wrap{margin:0 auto;}
 .solo-head .sh-cap{color:var(--ink-2);font-size:14px;}
 .solo-head .sh-reach{font-size:14px;color:var(--ink-2);}
 .solo-head .sh-reach b{color:var(--ink);font-variant-numeric:tabular-nums;}
-.solo-cont{margin-top:14px;}
+.solo-cont{margin-top:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;}
+.solo-cont .ab-shareout{flex-basis:100%;margin:2px 0 0;}
+.save-status{font-size:12.5px;color:var(--ink-3);font-weight:600;letter-spacing:.01em;}
+.save-status[data-state="saving"]{color:var(--ink-2);}
+.save-status[data-state="error"]{color:var(--orange-600);}
 .wtop{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;}
 .status{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin-bottom:8px;}
 .h1{font-family:var(--font-display);font-size:32px;letter-spacing:-.03em;line-height:1.08;margin:22px 0;}
@@ -540,6 +544,79 @@ async function persistVisibleEdits(x){
       el.dataset.dirty='';}catch(e){}
   }
 }
+// ---- Auto-save (Bjion 2026-08-20): copy + icebreaker + preview edits save on
+// their own, no manual Save button. Each [data-edit] field debounces a save while
+// you type and flushes on blur; the poll is paused while a field is focused
+// (fetchRun guard) so a save never yanks the cursor. The local model is mirrored so
+// switching version tabs shows the saved text instantly, not a stale copy.
+const _saveTimers=new WeakMap();
+function setSaveStatus(state,text){
+  document.querySelectorAll('.save-status').forEach(s=>{s.dataset.state=state;s.textContent=text;});
+}
+function mirrorEdit(idea,field,val){
+  if(!idea||!field)return;
+  const m=String(field).split(':');
+  if(m[0]==='seq'){
+    const si=+m[1],vi=+m[2],vs=((sequenceOf(idea)[si])||{}).versions||[];
+    if(vs[vi]){ if(m[3]==='subject')vs[vi].subject=val; else vs[vi].email=val; }
+    if(si===0&&vi===0&&m[3]!=='subject')idea.email=val;
+  }else if(m[0]==='ice'){
+    const ib=idea.icebreaker; if(!ib)return;
+    if(m[1]==='fallback')ib.fallback=val;
+    else if(ib.angles&&ib.angles[+m[1]])ib.angles[+m[1]].example=val;
+  }
+}
+function autosaveField(el,ideaId){
+  if(!el||el.dataset.dirty!=='1')return;
+  const val=el.innerText.trim(); if(!val)return;
+  const field=el.dataset.edit; if(!field)return;
+  el.dataset.dirty='';
+  setSaveStatus('saving','Saving…');
+  fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
+    body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:ideaId,field:field,value:val,share:SHARE})})
+    .then(r=>r.json()).then(j=>{
+      if(!j.ok){el.dataset.dirty='1';setSaveStatus('error',j.message||'Could not save, will retry');return;}
+      const idea=(IDEAS[active]&&IDEAS[active].id===ideaId)?IDEAS[active]:IDEAS.find(i=>i.id===ideaId);
+      if(idea)mirrorEdit(idea,field,val);
+      if(el.dataset.dirty!=='1')setSaveStatus('saved','All changes saved');
+    })
+    .catch(()=>{el.dataset.dirty='1';setSaveStatus('error','Offline, will retry on next edit');});
+}
+function scheduleAutosave(el,ideaId){
+  const t=_saveTimers.get(el); if(t)clearTimeout(t);
+  setSaveStatus('saving','Saving…');
+  _saveTimers.set(el,setTimeout(()=>autosaveField(el,ideaId),900));
+}
+function flushAutosave(el,ideaId){
+  const t=_saveTimers.get(el); if(t){clearTimeout(t);_saveTimers.delete(el);}
+  autosaveField(el,ideaId);
+}
+// Reusable "Share Campaign Ideas" wiring — used by BOTH the multi sidebar and the
+// single-campaign header, so single has every feature multi does (Bjion 2026-08-20:
+// "the only difference between multi and single is literally the sidebar").
+function wireAboutShare(root,sid){
+  const abi=root.querySelector('#ab-i');
+  if(abi)abi.onclick=()=>{const h=root.querySelector('#ab-help');if(h)h.classList.toggle('open');};
+  const shb=root.querySelector('#ab-share');
+  if(!shb)return;
+  shb.onclick=async()=>{
+    const out=root.querySelector('#ab-shareout');
+    shb.disabled=true;shb.textContent='Making your link…';
+    try{
+      const r=await fetch('/api/strategy/share',{method:'POST',credentials:'include',
+        headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:sid})});
+      const j=await r.json();
+      if(!j.ok){shb.disabled=false;shb.textContent='Share Campaign Ideas';if(out)out.textContent=j.message||'Could not make the link, try again.';return;}
+      const url=location.origin+j.url;
+      let ok=false;
+      try{const t=document.createElement('textarea');t.value=url;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();}catch(e){}
+      if(!ok&&navigator.clipboard){navigator.clipboard.writeText(url).then(()=>{},()=>{});ok=true;}
+      shb.disabled=false;shb.textContent=ok?'Link copied':'Share Campaign Ideas';
+      if(out)out.innerHTML='One link for everyone: teammates who are signed in get this full board, your client gets their own view. <a href="'+url+'">Open it</a>';
+      setTimeout(()=>{shb.textContent='Share Campaign Ideas';},5000);
+    }catch(e){shb.disabled=false;shb.textContent='Share Campaign Ideas';}
+  };
+}
 async function clientSaveCopy(x,btn){
   const eds=[...document.querySelectorAll('[data-edit]')].filter(el=>el.innerText.trim());
   if(!eds.length){btn.textContent='Nothing to save';return;}
@@ -681,10 +758,10 @@ function panelHTML(x){
       h+=mailFrameHl(v.subject||'',v.email||'','seq:'+si+':'+sel);
     });
     h+=(CLIENT_MODE
-        ?`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save my edits</button></div>`
-         +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Saving shares it with your team.</p>`
-        :`<div class="actions-center"><button class="btn-ink" id="client-save-copy">Save edits</button><button class="btn-ink" data-goto="build">Next: see the preview</button></div>`
-         +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it, then save.</p>`);
+        ?`<div class="actions-center"><span class="save-status" data-state="saved">All changes saved</span></div>`
+         +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. It saves on its own and shares with your team.</p>`
+        :`<div class="actions-center"><span class="save-status" data-state="saved">All changes saved</span><button class="btn-ink" data-goto="build">Next: see the preview</button></div>`
+         +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Changes save automatically.</p>`);
     return h;
   }
   if(tab==='first'){
@@ -709,8 +786,8 @@ function panelHTML(x){
         +(ib.fallback?`<p class="mail-label" style="margin-top:20px">Always a fallback</p>`
           +`<div class="opener-list"><div class="opener-row"><div class="opener-order"><span class="opos">&#8595;</span></div>`
           +`<div class="opener-body"><p class="ib-example">"<span contenteditable="true" spellcheck="true" data-edit="ice:fallback">${highlightTokensHtml(ib.fallback)}</span>"</p></div><span></span></div></div>`:'')
-        +`<p class="hooknote" style="margin-top:16px">We try these in order for each person and always land on the fallback, so no one ever gets a blank opener. Click into a line to edit it, then save.</p>`
-        +`<div class="actions-center"><button class="btn-ink" id="client-save-copy">${CLIENT_MODE?'Save my edits':'Save edits'}</button><button class="btn-ink" data-goto="copy">Next: your emails</button></div>`;
+        +`<p class="hooknote" style="margin-top:16px">We try these in order for each person and always land on the fallback, so no one ever gets a blank opener. Click into a line to edit it. Changes save automatically.</p>`
+        +`<div class="actions-center"><span class="save-status" data-state="saved">All changes saved</span><button class="btn-ink" data-goto="copy">Next: your emails</button></div>`;
     }
     return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
       +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
@@ -763,7 +840,7 @@ function panelHTML(x){
           ?`<div class="mb mb-edit" contenteditable="true" spellcheck="true" data-edit="seq:${si}:${vi}">${highlightTokensHtml(v.email||'')}</div>`
           :`<div class="mb">${resolvedTextHtml(v.email,x,pr)}</div>`;
         const row=editing
-          ?`<div class="mail-editrow"><button class="btn-ink mail-save" data-si="${si}" data-vi="${vi}">Save</button><button class="btn-ink mail-cancel">Cancel</button><span class="mail-hint">Anything in {curly brackets} fills in per person.</span></div>`
+          ?`<div class="mail-editrow"><button class="btn-ink mail-done" data-si="${si}" data-vi="${vi}">Done</button><span class="save-status" data-state="saved">Saved automatically</span><span class="mail-hint">Anything in {curly brackets} fills in per person.</span></div>`
           :`<div class="mail-editrow"><button class="mail-editbtn" data-si="${si}" data-vi="${vi}">&#9998; Edit this email</button></div>`;
         return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}${vtag}</p>`
           +`<div class="mail"><div class="mh">${head}</div>${body}</div>`+row;
@@ -806,26 +883,7 @@ function renderSidebar(){
       +`<p class="ab-shareout" id="ab-shareout"></p>`:'');
   side.innerHTML=(aboutRows?`<div class="client"><div class="lbl">About this session${(sid&&!CLIENT_MODE)?' <button class="ab-i" id="ab-i" type="button" aria-label="What is this?">i</button>':''}</div>${aboutRows}</div>`:'')
     +`<div class="sechead">${IDEAS.length} campaign idea${IDEAS.length===1?'':'s'}</div>${cards}`;
-  const abi=side.querySelector('#ab-i');
-  if(abi)abi.onclick=()=>{const h=side.querySelector('#ab-help');h.classList.toggle('open');};
-  const shb=side.querySelector('#ab-share');
-  if(shb)shb.onclick=async()=>{
-    const out=side.querySelector('#ab-shareout');
-    shb.disabled=true;shb.textContent='Making your link…';
-    try{
-      const r=await fetch('/api/strategy/share',{method:'POST',credentials:'include',
-        headers:{'Content-Type':'application/json'},body:JSON.stringify({run_id:sid})});
-      const j=await r.json();
-      if(!j.ok){shb.disabled=false;shb.textContent='Share Campaign Ideas';if(out)out.textContent=j.message||'Could not make the link, try again.';return;}
-      const url=location.origin+j.url;
-      let ok=false;
-      try{const t=document.createElement('textarea');t.value=url;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();}catch(e){}
-      if(!ok&&navigator.clipboard){navigator.clipboard.writeText(url).then(()=>{},()=>{});ok=true;}
-      shb.disabled=false;shb.textContent=ok?'Link copied':'Share Campaign Ideas';
-      if(out)out.innerHTML='One link for everyone: teammates who are signed in get this full board, your client gets their own view. <a href="'+url+'">Open it</a>';
-      setTimeout(()=>{shb.textContent='Share Campaign Ideas';},5000);
-    }catch(e){shb.disabled=false;shb.textContent='Share Campaign Ideas';}
-  };
+  wireAboutShare(side,sid);
   // Switching campaign ideas keeps the CURRENT tab (Bjion 2026-08-05): if you're
   // reading Copy on one idea, clicking another idea shows that idea's Copy, not a
   // reset to Targeting. Every idea has the same tab set (TABS=TABS_ALL), so the
@@ -846,13 +904,14 @@ function renderWorkspace(){
       +(x.caption?`<span class="sh-cap">${esc(x.caption)}</span>`:'')
       +(hasReach(x)?`<span class="sh-reach"><b>${num(x.net||x.reachablePool||0)}</b> ${reachWord(x)}</span></div>`
         :`<span class="sh-reach">size not estimated</span></div>`)
-      +((sid&&!CLIENT_MODE)?`<div class="solo-cont"><button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button></div>`:'')
+      +((sid&&!CLIENT_MODE)?`<div class="solo-cont"><button class="ab-continue" id="ab-share" type="button">Share Campaign Ideas</button><button class="ab-continue" id="sid-copy" type="button">Continue this session in a new chat</button><p class="ab-shareout" id="ab-shareout"></p></div>`:'')
       +`</div>`
     : `<h1 class="h1">${esc(x.name)}</h1>`;
   work.innerHTML=`<div class="wrap">${pills}${head}<div class="panels"><section class="panel">${panelHTML(x)}</section></div></div>`;
   work.querySelectorAll('.tabs label').forEach(l=>l.onclick=()=>{tab=l.dataset.tab;renderWorkspace();});
   const scb=work.querySelector('#sid-copy');
   if(scb)scb.onclick=()=>{const p=carryPrompt(sid);let ok=false;try{const t=document.createElement('textarea');t.value=p;t.style.position='fixed';t.style.opacity='0';document.body.appendChild(t);t.focus();t.select();ok=document.execCommand('copy');t.remove();}catch(e){}if(!ok&&navigator.clipboard){navigator.clipboard.writeText(p).then(()=>{},()=>{});ok=true;}scb.textContent=ok?'Prompt copied. Paste it into a new chat':'Copy blocked by the browser';setTimeout(()=>{scb.textContent='Continue this session in a new chat';},4000);};
+  wireAboutShare(work,sid);   // single-campaign header carries Share too (solo = multi minus the idea rail)
   const csb=work.querySelector('#client-save-copy');
   if(csb)csb.onclick=()=>clientSaveCopy(x,csb);
   // version tabs: switch which variation shows for a sequence step, persisting
@@ -892,7 +951,14 @@ function renderWorkspace(){
     });
     pendingDel.timer=setTimeout(commitPendingDel,4200);
   });
-  work.querySelectorAll('[data-edit]').forEach(el=>el.oninput=()=>{el.dataset.dirty='1';});
+  // Auto-save (Bjion 2026-08-20): every edit saves itself — no Save button. Debounce
+  // while typing, flush on blur. ideaId is captured at bind time so a mid-edit poll
+  // that swaps IDEAS can't misroute the save.
+  work.querySelectorAll('[data-edit]').forEach(el=>{
+    const ideaId=(IDEAS[active]||x).id;
+    el.addEventListener('input',()=>{el.dataset.dirty='1';scheduleAutosave(el,ideaId);});
+    el.addEventListener('blur',()=>{flushAutosave(el,ideaId);});
+  });
   const dsb=work.querySelector('#dismiss-idea');
   if(dsb)dsb.onclick=async()=>{
     // same two-tap pattern as the version cross: no native confirm (suppressed in panes)
@@ -945,30 +1011,12 @@ function renderWorkspace(){
   // on the Preview tab. Saves via /api/strategy/copy-edit with the Copy tab's exact
   // field grammar (seq:<step>:<version>) — one field changes, nothing else.
   work.querySelectorAll('.mail-editbtn').forEach(b=>b.onclick=()=>{sumEdit={si:+b.dataset.si,vi:+b.dataset.vi};renderWorkspace();});
-  work.querySelectorAll('.mail-cancel').forEach(b=>b.onclick=()=>{sumEdit=null;renderWorkspace();});
-  work.querySelectorAll('.mail-save').forEach(b=>b.onclick=async()=>{
-    const cur=IDEAS[active];if(!cur){sumEdit=null;renderWorkspace();return;}
-    const si=+b.dataset.si,vi=+b.dataset.vi;
+  // "Done" just leaves edit mode — the field already auto-saved on input/blur (Bjion
+  // 2026-08-20). Flush any last keystroke first so nothing in flight is dropped.
+  work.querySelectorAll('.mail-done').forEach(b=>b.onclick=()=>{
     const el=work.querySelector('.mb-edit[data-edit]');
-    const val=el?el.innerText.trim():'';
-    if(!val){nvToast('The email is empty, write something or cancel.');return;}
-    b.disabled=true;b.textContent='Saving…';
-    try{
-      const r=await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
-        body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:cur.id,field:'seq:'+si+':'+vi,value:val,share:SHARE})});
-      const j=await r.json();
-      if(!j.ok){b.disabled=false;b.textContent='Save';nvToast(j.message||'Could not save.');return;}
-      // reflect locally on the CURRENT idea (poll can swap objects mid-await — same
-      // lesson as the version delete, Bjion 2026-08-05); if the idea moved, resync.
-      const nowIdea=IDEAS[active];
-      if(nowIdea&&nowIdea.id===cur.id){
-        const vs2=((sequenceOf(nowIdea)[si])||{}).versions||[];
-        if(vs2[vi])vs2[vi].email=val;
-        if(si===0&&vi===0)nowIdea.email=val; // server mirrors the primary the same way
-        if(el)el.dataset.dirty='';
-        sumEdit=null;renderWorkspace();
-      }else{sumEdit=null;lastFP=null;fetchRun();}
-    }catch(e){b.disabled=false;b.textContent='Save';nvToast('Could not save.');}
+    if(el)flushAutosave(el,(IDEAS[active]||x).id);
+    sumEdit=null;renderWorkspace();
   });
   try{saveView();}catch(e){}
 }
@@ -1041,9 +1089,11 @@ function restoreView(){try{
   if(s.copyVer&&typeof s.copyVer==='object')copyVer=s.copyVer;
 }catch(e){}}
 async function fetchRun(){
-  // never re-render over a client's half-typed edit — the poll catches up
-  // on the next tick after they click away
-  if(CLIENT_MODE&&document.activeElement&&document.activeElement.dataset&&document.activeElement.dataset.edit)return;
+  // never re-render over a half-typed edit — the poll catches up on the next tick
+  // after they click away. Applies to EVERYONE now (Bjion 2026-08-20): auto-save
+  // writes mid-edit, so a poll firing while a field is focused must not rebuild the
+  // DOM and yank the cursor — owner side included, not just the client view.
+  if(document.activeElement&&document.activeElement.dataset&&document.activeElement.dataset.edit)return;
   // a version delete is mid-Undo-window: the server still has the row, so a poll now
   // would re-add what we just optimistically removed. Hold until commit/undo clears it.
   if(pendingDel)return;
@@ -1057,6 +1107,11 @@ async function fetchRun(){
       return;
     }
     const j=await r.json();const run=j.run||j;const ideas=(run&&run.ideas)||[];
+    // Guard: a poll that briefly reads no live row (e.g. mid-write on the server)
+    // must never wipe a board that already has ideas. Keep the last good board and
+    // let the next poll catch up. (Belt-and-braces with the server insert-then-
+    // supersede fix.)
+    if(!ideas.length && IDEAS && IDEAS.length && lastFP!==null)return;
     SERVED_RUN_ID=j.run_id||RUN_ID||'';
     // Permalink permanence (strategy-permalink-permanence, 2026-08-09): a board
     // opened BARE serves the newest session, so a URL copied from the address
