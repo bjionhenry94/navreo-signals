@@ -4172,7 +4172,7 @@ function companySectionHtml(row) {
       ${fact("Size", hc ? esc(hc) : dash)}
       ${fact("Company HQ", loc ? esc(loc) : dash)}
     </dl>
-    ${descShown ? `<details class="lp-desc" open><summary>What they do</summary><div class="lp-company-desc">${esc(descShown)}</div></details>` : ""}
+    ${descShown ? `<details class="lp-desc"><summary>What they do</summary><div class="lp-company-desc">${esc(descShown)}</div></details>` : ""}
   </div>`;
 }
 function clientSectionHtml(row) {
