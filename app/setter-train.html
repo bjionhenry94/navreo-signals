@@ -675,9 +675,13 @@ function renderCasesOrEmpty() {
   if (!CASES.length) { view = "empty"; render(); return; }
   // Pre-loaded scenario bank (owner ruling 2026-08-20): scenarios are
   // pre-made at creation, so cases existing no longer implies the offer
-  // interview ran - a fresh trainee still starts with the five questions.
+  // interview ran - a trainee still starts with the five questions until an
+  // interview has actually been ANSWERED. Historical case answers don't
+  // count (GreenShift launch 2026-08-20: CSM-side training answers on the
+  // doc were suppressing the client's first questionnaire); skipping is
+  // remembered per session only, so a skipper is gently re-asked next visit.
   const answeredIv = INTERVIEWS.some((i) => Object.keys((i && i.answers) || {}).length);
-  if (SHARE_MODE && !firstIvDone && !answeredIv && !Object.keys(ANSWERS).length) {
+  if (SHARE_MODE && !firstIvDone && !answeredIv) {
     renderBankFirstInterview();
     return;
   }
