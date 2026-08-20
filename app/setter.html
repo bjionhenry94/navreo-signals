@@ -4150,7 +4150,9 @@ function companySectionHtml(row) {
     ? `${tzf.tone ? `<span class="lp-tz-dot ${esc(tzf.tone)}"></span>` : ""}${esc(tzf.shown)}`
     : dash;
   const desc = c.description ? String(c.description) : "";
-  const descShown = desc.length > 700 ? desc.slice(0, 697).replace(/\s+\S*$/, "") + "…" : desc;
+  // Full description, no truncation (owner ask 2026-08-20) - the details fold
+  // already keeps it out of the way until opened.
+  const descShown = desc;
   const chipLabel = q.verdict === "likely" ? "Likely qualified"
     : q.verdict === "unlikely" ? "Unlikely fit"
     : wc.done ? "Fit unknown" : "";
