@@ -314,7 +314,7 @@ let generating = false; // guards the POST /training/generate and /training/rech
    2026-08-16, revision 2), so the client page is rating rounds only - no
    chat pane, no uploads. */
 let ROUND_IDS = null;
-const ROUND_SIZE = 5;
+const ROUND_SIZE = 3;   // owner ruling 2026-08-20: rounds of 3, was 5
 const ROUND_CAP = 12;           // rounds per sitting - then "we'll take it from here"
 
 /* ── Background-generation polling state ──────────────────────────────────
@@ -601,7 +601,10 @@ function beginRoundIfNeeded() {
       if (restored.some((id) => !isAnswered(id))) { ROUND_IDS = restored; return; }
     }
   }
-  ROUND_IDS = currentUnanswered().map((c) => c.id);
+  // Cap the round at ROUND_SIZE (owner ruling 2026-08-20): a backlog of
+  // unanswered cases (a prefetched batch, or an old doc) feeds the NEXT
+  // rounds instead of inflating this one.
+  ROUND_IDS = currentUnanswered().slice(0, ROUND_SIZE).map((c) => c.id);
   let n = 0, sitting = 0;
   try {
     n = Number(sessionStorage.getItem("trainRoundNum") || "0");
@@ -816,7 +819,18 @@ function isAnswered(caseId) {
   // server records it skipped and the readiness score ignores it.
   return !!a && (a.skipped === true || (a.decision_ok !== undefined && a.decision_ok !== null));
 }
-function currentUnanswered() { return CASES.filter((c) => !isAnswered(c.id)); }
+function currentUnanswered() {
+  const un = CASES.filter((c) => !isAnswered(c.id));
+  // Share mode: while a round is in progress the stream IS the round - cases
+  // a background prefetch lands mid-round stay out of view until the
+  // round-done screen starts the next round, so a round never silently grows
+  // past ROUND_SIZE and the score screen always shows.
+  if (SHARE_MODE && ROUND_IDS && ROUND_IDS.some((id) => !isAnswered(id))) {
+    const inRound = new Set(ROUND_IDS.map(String));
+    return un.filter((c) => inRound.has(String(c.id)));
+  }
+  return un;
+}
 function pendingFor(caseId) {
   if (!PENDING[caseId]) PENDING[caseId] = { decision_ok: undefined, reply_ok: null, note: "", scope: "one_off" };
   return PENDING[caseId];
@@ -1022,6 +1036,12 @@ function render() {
   if (view === "empty") { renderEmpty(); return; }
   if (view === "done") { renderDone(); return; }
   if (view === "review") { renderReview(); return; }
+  // Share mode: the round is over when ITS cards are done, even when a
+  // prefetched next batch is already sitting unanswered in the pool - the
+  // round-done screen must show between rounds.
+  if (SHARE_MODE && ROUND_IDS && ROUND_IDS.length && ROUND_IDS.every((id) => isAnswered(id))) {
+    view = "done"; renderDone(); return;
+  }
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; renderDone(); return; }
   if (idx >= unanswered.length) idx = unanswered.length - 1;
@@ -1101,7 +1121,7 @@ function renderRoundDone() {
     </div>
   `;
   const genBtn = document.getElementById("doneGenerateBtn");
-  if (genBtn) genBtn.addEventListener("click", () => generateMore());
+  if (genBtn) genBtn.addEventListener("click", () => startNextRoundOrGenerate());
   const reviewBtn = document.getElementById("doneReviewBtn");
   if (reviewBtn) reviewBtn.addEventListener("click", () => startReview());
 }
@@ -1248,8 +1268,89 @@ async function teachFromReview(caseId, textarea, btn) {
   protoNote("Got it - we'll reply that way from now on");
 }
 
+/* ── Next-round prefetch (share mode - owner ask 2026-08-20: "speed up the
+   new rounds") ─────────────────────────────────────────────────────────────
+   Rounds felt slow because the next batch only started building when the
+   client clicked "Start round N+1". Instead, kick the batch off silently in
+   the background as soon as the current round gets its first rating (a
+   visitor who rates nothing costs nothing), so by the round-done screen the
+   next round is usually already in the pool and starts instantly. The poll
+   below only APPENDS new cases - it never touches ANSWERS (optimistic
+   in-flight saves live there) and never re-renders the card being rated. */
+let PREFETCHED_ROUND = 0;
+let prefetchPollHandle = null;
+
+function stopPrefetchPoll() {
+  if (prefetchPollHandle) { clearInterval(prefetchPollHandle); prefetchPollHandle = null; }
+}
+
+function maybePrefetchNextRound() {
+  if (!SHARE_MODE || !ROUND_IDS || !ROUND_IDS.length) return;
+  const answered = ROUND_IDS.filter((id) => isAnswered(id)).length;
+  if (!answered || answered >= ROUND_IDS.length) return;   // fire mid-round only
+  const rn = currentRoundNum();
+  if (PREFETCHED_ROUND === rn) return;                     // once per round
+  if (roundsThisSitting() >= ROUND_CAP) return;            // no further round is offered
+  if ((Number(READINESS.score) || 0) >= 90) return;        // next round is optional past the goal
+  PREFETCHED_ROUND = rn;
+  const inRound = new Set(ROUND_IDS.map(String));
+  const spares = CASES.filter((c) => !isAnswered(c.id) && !inRound.has(String(c.id))).length;
+  if (spares >= ROUND_SIZE) return;                        // next round already waiting
+  const body = { agent_id: selectedAgentId, batch_size: ROUND_SIZE, share: SHARE_TOKEN };
+  fetchJson("/api/setter/training/generate", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((res) => {
+    const st = res.ok && res.data && res.data.status;
+    if (st === "started" || st === "already_running") startPrefetchPoll();
+  });
+}
+
+function startPrefetchPoll() {
+  if (prefetchPollHandle) return;
+  const deadline = Date.now() + POLL_MAX_MS;
+  let appended = 0;
+  prefetchPollHandle = setInterval(async () => {
+    if (Date.now() > deadline) { stopPrefetchPoll(); return; }
+    const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+    if (!res.ok || !prefetchPollHandle) return;
+    const have = new Set(CASES.map((c) => String(c.id)));
+    const fresh = ((res.data && res.data.cases) || []).filter((c) => !have.has(String(c.id)));
+    if (fresh.length) { CASES = CASES.concat(fresh); appended += fresh.length; }
+    const st = (res.data && res.data.generating && res.data.generating.status) || "idle";
+    if (st !== "running" && appended > 0) {
+      stopPrefetchPoll();
+      // If the trainer is already sitting on the round-done screen, refresh
+      // it so "Start round N+1" opens the freshly-landed batch instantly.
+      if (view === "done") render();
+    }
+  }, POLL_INTERVAL_MS);
+}
+
+/* Round-done "Start round N+1": open the prefetched batch instantly when
+   one is already in the pool; only fall back to a visible generate (with
+   its busy label and poll) when the pool is dry. */
+function startNextRoundOrGenerate() {
+  if (SHARE_MODE) {
+    const spare = CASES.filter((c) => !isAnswered(c.id));
+    if (spare.length) {
+      stopPrefetchPoll();
+      ROUND_IDS = null;
+      try { sessionStorage.removeItem("trainRoundIds"); } catch { /* ignore */ }
+      beginRoundIfNeeded();
+      idx = 0;
+      view = "stream";
+      render();
+      return;
+    }
+    stopPrefetchPoll();
+  }
+  generateMore();
+}
+
 async function generateMore() {
   if (generating) return;
+  stopPrefetchPoll(); // the visible generate's own poll takes over from here
   const restores = markGenerateButtonsBusy("Building new scenarios and drafting our replies - under a minute…");
   generating = true;
   const baselineCount = CASES.length;
@@ -1654,6 +1755,7 @@ function submitAndAdvance(c) {
     // owner/CSM trainer still runs the usual notice+poll.
     const retrainStatus = res.data && res.data.retrain;
     if (!SHARE_MODE && (retrainStatus === "started" || retrainStatus === "queued")) startRetrainNotice();
+    maybePrefetchNextRound();
   });
 }
 
@@ -1696,6 +1798,7 @@ function skipAndAdvance(c) {
     }
     clearError();
     applyReadiness((res.data && res.data.readiness) || READINESS, { animate: false });
+    maybePrefetchNextRound();
   });
 }
 
@@ -1720,7 +1823,7 @@ const TUT_STEPS = [
     body: () => "Each card shows a conversation and the reply we'd send for you - hit Correct if you'd send it too, or Needs work and just tell us what you'd change. Try one now, or hit Next.",
     target: () => document.querySelector(".train-verdict") || document.querySelector(".train-card") || document.getElementById("trainApp") },
   { title: "The finish line", cta: "Let's go",
-    body: () => "Cards come in rounds of 5 - after each one we take in everything you've shown us and draw a fresh set. At 90 we've got your voice down, and everything you show us is saved so you can stop whenever you like.",
+    body: () => `Cards come in rounds of ${ROUND_SIZE} - after each one we take in everything you've shown us and draw a fresh set. At 90 we've got your voice down, and everything you show us is saved so you can stop whenever you like.`,
     target: () => document.getElementById("readinessPanelHost") },
 ];
 
