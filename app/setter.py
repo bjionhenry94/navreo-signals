@@ -11913,7 +11913,9 @@ def _pending_staged_scenarios(agent: dict, existing_cases: list) -> list:
         first = q.get("lead_first_name") or ""
         if pool:
             o = pool[i % len(pool)]
-            o_subject = o["subject"] or "A quick idea"
+            # Subject resolves tokens too (live blemish 2026-08-20: a raw
+            # "{Company}" showed on the card title).
+            o_subject = _resolve_outreach_tokens(o["subject"], first, "").strip() or "A quick idea"
             o_body = _resolve_outreach_tokens(o["body"], first, "")
         else:
             o_subject, o_body = "A quick idea", _STAGED_FALLBACK_OUTREACH
@@ -12462,8 +12464,9 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
         company = str(item.get("lead_company") or "").strip()
         if slot_outreach is not None:
             # Real campaign copy, VERBATIM (tokens resolved per lead) - the
-            # model's own outreach fields are ignored on this path.
-            o_subject = slot_outreach[i]["subject"]
+            # model's own outreach fields are ignored on this path. Subject
+            # resolves tokens too (live blemish 2026-08-20).
+            o_subject = _resolve_outreach_tokens(slot_outreach[i]["subject"], first, company).strip()
             o_body = _resolve_outreach_tokens(slot_outreach[i]["body"], first, company)
         else:
             o_subject = str(item.get("outreach_subject") or "").strip()
