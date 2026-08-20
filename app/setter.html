@@ -256,6 +256,10 @@
 .dh-email { font-size: 12.5px; color: var(--ink-2); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* email + copy-email travel as one group, beneath the name line. */
 .dh-emailgrp { display: inline-flex; align-items: center; gap: 4px; min-width: 0; margin-top: 3px; }
+/* Right side of the top tier: the client pill stacked above the "replied X ago"
+   pill, both hugging the right edge (owner ask 2026-08-20 - moved the client
+   pill up out of the cream band). */
+.dh-row1-right { display: flex; flex-direction: column; align-items: flex-end; gap: 5px; flex-shrink: 0; }
 /* "replied X ago" as a neutral pill (matches the app's pill/age-badge look). */
 .dh-replied { font-size: 11px; font-weight: 500; color: var(--ink-2); white-space: nowrap; flex-shrink: 0; background: #F2F2F0; padding: 3px 10px; border-radius: 999px; }
 /* Soft warm band grouping the campaign context + the action links. The links
@@ -305,13 +309,6 @@
 .lead-panel .lp-notes-status:empty { margin-top: 0; }
 .lead-panel .lp-notes-status.err { color: #b42318; }
 .lead-panel .lp-notes { margin-bottom: 12px; }
-/* "What this agent may share" (pricing) - shared with the Try-it drawer. The
-   heading needs an explicit size or it renders as a 16px browser-default bold,
-   louder than the lead's own name. In the narrow sidebar the note is also
-   capped + scrolled so a long instruction block can't blow out the panel. */
-.agent-share-h { font-size: 13px; font-weight: 600; color: var(--ink); }
-.lead-panel .agent-share { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
-.lead-panel .agent-share .small { max-height: 132px; overflow: auto; }
 /* Subsequence toggle at the foot of the panel */
 .lead-panel .lp-subseq {
   display: flex; align-items: center; gap: 8px; font-size: 12.5px; color: var(--ink-2);
@@ -715,9 +712,7 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
    from the top bar's panel button; shown by default on desktop, hidden on
    phones. */
 .inbox-shell.lead-hidden .lead-panel { display: none; }
-.lp-panel-head { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-3); margin-bottom: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-/* Warm-call additions (owner ask 2026-08-15): the phone sits top-right of the
-   LEAD DETAILS title as a tap-to-call link; the company block + qualified
+/* Warm-call additions (owner ask 2026-08-15): the company block + qualified
    chip + collapsed client context fill the "should I call this person?" gap. */
 .lp-phone { font-size: 13px; font-weight: 700; letter-spacing: 0; text-transform: none; color: var(--ink-1, inherit); text-decoration: none; white-space: nowrap; }
 .lp-phone:hover { text-decoration: underline; }
@@ -750,11 +745,6 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-phone-bad { color: var(--ink-3); }
 .lp-kind-bad { background: #f7e8e4; color: #a33b25; }
 .lp-said { font-size: 12px; font-style: italic; color: var(--ink-2, inherit); line-height: 1.45; margin-bottom: 12px; }
-.lp-disp { display: flex; align-items: center; gap: 6px; margin: -4px 0 12px; flex-wrap: wrap; }
-.lp-disp-label { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); }
-.lp-disp-btn { font-size: 10px; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 999px; padding: 2px 8px; cursor: pointer; color: var(--ink-3); }
-.lp-disp-btn:hover { color: var(--ink-1, inherit); }
-.lp-disp-btn.on { background: var(--ink-1, #222); color: var(--bg-1, #fff); border-color: var(--ink-1, #222); }
 .dh-actions { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .lp-panel-toggle {
   flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
@@ -3563,10 +3553,13 @@ function renderDetail(row) {
             ${row.lead_email ? `<button type="button" class="dh-copy" id="copyEmailBtn" data-email="${esc(row.lead_email)}" title="Copy email address" aria-label="Copy email address">${ICON_COPY}</button>` : ""}
           </span>
         </div>
-        <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
+        <div class="dh-row1-right">
+          ${clientPillHtml(row)}
+          <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
+        </div>
       </div>
       <div class="dh-band">
-        <div class="dh-campaign" title="${esc(campaignNameFor(row))}">${clientPillHtml(row)}<span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>
+        <div class="dh-campaign" title="${esc(campaignNameFor(row))}"><span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>
         <div class="dh-actions">
           <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
           <button type="button" class="lp-panel-toggle" id="panelToggleBtn" aria-pressed="true" title="Hide lead details">${ICON_PANEL}</button>
@@ -3603,9 +3596,8 @@ function renderDetail(row) {
     // The whole lead-details column is shown/hidden as one (see
     // applyLeadPanelHidden + the top-bar #panelToggleBtn); the panel itself is
     // just a titled stack of sections.
-    panelEl.innerHTML = `<div class="lp-panel-head"><span>Lead details</span></div>` + leadPanelHtml(row);
+    panelEl.innerHTML = leadPanelHtml(row);
     wireClientToggle(panelEl);
-    wirePhoneDisposition(panelEl, row);
     wireLeadNotes(panelEl, row);
   }
   // Wire the top-bar button that hides/shows the entire lead-details column,
@@ -3731,46 +3723,41 @@ function autoSendVerdictHtml(row, terse) {
   if (terse && row.decision_reason) return "<b>No</b>.";
   return `<b>No</b> - ${esc(row.decision_reason || "one of the autopilot checks failed.")}`;
 }
-/* The pricing "what this agent may share" block, shown only when the reply
-   touches pricing. Shared by the Try-it drawer and the sidebar. */
-function agentPricingHtml(row) {
-  const cls = row.classification || {};
-  if (!(cls.all_intents || []).includes("pricing")) return "";
-  const agent = AGENTS.find((a) => String(a.id) === String(row.agent_id));
-  const instructions = (agent && (agent.instructions || agent.pricing_notes)) || "";
-  return `<div class="agent-share"><div class="agent-share-h">What this agent may share</div>
-      <div class="small" style="white-space:pre-wrap;margin-top:4px">${esc(instructions) || "<i>No instructions saved for this agent.</i>"}</div>
-    </div>`;
-}
 /* The decision facts (Intent / Timezone / Opt-out hits / AI flags / Call
    slots) as pure data, so the Try-it drawer and the sidebar render the SAME
    facts and can't drift. opts.hideEmpty drops the two "none" guardrail rows
    (the sidebar wants a clean scan; the Try-it drawer keeps them, unchanged). */
+/* The replier's local time now + a working-hours tone (green 9-18 their time,
+   orange outside) - the clock math done for the caller (SDR panel 2026-08-15)
+   so no rep computes "is it dinner time there?" in their head; the dot IS the
+   verdict (owner 2026-08-17: no "good time to call" commentary). Shared by the
+   decision facts and the Profile's "Personal Location" row so they never drift. */
+function leadTimezoneFact(row) {
+  const cls = row.classification || {};
+  const tz = row.timezone || cls.timezone_guess || "";
+  let shown = tz || "unknown";
+  let tone = "";
+  if (tz) {
+    try {
+      const now = new Date();
+      const t = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(now);
+      const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
+      tone = (h >= 9 && h < 18) ? "good" : "off";
+      shown = `${t} for them`;
+    } catch { /* bad tz name - keep the raw value */ }
+  }
+  return { tz, shown, tone };
+}
 function decisionFacts(row, opts) {
   opts = opts || {};
   const cls = row.classification || {};
   const guardrails = row.guardrails || {};
   const lexHits = Array.isArray(guardrails.lexicon_hits) ? guardrails.lexicon_hits : [];
   const redFlags = Array.isArray(guardrails.llm_red_flags) ? guardrails.llm_red_flags : [];
-  const tz = row.timezone || cls.timezone_guess || "";
   const facts = [];
   facts.push({ label: "Intent", value: `${intentLabel(cls.primary_intent)}${cls.confidence != null ? ` (${Math.round(cls.confidence * 100)}% sure)` : ""}` });
-  // Do the clock math for the caller (SDR panel 2026-08-15): the raw IANA
-  // name made every rep compute "is it dinner time there?" in their head.
-  // The dot IS the verdict (owner 2026-08-17: no "good time to call"
-  // commentary) - green in their working hours, orange outside.
-  let tzShown = tz || "unknown";
-  let tzTone = "";
-  if (tz) {
-    try {
-      const now = new Date();
-      const t = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(now);
-      const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
-      tzTone = (h >= 9 && h < 18) ? "good" : "off";
-      tzShown = `${t} for them`;
-    } catch { /* bad tz name - keep the raw value */ }
-  }
-  facts.push({ label: "Timezone", value: tzShown, tone: tzTone });
+  const tzf = leadTimezoneFact(row);
+  facts.push({ label: "Timezone", value: tzf.shown, tone: tzf.tone });
   if (!opts.hideEmpty || lexHits.length) facts.push({ label: "Opt-out hits", value: lexHits.length ? lexHits.join(", ") : "none" });
   if (!opts.hideEmpty || redFlags.length) facts.push({ label: "AI flags", value: redFlags.length ? redFlags.join(", ") : "none" });
   facts.push({ label: "Call slots", value: slotSituationText(row) });
@@ -3796,8 +3783,6 @@ function howDecidedContentHtml(row, opts) {
     parts.push(`<div class="small" style="margin:-2px 0 8px;color:var(--ink-3)">${esc(row.no_slots_reason)}</div>`);
   }
   if (row.category) parts.push(kv("Smartlead category", esc(row.category)));
-  const pricing = agentPricingHtml(row);
-  if (pricing) parts.push(pricing);
   return parts.join("");
 }
 function slotSituationText(row) {
@@ -3923,7 +3908,7 @@ function leadQuickLinksHtml(row) {
   // One-tap dial from the always-visible bar (SDR panel gripe 2026-08-15:
   // on phones the sidebar phone was toggle-then-tap - two taps).
   const wcSticky = warmcallFor(row);
-  const wcPh = ((wcSticky.phone_meta || {}).status === "bad") ? "" : String(wcSticky.phone || "").trim();
+  const wcPh = String(wcSticky.phone || "").trim();
   const callBtn = wcPh
     ? `<a class="lp-qbtn lp-call-btn" href="tel:${esc(wcPh.replace(/[^+\d]/g, ""))}" title="Call ${esc(wcPh)}"><span>📞 ${esc(wcPh)}</span></a>` : "";
   // No CRM button here (owner 2026-08-17): the sidebar's "Open in CRM" link
@@ -4026,7 +4011,6 @@ function leadPanelHtml(row) {
     ${crmTopHtml(row)}
     ${notesSectionHtml(row)}
     ${catSectionHtml}
-    ${phoneDispositionHtml(row)}
     ${noAgentHtml}
     ${companySectionHtml(row)}
     <div class="lp-section">
@@ -4111,34 +4095,6 @@ function wireLeadNotes(scope, row) {
    qualified_info / client_info); before hydration they show quiet dashes, and
    hydrateLeadContact swaps each block in place by id so a category pick in
    progress is never clobbered. */
-/* One-tap call disposition (SDR panel round 2, 2026-08-15): after a dial the
-   rep files what happened right where they dialled. Writes to OUR enrichment
-   row only (never Smartlead); "bad" strikes the number everywhere. */
-function phoneDispositionHtml(row) {
-  const wc = warmcallFor(row);
-  if (!String(wc.phone || "").trim()) return `<div class="lp-disp" id="lpDisp" style="display:none"></div>`;
-  const cur = (wc.phone_meta || {}).status || "";
-  const btn = (val, label) =>
-    `<button type="button" class="lp-disp-btn${cur === val ? " on" : ""}" data-disp="${val}" title="${cur === val ? "Filed - click to clear" : `File the call as ${label.toLowerCase()}`}">${label}</button>`;
-  return `<div class="lp-disp" id="lpDisp"><span class="lp-disp-label">Last call:</span>${btn("connected", "Connected")}${btn("voicemail", "Voicemail")}${btn("bad", "Bad number")}</div>`;
-}
-function wirePhoneDisposition(scope, row) {
-  (scope || document).querySelectorAll("#lpDisp .lp-disp-btn").forEach((b) => {
-    b.addEventListener("click", async () => {
-      const wc = warmcallFor(row);
-      const cur = (wc.phone_meta || {}).status || "";
-      const next = b.getAttribute("data-disp") === cur ? "" : b.getAttribute("data-disp");
-      const res = await fetchJson("/api/setter/phone-status", { method: "POST",
-        body: JSON.stringify({ email: row.lead_email, status: next }) });
-      if (!res.ok) { protoNote("Couldn't save the call outcome - try again."); return; }
-      wc.phone_meta = { ...(wc.phone_meta || {}), status: next, status_at: new Date().toISOString().slice(0, 10) };
-      const dEl = document.getElementById("lpDisp");
-      if (dEl) { dEl.outerHTML = phoneDispositionHtml(row); wirePhoneDisposition(document, row); }
-      document.querySelectorAll(".lp-quick").forEach((q) => { q.innerHTML = leadQuickLinksHtml(row); });
-      protoNote(next ? `Filed: ${next}` : "Call outcome cleared");
-    });
-  });
-}
 function crmTopHtml(row) {
   const cl = warmcallFor(row).client || row.client_info || {};
   const email = String(row.lead_email || "").toLowerCase();
@@ -4168,7 +4124,16 @@ function companySectionHtml(row) {
   const loc = [c.city, c.state, c.country].filter(Boolean).join(", ");
   const hc = c.employee_count ? `~${c.employee_count} staff` : (c.employee_range ? `${c.employee_range} staff` : "");
   const name = c.name || row.company_name || "";
-  const site = (row.company_website || "").replace(/^https?:\/\//, "");
+  const siteUrl = String(row.company_website || "").trim();
+  const site = siteUrl.replace(/^https?:\/\//, "");
+  const siteHref = siteUrl ? (/^https?:\/\//i.test(siteUrl) ? siteUrl : `https://${siteUrl}`) : "";
+  // The replier's own local time is their "Personal Location" - the same tz fact
+  // the decision block used, moved into the profile table (owner ask 2026-08-20)
+  // so Timezone and Personal Location are one row, not two.
+  const tzf = leadTimezoneFact(row);
+  const personalLoc = tzf.tz
+    ? `${tzf.tone ? `<span class="lp-tz-dot ${esc(tzf.tone)}"></span>` : ""}${esc(tzf.shown)}`
+    : dash;
   const desc = c.description ? String(c.description) : "";
   const descShown = desc.length > 700 ? desc.slice(0, 697).replace(/\s+\S*$/, "") + "…" : desc;
   const chipLabel = q.verdict === "likely" ? "Likely qualified"
@@ -4183,10 +4148,10 @@ function companySectionHtml(row) {
     <dl class="lp-facts">
       ${fullName ? fact("Name", esc(fullName)) : ""}
       ${fact("Role", role ? esc(role) : dash)}
-      ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· ${esc(site)}</span>` : ""}` : dash)}
+      ${fact("Personal Location", personalLoc)}
+      ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a></span>` : ""}` : dash)}
       ${fact("Size", hc ? esc(hc) : dash)}
-      ${fact("Location", loc ? esc(loc) : dash)}
-      ${fact("Industry", c.industry ? esc(c.industry) : dash)}
+      ${fact("Company HQ", loc ? esc(loc) : dash)}
     </dl>
     ${descShown ? `<details class="lp-desc"><summary>What they do</summary><div class="lp-company-desc">${esc(descShown)}</div></details>` : ""}
     ${verdictHtml}
@@ -4234,19 +4199,17 @@ function leadDecisionHtml(row) {
     parts.push(`<div class="lp-verdict"><b>Would this have auto-sent?</b> ${verdict}</div>`);
   }
   // Sidebar cuts: Intent (owner ask 2026-08-11) and Call slots (owner ask
-  // 2026-08-17: the drafted email itself shows the offered times). The
-  // timezone row gets a colour dot - green when it's a good time to call,
-  // orange outside working hours (owner point 2).
+  // 2026-08-17: the drafted email itself shows the offered times). Timezone
+  // is also cut here (owner ask 2026-08-20): it now lives in the Profile table
+  // as the "Personal Location" row, so showing it here too would double it up.
   // Opt-out hits also cut from the sidebar (owner 2026-08-17: guardrail
   // internals like "spam" read as noise here; the Try-it drawer keeps them).
-  const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent" && f.label !== "Call slots" && f.label !== "Opt-out hits");
+  const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent" && f.label !== "Call slots" && f.label !== "Opt-out hits" && f.label !== "Timezone");
   if (facts.length) {
     parts.push(`<dl class="lp-facts">` + facts.map((f) =>
       `<div class="lp-fact"><dt>${esc(f.label)}</dt><dd>${f.tone ? `<span class="lp-tz-dot ${esc(f.tone)}"></span>` : ""}${esc(f.value)}</dd></div>`).join("") + `</dl>`);
   }
   if (row.no_slots_reason) parts.push(`<div class="lp-note">${esc(row.no_slots_reason)}</div>`);
-  const pricing = agentPricingHtml(row);
-  if (pricing) parts.push(pricing);
   return parts.join("") || `<div class="lp-line muted">No decision details.</div>`;
 }
 /* Fill a given category <select> from the live Smartlead list. The tone pill
@@ -4347,7 +4310,6 @@ async function hydrateLeadContact(row) {
   WARMCALL[wcKey] = { ...wcPrev, done: true,
     phone: String(res.data.phone || ""),
     phone_kind: String(res.data.phone_kind || ""),
-    phone_meta: res.data.phone_meta || {},
     person_title: String((res.data.person || {}).title || ""),
     company: res.data.company || {},
     qualified: res.data.qualified || {},
@@ -4373,8 +4335,6 @@ async function hydrateLeadContact(row) {
     if (coEl) coEl.outerHTML = companySectionHtml(row);
     const clEl = document.getElementById("lpClient");
     if (clEl) { clEl.outerHTML = clientSectionHtml(row); wireClientToggle(document); }
-    const dEl = document.getElementById("lpDisp");
-    if (dEl) { dEl.outerHTML = phoneDispositionHtml(row); wirePhoneDisposition(document, row); }
     const crmEl = document.getElementById("lpCrmTop");
     if (crmEl) crmEl.outerHTML = crmTopHtml(row);
     // The Notes box is deliberately NOT in the swapped blocks (typing must
@@ -4862,7 +4822,7 @@ function sendGateChipsHtml(row, subs) {
   const note = (subs || []).length === 0
     ? `<div class="small muted" style="margin-bottom:6px">This campaign has no follow-up sequences set up — choose None to unlock Approve.</div>` : "";
   return `<div class="send-gate" id="gate-${esc(row.id)}">
-    <div class="sg-label">Follow-up track — pick one to unlock Approve</div>
+    <div class="sg-label">Choose the automated follow-up sequence — pick one to unlock Approve</div>
     ${note}
     <div class="sg-chips">${chips.join("")}</div>
     ${gateHintHtml()}
