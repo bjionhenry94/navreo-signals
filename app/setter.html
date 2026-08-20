@@ -739,7 +739,7 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-crm-link { font-weight: 600; }
 .lp-crm-top { margin-bottom: 12px; font-size: 12px; }
 .lp-desc { margin: 6px 0 2px; }
-.lp-desc summary { cursor: pointer; font-size: 11px; font-weight: 600; color: var(--ink-3); }
+.lp-desc summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--ink-3); }
 .lp-desc .lp-company-desc { margin-top: 6px; }
 .lp-call-btn span { white-space: nowrap; }
 .lp-phone-bad { color: var(--ink-3); }
@@ -4024,10 +4024,10 @@ function leadPanelHtml(row) {
     ${catSectionHtml}
     ${noAgentHtml}
     ${companySectionHtml(row)}
+    ${clientSectionHtml(row)}
     <div class="lp-section">
       ${leadDecisionHtml(row)}
     </div>
-    ${clientSectionHtml(row)}
   `;
 }
 /* Notes: a SHARED, team-visible free-text scratchpad on this lead (owner ask
