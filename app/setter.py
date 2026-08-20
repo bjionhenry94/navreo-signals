@@ -13071,6 +13071,7 @@ def _training_generate_threadmain(agent_id, agent, allowed_campaign_ids, batch_s
             lock.release()
         except RuntimeError:  # noqa: BLE001 - lock wasn't held (shouldn't happen); never crash a bg thread
             pass
+    _sweep_orphaned_training_flags(agent_id)
 
 
 def _finish_training_generation(agent_id: str, status: str, error: str | None = None, added: int | None = None):
@@ -13448,6 +13449,37 @@ def _training_retrain_threadmain(agent_id, lock, redraft=True):
             lock.release()
         except RuntimeError:  # noqa: BLE001 - lock wasn't held (shouldn't happen); never crash a bg thread
             pass
+    _sweep_orphaned_training_flags(agent_id)
+
+
+def _sweep_orphaned_training_flags(agent_id: str):
+    """A queued flag that lands between a worker's LAST queued-work check and
+    its lock release has no worker left to honour it (live-verify tail race
+    2026-08-20: a generate finished at :59, the next answer flagged a pool
+    retrain at :01 while the threadmain was mid-release, and the flag sat
+    orphaned with covers never catching up). Every threadmain calls this
+    AFTER releasing: while flags remain and the lock is free, take it and
+    run them; when someone else holds the lock, THEIR tail owns the sweep.
+    Bounded, never raises."""
+    for _ in range(4):
+        try:
+            doc = _load_training(agent_id)
+            gen = doc.get("generating") or {}
+            if not gen.get("retrain_queued") and not gen.get("generate_queued"):
+                return
+            lock = _get_training_gen_lock(agent_id)
+            if not lock.acquire(blocking=False):
+                return  # the current holder's own tail sweep takes over
+            try:
+                _maybe_run_queued_retrain(agent_id)
+                _maybe_run_queued_generate(agent_id)
+            finally:
+                try:
+                    lock.release()
+                except RuntimeError:  # noqa: BLE001
+                    pass
+        except Exception:  # noqa: BLE001 - never raise out of a background thread
+            return
 
 
 def _merge_running_marker(existing: dict, **fields) -> dict:
@@ -14094,6 +14126,7 @@ def _training_recheck_threadmain(agent_id, count, lock):
             lock.release()
         except RuntimeError:  # noqa: BLE001 - lock wasn't held (shouldn't happen); never crash a bg thread
             pass
+    _sweep_orphaned_training_flags(agent_id)
 
 
 def route_training_recheck(payload):

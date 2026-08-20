@@ -6464,6 +6464,48 @@ def test_queued_share_retrain_keeps_pool_mode():
          setter._load_agent(agent["id"]).get("instructions"))
 
 
+def test_orphaned_flag_sweep_consumes_tail_race_flags():
+    """Tail race (live-verify 2026-08-20): a flag landing between a worker's
+    last queued-work check and its lock release is orphaned - the
+    post-release sweep must consume it. Direct test: flags on the doc, lock
+    free, sweep runs both kinds."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-sweep01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-sw-00"), _fixed_training_case("case-sw-01")],
+           "answers": {"case-sw-00": {"decision_ok": False, "reply_ok": False,
+                                      "note": "Never discount.", "scope": "remember",
+                                      "at": "2026-08-20T16:21:00+00:00"}},
+           "used_reply_ids": [], "readiness_history": [],
+           "client_round_ids": ["case-sw-00"],
+           "pending_merges": [{"note": "Never discount.", "source": "training:case-sw-00",
+                               "at": "2026-08-20T16:21:00+00:00"}],
+           "generating": {"status": "idle", "retrain_queued": "pool",
+                          "generate_queued": {"batch_size": 2, "share": True}},
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>SWEPT fresh draft</div>"}
+
+    setter._sweep_orphaned_training_flags(agent["id"])
+
+    saved = setter._load_training(agent["id"])
+    gen = saved.get("generating") or {}
+    check("flag sweep: both flags consumed",
+         not gen.get("retrain_queued") and not gen.get("generate_queued"), gen)
+    by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("flag sweep: pool retrain ran in pool mode (spare redrafted, covers stamped)",
+         "SWEPT" in (by_id.get("case-sw-01") or {}).get("draft_html", "")
+         and (saved.get("brain_covers_at") or "") >= "2026-08-20T16:21:00+00:00",
+         (by_id.get("case-sw-01"), saved.get("brain_covers_at")))
+    check("flag sweep: queued generate ran too (cases grew)",
+         len(saved.get("cases") or []) > 2, len(saved.get("cases") or []))
+    check("flag sweep: merge drained", (saved.get("pending_merges") or []) == [],
+         saved.get("pending_merges"))
+
+
 def test_training_interview_questions_and_answers_merge():
     """Offer interview (owner ruling 2026-08-20): action='questions' serves a
     5-question set (static fallback here - the FakeHTTP returns {} for the
@@ -11764,6 +11806,7 @@ if __name__ == "__main__":
     test_generate_queued_behind_retrain_lock_runs_after()
     test_generate_queued_survives_retrain_marker_overwrite()
     test_generate_queued_survives_worker_loop_top_marker()
+    test_orphaned_flag_sweep_consumes_tail_race_flags()
     test_interview_first_answers_defer_merge_behind_generate()
     test_queued_share_retrain_keeps_pool_mode()
     test_training_interview_questions_and_answers_merge()
