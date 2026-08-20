@@ -378,6 +378,13 @@ let transitionPollHandle = null;
 let transitionStartedAt = 0;
 let lastFeedbackAt = "";      // server-time of MY newest teaching this sitting
 try { lastFeedbackAt = sessionStorage.getItem("trainLastFeedbackAt") || ""; } catch { /* ignore */ }
+/* Feedback answers whose server timestamp hasn't come back yet. The done
+   screen renders optimistically BEFORE the answer POST resolves, so for a
+   beat the gate would compare against a STALE lastFeedbackAt and open on a
+   pre-feedback draft (live-verify race 2026-08-20, run 2: a 0.4s "win"
+   showing a card that ignored the rule taught 0.4s earlier). While any
+   feedback is still syncing, nothing counts as fresh. */
+let pendingFeedbackSync = 0;
 
 function bumpLastFeedbackAt(at) {
   if (!at || at <= lastFeedbackAt) return;
@@ -385,11 +392,13 @@ function bumpLastFeedbackAt(at) {
   try { sessionStorage.setItem("trainLastFeedbackAt", at); } catch { /* ignore */ }
 }
 function poolFresh() {
+  if (pendingFeedbackSync > 0) return false;
   return !lastFeedbackAt || (BRAIN_COVERS_AT && BRAIN_COVERS_AT >= lastFeedbackAt);
 }
 /* A single case is fresh when it was drafted (or re-drafted) after my last
    teaching - or when the whole pool has been swept since. */
 function caseFresh(c) {
+  if (pendingFeedbackSync > 0) return false;
   if (!lastFeedbackAt) return true;
   const stamp = String((c && (c.redrafted_at || c.generated_at)) || "");
   return (stamp && stamp >= lastFeedbackAt) || poolFresh();
@@ -1410,9 +1419,11 @@ async function submitInterviewAnswers(iv, onDone) {
   if (SHARE_MODE) body.share = SHARE_TOKEN;
   const btn = document.getElementById("ivSubmitBtn");
   const restore = btn ? busyBtn(btn, "Teaching your AI…") : null;
+  pendingFeedbackSync++;
   const res = await fetchJson("/api/setter/training/interview", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
+  pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
   if (restore) restore();
   if (!res.ok) { showError("Couldn't save your answers: " + res.error); return; }
   clearError();
@@ -2135,6 +2146,9 @@ function submitAndAdvance(c) {
   IN_FLIGHT_ANSWERS.add(c.id);
   ANSWERS[c.id] = { decision_ok: !!p.decision_ok, reply_ok: p.reply_ok, note: p.note || "", scope: effectiveScope };
   delete PENDING[c.id];
+  const carriesFeedback = SHARE_MODE && !!(answerBody.note || answerBody.edited_body
+    || answerBody.decision_ok === false || answerBody.reply_ok === false);
+  if (carriesFeedback) pendingFeedbackSync++;
   clearError();
   markSaving();
 
@@ -2150,6 +2164,7 @@ function submitAndAdvance(c) {
     body: JSON.stringify(answerBody),
   }).then((res) => {
     IN_FLIGHT_ANSWERS.delete(c.id);
+    if (carriesFeedback) pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
     unmarkSaving();
     if (!res.ok) {
       if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
