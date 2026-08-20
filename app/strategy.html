@@ -71,13 +71,12 @@ body.solo .wrap{margin:0 auto;}
 .solo-head .sh-reach b{color:var(--ink);font-variant-numeric:tabular-nums;}
 .solo-cont{margin-top:14px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;}
 .solo-cont .ab-shareout{flex-basis:100%;margin:2px 0 0;}
-.save-status{font-size:12.5px;color:var(--ink-3);font-weight:600;letter-spacing:.01em;display:inline-flex;align-items:center;gap:5px;transition:color .15s ease;}
-.save-status[data-state="idle"]{color:var(--ink-3);}
-.save-status[data-state="saving"]{color:var(--ink-2);}
-.save-status[data-state="saved"]{color:#1f9d55;}
-.save-status[data-state="error"]{color:var(--orange-600);}
-.save-status.flash{animation:savedpop .8s ease;}
-@keyframes savedpop{0%{transform:scale(.85);opacity:.3;}35%{transform:scale(1.06);opacity:1;}100%{transform:scale(1);opacity:1;}}
+/* auto-save: a small 'Saved ✓' that fades in and out just under the edited box */
+.saved-pop{position:absolute;z-index:60;font-size:12px;font-weight:600;color:#1f9d55;letter-spacing:.02em;pointer-events:none;opacity:0;}
+.saved-pop.show{animation:savedfade 2.4s ease forwards;}
+@keyframes savedfade{0%{opacity:0;transform:translateY(-4px);}20%{opacity:1;transform:translateY(0);}60%{opacity:1;}100%{opacity:0;}}
+/* editable copy box keeps its line breaks no matter how content is set */
+.mb[data-edit]{white-space:pre-wrap;}
 .wtop{display:flex;align-items:flex-start;justify-content:space-between;gap:20px;flex-wrap:wrap;}
 .status{font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--ink-3);margin-bottom:8px;}
 .h1{font-family:var(--font-display);font-size:32px;letter-spacing:-.03em;line-height:1.08;margin:22px 0;}
@@ -554,11 +553,15 @@ async function persistVisibleEdits(x){
 // (fetchRun guard) so a save never yanks the cursor. The local model is mirrored so
 // switching version tabs shows the saved text instantly, not a stale copy.
 const _saveTimers=new WeakMap();
-function setSaveStatus(state,text){
-  document.querySelectorAll('.save-status').forEach(s=>{
-    s.dataset.state=state;s.textContent=text;
-    if(state==='saved'){s.classList.remove('flash');void s.offsetWidth;s.classList.add('flash');}  // re-trigger the pop each save
-  });
+let _savedPop;
+function flashSavedUnder(el){
+  if(!el||!el.isConnected)return;
+  if(!_savedPop){_savedPop=document.createElement('div');_savedPop.className='saved-pop';document.body.appendChild(_savedPop);}
+  const p=_savedPop;p.textContent='Saved ✓';
+  const r=el.getBoundingClientRect();
+  p.style.left=(r.left+window.scrollX)+'px';
+  p.style.top=(r.bottom+window.scrollY+6)+'px';
+  p.classList.remove('show');void p.offsetWidth;p.classList.add('show');  // re-trigger the slow fade each save
 }
 function mirrorEdit(idea,field,val){
   if(!idea||!field)return;
@@ -578,20 +581,18 @@ function autosaveField(el,ideaId){
   const val=el.innerText.trim(); if(!val)return;
   const field=el.dataset.edit; if(!field)return;
   el.dataset.dirty='';
-  setSaveStatus('saving','Saving…');
   fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
     body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:ideaId,field:field,value:val,share:SHARE})})
     .then(r=>r.json()).then(j=>{
-      if(!j.ok){el.dataset.dirty='1';setSaveStatus('error',j.message||'Could not save, will retry');return;}
+      if(!j.ok){el.dataset.dirty='1';nvToast(j.message||'Could not save, will retry');return;}
       const idea=(IDEAS[active]&&IDEAS[active].id===ideaId)?IDEAS[active]:IDEAS.find(i=>i.id===ideaId);
       if(idea)mirrorEdit(idea,field,val);
-      if(el.dataset.dirty!=='1')setSaveStatus('saved','Saved ✓');
+      if(el.dataset.dirty!=='1')flashSavedUnder(el);
     })
-    .catch(()=>{el.dataset.dirty='1';setSaveStatus('error','Offline, will retry on next edit');});
+    .catch(()=>{el.dataset.dirty='1';nvToast('Offline, will retry on next edit');});
 }
 function scheduleAutosave(el,ideaId){
   const t=_saveTimers.get(el); if(t)clearTimeout(t);
-  setSaveStatus('saving','Saving…');
   _saveTimers.set(el,setTimeout(()=>autosaveField(el,ideaId),900));
 }
 function flushAutosave(el,ideaId){
@@ -765,9 +766,8 @@ function panelHTML(x){
       h+=mailFrameHl(v.subject||'',v.email||'','seq:'+si+':'+sel);
     });
     h+=(CLIENT_MODE
-        ?`<div class="actions-center"><span class="save-status" data-state="idle">Changes save automatically</span></div>`
-         +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. It saves on its own and shares with your team.</p>`
-        :`<div class="actions-center"><span class="save-status" data-state="idle">Changes save automatically</span><button class="btn-ink" data-goto="build">Next: see the preview</button></div>`
+        ?`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. It saves on its own and shares with your team.</p>`
+        :`<div class="actions-center"><button class="btn-ink" data-goto="build">Next: see the preview</button></div>`
          +`<p class="hooknote" style="margin-top:10px">Click into an email above to edit it. Changes save automatically.</p>`);
     return h;
   }
@@ -794,7 +794,7 @@ function panelHTML(x){
           +`<div class="opener-list"><div class="opener-row"><div class="opener-order"><span class="opos">&#8595;</span></div>`
           +`<div class="opener-body"><p class="ib-example">"<span contenteditable="true" spellcheck="true" data-edit="ice:fallback">${highlightTokensHtml(ib.fallback)}</span>"</p></div><span></span></div></div>`:'')
         +`<p class="hooknote" style="margin-top:16px">We try these in order for each person and always land on the fallback, so no one ever gets a blank opener. Click into a line to edit it. Changes save automatically.</p>`
-        +`<div class="actions-center"><span class="save-status" data-state="idle">Changes save automatically</span><button class="btn-ink" data-goto="copy">Next: your emails</button></div>`;
+        +`<div class="actions-center"><button class="btn-ink" data-goto="copy">Next: your emails</button></div>`;
     }
     return `<p class="copy-heading">The opener</p><div class="opener-list">${openerRows()}</div>`
       +`<p class="hooknote" style="margin-top:16px">We try these in order for each person, and always have the safe opener as backup.</p>`
@@ -847,7 +847,7 @@ function panelHTML(x){
           ?`<div class="mb mb-edit" contenteditable="true" spellcheck="true" data-edit="seq:${si}:${vi}">${highlightTokensHtml(v.email||'')}</div>`
           :`<div class="mb">${resolvedTextHtml(v.email,x,pr)}</div>`;
         const row=editing
-          ?`<div class="mail-editrow"><button class="btn-ink mail-done" data-si="${si}" data-vi="${vi}">Done</button><span class="save-status" data-state="idle">Saves automatically</span><span class="mail-hint">Anything in {curly brackets} fills in per person.</span></div>`
+          ?`<div class="mail-editrow"><button class="btn-ink mail-done" data-si="${si}" data-vi="${vi}">Done</button><span class="mail-hint">Saves automatically. Anything in {curly brackets} fills in per person.</span></div>`
           :`<div class="mail-editrow"><button class="mail-editbtn" data-si="${si}" data-vi="${vi}">&#9998; Edit this email</button></div>`;
         return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}${vtag}</p>`
           +`<div class="mail"><div class="mh">${head}</div>${body}</div>`+row;
