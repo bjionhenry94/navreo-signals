@@ -730,7 +730,7 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-phone-kind { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; padding: 1px 5px; border-radius: 4px; background: var(--bg-2, #eee); color: var(--ink-3); }
 .lp-phone-copy { font-size: 10px; letter-spacing: 0; text-transform: none; border: 1px solid var(--line, #ddd); background: transparent; border-radius: 5px; padding: 1px 6px; cursor: pointer; color: var(--ink-3); }
 .lp-phone-copy:hover { color: var(--ink-1, inherit); }
-.lp-verdict-row { margin-top: 10px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.lp-verdict-row { margin: 0 0 12px; display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
 .lp-verdict-row .lp-qual { margin-left: 0; }
 .lp-qual-reason-inline { font-size: 11px; color: var(--ink-3); line-height: 1.4; }
 .lp-tz-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; vertical-align: 1px; }
@@ -4144,6 +4144,7 @@ function companySectionHtml(row) {
     : "";
   const fact = (label, val) => `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
   return `<div class="lp-section lp-company" id="lpCompany">
+    ${verdictHtml}
     <div class="lp-label">Profile</div>
     <dl class="lp-facts">
       ${fullName ? fact("Name", esc(fullName)) : ""}
@@ -4154,7 +4155,6 @@ function companySectionHtml(row) {
       ${fact("Company HQ", loc ? esc(loc) : dash)}
     </dl>
     ${descShown ? `<details class="lp-desc"><summary>What they do</summary><div class="lp-company-desc">${esc(descShown)}</div></details>` : ""}
-    ${verdictHtml}
   </div>`;
 }
 function clientSectionHtml(row) {
