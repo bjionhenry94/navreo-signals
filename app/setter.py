@@ -12784,13 +12784,19 @@ def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: di
         synthetic_thread.append({"who": "lead", "subject": subject, "body": body,
                                  "at": _at(1), "from_name": first_name})
 
-        return _build_case_core(subject=subject, body=body, raw_body=raw_body, category=category,
+        case = _build_case_core(subject=subject, body=body, raw_body=raw_body, category=category,
                                 campaign_id=campaign_id, email_domain="",
                                 original_outreach=original_outreach, human_answer_history={},
                                 agent=agent, eff_settings=eff_settings, avail=avail, slot_status0=slot_status0,
                                 now=now, mem_digest=mem_digest, idx=idx, reply_id=None, synthetic=True,
                                 synthetic_thread=synthetic_thread, inbound_at=_at(1),
                                 lead_first_name=first_name)
+        if case:
+            # The invented prospect's company, surfaced so the trainer UI can
+            # say plainly that this lead is made up (owner confusion
+            # 2026-08-20: a fictional "BrightLane" read as a real client).
+            case["lead_company"] = str(scenario.get("lead_company") or "").strip()
+        return case
     except Exception:  # noqa: BLE001 - a single bad scenario must never abort the whole batch
         return None
 

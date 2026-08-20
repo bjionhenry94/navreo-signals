@@ -68,6 +68,11 @@
 .scope-hint { color: var(--ink-3); margin: -4px 0 10px; line-height: 1.45; }
 .train-card { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin-bottom: 14px; }
 .tr-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 12px; }
+/* Practice-prospect note: says plainly the lead is invented (owner confusion
+   2026-08-20 - a fictional company read as a real client). */
+.practice-note { font-size: 12px; color: var(--ink-3); line-height: 1.5; margin: 0 0 10px;
+  padding: 8px 10px; background: var(--bg-2, rgba(0,0,0,0.03)); border-radius: 6px; }
+
 /* subtle badge on synthetic (practice) scenarios - outlined, not filled, so
    it visibly demotes below the campaign/category pills without competing
    for attention; renders identically in SHARE_MODE since renderCase() has
@@ -1798,16 +1803,23 @@ function renderCase(unanswered, i) {
         <div class="tr-block-lab">Their reply</div>
         <div class="tr-msg big">${inboundBody}</div>
       </div>`;
+  // Practice cards name their pretend prospect outright (owner confusion
+  // 2026-08-20: a fictional "BrightLane" read as a real client) - the lead
+  // is invented; the outreach email is the real campaign copy.
+  const practiceNote = c.synthetic
+    ? `<div class="practice-note">${esc(c.lead_first_name || "The person")}${c.lead_company ? ` at ${esc(c.lead_company)}` : ""} is a made-up practice prospect, invented so you can rehearse the reply - the email we sent them is your real campaign copy, and nothing here ever emails anyone.</div>`
+    : "";
   el.innerHTML = `
     <div class="train-progress">${progressLine}</div>
     <div class="retrain-notice" id="trRetrainNotice" style="display:${indicator.visible ? "" : "none"}">${esc(indicator.text)}</div>
     <div id="learnedChipHost">${renderLearnedChipHtml()}</div>
     <div class="train-card">
       <div class="tr-chips">
-        <span class="pill n">${esc(campaignName)}</span>
+        ${(SHARE_MODE && !c.campaign_id) ? "" : `<span class="pill n">${esc(campaignName)}</span>`}
         <span class="pill n">${esc(category)}</span>
         ${c.synthetic ? `<span class="pill practice">Practice</span>` : ""}
       </div>
+      ${practiceNote}
       ${conversationHtml}
       ${hasHumanHist ? `
       <details class="tr-details">
