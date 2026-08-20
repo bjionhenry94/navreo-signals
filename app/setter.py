@@ -12421,7 +12421,9 @@ reference_replies, when given, are REAL replies this exact agent has actually re
 
 fallback_context, when given instead (no reference replies exist yet), is the agent's own brain plus a sample of the real outreach it sends - use it only to understand what a lead would plausibly be reacting to. Never turn any instructions/pricing/resource/voice_examples content into something the LEAD states as fact in their own reply.
 
-avoid_duplicating lists short gists (category plus the start of the inbound text) of scenarios already waiting to be answered - do not repeat any of these angles, names, or companies.
+avoid_duplicating lists short gists (category plus the start of the inbound text) of scenarios already generated for this agent - both ones already waiting to be answered AND ones written earlier in this same build. Do not repeat any of these angles, opening lines, names, or companies; if two of your own scenarios would come out similar, change one.
+
+vary_across_scenarios_on, when given, is the list of axes your scenarios MUST differ on. Even within a single category, no two leads should read like the same person: deliberately spread them across these axes (different seniorities, company sizes and industries, specific concerns, message lengths and tones, buying stages). Reusing the same "sounds interesting, tell me more" shape for every Interested lead is exactly the failure to avoid - make each one a recognisably different person with a different reason for writing.
 
 THREAD DEPTH: for roughly one scenario in three (spread across categories), also fill prior_lead_reply - an EARLIER, shorter message from the same lead that came before the final reply in `body` (e.g. a first "sounds interesting, how does it work?" before the final "OK and what about pricing?"). The two lead messages must read as the same person continuing one conversation. For all other scenarios prior_lead_reply is an empty string. prior_lead_reply obeys the same lead-side-only law as body.
 
@@ -12435,7 +12437,8 @@ Output STRICT JSON: {"scenarios": [{"lead_first_name": "...", "lead_company": ".
 
 
 def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campaign_ids: list | None = None,
-                               reference_sample: list | None = None) -> list:
+                               reference_sample: list | None = None,
+                               avoid_gists: list | None = None, outreach_offset: int = 0) -> list:
     """ONE gpt-5-mini call inventing `count` lead-side-only synthetic
     training scenarios (see the doctrine comment above), used only to top
     up a batch the real replies table can't fill (see
@@ -12496,7 +12499,12 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
     slot_outreach = None
     if outreach_needed and outreach_pool:
         outreach_needed = False
-        slot_outreach = [outreach_pool[i % len(outreach_pool)] for i in range(count)]
+        # outreach_offset (bank chunking 2026-08-20): a 50-case bank builds in
+        # chunks of 10; without the offset every chunk restarts at pool[0], so
+        # only the first ~10 of e.g. GreenShift's 20 board angles ever get
+        # rehearsed and the same outreach -> same reply theme repeats. The
+        # offset walks the whole pool across chunks so every angle is used.
+        slot_outreach = [outreach_pool[(outreach_offset + i) % len(outreach_pool)] for i in range(count)]
     payload = {"scenario_plan": scenario_plan, "outreach_needed": outreach_needed}
     if slot_outreach:
         payload["campaign_outreach_by_slot"] = [
@@ -12528,8 +12536,36 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
             continue
         body_text = ((c.get("inbound") or {}).get("body") or "").strip()
         unanswered_gists.append(f"{c.get('category') or ''}: {body_text[:80]}")
-    if unanswered_gists:
-        payload["avoid_duplicating"] = unanswered_gists[:60]
+    # avoid_gists (bank chunking 2026-08-20): the gists of scenarios invented
+    # in EARLIER chunks of this same build - the doc isn't saved between
+    # chunks, so without threading these in, chunk 2 has no idea what chunk 1
+    # wrote and the bank converges. Merged with the doc's own unanswered
+    # gists, deduped, capped.
+    all_avoid = unanswered_gists + [g for g in (avoid_gists or []) if g]
+    seen_avoid, avoid_out = set(), []
+    for g in all_avoid:
+        if g not in seen_avoid:
+            seen_avoid.add(g)
+            avoid_out.append(g)
+    if avoid_out:
+        payload["avoid_duplicating"] = avoid_out[:80]
+    # Variety pressure (owner feedback 2026-08-20: "most of the scenarios were
+    # the same so it got repetitive"). Within one category the leads must
+    # differ on concrete axes, not just reword one template. Rotated by offset
+    # so successive chunks lean on different axes.
+    _VARIETY_AXES = [
+        "the lead's seniority (founder / VP / manager / individual contributor)",
+        "company size and industry (a tiny agency vs a large enterprise, different sectors)",
+        "the specific concern raised (price, timing, integration, trust, internal buy-in, ROI proof)",
+        "message length and tone (a two-word reply vs a careful paragraph; warm vs curt vs skeptical)",
+        "how far along they are (curious first reply vs ready-to-book vs comparing you to a competitor)",
+    ]
+    # Rotate which axis leads each chunk. outreach_offset advances in
+    # chunk-size steps (typically 10); // 5 turns that into a stride that is
+    # coprime with the 5-axis list, so successive chunks genuinely start on
+    # different axes instead of all landing on axis 0 (10 % 5 == 0).
+    _rot = (outreach_offset // 5) % len(_VARIETY_AXES)
+    payload["vary_across_scenarios_on"] = _VARIETY_AXES[_rot:] + _VARIETY_AXES[:_rot]
 
     try:
         r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
@@ -13374,14 +13410,28 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
             try:
                 # Bank builds invent in chunks of <=10 - the invention prompt
                 # and its category plan are proven at that size; one 50-item
-                # call would degrade variety and risk output limits.
+                # call would degrade variety and risk output limits. Each chunk
+                # is threaded with (a) the gists every earlier chunk produced
+                # (the doc isn't saved between chunks, so this is the only way
+                # chunk N knows what chunks 1..N-1 wrote) and (b) an advancing
+                # outreach_offset so the whole board-copy pool is rehearsed and
+                # the variety axes rotate - both fixing the "most scenarios were
+                # the same" repetition (owner feedback 2026-08-20).
                 invented = []
+                accumulated_gists = []
+                offset = 0
                 remaining = shortfall
                 while remaining > 0:
                     chunk = min(10, remaining)
-                    invented += _invent_training_scenarios(agent, doc, chunk,
-                                                           allowed_campaign_ids=allowed_campaign_ids,
-                                                           reference_sample=reference_sample)
+                    batch = _invent_training_scenarios(
+                        agent, doc, chunk, allowed_campaign_ids=allowed_campaign_ids,
+                        reference_sample=reference_sample, avoid_gists=accumulated_gists,
+                        outreach_offset=offset)
+                    invented += batch
+                    for s in batch:
+                        accumulated_gists.append(
+                            f"{s.get('category') or ''}: {str(s.get('body') or '')[:80]}")
+                    offset += chunk
                     remaining -= chunk
                 scenarios = list(staged_scenarios) + invented
             except Exception as e:  # noqa: BLE001 - inventing scenarios must never crash the worker
@@ -14776,14 +14826,22 @@ TRAINING_INTERVIEW_SCHEMA = {
 
 TRAINING_INTERVIEW_SYSTEM = """You prepare the next FIVE interview questions for a business owner who is training their AI email assistant to reply to leads in their voice. You are given the assistant's current instruction manual, every question the owner has already been asked (with their answers), and the owner's most recent training feedback.
 
-Your five questions gather the OPERATIONAL FACTS the manual still lacks - the concrete things the assistant needs when writing replies: phone number, what to say when someone asks the price, booking link, what never to promise, how to answer the most common objections, who the offer is and isn't for, guarantees, timelines, what to do with out-of-scope requests.
+Your questions gather the OPERATIONAL FACTS the manual still lacks - the concrete things the assistant needs when writing replies. There is a WIDE landscape of these; each round must MOVE INTO NEW TERRITORY rather than re-mining a topic already covered. The topic areas (spread across rounds, do not exhaust one before touching the others):
+- Contact + logistics: phone, booking link, who to hand off to, response hours.
+- Money: how to talk about price, discounts, contract length, cancellation, payment terms.
+- The offer's edges: who it is and isn't for, what you never promise, guarantees, what's out of scope.
+- Handling objections: "too expensive", "we already do this", "no budget", "send me a proposal", "not now".
+- Proof + trust: case studies, references, results, how you'd word them.
+- Voice + style: how formal, how long, sign-off, phrases you love or ban, tone with a skeptical lead.
+- Process: onboarding time, what happens after a call is booked, next steps.
+- Scheduling: timezones, how far out to offer, what to do when a lead names a time.
 
 Rules:
-- Each question must be answerable in ONE short line by a non-technical founder.
-- Never re-ask anything already answered or already stated in the manual.
-- Prefer questions the recent feedback suggests are missing (a correction about pricing means pricing details are unclear - dig there).
+- HARD ANTI-REPEAT: treat already_asked as covered ground. Do not ask the same thing in new words, and do not stay in a topic area that already has two or more answers when other areas are still untouched. If most areas above are already covered, dig into a genuinely finer, still-uncovered detail rather than looping back.
+- Each question answerable in ONE short line by a non-technical founder.
+- Prefer questions the recent feedback suggests are missing (a correction about pricing means pricing wording is unclear - dig a NEW angle there, don't just re-ask "what's your price").
 - Plain 16-year-old-simple English. No jargon, no compound questions.
-- Exactly 5 questions.
+- Exactly 5 questions, each from a DIFFERENT topic area where possible.
 
 Output STRICT JSON: {"questions": ["...", "...", "...", "...", "..."]}"""
 

@@ -6479,13 +6479,20 @@ def test_training_bank_owner_only_builds_big_and_share_stays_capped():
     http.classify_fn = _training_classify_fn
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Ada"}
     invent_counts = []
+    seen_avoid = []
+    seen_axis0 = []
+    call_n = [0]
     def invent_fn(body):
         payload = json.loads(body["messages"][1]["content"])
         plan = payload.get("scenario_plan") or []
         invent_counts.append(len(plan))
+        seen_avoid.append(len(payload.get("avoid_duplicating") or []))
+        seen_axis0.append((payload.get("vary_across_scenarios_on") or [""])[0])
+        base = call_n[0] * 100
+        call_n[0] += 1
         return {"scenarios": [
-            {"lead_first_name": f"Pat{i}", "lead_company": f"Acme {i} Co",
-             "subject": "Re: our email", "body": f"Synthetic reply #{i}. Thanks.",
+            {"lead_first_name": f"Pat{base+i}", "lead_company": f"Acme {base+i} Co",
+             "subject": "Re: our email", "body": f"Synthetic reply #{base+i}. Thanks.",
              "prior_lead_reply": "", "outreach_subject": "", "outreach_body": ""}
             for i in range(len(plan))]}
     http.invent_fn = invent_fn
@@ -6497,6 +6504,10 @@ def test_training_bank_owner_only_builds_big_and_share_stays_capped():
          len(saved.get("cases") or []))
     check("bank: invention was chunked at <=10 per call",
          len(invent_counts) >= 3 and all(c <= 10 for c in invent_counts), invent_counts)
+    check("bank: later chunks are told what earlier chunks invented (avoid grows)",
+         len(seen_avoid) >= 2 and seen_avoid[-1] > seen_avoid[0], seen_avoid)
+    check("bank: variety axes rotate across chunks (not identical every call)",
+         len(set(seen_axis0)) > 1, seen_axis0)
 
     # A share token cannot bank: clamp still applies and the share unanswered
     # cap refuses on top of the big pool.
