@@ -14003,10 +14003,36 @@ def route_training_answer(payload):
 
 
 def route_training_reset(payload):
+    """POST /api/setter/training/reset. Default: clears answers + readiness
+    history but keeps the stored cases and used_reply_ids (the original
+    contract - re-rate the same scenarios, never redraw the same replies).
+    With {"full": true} (owner request 2026-08-20, the page-foot link):
+    wipes the WHOLE training doc back to a fresh slate - cases, answers,
+    readiness history, pending merges, confirmed examples, used_reply_ids -
+    so the next generate starts from nothing, real replies included. Owner
+    surface only: the route stays out of _AUTH_PUBLIC_POST, so a client
+    share token can never reach it. Refuses (409) while a generate/retrain/
+    recheck pass holds this agent's training lock - resetting under a
+    running batch would race the worker's own doc save."""
     try:
-        agent_id = (payload or {}).get("agent_id")
+        payload = payload or {}
+        agent_id = payload.get("agent_id")
         if not agent_id:
             return 400, {"error": "agent_id is required"}
+        if payload.get("full"):
+            lock = _get_training_gen_lock(agent_id)
+            if not lock.acquire(blocking=False):
+                return 409, {"error": "A scenario batch is still generating - "
+                                      "try again in a moment."}
+            try:
+                doc = {"cases": [], "answers": {}, "used_reply_ids": [],
+                       "readiness_history": [], "generating": {"status": "idle"},
+                       "pending_merges": [], "confirmed_examples": [],
+                       "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
+                _save_training(agent_id, doc)
+            finally:
+                lock.release()
+            return 200, {"ok": True, "full": True}
         doc = _load_training(agent_id)
         doc["answers"] = {}
         doc["readiness_history"] = []

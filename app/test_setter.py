@@ -7546,6 +7546,50 @@ def test_training_reset_clears_answers_keeps_used_ids():
     check("training reset: missing agent_id -> 400", status2 == 400, (status2, resp2))
 
 
+def test_training_reset_full_wipes_whole_doc():
+    sb, http = fresh_setter()
+    agent = {"id": "agent-train0018", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {
+        "cases": [{"id": "case-0000"}, {"id": "case-0001"}],
+        "answers": {"case-0000": {"decision_ok": True, "reply_ok": True, "note": "",
+                                  "at": "2026-01-01T00:00:00+00:00"}},
+        "used_reply_ids": [201, 202, 203],
+        "readiness_history": [{"at": "2026-01-01T00:00:00+00:00", "score": 50, "n_answers": 1}],
+        "pending_merges": [{"case_id": "case-0000"}],
+        "confirmed_examples": [{"html": "<div>Hi</div>"}],
+        "created_at": "2026-01-01T00:00:00+00:00",
+    }
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_reset({"agent_id": agent["id"], "full": True})
+    check("training full reset: returns 200 ok+full",
+         status == 200 and resp.get("ok") is True and resp.get("full") is True, (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    check("training full reset: cases cleared", saved.get("cases") == [], saved.get("cases"))
+    check("training full reset: answers cleared", saved.get("answers") == {}, saved.get("answers"))
+    check("training full reset: used_reply_ids cleared so real replies can be redrawn",
+         saved.get("used_reply_ids") == [], saved.get("used_reply_ids"))
+    check("training full reset: readiness_history cleared",
+         saved.get("readiness_history") == [], saved.get("readiness_history"))
+    check("training full reset: pending_merges cleared",
+         saved.get("pending_merges") == [], saved.get("pending_merges"))
+    check("training full reset: confirmed_examples cleared",
+         not saved.get("confirmed_examples"), saved.get("confirmed_examples"))
+
+    # A full reset must refuse while a generate/retrain/recheck pass holds the
+    # agent's training lock - resetting under a running batch would race the
+    # worker's own doc save.
+    lock = setter._get_training_gen_lock(agent["id"])
+    lock.acquire()
+    try:
+        status3, resp3 = setter.route_training_reset({"agent_id": agent["id"], "full": True})
+        check("training full reset: 409 while a batch is generating", status3 == 409, (status3, resp3))
+    finally:
+        lock.release()
+
+
 def test_training_get_route():
     sb, http = fresh_setter()
     agent = {"id": "agent-train0009", "mode": "draft_only", "enabled": True, "allowed_intents": ["send_resource"]}
@@ -10972,6 +11016,7 @@ if __name__ == "__main__":
     test_draft_system_fallback_ladder_text()
     test_draft_no_live_slots_directive()
     test_training_reset_clears_answers_keeps_used_ids()
+    test_training_reset_full_wipes_whole_doc()
     test_training_get_route()
     test_training_get_self_heals_stale_running_marker()
     test_compute_readiness_pure_function()

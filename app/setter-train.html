@@ -190,6 +190,13 @@ body.share-mode #nav-jobs-tab, body.share-mode #nav-jobs-panel { display: none !
 .share-tut-link { font-size: 12px; color: var(--ink-3); }
 .share-tut-link a { color: var(--ink-3); text-decoration: underline; cursor: pointer; }
 
+/* ── Reset-all-training foot link (owner mode only - the share/client page
+   must never offer a way to wipe the CSM's work) ────────── */
+.train-reset-foot { margin: 32px 0 12px; font-size: 12px; color: var(--ink-3); line-height: 1.6; }
+.train-reset-foot a { color: var(--ink-3); text-decoration: underline; cursor: pointer; }
+.train-reset-foot a.trf-danger { color: var(--red); font-weight: 600; }
+body.share-mode .train-reset-foot { display: none !important; }
+
 /* ── Round summary + trained banner (share mode) ────────── */
 .round-score { font-family: var(--font-display); font-weight: 400; font-size: 34px; letter-spacing: -0.01em; margin: 4px 0 2px; }
 .done-banner.trained { border-color: var(--green-line); background: var(--green-bg); }
@@ -232,6 +239,14 @@ body.share-mode #nav-jobs-tab, body.share-mode #nav-jobs-panel { display: none !
 
     <div id="readinessPanelHost"></div>
     <div id="trainApp"></div>
+    <div class="train-reset-foot" id="trainResetFoot" style="display:none">
+      <a role="button" tabindex="0" id="trainResetLink">Reset all training for this agent…</a>
+      <span id="trainResetConfirm" style="display:none">
+        This deletes every scenario and every rating for this agent, so training starts from scratch. The agent's saved brain (its instructions and remembered feedback) is not touched.
+        <a role="button" tabindex="0" class="trf-danger" id="trainResetYes">Yes, reset everything</a>
+        <a role="button" tabindex="0" id="trainResetNo">Cancel</a>
+      </span>
+    </div>
   </main>
 </div>
 
@@ -960,7 +975,44 @@ function renderReadinessPanel(animate) {
 }
 
 /* ── Main render ───────────────────────────────────────── */
+/* Reset-all foot link (owner mode only). Visibility tracks the page state:
+   shown whenever a real agent is loaded, hidden while loading / with no
+   agents, and never rendered at all in share mode (CSS backstops this). */
+function updateResetFoot() {
+  const foot = document.getElementById("trainResetFoot");
+  if (!foot) return;
+  const show = !SHARE_MODE && !!selectedAgentId && view !== "loading" && view !== "no_agents";
+  foot.style.display = show ? "" : "none";
+}
+
+if (!SHARE_MODE) {
+  const rLink = document.getElementById("trainResetLink");
+  const rConfirm = document.getElementById("trainResetConfirm");
+  const rYes = document.getElementById("trainResetYes");
+  const rNo = document.getElementById("trainResetNo");
+  rLink.addEventListener("click", () => { rLink.style.display = "none"; rConfirm.style.display = ""; });
+  rNo.addEventListener("click", () => { rConfirm.style.display = "none"; rLink.style.display = ""; });
+  rYes.addEventListener("click", async () => {
+    if (rYes.dataset.busy) return;
+    rYes.dataset.busy = "1";
+    rYes.textContent = "Resetting…";
+    const res = await fetchJson("/api/setter/training/reset", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agent_id: selectedAgentId, full: true }),
+    });
+    delete rYes.dataset.busy;
+    rYes.textContent = "Yes, reset everything";
+    rConfirm.style.display = "none";
+    rLink.style.display = "";
+    if (!res.ok) { showError("Couldn't reset training: " + res.error); return; }
+    clearError();
+    idx = 0;
+    await loadTraining();
+  });
+}
+
 function render() {
+  updateResetFoot();
   const el = document.getElementById("trainApp");
   if (view === "loading") { el.innerHTML = `<div class="empty">Loading…</div>`; return; }
   if (view === "no_agents") {
