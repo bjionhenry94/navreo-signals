@@ -673,12 +673,67 @@ function applyCasesSnapshot(data) {
 
 function renderCasesOrEmpty() {
   if (!CASES.length) { view = "empty"; render(); return; }
+  // Pre-loaded scenario bank (owner ruling 2026-08-20): scenarios are
+  // pre-made at creation, so cases existing no longer implies the offer
+  // interview ran - a fresh trainee still starts with the five questions.
+  const answeredIv = INTERVIEWS.some((i) => Object.keys((i && i.answers) || {}).length);
+  if (SHARE_MODE && !firstIvDone && !answeredIv && !Object.keys(ANSWERS).length) {
+    renderBankFirstInterview();
+    return;
+  }
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; render(); return; }
+  // Same freshness door as round-open: never boot the stream onto drafts
+  // older than the newest teaching (the interview just taught; the bank's
+  // drafts predate it) - hold and let the transition poll open it.
+  if (SHARE_MODE && !unanswered.some(caseFresh)) {
+    view = "done";
+    render();
+    startTransitionPoll();
+    return;
+  }
   beginRoundIfNeeded();
   idx = 0;
   view = "stream";
   render();
+}
+
+/* First visit over a PRE-LOADED bank: the interview renders full-screen
+   before any card shows; view "interview" is a no-repaint state (render()
+   leaves the DOM alone) so score updates never wipe a half-typed answer. */
+let firstIvDone = false;
+try { firstIvDone = sessionStorage.getItem("trainIvFirstDone") === "1"; } catch { /* ignore */ }
+function markFirstIvDone() {
+  firstIvDone = true;
+  try { sessionStorage.setItem("trainIvFirstDone", "1"); } catch { /* ignore */ }
+}
+
+function renderBankFirstInterview() {
+  view = "interview";
+  const el = document.getElementById("trainApp");
+  el.innerHTML = `
+    <div class="empty-flow">
+      <p>Before you rate anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
+      <div id="ivFirstHost"><div class="round-updating"><span class="spin"></span><span>Getting your questions ready…</span></div></div>
+    </div>`;
+  fetchInterviewQuestions().then((iv) => {
+    if (view !== "interview") return;
+    const host = document.getElementById("ivFirstHost");
+    if (!host) return;
+    const proceed = () => { markFirstIvDone(); renderCasesOrEmpty(); };
+    if (!iv || !(iv.questions || []).length) { proceed(); return; }
+    INTERVIEWS.push(iv);
+    host.innerHTML = interviewFormHtml(iv, {
+      title: "Five quick questions",
+      sub: "One line each - we use these in every reply we draft for you.",
+      cta: "Save answers & start rating",
+      skip: "Skip - take me to the scenarios",
+    });
+    const submitBtn = document.getElementById("ivSubmitBtn");
+    if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, proceed));
+    const skipBtn = document.getElementById("ivSkipBtn");
+    if (skipBtn) skipBtn.addEventListener("click", proceed);
+  });
 }
 
 /* A round begins whenever the stream starts with no round in progress: at
@@ -1131,6 +1186,9 @@ function render() {
   updateResetFoot();
   const el = document.getElementById("trainApp");
   if (view === "loading") { el.innerHTML = `<div class="empty">Loading…</div>`; return; }
+  // renderBankFirstInterview owns the DOM in this state - a stray render()
+  // (score update, poll tick) must never wipe a half-typed answer.
+  if (view === "interview") return;
   if (view === "no_agents") {
     el.innerHTML = `<div class="empty-flow"><p>No agents yet. Create one on the <a href="setter.html">Setter</a> page first, then come back here to train it.</p></div>`;
     return;
@@ -1183,6 +1241,7 @@ function renderEmpty() {
         skip: "Skip - just show me scenarios",
       });
       const firstGenSpinner = () => {
+        markFirstIvDone();
         const h = document.getElementById("ivFirstHost");
         if (h) h.innerHTML = `<div class="round-updating"><span class="spin"></span><span>Writing your first scenarios - under a minute…</span></div>`;
         generateMore();

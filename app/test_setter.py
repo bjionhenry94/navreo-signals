@@ -6464,6 +6464,139 @@ def test_queued_share_retrain_keeps_pool_mode():
          setter._load_agent(agent["id"]).get("instructions"))
 
 
+def test_training_bank_owner_only_builds_big_and_share_stays_capped():
+    """Scenario bank (owner ruling 2026-08-20): an owner generate with
+    {bank: N} bypasses the batch clamp and unanswered cap and builds N cases
+    (invention chunked <=10 per call); a share token sending bank is ignored
+    and keeps the old clamp."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-bank01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    setter._save_training(agent["id"], {"cases": [], "answers": {}, "used_reply_ids": [],
+                                        "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"})
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Ada"}
+    invent_counts = []
+    def invent_fn(body):
+        payload = json.loads(body["messages"][1]["content"])
+        plan = payload.get("scenario_plan") or []
+        invent_counts.append(len(plan))
+        return {"scenarios": [
+            {"lead_first_name": f"Pat{i}", "lead_company": f"Acme {i} Co",
+             "subject": "Re: our email", "body": f"Synthetic reply #{i}. Thanks.",
+             "prior_lead_reply": "", "outreach_subject": "", "outreach_body": ""}
+            for i in range(len(plan))]}
+    http.invent_fn = invent_fn
+
+    status, resp = _generate_and_wait({"agent_id": agent["id"], "bank": 25})
+    check("bank: owner bank build starts", status == 200 and resp.get("status") == "started", (status, resp))
+    saved = setter._load_training(agent["id"])
+    check("bank: ~25 cases landed in one build", len(saved.get("cases") or []) >= 20,
+         len(saved.get("cases") or []))
+    check("bank: invention was chunked at <=10 per call",
+         len(invent_counts) >= 3 and all(c <= 10 for c in invent_counts), invent_counts)
+
+    # A share token cannot bank: clamp still applies and the share unanswered
+    # cap refuses on top of the big pool.
+    token = setter.mint_training_share(agent["id"])
+    status2, resp2 = setter.route_training_generate({"share": token, "bank": 50, "batch_size": 50})
+    check("bank: share generate is refused over the unanswered cap (bank ignored)",
+         status2 == 400 and "unanswered" in (resp2.get("error") or ""), (status2, resp2))
+
+
+def test_share_generate_recycles_answered_bank_when_dry():
+    """Bank wrap-around (owner ruling 2026-08-20): a share top-up on a doc
+    whose scenarios are all answered goes BACK TO THE FIRST scenario -
+    clones in original order with fresh drafts from today's brain, a
+    persisted cursor that wraps, and NO invention call."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-recyc01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "instructions": "We sell widgets.",
+             "sender_first": "Ada", "training_outreach": TEST_TRAINING_OUTREACH}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    cases = [_fixed_training_case(f"case-rc-{i:02d}", body=f"bank scenario {i}") for i in range(5)]
+    # Cover the standing staged questions so the top-up's shortfall reaches
+    # the recycler instead of seeding staged scenarios first.
+    for c, key in zip(cases, ("ask_phone", "ask_booking_link", "ask_price", "ask_case_studies")):
+        c["staged_key"] = key
+    answers = {c["id"]: {"decision_ok": True, "reply_ok": True, "note": "", "scope": "one_off",
+                         "at": f"2026-08-20T10:0{i}:00+00:00"} for i, c in enumerate(cases)}
+    setter._save_training(agent["id"], {"cases": cases, "answers": answers, "used_reply_ids": [],
+                                        "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"})
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>RECYCLED fresh reply</div>"}
+    invents = []
+    http.invent_fn = lambda body: (invents.append(1) or {"scenarios": []})
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = _generate_and_wait({"share": token, "batch_size": 3}, agent_id=agent["id"])
+    check("recycle: share top-up starts", status == 200 and resp.get("status") == "started", (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    clones = [c for c in saved.get("cases") or [] if c.get("recycled_from")]
+    check("recycle: three clones appended", len(clones) == 3, len(clones))
+    check("recycle: clones follow ORIGINAL order from scenario one",
+         [c["recycled_from"] for c in clones] == ["case-rc-00", "case-rc-01", "case-rc-02"],
+         [c.get("recycled_from") for c in clones])
+    check("recycle: scenario text repeats verbatim, draft is fresh",
+         all(c["inbound"]["body"] == f"bank scenario {i}" and "RECYCLED" in c["draft_html"]
+             for i, c in enumerate(clones)), clones and clones[0])
+    check("recycle: cursor persisted at 3", saved.get("recycle_cursor") == 3, saved.get("recycle_cursor"))
+    check("recycle: no invention ran", invents == [], invents)
+
+    # Second top-up wraps past the end: roots 3, 4, then back to 0.
+    answers2 = dict(saved.get("answers") or {})
+    for c in clones:
+        answers2[c["id"]] = {"decision_ok": True, "reply_ok": True, "note": "", "scope": "one_off",
+                             "at": "2026-08-20T11:00:00+00:00"}
+    saved["answers"] = answers2
+    setter._save_training(agent["id"], saved)
+    status2, _resp2 = _generate_and_wait({"share": token, "batch_size": 3}, agent_id=agent["id"])
+    saved2 = setter._load_training(agent["id"])
+    clones2 = [c for c in saved2.get("cases") or [] if c.get("recycled_from")][3:]
+    check("recycle: wrap-around order 3, 4, 0",
+         [c["recycled_from"] for c in clones2] == ["case-rc-03", "case-rc-04", "case-rc-00"],
+         [c.get("recycled_from") for c in clones2])
+    check("recycle: cursor wrapped to 1", saved2.get("recycle_cursor") == 1, saved2.get("recycle_cursor"))
+
+
+def test_pool_redraft_horizon_bounds_the_sweep():
+    """With a big bank, a feedback answer must redraft only the next
+    TRAINING_REDRAFT_HORIZON upcoming cases - never the whole pool."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-horizon1", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"],
+             "instructions": "Flat $400/mo.", "sender_first": "Ada"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    cases = [_fixed_training_case(f"case-h-{i:02d}") for i in range(14)]
+    setter._save_training(agent["id"], {"cases": cases, "answers": {}, "used_reply_ids": [],
+                                        "readiness_history": [], "created_at": "2026-01-01T00:00:00+00:00"})
+    http.classify_fn = lambda _b: {"primary_intent": "send_resource", "all_intents": ["send_resource"],
+                                   "simple_ask": True, "confidence": 0.9, "red_flags": [],
+                                   "timezone_guess": None, "tz_confidence": 0.0, "wants": "x", "rationale": ""}
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>HORIZON fresh</div>"}
+
+    token = setter.mint_training_share(agent["id"])
+    _answer_and_wait({
+        "share": token, "case_id": "case-h-00", "decision_ok": False, "reply_ok": False,
+        "note": "Never discount.", "scope": "remember",
+        "round_ids": ["case-h-00", "case-h-01", "case-h-02"],
+    }, agent_id=agent["id"])
+
+    saved = setter._load_training(agent["id"])
+    redrafted = [c["id"] for c in saved.get("cases") or [] if c.get("redrafted_at")]
+    check("horizon: exactly the window redrafted (8), not the whole pool",
+         len(redrafted) == setter.TRAINING_REDRAFT_HORIZON, redrafted)
+    check("horizon: the window is the HEAD of the queue (positions 3..10)",
+         redrafted == [f"case-h-{i:02d}" for i in range(3, 3 + setter.TRAINING_REDRAFT_HORIZON)],
+         redrafted)
+    check("horizon: in-round unanswered cards untouched",
+         not any(c.get("redrafted_at") for c in saved["cases"][:3] if c["id"] != "case-h-00"),
+         saved["cases"][:3])
+
+
 def test_orphaned_flag_sweep_consumes_tail_race_flags():
     """Tail race (live-verify 2026-08-20): a flag landing between a worker's
     last queued-work check and its lock release is orphaned - the
@@ -11806,6 +11939,9 @@ if __name__ == "__main__":
     test_generate_queued_behind_retrain_lock_runs_after()
     test_generate_queued_survives_retrain_marker_overwrite()
     test_generate_queued_survives_worker_loop_top_marker()
+    test_training_bank_owner_only_builds_big_and_share_stays_capped()
+    test_share_generate_recycles_answered_bank_when_dry()
+    test_pool_redraft_horizon_bounds_the_sweep()
     test_orphaned_flag_sweep_consumes_tail_race_flags()
     test_interview_first_answers_defer_merge_behind_generate()
     test_queued_share_retrain_keeps_pool_mode()

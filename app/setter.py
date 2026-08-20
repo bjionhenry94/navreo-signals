@@ -11570,6 +11570,17 @@ TRAINING_MAX_UNANSWERED = 40
 # owner - a client link left idle for weeks should not silently pile up a
 # huge backlog of scenarios.
 TRAINING_MAX_UNANSWERED_SHARE = 20
+# Scenario bank (owner ruling 2026-08-20): a one-time owner-side pre-build at
+# training-creation time - scenarios never change, only the drafts do, so the
+# client trains against a fixed bank and rounds never wait on generation.
+TRAINING_BANK_MAX = 50
+# How many upcoming unanswered cases a pool-redraft rewrites per pass. With a
+# 50-case bank, "redraft everything unanswered" would mean ~150 LLM calls per
+# rating; the rolling window keeps the next 2-3 rounds fresh (fresh-first
+# round ordering consumes from the head) and each subsequent feedback answer
+# rolls the window forward. One draft is never shown stale - the round gate
+# checks per-case stamps.
+TRAINING_REDRAFT_HORIZON = 8
 # Positive-only training (owner ruling 2026-08-20, EVERY trainer - client and
 # owner alike): a batch is 100% actionable/positive, never a Not Interested,
 # Do Not Contact, Wrong Person, or Out Of Office. Those aren't actionable, so
@@ -12974,11 +12985,27 @@ def route_training_generate(payload):
         agent = _load_agent(agent_id)
         if not agent:
             return 404, {"error": "Agent not found."}
-        try:
-            batch_size = int(payload.get("batch_size") or TRAINING_BATCH_DEFAULT)
-        except (TypeError, ValueError):
-            batch_size = TRAINING_BATCH_DEFAULT
-        batch_size = max(1, min(batch_size, TRAINING_BATCH_MAX))
+        # Scenario BANK (owner ruling 2026-08-20: "pre-make maybe 50 different
+        # scenarios upfront... then it's only the drafts which are changing").
+        # Owner-only: a one-time big build at training-creation time, so the
+        # client never waits on generation - rounds consume the bank and the
+        # bounded pool-redraft keeps the upcoming drafts fresh. Ignored on a
+        # share token entirely; bypasses the batch clamp and the unanswered
+        # cap below (the bank IS a big unanswered pool, on purpose).
+        bank = 0
+        if not is_share_mode:
+            try:
+                bank = max(0, min(int(payload.get("bank") or 0), TRAINING_BANK_MAX))
+            except (TypeError, ValueError):
+                bank = 0
+        if bank:
+            batch_size = bank
+        else:
+            try:
+                batch_size = int(payload.get("batch_size") or TRAINING_BATCH_DEFAULT)
+            except (TypeError, ValueError):
+                batch_size = TRAINING_BATCH_DEFAULT
+            batch_size = max(1, min(batch_size, TRAINING_BATCH_MAX))
 
         # Training always draws real replies ONLY from the agent's own
         # campaigns (owner ruling 2026-07-14: an agent must never train on
@@ -12999,7 +13026,7 @@ def route_training_generate(payload):
         answers = dict(doc.get("answers") or {})
         unanswered = [c for c in existing_cases if not _is_case_answered(c.get("id"), answers)]
         max_unanswered = TRAINING_MAX_UNANSWERED_SHARE if is_share_mode else TRAINING_MAX_UNANSWERED
-        if len(unanswered) > max_unanswered:
+        if len(unanswered) > max_unanswered and not bank:
             return 400, {"error": f"There are already {len(unanswered)} unanswered scenarios waiting - "
                                   "answer some before generating more."}
 
@@ -13129,6 +13156,60 @@ def _log_synthetic_usage(agent_id: str, count: int, trigger: str, is_share_mode:
         pass
 
 
+def _recycle_bank_cases(agent, doc, count, start_idx):
+    """Bank wrap-around (owner ruling 2026-08-20): clone the next `count`
+    ANSWERED root scenarios in original order (recycle_cursor wraps
+    forever), give each clone a new id + recycled_from lineage, and re-run
+    classify -> decide -> draft through TODAY'S brain via
+    _retrain_one_training_case - the scenario repeats, the reply is new.
+    Roots are cases without a recycled_from of their own, so the cursor
+    walks the ORIGINAL bank, not an ever-growing clone list. Returns
+    (clones, new_cursor|None); ([], None) when nothing is answered yet -
+    the caller falls back to invention. Never raises."""
+    try:
+        answers = dict(doc.get("answers") or {})
+        roots = [c for c in (doc.get("cases") or [])
+                 if not c.get("recycled_from") and _is_case_answered(c.get("id"), answers)]
+        if not roots or count <= 0:
+            return [], None
+        train_agent = {**agent, "mode": "autopilot", "enabled": True}
+        digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
+                                      _training_session_feedback_digest(doc))
+        settings = _load_settings()
+        now = _dt.datetime.now(_dt.timezone.utc)
+        eff = dict(settings)
+        eff["_agent"] = train_agent
+        slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+        if slot_status0 != "ok":
+            avail, slot_status0 = _synthetic_training_avail(now), "ok"
+
+        cursor = int(doc.get("recycle_cursor") or 0) % len(roots)
+        stamp = now.isoformat(timespec="seconds")
+        clones = []
+        for i in range(count):
+            root = roots[(cursor + i) % len(roots)]
+            clone = json.loads(json.dumps(root))
+            clone["id"] = f"case-{uuid.uuid4().hex[:10]}-{start_idx + i:02d}"
+            clone["recycled_from"] = str(root.get("id"))
+            clone.pop("staged_key", None)   # staged dedupe applies to originals only
+            clone.pop("recheck", None)
+            clone.pop("redrafted_at", None)
+            clone["generated_at"] = stamp
+            clones.append(clone)
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(clones))) as pool:
+            futs = [pool.submit(_retrain_one_training_case, c, train_agent, eff, avail,
+                                slot_status0, now, digest) for c in clones]
+            for fut in concurrent.futures.as_completed(futs):
+                try:
+                    fut.result()
+                except Exception:  # noqa: BLE001 - one bad clone keeps its root's old draft
+                    pass
+        return clones, (cursor + count) % len(roots)
+    except Exception:  # noqa: BLE001 - recycling must never sink the batch
+        return [], None
+
+
 def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size, is_share_mode=False):
     """The real generation work - runs off-request on a daemon thread and
     its own final save RE-LOADS the doc first (lost-update protection: an
@@ -13156,6 +13237,21 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         replies = _select_training_replies(doc, real_want, allowed_campaign_ids=allowed_campaign_ids)
 
         shortfall = real_want - len(replies)
+
+        # Bank wrap-around (owner ruling 2026-08-20: "if we hit all the
+        # scenarios, it just goes back to the first scenario"). Share-mode
+        # top-ups on a doc that already carries ANSWERED scenarios recycle
+        # them in original order - the scenario repeats verbatim, the draft
+        # is written fresh by today's brain (generation drift plus every
+        # merge landed since makes the copy different anyway). A persisted
+        # cursor wraps forever; invention only fills whatever recycling
+        # cannot (a doc with nothing answered yet).
+        recycled_cases = []
+        recycle_cursor = None
+        if shortfall > 0 and is_share_mode:
+            recycled_cases, recycle_cursor = _recycle_bank_cases(
+                agent, doc, shortfall, start_idx=len(existing_cases))
+            shortfall -= len(recycled_cases)
 
         # REAL-CAMPAIGNS-ONLY GATE (owner ruling 2026-08-20: "You should
         # never, ever give training based on campaigns which don't exist").
@@ -13190,9 +13286,17 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
             reference_sample = _fetch_reply_tone_sample(allowed_campaign_ids=allowed_campaign_ids)
             synthetic_trigger = "shortfall" if (replies or reference_sample) else "zero_replies"
             try:
-                invented = _invent_training_scenarios(agent, doc, shortfall,
-                                                      allowed_campaign_ids=allowed_campaign_ids,
-                                                      reference_sample=reference_sample)
+                # Bank builds invent in chunks of <=10 - the invention prompt
+                # and its category plan are proven at that size; one 50-item
+                # call would degrade variety and risk output limits.
+                invented = []
+                remaining = shortfall
+                while remaining > 0:
+                    chunk = min(10, remaining)
+                    invented += _invent_training_scenarios(agent, doc, chunk,
+                                                           allowed_campaign_ids=allowed_campaign_ids,
+                                                           reference_sample=reference_sample)
+                    remaining -= chunk
                 scenarios = list(staged_scenarios) + invented
             except Exception as e:  # noqa: BLE001 - inventing scenarios must never crash the worker
                 if _LOG:
@@ -13203,7 +13307,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                         pass
                 scenarios = list(staged_scenarios)
 
-        if not replies and not scenarios:
+        if not replies and not scenarios and not recycled_cases:
             _finish_training_generation(agent_id, "failed",
                 error="No new real replies were available to build scenarios from.")
             return
@@ -13308,7 +13412,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                 _c["staged_key"] = scenarios[_i]["staged_key"]
         new_synthetic_cases = [c for c in synthetic_results if c]
 
-        if not new_cases and not new_synthetic_cases:
+        if not new_cases and not new_synthetic_cases and not recycled_cases:
             _finish_training_generation(agent_id, "failed",
                 error="Couldn't build any scenarios just now - try again in a minute.")
             return
@@ -13326,14 +13430,17 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # in the meantime - appending onto a stale in-memory copy would
         # silently drop it.
         fresh_doc = _load_training(agent_id)
-        fresh_doc["cases"] = list(fresh_doc.get("cases") or []) + new_cases + new_synthetic_cases
+        fresh_doc["cases"] = (list(fresh_doc.get("cases") or []) + new_cases
+                              + new_synthetic_cases + recycled_cases)
         fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
+        if recycle_cursor is not None:
+            fresh_doc["recycle_cursor"] = recycle_cursor
         if brain_covers_at:
             fresh_doc["brain_covers_at"] = max(brain_covers_at, str(fresh_doc.get("brain_covers_at") or ""))
         gen_marker = {
             "status": "idle",
             "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-            "added": len(new_cases) + len(new_synthetic_cases),
+            "added": len(new_cases) + len(new_synthetic_cases) + len(recycled_cases),
         }
         # Carry retrain_queued forward if a "remember" answer set it while
         # this batch was building - see _finish_training_generation's own
@@ -13618,6 +13725,12 @@ def _redraft_training_pool(agent_id: str) -> int:
             in_round = {str(x) for x in (in_round_raw or [])}
             pool = [c for c in cases
                     if not _is_case_answered(c.get("id"), answers) and str(c.get("id")) not in in_round]
+            # Rolling window (bank ruling 2026-08-20): only the next
+            # TRAINING_REDRAFT_HORIZON upcoming cases are rewritten per pass -
+            # rounds consume fresh-first from the head, and every later
+            # feedback answer rolls the window forward. Position order = the
+            # order rounds will consume.
+            pool = pool[:TRAINING_REDRAFT_HORIZON]
         updated = 0
         if pool:
             digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
