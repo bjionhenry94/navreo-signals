@@ -1129,6 +1129,7 @@ function render() {
   if (idx >= unanswered.length) idx = unanswered.length - 1;
   if (idx < 0) idx = 0;
   renderCase(unanswered, idx);
+  maybeStartTutorial(); // no-op once seen; waits for the first real card
 }
 
 function renderEmpty() {
@@ -2300,6 +2301,11 @@ const TUT_STEPS = [
 
 function maybeStartTutorial() {
   if (!SHARE_MODE) return;
+  // Fastloop (2026-08-20): the first thing a fresh visitor sees may be the
+  // offer interview, whose screen the card-focused tour would just sit on
+  // top of - wait for the first actual card; render() retries us on every
+  // stream render.
+  if (view !== "stream" || !CASES.length) return;
   let seen = null;
   try { seen = localStorage.getItem(TUT_KEY); } catch { /* ignore */ }
   if (!seen) startTutorial();
