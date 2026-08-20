@@ -1675,8 +1675,13 @@ function startPrefetchPoll() {
 /* Round-done "Start round N+1": open the prefetched batch instantly when
    one is already in the pool; only fall back to a visible generate (with
    its busy label and poll) when the pool is dry. */
-function startNextRoundOrGenerate() {
+async function startNextRoundOrGenerate() {
   if (SHARE_MODE) {
+    // One fresh snapshot before opening (2026-08-20): cases that landed
+    // since the last poll tick join THIS round instead of straggling into a
+    // one-card round behind a slow prefetch.
+    const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
+    if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
     const spare = CASES.filter((c) => !isAnswered(c.id));
     if (spare.length) {
       stopPrefetchPoll();
