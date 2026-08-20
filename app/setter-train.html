@@ -1380,8 +1380,6 @@ function growRoundIfShort() {
    round builds, so the wait does double duty. Always skippable; answers
    merge into the agent's brain through the same correction door as
    everything else and ride the digest into the very next drafts. */
-let ivShownForRound = 0;
-
 function interviewFormHtml(iv, opts) {
   opts = opts || {};
   const qs = (iv && iv.questions) || [];
@@ -1438,31 +1436,60 @@ async function submitInterviewAnswers(iv, onDone) {
   if (onDone) onDone();
 }
 
-/* Round-done variant: fetch (or reuse) the latest question set and slot the
-   form under the score while the next round builds. */
-async function maybeRenderInterview(roundNum) {
+/* Round-done variant: fetch once per round, then MOUNT from cache on every
+   done render - applyReadiness legitimately re-renders the banner when a
+   landed score moves (which wiped the old one-shot form: the async fetch
+   wrote into a detached host and the shown-flag blocked refills,
+   live-verify 2026-08-20). Typed answers survive the re-render via
+   IV_TYPED, snapshotted in renderRoundDone before innerHTML resets. */
+let IV_CURRENT = null;        // latest fetched, still-unanswered question set
+let ivFetchedForRound = 0;    // one fetch per round
+let ivDismissedForRound = 0;  // client hit skip on this round
+let IV_TYPED = {};            // qid -> half-typed answer, survives re-renders
+
+function mountInterviewForm() {
   const host = document.getElementById("interviewHost");
-  if (!host || ivShownForRound === roundNum) return;
-  let iv = INTERVIEWS.length ? INTERVIEWS[INTERVIEWS.length - 1] : null;
-  const unansweredSet = iv && (iv.questions || []).length && !Object.keys(iv.answers || {}).length;
-  if (!unansweredSet) {
-    iv = await fetchInterviewQuestions();
-    if (iv) INTERVIEWS.push(iv);
-  }
-  if (!iv || !(iv.questions || []).length || view !== "done") return;
-  ivShownForRound = roundNum;
-  host.innerHTML = interviewFormHtml(iv, {
+  if (!host || view !== "done") return;
+  if (!IV_CURRENT || !(IV_CURRENT.questions || []).length) return;
+  if (Object.keys(IV_CURRENT.answers || {}).length) return; // already answered
+  if (ivDismissedForRound === currentRoundNum()) return;
+  if (document.getElementById("ivForm")) return;            // already mounted
+  host.innerHTML = interviewFormHtml(IV_CURRENT, {
     title: "While that builds - a few quick questions",
     sub: "Your answers go straight into the next replies. One line each, skip any.",
   });
+  document.querySelectorAll("#ivForm .iv-q input").forEach((inp) => {
+    const qid = inp.getAttribute("data-qid");
+    if (IV_TYPED[qid]) inp.value = IV_TYPED[qid];
+    inp.addEventListener("input", () => { IV_TYPED[qid] = inp.value; });
+  });
   const submitBtn = document.getElementById("ivSubmitBtn");
-  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, () => {
+  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(IV_CURRENT, () => {
+    IV_TYPED = {};
     const h = document.getElementById("interviewHost");
     if (h) h.innerHTML = "";
     if (view === "done") render();
   }));
   const skipBtn = document.getElementById("ivSkipBtn");
-  if (skipBtn) skipBtn.addEventListener("click", () => { host.innerHTML = ""; });
+  if (skipBtn) skipBtn.addEventListener("click", () => {
+    ivDismissedForRound = currentRoundNum();
+    IV_TYPED = {};
+    host.innerHTML = "";
+  });
+}
+
+async function maybeRenderInterview(roundNum) {
+  if (ivFetchedForRound !== roundNum) {
+    ivFetchedForRound = roundNum;
+    let iv = INTERVIEWS.length ? INTERVIEWS[INTERVIEWS.length - 1] : null;
+    const unansweredSet = iv && (iv.questions || []).length && !Object.keys(iv.answers || {}).length;
+    if (!unansweredSet) {
+      iv = await fetchInterviewQuestions();
+      if (iv) INTERVIEWS.push(iv);
+    }
+    if (iv && (iv.questions || []).length) { iv.answers = iv.answers || {}; IV_CURRENT = iv; }
+  }
+  mountInterviewForm();
 }
 
 /* ── Review mode (owner request 2026-07-14) ────────────────────────────────
