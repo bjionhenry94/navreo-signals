@@ -348,6 +348,7 @@ const CHECKS=[
 function checksFor(x){return CHECKS.map(c=>[c[0],c[1],!!c[2](x)]);}
 let RUN_META={};
 let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null, client='';
+let _ownEditAt=0;  // ms of my last own save; suppresses the redundant top-right 'Updated' chip for my own edit's poll echo
 let copyVer={}; // Copy tab: active version index per sequence step (reset per idea)
 let sumEdit=null; // Preview tab: {si,vi} while an email is being edited inline (Bjion 2026-08-05)
 let pendingDel=null; // {id,si,vi,ver,timer} version delete, or {kind:'ice',id,ai,angle,timer} opener delete, waiting out its Undo window (Bjion 2026-08-05 / 2026-08-10)
@@ -500,6 +501,7 @@ async function reorderIcebreaker(x,i,dir){
   const j=i+dir;if(j<0||j>=angles.length)return;
   angles.splice(j,0,angles.splice(i,1)[0]);
   renderWorkspace();
+  _ownEditAt=Date.now();
   try{await fetch('/api/strategy/reorder-icebreaker',{method:'POST',credentials:'include',
     headers:{'Content-Type':'application/json'},
     body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,from:i,to:j})});}catch(e){}
@@ -532,6 +534,7 @@ function showUndoToast(msg,onUndo){
 function commitPendingDel(){
   if(!pendingDel)return;
   const pd=pendingDel;pendingDel=null;clearTimeout(pd.timer);
+  _ownEditAt=Date.now();
   const field=pd.kind==='ice'?('ice:'+pd.ai+':delete'):('seq:'+pd.si+':'+pd.vi+':delete');
   const oops=pd.kind==='ice'?'Could not remove that opener.':'Could not remove that version.';
   fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',
@@ -541,6 +544,7 @@ function commitPendingDel(){
 }
 async function persistVisibleEdits(x){
   const eds=[...document.querySelectorAll('[data-edit]')].filter(el=>el.dataset.dirty==='1'&&el.innerText.trim());
+  if(eds.length)_ownEditAt=Date.now();
   for(const el of eds){
     try{await fetch('/api/strategy/copy-edit',{method:'POST',headers:{'Content-Type':'application/json'},
       body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:x.id,field:el.dataset.edit,value:el.innerText.trim(),share:SHARE})});
@@ -585,6 +589,7 @@ function autosaveField(el,ideaId){
     body:JSON.stringify({run_id:SERVED_RUN_ID||RUN_ID,ideaId:ideaId,field:field,value:val,share:SHARE})})
     .then(r=>r.json()).then(j=>{
       if(!j.ok){el.dataset.dirty='1';nvToast(j.message||'Could not save, will retry');return;}
+      _ownEditAt=Date.now();
       const idea=(IDEAS[active]&&IDEAS[active].id===ideaId)?IDEAS[active]:IDEAS.find(i=>i.id===ideaId);
       if(idea)mirrorEdit(idea,field,val);
       if(el.dataset.dirty!=='1')flashSavedUnder(el);
@@ -1139,7 +1144,15 @@ async function fetchRun(){
     if(first)restoreView();
     document.body.classList.toggle('solo', IDEAS.length===1 || RUN_META.solo===true);
     render();boot.classList.add('gone');
-    if(!first){addUpdate(foc.note||'',foc.ts||j.updated||run.updated);followFocus(foc);}
+    if(!first){
+      // My own save echoes back on the next poll. The under-box 'Saved ✓' already
+      // confirmed it, so don't also raise the top-right 'Updated' chip — that chip is
+      // for changes from elsewhere (chat / a client on the share link), which always
+      // carry a focus note. (Bjion 2026-08-20)
+      const ownEcho=!(foc&&foc.note)&&(Date.now()-_ownEditAt<8000);
+      if(!ownEcho)addUpdate(foc.note||'',foc.ts||j.updated||run.updated);
+      followFocus(foc);
+    }
     lastFP=fp;
   }catch(e){/* keep last good board */}
 }
