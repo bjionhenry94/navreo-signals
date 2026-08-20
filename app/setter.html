@@ -3737,6 +3737,7 @@ function leadTimezoneFact(row) {
   const tz = row.timezone || cls.timezone_guess || "";
   let shown = tz || "unknown";
   let tone = "";
+  let place = "";
   if (tz) {
     try {
       const now = new Date();
@@ -3744,9 +3745,19 @@ function leadTimezoneFact(row) {
       const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
       tone = (h >= 9 && h < 18) ? "good" : "off";
       shown = `${t} for them`;
+      place = tzPlace(tz);
     } catch { /* bad tz name - keep the raw value */ }
   }
-  return { tz, shown, tone };
+  return { tz, shown, tone, place };
+}
+/* The city an IANA timezone points at, as a plain place label for the Profile's
+   "Personal Location" row - "Europe/London" -> "London", "America/New_York" ->
+   "New York", "America/Argentina/Buenos_Aires" -> "Buenos Aires" (owner ask
+   2026-08-20: Personal Location shows WHERE they are; the local time is its own
+   row). Falls back to the raw tz string if it has no readable city segment. */
+function tzPlace(tz) {
+  const seg = String(tz || "").split("/").pop() || "";
+  return seg.replace(/_/g, " ").trim() || String(tz || "");
 }
 function decisionFacts(row, opts) {
   opts = opts || {};
@@ -4127,11 +4138,15 @@ function companySectionHtml(row) {
   const siteUrl = String(row.company_website || "").trim();
   const site = siteUrl.replace(/^https?:\/\//, "");
   const siteHref = siteUrl ? (/^https?:\/\//i.test(siteUrl) ? siteUrl : `https://${siteUrl}`) : "";
-  // The replier's own local time is their "Personal Location" - the same tz fact
-  // the decision block used, moved into the profile table (owner ask 2026-08-20)
-  // so Timezone and Personal Location are one row, not two.
+  // The person's timezone drives TWO Profile rows (owner ask 2026-08-20):
+  // "Personal Location" = WHERE the tz points (Europe/London -> London), and a
+  // separate "Local time" row = the clock there now ("3:17 AM for them") with
+  // the working-hours dot. Same tz fact the decision block used, so they can't
+  // drift. (Superseded the 08-20-morning single merged row - a place, not a
+  // time, belongs under "Personal Location".)
   const tzf = leadTimezoneFact(row);
-  const personalLoc = tzf.tz
+  const personalLoc = tzf.place ? esc(tzf.place) : dash;
+  const localTime = tzf.tz
     ? `${tzf.tone ? `<span class="lp-tz-dot ${esc(tzf.tone)}"></span>` : ""}${esc(tzf.shown)}`
     : dash;
   const desc = c.description ? String(c.description) : "";
@@ -4150,6 +4165,7 @@ function companySectionHtml(row) {
       ${fullName ? fact("Name", esc(fullName)) : ""}
       ${fact("Role", role ? esc(role) : dash)}
       ${fact("Personal Location", personalLoc)}
+      ${fact("Local time", localTime)}
       ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a></span>` : ""}` : dash)}
       ${fact("Size", hc ? esc(hc) : dash)}
       ${fact("Company HQ", loc ? esc(loc) : dash)}
@@ -4201,7 +4217,8 @@ function leadDecisionHtml(row) {
   // Sidebar cuts: Intent (owner ask 2026-08-11) and Call slots (owner ask
   // 2026-08-17: the drafted email itself shows the offered times). Timezone
   // is also cut here (owner ask 2026-08-20): it now lives in the Profile table
-  // as the "Personal Location" row, so showing it here too would double it up.
+  // as the "Personal Location" + "Local time" rows, so showing it here too
+  // would double it up.
   // Opt-out hits also cut from the sidebar (owner 2026-08-17: guardrail
   // internals like "spam" read as noise here; the Try-it drawer keeps them).
   const facts = decisionFacts(row, { hideEmpty: true }).filter((f) => f.label !== "Intent" && f.label !== "Call slots" && f.label !== "Opt-out hits" && f.label !== "Timezone");
