@@ -11338,6 +11338,99 @@ def test_followup_preserves_original_sent_record():
     check("follow-up: exactly one Smartlead post", len(sends) == 1, len(sends))
 
 
+def _forward_thread(lead, replier, ours="b-henry@bridgeandscale.info",
+                    cc=("Elise.Skert@ideaentity.com", "Saikarthik.Yerra@ideaentity.com"),
+                    mid="m-fwd"):
+    """A thread whose latest REPLY came FROM `replier` (a colleague the lead
+    handed us off to), CC'ing `cc`, To'ing our sending mailbox."""
+    return [
+        {"type": "SENT", "from_email": ours, "to": [lead], "cc": None,
+         "message_id": "m-out-1", "time": "2026-08-11T20:24:10Z"},
+        {"type": "REPLY", "from_email": replier, "to": [ours],
+         "cc": [{"name": "", "address": a} for a in cc],
+         "message_id": mid, "time": "2026-08-18T17:08:25Z"},
+    ]
+
+
+def test_reply_recipient_forward_routing():
+    """Owner report 2026-08-20: a lead (Venu) forwarded our email to a colleague
+    (Timothy), Timothy replied from his OWN inbox asking for a meeting, and the
+    setter greeted 'Hi Timothy' but MAILED VENU — Timothy never got the calendar.
+    The reply must be addressed to whoever actually replied; the lead stays the
+    Smartlead record, only the recipient moves. The normal (lead-replied) case
+    must stay byte-for-byte unchanged."""
+    lead = "venu.yerra@ideaentity.com"
+    timo = "timothy.vlach@ideaentity.com"
+
+    # ── End-to-end: the SENT body is addressed to the colleague, reply-all to
+    # his message, and the original lead is not re-mailed. ──────────────────
+    sb, http = fresh_setter()
+    sb.queue.append(_sendable_row(900, email=lead, mid="m-fwd", lead_first_name="Venu",
+                                  thread=_forward_thread(lead, "Timothy.Vlach@ideaentity.com")))
+    setter._send_reply(sb.queue[0], {}, "Re: hi", "<p>hi</p>")
+    posts = [c[2] for c in http.smartlead_calls if "reply-email-thread" in c[1]]
+    check("forward: exactly one send went out", len(posts) == 1, len(posts))
+    body = posts[0] if posts else {}
+    cc = str(body.get("cc") or "").lower()
+    check("forward: reply is addressed TO the colleague who replied, not the lead",
+          body.get("to_email") == timo, body.get("to_email"))
+    check("forward: the original lead is NOT the recipient",
+          body.get("to_email") != lead, body.get("to_email"))
+    check("forward: greeting name follows the colleague",
+          body.get("to_first_name") == "Timothy", body.get("to_first_name"))
+    check("forward: colleague is not also CC'd (no To+CC duplication)",
+          timo not in cc, cc)
+    check("forward: the handed-off lead is not re-mailed on CC either",
+          lead not in cc, cc)
+    check("forward: our own mailbox never appears on CC",
+          "b-henry@bridgeandscale.info" not in cc, cc)
+    check("forward: the reply-alls the colleague CC'd are kept on the thread",
+          "elise.skert@ideaentity.com" in cc and "saikarthik.yerra@ideaentity.com" in cc, cc)
+
+    # ── Normal case: the LEAD themselves replied — unchanged, addressed to lead.
+    sb2, http2 = fresh_setter()
+    sb2.queue.append(_sendable_row(901, email=lead, mid="m-self", lead_first_name="Venu",
+                                   thread=_forward_thread(lead, lead, cc=(), mid="m-self")))
+    setter._send_reply(sb2.queue[0], {}, "Re: hi", "<p>hi</p>")
+    body2 = [c[2] for c in http2.smartlead_calls if "reply-email-thread" in c[1]][0]
+    check("normal: a lead who replies themselves is still the recipient",
+          body2.get("to_email") == lead, body2.get("to_email"))
+    check("normal: the lead's own first name is preserved",
+          body2.get("to_first_name") == "Venu", body2.get("to_first_name"))
+
+    # ── Helper-level fallbacks: never redirect when we shouldn't. ────────────
+    base = {"lead_email": lead, "lead_first_name": "Venu", "message_id": "m-fwd"}
+    check("fallback: no thread → the lead is the recipient",
+          setter._reply_recipient({**base, "thread": None}) == (lead, "Venu"))
+    check("fallback: a reply FROM one of our mailboxes → lead, never ourselves",
+          setter._reply_recipient({**base, "thread": _forward_thread(
+              lead, "b-henry@bridgeandscale.info")}) == (lead, "Venu"))
+    check("fallback: a bounce/auto address (role local-part) → lead, never a robot",
+          setter._reply_recipient({**base, "thread": _forward_thread(
+              lead, "mailer-daemon@ideaentity.com")}) == (lead, "Venu"))
+    check("redirect: a real colleague resolves to (their address, their first name)",
+          setter._reply_recipient({**base, "thread": _forward_thread(
+              lead, "Timothy.Vlach@ideaentity.com")}) == (timo, "Timothy"))
+
+    # ── exclude keeps the new To off the CC even if it appears in the reply. ─
+    row_ex = {**base, "thread": [
+        {"type": "SENT", "from_email": "b-henry@bridgeandscale.info", "to": [lead], "message_id": "s1"},
+        {"type": "REPLY", "from_email": timo, "message_id": "m-fwd",
+         "to": [timo, "peer@ideaentity.com"], "cc": []},
+    ]}
+    cc_ex = setter._reply_all_cc(row_ex, exclude=timo).lower()
+    check("exclude: the addressed colleague is dropped from CC, peers kept",
+          timo not in cc_ex and "peer@ideaentity.com" in cc_ex, cc_ex)
+
+    # ── first-name derivation is best-effort and safe. ──────────────────────
+    check("first-name: from first.last email local part",
+          setter._first_name_for({}, "timothy.vlach@ideaentity.com") == "Timothy")
+    check("first-name: a signed from_name wins",
+          setter._first_name_for({"from_name": "Timothy Vlach"}, "tv@x.com") == "Timothy")
+    check("first-name: an opaque local part yields no guess (blank, not garbage)",
+          setter._first_name_for({}, "tvlach@x.com") == "")
+
+
 def test_stranded_followup_claim_restores_to_sent():
     """A 'sending' claim taken from an already-SENT row (interrupted
     follow-up) must reap back to sent, never needs_review — dropping it there
@@ -11923,6 +12016,7 @@ if __name__ == "__main__":
     test_stranded_sending_claim_reaped_to_needs_review()
     test_send_claim_stamps_updated_at()
     test_followup_preserves_original_sent_record()
+    test_reply_recipient_forward_routing()
     test_stranded_followup_claim_restores_to_sent()
     test_recent_send_block_ignores_test_rows()
     test_agent_adoption_busts_the_read_caches()

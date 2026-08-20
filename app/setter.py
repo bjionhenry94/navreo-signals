@@ -2952,44 +2952,123 @@ def _recipient_addrs(*values) -> list:
     return out
 
 
-def _reply_all_cc(row: dict) -> str:
+def _our_sending_addrs(row: dict) -> set:
+    """Every mailbox WE have sent from in this thread, lower-cased. The reply's
+    To is normally one of these, so it drops out of a reply-all and we never CC
+    or re-address ourselves."""
+    out: set = set()
+    thread = row.get("thread")
+    if isinstance(thread, list):
+        for m in thread:
+            if isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT":
+                fe = str(m.get("from_email") or "").strip().lower()
+                if fe:
+                    out.add(fe)
+    return out
+
+
+def _target_reply(row: dict):
+    """The exact REPLY this row is answering - matched by message id, else the
+    most recent reply on the thread. None when the thread carries no reply
+    (older hydrations, or a thread that never loaded)."""
+    thread = row.get("thread")
+    if not isinstance(thread, list) or not thread:
+        return None
+    replies = [m for m in thread
+               if isinstance(m, dict) and str(m.get("type") or "").upper() == "REPLY"]
+    if not replies:
+        return None
+    ids = {str(row.get("message_id") or ""), str(row.get("source_message_id") or "")} - {""}
+    return next((m for m in replies if str(m.get("message_id") or "") in ids), None) or replies[-1]
+
+
+# Role/automation mailboxes a handed-off reply must never be redirected TO - a
+# bounce or auto-responder can arrive from a non-lead address, and answering it
+# would mail a robot. Human review is the real guard; this is belt-and-braces
+# for the follow-up path.
+_SYSTEM_LOCALPARTS = {
+    "mailer-daemon", "postmaster", "no-reply", "noreply", "donotreply",
+    "do-not-reply", "bounce", "bounces", "notifications", "notification",
+    "auto-reply", "autoreply",
+}
+
+
+def _first_name_for(target: dict, email: str) -> str:
+    """Best-effort first name for a redirected reply's recipient - cosmetic only
+    (the draft body already carries the authoritative greeting). Prefer a signed
+    from_name; else the email's local part before a separator when it reads like
+    a real first.last name; else "" (Smartlead is fine with a blank)."""
+    nm = str((target or {}).get("from_name") or "").strip()
+    if nm:
+        first = re.split(r"\s+", nm)[0].strip(" ,.\"'")
+        if first and first.replace("-", "").replace("'", "").isalpha():
+            return first[:1].upper() + first[1:]
+    local = str(email or "").split("@", 1)[0]
+    if re.search(r"[._+\-]", local):
+        cand = re.split(r"[._+\-]", local)[0].strip()
+        if cand.isalpha() and len(cand) > 1:
+            return cand[:1].upper() + cand[1:]
+    return ""
+
+
+def _reply_recipient(row: dict) -> tuple:
+    """(to_email, to_first_name) for Smartlead's reply-email-thread.
+
+    Normally the lead themselves replied, so we answer the lead - the historical
+    behaviour, byte-for-byte. But when the lead handed us off to a colleague who
+    is now writing from their OWN inbox (a forward: Venu forwarded our email to
+    Timothy, and Timothy replied from timothy.vlach@…), the reply we're answering
+    came FROM that colleague, not the lead. reply-email-thread defaults its
+    recipient to the lead's address, so without this the setter greets
+    "Hi Timothy" in the body but mails Venu - the person who actually asked for
+    the meeting never receives it (owner report 2026-08-20). Return the real
+    replier so the To matches the greeting; the lead stays the Smartlead record,
+    only the recipient moves.
+
+    Falls back to the lead whenever the replier IS the lead, the thread/from_email
+    is missing (older hydrations), the replier resolves to one of our own sending
+    mailboxes, or it's a role/automation address - never wrong, just
+    lead-addressed."""
+    lead_email = str(row.get("lead_email") or "").strip()
+    lead_first = row.get("lead_first_name") or ""
+    target = _target_reply(row)
+    if not target:
+        return lead_email, lead_first
+    frm = str(target.get("from_email") or "").strip()
+    fl = frm.lower()
+    if (not fl or "@" not in fl or fl == lead_email.lower()
+            or fl in _our_sending_addrs(row)
+            or fl.split("@", 1)[0] in _SYSTEM_LOCALPARTS):
+        return lead_email, lead_first
+    return fl, _first_name_for(target, fl)
+
+
+def _reply_all_cc(row: dict, exclude: str = "") -> str:
     """The `cc` string for Smartlead's reply-email-thread so a send REPLIES TO
     ALL, not just the sender. When the lead CC'd colleagues on the reply we're
     answering, a reply that goes to the sender alone silently drops those
     colleagues off the thread (owner report 2026-08-18: the setter replied to
     the sender only, so when the sender CC'd their team our answer never reached
     them). This returns everyone who was on that reply - its cc plus any other
-    To recipients - minus our own sending mailbox(es) and the lead themselves,
-    as a comma-separated string. Returns "" when there's no one to add, which
-    preserves the original sender-only behaviour.
+    To recipients - minus our own sending mailbox(es), the lead themselves, and
+    `exclude` (the address we're now sending TO, so a redirected hand-off never
+    CCs the same person it addresses), as a comma-separated string. Returns ""
+    when there's no one to add, which preserves the original sender-only
+    behaviour.
 
     Sourced from the thread the row already carries (each message keeps its cc /
     to since the 2026-08-18 hydrate change), so it costs no extra Smartlead
     call. A row hydrated BEFORE that change simply has no cc/to on its thread
     and falls back to sender-only - graceful, never wrong."""
-    thread = row.get("thread")
-    if not isinstance(thread, list) or not thread:
+    target = _target_reply(row)
+    if not target:
         return ""
-    # Our own addresses = every mailbox we have SENT from in this thread. The
-    # reply's To is normally exactly one of these, so it drops out below and we
-    # never CC ourselves.
-    ours = set()
-    for m in thread:
-        if isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT":
-            fe = str(m.get("from_email") or "").strip().lower()
-            if fe:
-                ours.add(fe)
-    replies = [m for m in thread
-               if isinstance(m, dict) and str(m.get("type") or "").upper() == "REPLY"]
-    if not replies:
-        return ""
-    # The exact reply we're answering (matched by id), else the most recent one.
-    ids = {str(row.get("message_id") or ""), str(row.get("source_message_id") or "")} - {""}
-    target = next((m for m in replies if str(m.get("message_id") or "") in ids), None) or replies[-1]
+    ours = _our_sending_addrs(row)
     lead = str(row.get("lead_email") or "").strip().lower()
+    ex = str(exclude or "").strip().lower()
     cc: list = []
     for a in _recipient_addrs(target.get("cc"), target.get("to")):
-        if a and a != lead and a not in ours and a not in cc:
+        if a and a != lead and a not in ours and a != ex and a not in cc:
             cc.append(a)
     return ", ".join(cc)
 
@@ -4329,22 +4408,29 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
         _apply_patch(row, patch)
         return {"ok": False, "row": patch}
     try:
+        # Who to address: normally the lead, but when a colleague the lead
+        # forwarded us to is now replying from their own inbox, the reply must
+        # go to THEM - otherwise we greet "Hi Timothy" and mail Venu (owner
+        # report 2026-08-20). reply-email-thread's to_email defaults to the
+        # lead, so the normal (lead-replied) case is byte-for-byte unchanged.
+        to_email, to_first = _reply_recipient(row)
         body = {
             "email_stats_id": stats_id,
             "email_body": html_body,
             "reply_message_id": row.get("message_id"),
             "reply_email_time": row.get("replied_at"),
             "reply_email_body": row.get("reply_body"),
-            "to_email": row.get("lead_email"),
-            "to_first_name": row.get("lead_first_name") or "",
+            "to_email": to_email,
+            "to_first_name": to_first,
             "add_signature": False,
         }
-        # Reply-to-ALL: keep every colleague the lead CC'd on this thread on the
-        # reply (owner report 2026-08-18). Sender-only silently dropped them,
-        # so a "please liaise with my colleague" reply never reached the
-        # colleague. Empty string => no one to add => Smartlead sends
-        # sender-only exactly as before.
-        cc = _reply_all_cc(row)
+        # Reply-to-ALL: keep every colleague on this thread on the reply (owner
+        # report 2026-08-18) - minus whoever we're now addressing, so a
+        # redirected hand-off never CCs the same person it's sent to. Sender-only
+        # silently dropped them, so a "please liaise with my colleague" reply
+        # never reached the colleague. Empty string => no one to add => Smartlead
+        # sends to the To alone exactly as before.
+        cc = _reply_all_cc(row, exclude=to_email)
         if cc:
             body["cc"] = cc
         resp = _sl_post(f"/campaigns/{row.get('smartlead_campaign_id')}/reply-email-thread", body)
