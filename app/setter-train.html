@@ -1710,6 +1710,18 @@ async function startNextRoundOrGenerate() {
     const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
     if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
     const spare = CASES.filter((c) => !isAnswered(c.id));
+    // Freshness is enforced HERE, the one door every entry point uses -
+    // live-verify 2026-08-20: the >=90 "Keep training (optional)" button
+    // took the trained branch, which skipped the round gate and opened on
+    // drafts older than the note taught 2s earlier. Stale-only pool: hold
+    // the done screen and let the transition poll open it when the sweep
+    // lands.
+    if (spare.length && !spare.some(caseFresh)) {
+      view = "done";
+      render();
+      startTransitionPoll();
+      return;
+    }
     if (spare.length) {
       stopPrefetchPoll();
       stopTransitionPoll();
