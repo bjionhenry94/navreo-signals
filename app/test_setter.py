@@ -5462,12 +5462,12 @@ def test_training_generate_synthetic_only_preserves_existing_used_reply_ids():
          list(doc.get("used_reply_ids") or []) == [101, 102], doc.get("used_reply_ids"))
 
 
-def test_training_synthetic_category_mix_80_20():
-    """A batch of 10 synthetic scenarios honours 80/20 within rounding: 8
-    actionable spread across Interested/Information Request/Meeting
-    Request, 2 negatives from Not Interested/Out Of Office - and the exact
-    counts the code computes are what get sent to the model as
-    scenario_plan."""
+def test_training_synthetic_category_mix_positive_only():
+    """Positive-only policy (owner ruling 2026-08-20, every trainer): a batch
+    of 10 synthetic scenarios is 100% actionable, spread across Interested/
+    Information Request/Meeting Request, with ZERO negatives (no Not Interested
+    or Out Of Office) - and the exact counts the code computes are what get
+    sent to the model as scenario_plan."""
     from collections import Counter
 
     targets = setter._synthetic_category_targets(10)
@@ -5475,10 +5475,10 @@ def test_training_synthetic_category_mix_80_20():
     negative = {"Not Interested", "Out Of Office"}
     total_actionable = sum(v for k, v in targets.items() if k in actionable)
     total_negative = sum(v for k, v in targets.items() if k in negative)
-    check("category mix: 8 actionable across the 3 simple categories", total_actionable == 8, targets)
-    check("category mix: 2 negatives across Not Interested/Out Of Office", total_negative == 2, targets)
-    check("category mix: no category outside the simple/common synthetic set",
-         set(targets.keys()) <= (actionable | negative), targets)
+    check("category mix: all 10 actionable across the 3 simple categories", total_actionable == 10, targets)
+    check("category mix: zero negatives (positive-only policy)", total_negative == 0, targets)
+    check("category mix: no category outside the actionable synthetic set",
+         set(targets.keys()) <= actionable, targets)
     check("category mix: total sums to 10", sum(targets.values()) == 10, targets)
 
     sb, http = fresh_setter()
@@ -5501,6 +5501,57 @@ def test_training_synthetic_category_mix_80_20():
          dict(Counter(plan)) == targets, (dict(Counter(plan)), targets))
     check("category mix: returned scenarios carry the same category the code assigned, in plan order",
          [s["category"] for s in scenarios] == plan, (scenarios, plan))
+
+
+def test_training_staged_questions_seeded_on_share_and_deduped():
+    """Standing staged questions (owner ruling 2026-08-20, every SDR): the
+    CLIENT (share) trainer always seeds the four fixed asks - phone, booking
+    link, price, case studies - as synthetic cases carrying a stable
+    staged_key, once per agent (deduped on later rounds). The owner trainer
+    does not seed them (they reach the shared doc via the share trainer)."""
+    sb, http = fresh_setter()
+    _seed_training_corpus(sb, per_category=6, campaign_id=8300)
+    _seed_training_corpus(sb, per_category=6, campaign_id=8301, start_id=1000)
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
+
+    STAGED = ["ask_booking_link", "ask_case_studies", "ask_phone", "ask_price"]
+
+    agent = {"id": "agent-staged0001", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"],
+             "instructions": "We help teams book more meetings.", "campaign_ids": [8300]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    token = setter.mint_training_share(agent["id"])
+
+    # First share round: batch_size 4 == the four staged questions, so
+    # real_want is 0 and the whole batch is the staged set.
+    _generate_and_wait({"share": token, "batch_size": 4}, agent_id=agent["id"])
+    cases = setter._load_training(agent["id"]).get("cases") or []
+    staged = [c for c in cases if c.get("staged_key")]
+    check("staged: all four standing questions seeded on the share trainer",
+         sorted(c.get("staged_key") for c in staged) == STAGED,
+         [c.get("staged_key") for c in staged])
+    check("staged: every staged case is synthetic with no real reply",
+         bool(staged) and all(c.get("synthetic") is True and c.get("reply_id") is None for c in staged), staged)
+    bodies = " ".join(((c.get("inbound") or {}).get("body") or "") for c in staged).lower()
+    check("staged: the price and case-study asks are present in the seeded bodies",
+         "price" in bodies and "case studies" in bodies, bodies)
+
+    # Second share round never re-seeds an already-present staged question.
+    _generate_and_wait({"share": token, "batch_size": 4}, agent_id=agent["id"])
+    keys2 = [c.get("staged_key") for c in (setter._load_training(agent["id"]).get("cases") or [])
+             if c.get("staged_key")]
+    check("staged: deduped - still exactly the four staged cases after a second round",
+         sorted(keys2) == STAGED, keys2)
+
+    # Owner mode does not seed staged questions.
+    agent2 = {"id": "agent-staged0002", "mode": "draft_only", "enabled": True,
+              "allowed_intents": ["send_resource"], "instructions": "x", "campaign_ids": [8301]}
+    sb.agents[agent2["id"]] = {"id": agent2["id"], "doc": agent2}
+    _generate_and_wait({"agent_id": agent2["id"], "batch_size": 4}, agent_id=agent2["id"])
+    owner_cases = setter._load_training(agent2["id"]).get("cases") or []
+    check("staged: owner trainer does not seed staged questions",
+         bool(owner_cases) and not any(c.get("staged_key") for c in owner_cases), owner_cases)
 
 
 def test_training_invent_prompt_includes_reference_sample_gists_and_law():
@@ -5866,6 +5917,95 @@ def test_training_retrain_note_updates_unanswered_leaves_answered():
          cases_by_id["case-r-01"].get("updated_by_feedback") is True
          and cases_by_id["case-r-01"]["classification"].get("primary_intent") == "send_resource"
          and "Sure thing" in (cases_by_id["case-r-01"]["draft_html"] or ""), cases_by_id.get("case-r-01"))
+
+
+def test_training_share_answer_does_not_redraft_current_round():
+    """Client Training Wizard (share mode, owner ruling 2026-08-20): a rating
+    still kicks off the retrain worker (so a correction can merge into the
+    brain), but it must NOT re-draft the round's other unanswered cards under
+    the trainer's eyes. Only the owner/CSM trainer keeps Feature B's
+    cross-round redraft (see test_training_retrain_note_updates... above)."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-shre-rt01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource", "pricing", "scheduling"], "instructions": "Flat $400/mo."}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    case_a = _fixed_training_case("case-s-00", body="answered trigger case")
+    case_b = _fixed_training_case("case-s-01", body="unanswered case")
+    doc = {"cases": [case_a, case_b], "answers": {}, "used_reply_ids": [], "readiness_history": [],
+          "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    reclassified = []
+
+    def classify_fn(body):
+        reclassified.append(True)  # a redraft pass would re-run classify here
+        return {"primary_intent": "send_resource", "all_intents": ["send_resource"], "simple_ask": True,
+                "confidence": 0.9, "red_flags": [], "timezone_guess": None, "tz_confidence": 0.0,
+                "wants": "x", "rationale": ""}
+    http.classify_fn = classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "<div>NEW draft</div>"}
+
+    token = setter.mint_training_share(agent["id"])
+    status, resp = _answer_and_wait({
+        "share": token, "case_id": "case-s-00", "decision_ok": False, "scope": "one_off",
+    }, agent_id=agent["id"])
+    check("share retrain: answering still returns 200 and kicks off the worker",
+         status == 200 and resp.get("retrain") == "started", (status, resp))
+
+    saved = setter._load_training(agent["id"])
+    cases_by_id = {c["id"]: c for c in saved.get("cases") or []}
+    check("share retrain: the UNANSWERED case is NOT re-drafted (draft unchanged)",
+         cases_by_id["case-s-01"]["draft_html"] == "<div>old draft</div>"
+         and not cases_by_id["case-s-01"].get("updated_by_feedback"), cases_by_id.get("case-s-01"))
+    check("share retrain: no case was re-classified (no redraft pass ran on the round)",
+         reclassified == [], reclassified)
+    gen = saved.get("generating") or {}
+    check("share retrain: worker still ran and settled idle, merge-only (updated 0)",
+         gen.get("status") == "idle" and gen.get("kind") == "retrain" and gen.get("updated") == 0, gen)
+
+
+def test_training_skip_is_neutral_and_leaves_stream():
+    """Skip (owner ruling 2026-08-20): a skipped card is handled - it leaves the
+    unanswered stream so it is never re-shown - but neutral: no retrain, and
+    compute_readiness ignores it, so the score never moves."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-skip01", "mode": "draft_only", "enabled": True,
+             "allowed_intents": ["send_resource"], "sender_first": "Ada"}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    doc = {"cases": [_fixed_training_case("case-k-00", body="skip me"),
+                     _fixed_training_case("case-k-01", body="another")],
+           "answers": {}, "used_reply_ids": [], "readiness_history": [],
+           "created_at": "2026-01-01T00:00:00+00:00"}
+    setter._save_training(agent["id"], doc)
+
+    status, resp = setter.route_training_answer({"agent_id": agent["id"], "case_id": "case-k-00", "skipped": True})
+    check("skip: 200 and NO retrain kicked off", status == 200 and resp.get("retrain") is None, (status, resp))
+    check("skip: readiness stays 0 (a skip never moves the score)",
+         (resp.get("readiness") or {}).get("score") == 0, resp)
+    check("skip: the skipped card counts as handled (out of the stream)",
+         resp.get("answered_count") == 1 and resp.get("unanswered_count") == 1, resp)
+
+    saved = setter._load_training(agent["id"])
+    ans = (saved.get("answers") or {}).get("case-k-00") or {}
+    check("skip: stored answer is neutral - skipped True, decision_ok None, no note",
+         ans.get("skipped") is True and ans.get("decision_ok") is None and not ans.get("note"), ans)
+    check("skip: compute_readiness excludes the skip entirely (n_answers 0)",
+         setter.compute_readiness(saved).get("n_answers") == 0, setter.compute_readiness(saved))
+
+
+def test_synthetic_training_avail_lets_pick_slots_offer_two():
+    """No live calendar in the Training Wizard -> _synthetic_training_avail
+    (owner ruling 2026-08-20) feeds pick_slots enough real future times that it
+    still offers TWO in the lead's workday, so a practice draft proposes times
+    instead of a bare availability ask."""
+    now = setter._parse_iso("2026-09-01T09:00:00+00:00")
+    avail = setter._synthetic_training_avail(now)
+    check("synthetic avail: non-empty and every time is in the future",
+         bool(avail) and all(setter._parse_iso(t) > now for t in avail), avail[:3])
+    slots = setter.pick_slots(avail, "America/New_York", {"_agent": {}, "_lead": {}}, now)
+    check("synthetic avail: pick_slots offers exactly two call times from it",
+         len(slots) == 2 and all(s.get("iso") and s.get("label") for s in slots), slots)
 
 
 def test_training_retrain_trigger_conditions():
@@ -7197,9 +7337,9 @@ def test_training_answer_note_path_still_returns_started_without_agent_load():
     real_threadmain = setter._training_retrain_threadmain
     block_event = threading.Event()
 
-    def blocked_threadmain(agent_id_, lock_):
+    def blocked_threadmain(agent_id_, lock_, redraft_=True):
         block_event.wait(timeout=10)
-        real_threadmain(agent_id_, lock_)
+        real_threadmain(agent_id_, lock_, redraft_)
 
     setter._training_retrain_threadmain = blocked_threadmain
     try:
@@ -7571,8 +7711,17 @@ def test_share_mint_verify_roundtrip():
 def test_route_training_share_mints_and_share_info():
     sb, http = fresh_setter()
     agent = {"id": "agent-shr0002", "name": "Ada", "mode": "draft_only", "enabled": True,
-             "allowed_intents": ["send_resource"]}
+             "allowed_intents": ["send_resource"], "sender_first": "Ada"}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+
+    # Prerequisite (owner ruling 2026-08-20): no sender configured -> a training
+    # session cannot be created yet.
+    no_sender = {"id": "agent-shr-nosender", "name": "Nyx", "mode": "draft_only", "enabled": True,
+                 "allowed_intents": ["send_resource"]}
+    sb.agents[no_sender["id"]] = {"id": no_sender["id"], "doc": no_sender}
+    status0, resp0 = setter.route_training_share({"agent_id": no_sender["id"]})
+    check("share mint: no sender configured -> 400 (must know who emails are from first)",
+         status0 == 400 and "sent from" in (resp0.get("error") or ""), (status0, resp0))
 
     status, resp = setter.route_training_share({"agent_id": agent["id"]})
     check("share mint: 200", status == 200, (status, resp))
@@ -10776,7 +10925,8 @@ if __name__ == "__main__":
     test_training_generate_shortfall_top_up_real_plus_synthetic()
     test_training_generate_pure_synthetic_zero_replies()
     test_training_generate_synthetic_only_preserves_existing_used_reply_ids()
-    test_training_synthetic_category_mix_80_20()
+    test_training_synthetic_category_mix_positive_only()
+    test_training_staged_questions_seeded_on_share_and_deduped()
     test_training_invent_prompt_includes_reference_sample_gists_and_law()
     test_training_generate_synthetic_never_bypasses_unanswered_cap()
     test_training_generate_synthetic_lost_update_protection_answer_survives()
@@ -10785,6 +10935,9 @@ if __name__ == "__main__":
     test_training_answer_recomputes_readiness_and_counts()
     test_training_answer_remember_merges_instructions_one_off_does_not()
     test_training_retrain_note_updates_unanswered_leaves_answered()
+    test_training_share_answer_does_not_redraft_current_round()
+    test_training_skip_is_neutral_and_leaves_stream()
+    test_synthetic_training_avail_lets_pick_slots_offer_two()
     test_training_retrain_trigger_conditions()
     test_training_retrain_lock_contention_with_generate_queued_flag_honoured()
     test_training_retrain_failed_case_keeps_old_content()

@@ -1786,6 +1786,7 @@ Rules:
 - Every draft must be built from short <div> paragraphs separated by <br>, exactly like the examples above. A single-line reply with no paragraph breaks will be rejected.
 - Use the team's exact recurring phrases where they fit: the resource anchor is "Here's the breakdown I prepared." (or "Here's a case study I put together." when it's a case study); the call ask, ONLY when you have actual times to name, is "Would you be free for a call on {day, date at time TZ} or {day2, date2 at time2 TZ}, where I could share how I would implement our strategy for you?"; the fallback is "If those times aren't suitable, feel free to see my availability here and book in directly." with the link on "see my availability here".
 - ONE ASK, EVER (owner rule 2026-08-17: "You're asking for a call twice, don't do that"). A draft asks for the call at most once. The two-times call ask, a general-window proposal, and the "When would be a good time for us to talk?" availability ask are three ALTERNATIVES: exactly one may appear in a draft, never two. Each fallback-ladder step REPLACES the call ask, it never adds a second ask on top. A draft containing both "Would you be free for a call" and "When would be a good time" is invalid. Never write the call-ask sentence at all when you have no times to put in it. And never write the same sentence or phrase twice anywhere in one draft. A lead who has already said yes to a call, booked one, or shared THEIR OWN booking/scheduling link has chosen the path: confirm it (for their link: say you'll grab a time on it) and make ZERO fresh asks.
+- THE CTA IS A DIRECT ASK, NEVER PASSIVE (owner rule 2026-08-20, every SDR, outranks the agent's instructions). When the draft moves toward a call or a next step, ask for it outright: propose the two specific times when you have them, otherwise ask plainly for their availability by the fallback ladder. Never leave the decision hanging with a passive, opt-in CTA that puts the choice back on the lead - no "when you're ready you can book", "feel free to book if you'd like", "let me know if you'd like to", "should you wish to", "book in whenever suits you", "you're welcome to book if that's of interest". The ONLY exception is a lead who has EXPLICITLY declined or asked to reconnect later (not interested, "circle back in a couple of months", "reach out after Q3"): there the timing/constraint rule below governs - defer warmly to their timing, make NO push, and manufacture no call ask.
 - The names in the examples above (Donald, Parag, Priya, and the sign-off) are placeholders from OTHER teams' threads. Sign ONLY {SenderFirst} - never copy "Bjion" or any example name into a draft.
 - No em dashes anywhere, ever - use a comma or period instead.
 - No emoji.
@@ -11490,7 +11491,10 @@ def route_test_inject(payload):
 # engine's generate/retrain/recheck passes).
 def _is_case_answered(case_id, answers: dict) -> bool:
     a = (answers or {}).get(case_id)
-    return isinstance(a, dict) and a.get("decision_ok") is not None
+    # A skip counts as handled (owner ruling 2026-08-20): it leaves the
+    # unanswered stream so it is never re-shown, but compute_readiness excludes
+    # it so it never moves the score.
+    return isinstance(a, dict) and (a.get("decision_ok") is not None or a.get("skipped") is True)
 
 
 # ── training engine (per-agent, permanent) ──────────────────────────────────
@@ -11532,7 +11536,14 @@ TRAINING_MAX_UNANSWERED = 40
 # owner - a client link left idle for weeks should not silently pile up a
 # huge backlog of scenarios.
 TRAINING_MAX_UNANSWERED_SHARE = 20
-TRAINING_ACTIONABLE_SHARE = 0.8
+# Positive-only training (owner ruling 2026-08-20, EVERY trainer - client and
+# owner alike): a batch is 100% actionable/positive, never a Not Interested,
+# Do Not Contact, Wrong Person, or Out Of Office. Those aren't actionable, so
+# they are never selected from the real corpus nor invented. 1.0 zeroes the
+# negative split in _weighted_category_targets; the negative-category lists
+# below are kept only as the (now unused) reference of what "clear negative"
+# means, and as the default arg for _weighted_category_targets.
+TRAINING_ACTIONABLE_SHARE = 1.0
 
 # Review mode (owner request 2026-07-14): "go back through some of the old
 # scenarios and messaging, just to check that it's now been trained to
@@ -11548,9 +11559,10 @@ _TRAINING_ACTIONABLE_WEIGHTS = {
     "Interested": 650, "Information Request": 482, "Meeting Request": 263,
     "Contact Forward": 59, "positive-re-reply": 18,
 }
-# The majority-of-corpus clear-negative categories - included at ~20% of
-# every batch so a trainer also teaches the agent when to correctly LEAVE a
-# reply alone, not just when to intervene.
+# The clear-negative categories. Retained as a reference set (and as the
+# default negative list for _weighted_category_targets), but NO LONGER mixed
+# into any batch: positive-only training (see TRAINING_ACTIONABLE_SHARE) holds
+# the negative share at zero, so these are never selected or invented.
 _TRAINING_CLEAR_NEGATIVE_CATEGORIES = ["Not Interested", "Do Not Contact", "Wrong Person", "Out Of Office"]
 
 # Synthetic scenarios (see the doctrine comment above) only ever invent the
@@ -11777,6 +11789,82 @@ def _synthetic_category_targets(n: int) -> dict:
                                       negative_categories=_SYNTHETIC_NEGATIVE_CATEGORIES)
 
 
+# ── Standing staged questions (owner ruling 2026-08-20, every SDR, every
+# campaign) ─────────────────────────────────────────────────────────────────
+# Four asks every appointment-setter must field well, seeded into EVERY
+# agent's training as synthetic lead replies REGARDLESS of campaign - so the
+# trainer always rates how we handle a direct phone, booking-link, price, and
+# case-study ask. They run through the exact same synthetic pipeline as any
+# invented scenario (only the inbound text is fixed - the decision and draft
+# are the live brain's), and each built case carries a stable "staged_key" so
+# it is seeded once per agent and never duplicated on later rounds. All four
+# are positive/actionable, consistent with the positive-only policy above.
+_STAGED_TRAINING_QUESTIONS = [
+    {"key": "ask_phone", "category": "Meeting Request", "lead_first_name": "Chris",
+     "subject": "Quick one", "body": "What's your phone number? I'll give you a call."},
+    {"key": "ask_booking_link", "category": "Meeting Request", "lead_first_name": "Jordan",
+     "subject": "Quick one", "body": "What's your booking link? I'll book in direct."},
+    {"key": "ask_price", "category": "Information Request", "lead_first_name": "Sam",
+     "subject": "Quick one", "body": "What's your price?"},
+    {"key": "ask_case_studies", "category": "Information Request", "lead_first_name": "Alex",
+     "subject": "Quick one", "body": "What case studies do you have?"},
+]
+# Neutral, fact-free email-1, used ONLY when an agent has no real send to reuse
+# (see _build_synthetic_training_case - a real send always wins). Keeps a
+# staged question from being dropped for a brand-new agent with zero sends.
+_STAGED_FALLBACK_OUTREACH = (
+    "<div>Hi there,</div><br><div>I had a quick idea I think could help, "
+    "would you be open to me sharing it?</div>"
+)
+
+
+def _pending_staged_scenarios(agent: dict, existing_cases: list) -> list:
+    """The standing staged questions (see _STAGED_TRAINING_QUESTIONS) this
+    agent does not already carry, as synthetic scenario dicts ready for
+    _build_synthetic_training_case. Deduped by the stable staged_key stamped
+    on every staged case, so each question is seeded once per agent and never
+    re-asked on later rounds. Applies to every trainer (owner and client)."""
+    have = {(c or {}).get("staged_key") for c in (existing_cases or []) if isinstance(c, dict)}
+    pending = []
+    for q in _STAGED_TRAINING_QUESTIONS:
+        if q["key"] in have:
+            continue
+        pending.append({
+            "staged_key": q["key"],
+            "category": q["category"],
+            "lead_first_name": q.get("lead_first_name") or "",
+            "lead_company": "",
+            "subject": q.get("subject") or "",
+            "body": q["body"],
+            "prior_lead_reply": "",
+            "outreach_subject": "A quick idea",
+            "outreach_body": _STAGED_FALLBACK_OUTREACH,
+        })
+    return pending
+
+
+def _synthetic_training_avail(now_utc) -> list:
+    """Plausible future availability (ISO8601 UTC) for the Training Wizard when
+    an agent has no live calendar connected (owner ruling 2026-08-20): so a
+    practice draft PROPOSES concrete call times instead of deflecting to a bare
+    availability ask. These are handed to the drafter as real slots - the times
+    are PROVIDED, so both the never-invent-a-time rule and lint_draft's slot
+    checks are satisfied - and never reach a real send (training has no send
+    path). pick_slots() filters them to the lead's own workdays/work-hours and
+    picks two, exactly as it does live Calendly output, so the proposed times
+    always land inside the lead's business hours whatever their timezone."""
+    base = now_utc if isinstance(now_utc, _dt.datetime) else _parse_iso(now_utc)
+    if base.tzinfo is None:
+        base = base.replace(tzinfo=_dt.timezone.utc)
+    start = base.replace(hour=0, minute=0, second=0, microsecond=0) + _dt.timedelta(days=1)
+    out = []
+    for d in range(8):  # tomorrow through a week out - pick_slots drops weekends itself
+        day = start + _dt.timedelta(days=d)
+        for h in range(0, 24, 2):  # every 2h UTC so >=2 land in any lead's 9-17 local
+            out.append(day.replace(hour=h).isoformat(timespec="seconds"))
+    return out
+
+
 def _fetch_training_candidates(category: str, exclude_ids: list, want: int,
                                allowed_campaign_ids: list | None = None) -> list:
     """Real, unused `replies` rows for one category - excludes already-used
@@ -11855,7 +11943,9 @@ def _select_training_replies(doc: dict, batch_size: int, allowed_campaign_ids: l
 
     shortfall = batch_size - len(selected)
     if shortfall > 0:
-        all_cats = list(_TRAINING_ACTIONABLE_WEIGHTS.keys()) + _TRAINING_CLEAR_NEGATIVE_CATEGORIES
+        # Positive-only (owner ruling 2026-08-20): the shortfall top-up draws
+        # from actionable categories ONLY - never a clear-negative reply.
+        all_cats = list(_TRAINING_ACTIONABLE_WEIGHTS.keys())
         attempts = 0
         while shortfall > 0 and attempts < len(all_cats) * 2:
             progressed = False
@@ -12192,7 +12282,9 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
     # Largest-remainder rounding always sums exactly to `count`, but pad
     # defensively (falling back to the last negative category) so a future
     # weighting change can never silently short the plan below `count`.
-    fallback_cat = (_SYNTHETIC_NEGATIVE_CATEGORIES or ordered_cats or ["Interested"])[-1]
+    # Positive-only (owner ruling 2026-08-20): pad with an actionable
+    # category, never a clear-negative one.
+    fallback_cat = (list(_SYNTHETIC_ACTIONABLE_WEIGHTS.keys()) or ["Interested"])[-1]
     while len(scenario_plan) < count:
         scenario_plan.append(fallback_cat)
     scenario_plan = scenario_plan[:count]
@@ -12594,6 +12686,9 @@ def compute_readiness(doc: dict) -> dict:
     read as 'ready'."""
     doc = doc or {}
     answers = dict(doc.get("answers") or {})
+    # Skips are handled-but-neutral (owner ruling 2026-08-20): excluded from the
+    # score entirely, so they neither count toward coverage nor as agreement.
+    answers = {cid: a for cid, a in answers.items() if not (a or {}).get("skipped")}
     items = sorted(answers.items(), key=lambda kv: (kv[1] or {}).get("at") or "")
     n = len(items)
     if n == 0:
@@ -12875,10 +12970,17 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
     try:
         doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])
-        replies = _select_training_replies(doc, batch_size, allowed_campaign_ids=allowed_campaign_ids)
+        # Standing staged questions (owner ruling 2026-08-20, every SDR, every
+        # campaign) take priority within the batch: seed the ones this agent
+        # still lacks, then fill the remainder from real replies + synthetic.
+        # Seeded on the CLIENT (share) trainer - they land in the shared
+        # per-agent training doc, so the owner view sees them too.
+        staged_scenarios = _pending_staged_scenarios(agent, existing_cases) if is_share_mode else []
+        real_want = max(0, batch_size - len(staged_scenarios))
+        replies = _select_training_replies(doc, real_want, allowed_campaign_ids=allowed_campaign_ids)
 
-        shortfall = batch_size - len(replies)
-        scenarios = []
+        shortfall = real_want - len(replies)
+        scenarios = list(staged_scenarios)
         synthetic_trigger = None
         if shortfall > 0:
             # A pre-fetched, unscoped-by-used tone sample both feeds the
@@ -12890,9 +12992,10 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
             reference_sample = _fetch_reply_tone_sample(allowed_campaign_ids=allowed_campaign_ids)
             synthetic_trigger = "shortfall" if (replies or reference_sample) else "zero_replies"
             try:
-                scenarios = _invent_training_scenarios(agent, doc, shortfall,
-                                                       allowed_campaign_ids=allowed_campaign_ids,
-                                                       reference_sample=reference_sample)
+                invented = _invent_training_scenarios(agent, doc, shortfall,
+                                                      allowed_campaign_ids=allowed_campaign_ids,
+                                                      reference_sample=reference_sample)
+                scenarios = list(staged_scenarios) + invented
             except Exception as e:  # noqa: BLE001 - inventing scenarios must never crash the worker
                 if _LOG:
                     try:
@@ -12900,7 +13003,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                             {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
                     except Exception:  # noqa: BLE001
                         pass
-                scenarios = []
+                scenarios = list(staged_scenarios)
 
         if not replies and not scenarios:
             _finish_training_generation(agent_id, "failed",
@@ -12927,6 +13030,12 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         eff = dict(settings)
         eff["_agent"] = train_agent
         slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+        if slot_status0 != "ok":
+            # Training Wizard: no live calendar -> still propose plausible times
+            # (owner ruling 2026-08-20). Synthetic slots are PROVIDED to the
+            # drafter, so never-invent and the linter are both satisfied, and
+            # nothing is ever sent from training.
+            avail, slot_status0 = _synthetic_training_avail(now), "ok"
 
         # Cases are independent - each one is a self-contained pull (two
         # Supabase context fetches) + classify() + draft_reply() over its
@@ -12988,6 +13097,12 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                                 pass
                         synthetic_results[i] = None
 
+        # Stamp the stable staged_key onto each staged case (scenarios and
+        # synthetic_results are index-aligned) so staged questions dedupe on
+        # later rounds - see _pending_staged_scenarios.
+        for _i, _c in enumerate(synthetic_results):
+            if _c and _i < len(scenarios) and scenarios[_i].get("staged_key"):
+                _c["staged_key"] = scenarios[_i]["staged_key"]
         new_synthetic_cases = [c for c in synthetic_results if c]
 
         if not new_cases and not new_synthetic_cases:
@@ -13045,7 +13160,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
 # a generate() for one agent must never run concurrently, since both append/
 # rewrite the same training doc's `cases` list.
 
-def _kick_off_training_retrain(agent_id: str) -> str:
+def _kick_off_training_retrain(agent_id: str, redraft: bool = True) -> str:
     """Latency fix (2026-07-14, part 2): the REQUEST thread does ZERO doc
     round trips here now - it only makes the lock.acquire(blocking=False)
     bookkeeping decision and starts a thread. Every Supabase write this used
@@ -13072,7 +13187,7 @@ def _kick_off_training_retrain(agent_id: str) -> str:
     Response semantics unchanged - still returns "started" or "queued"."""
     lock = _get_training_gen_lock(agent_id)
     if lock.acquire(blocking=False):
-        thread = threading.Thread(target=_training_retrain_threadmain, args=(agent_id, lock), daemon=True)
+        thread = threading.Thread(target=_training_retrain_threadmain, args=(agent_id, lock, redraft), daemon=True)
         _TRAINING_GEN_THREADS[agent_id] = thread
         thread.start()
         return "started"
@@ -13104,9 +13219,9 @@ def _flag_training_retrain_queued(agent_id: str):
         pass
 
 
-def _training_retrain_threadmain(agent_id, lock):
+def _training_retrain_threadmain(agent_id, lock, redraft=True):
     try:
-        _training_retrain_worker(agent_id)
+        _training_retrain_worker(agent_id, redraft=redraft)
     finally:
         try:
             lock.release()
@@ -13486,6 +13601,10 @@ def _training_recheck_worker(agent_id: str, count: int):
         eff = dict(settings)
         eff["_agent"] = train_agent
         slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+        if slot_status0 != "ok":
+            # Training Wizard (recheck): propose plausible times with no live
+            # calendar too (owner ruling 2026-08-20) - see _synthetic_training_avail.
+            avail, slot_status0 = _synthetic_training_avail(now), "ok"
 
         results: dict = {}
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(target_ids))) as pool:
@@ -13636,7 +13755,7 @@ def _drain_pending_merges(agent_id: str) -> list:
     return pending
 
 
-def _training_retrain_worker(agent_id: str):
+def _training_retrain_worker(agent_id: str, redraft: bool = True):
     """Latency fix (2026-07-14, part 2): this worker's FIRST action, on
     every pass (including the very first), is persisting the "running"
     marker itself - _kick_off_training_retrain no longer writes it from the
@@ -13675,54 +13794,65 @@ def _training_retrain_worker(agent_id: str):
                 merge_correction_into_instructions(
                     merge_agent, note, source=(entry or {}).get("source") or "training")
 
-            agent = _load_agent(agent_id)
-            if not agent:
-                _finish_training_generation(agent_id, "idle")
-                return
-            train_agent = {**agent, "mode": "autopilot", "enabled": True}
-
-            doc = _load_training(agent_id)
-            cases = list(doc.get("cases") or [])
-            answers = dict(doc.get("answers") or {})
-            # LATEST OWNER RULES (recency weighting) always leads, then this
-            # session's own corrections/confirmations digest.
-            digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
-                                          _training_session_feedback_digest(doc))
-
-            settings = _load_settings()
-            now = _dt.datetime.now(_dt.timezone.utc)
-            eff = dict(settings)
-            eff["_agent"] = train_agent
-            slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
-
-            cases_by_id = {str(c.get("id")): c for c in cases}
-            unanswered_ids = [c.get("id") for c in cases if not _is_case_answered(c.get("id"), answers)]
-
             updated = 0
-            if unanswered_ids:
-                with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(unanswered_ids))) as pool:
-                    futs = []
-                    for cid in unanswered_ids:
-                        case = cases_by_id.get(cid)
-                        if not isinstance(case, dict):
-                            continue
-                        futs.append(pool.submit(_retrain_one_training_case, case, train_agent, eff, avail,
-                                               slot_status0, now, digest))
-                    for fut in concurrent.futures.as_completed(futs):
-                        try:
-                            fut.result()
-                            updated += 1
-                        except Exception:  # noqa: BLE001 - one bad case must never sink the pass
-                            pass
+            cases = None
+            if redraft:
+                # Owner trainer (Feature B, 2026-07-14): re-run every remaining
+                # UNANSWERED case through the freshly-merged brain so one
+                # correction carries across the round. The CLIENT Training
+                # Wizard passes redraft=False (owner ruling 2026-08-20): a
+                # rating there still teaches the brain (the merge above) but must
+                # NOT rewrite the round's other cards under the trainer's eyes -
+                # the improved brain shows up in the NEXT round instead, carried
+                # by its session digest and the merged instructions.
+                agent = _load_agent(agent_id)
+                if agent:
+                    train_agent = {**agent, "mode": "autopilot", "enabled": True}
+                    doc = _load_training(agent_id)
+                    cases = list(doc.get("cases") or [])
+                    answers = dict(doc.get("answers") or {})
+                    # LATEST OWNER RULES (recency weighting) always leads, then
+                    # this session's own corrections/confirmations digest.
+                    digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
+                                                  _training_session_feedback_digest(doc))
+
+                    settings = _load_settings()
+                    now = _dt.datetime.now(_dt.timezone.utc)
+                    eff = dict(settings)
+                    eff["_agent"] = train_agent
+                    slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
+                    if slot_status0 != "ok":
+                        # Training Wizard (retrain redraft): propose plausible
+                        # times with no live calendar (owner ruling 2026-08-20).
+                        avail, slot_status0 = _synthetic_training_avail(now), "ok"
+
+                    cases_by_id = {str(c.get("id")): c for c in cases}
+                    unanswered_ids = [c.get("id") for c in cases if not _is_case_answered(c.get("id"), answers)]
+
+                    if unanswered_ids:
+                        with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(unanswered_ids))) as pool:
+                            futs = []
+                            for cid in unanswered_ids:
+                                case = cases_by_id.get(cid)
+                                if not isinstance(case, dict):
+                                    continue
+                                futs.append(pool.submit(_retrain_one_training_case, case, train_agent, eff, avail,
+                                                       slot_status0, now, digest))
+                            for fut in concurrent.futures.as_completed(futs):
+                                try:
+                                    fut.result()
+                                    updated += 1
+                                except Exception:  # noqa: BLE001 - one bad case must never sink the pass
+                                    pass
 
             # Lost-update protection: reload the doc fresh right before the
-            # final save. Only `cases` and `generating` are ours to write -
-            # answers/used_reply_ids/readiness_history are left exactly as
-            # the fresh reload shows, so an answer that landed on any case
-            # (including one this pass just rewrote) while classify/draft
-            # round trips were in flight is never lost.
+            # final save. Only `cases` (when we redrafted) and `generating` are
+            # ours to write - answers/used_reply_ids/readiness_history are left
+            # exactly as the fresh reload shows, so an answer that landed on any
+            # case while classify/draft round trips were in flight is never lost.
             fresh = _load_training(agent_id)
-            fresh["cases"] = cases
+            if cases is not None:
+                fresh["cases"] = cases
             queued = bool((fresh.get("generating") or {}).get("retrain_queued"))
             finished_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
             fresh["generating"] = {"status": "idle", "kind": "retrain", "started_at": started_at,
@@ -13778,15 +13908,20 @@ def route_training_answer(payload):
                     return 404, {"error": "Agent not found."}
                 return 404, {"error": "Training scenario not found."}
 
-            decision_ok = payload.get("decision_ok")
-            reply_ok = payload.get("reply_ok")
-            note = str(payload.get("note") or "").strip()
+            # A skip (owner ruling 2026-08-20) records a handled-but-neutral
+            # answer: no verdicts, no note, so it never triggers a retrain, never
+            # becomes a confirmed exemplar, and compute_readiness ignores it - it
+            # only takes the card out of the unanswered stream.
+            skipped = bool(payload.get("skipped"))
+            decision_ok = None if skipped else payload.get("decision_ok")
+            reply_ok = None if skipped else payload.get("reply_ok")
+            note = "" if skipped else str(payload.get("note") or "").strip()
             scope = payload.get("scope") or "one_off"
             at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
             answers = dict(doc.get("answers") or {})
             answers[case_id] = {"decision_ok": decision_ok, "reply_ok": reply_ok, "note": note,
-                                "scope": scope, "at": at}
+                                "scope": scope, "at": at, "skipped": skipped}
             doc["answers"] = answers
 
             # Thumbs-up teaches too (owner brief 2026-07-14: "when I give a
@@ -13842,7 +13977,12 @@ def route_training_answer(payload):
         # saved, so the retrain worker's own drain-then-reload sees this
         # case as answered (excluded) and picks up the just-queued note.
         triggers_retrain = bool(note) or decision_ok is False or reply_ok is False
-        retrain = _kick_off_training_retrain(agent_id) if triggers_retrain else None
+        # Client Training Wizard (share mode): feedback teaches the brain but
+        # must NOT re-draft the round's other cards under the trainer's eyes
+        # (owner ruling 2026-08-20) - the learning shows up in the next round.
+        # The owner/CSM trainer keeps Feature B's cross-round redraft.
+        retrain = (_kick_off_training_retrain(agent_id, redraft=not bool(share_token))
+                   if triggers_retrain else None)
 
         return 200, {"ok": True, "readiness": readiness,
                     "answered_count": answered_count, "unanswered_count": unanswered_count,
@@ -13877,6 +14017,13 @@ def route_training_share(payload):
         agent = _load_agent(agent_id)
         if not agent:
             return 404, {"error": "Agent not found."}
+        # Prerequisite (owner ruling 2026-08-20): a training session can only be
+        # created once we know who the emails are sent FROM - the sender's name
+        # every draft signs off with. Without it the agent would train on (and
+        # send) unsigned drafts, so block session creation until it is set.
+        if not _sender_first_for(agent):
+            return 400, {"error": "Set who the emails are sent from (the sender's name) "
+                                  "before creating a training session."}
         try:
             days = int(payload.get("days") or 30)
         except (TypeError, ValueError):

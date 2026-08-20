@@ -299,7 +299,7 @@ let generating = false; // guards the POST /training/generate and /training/rech
    2026-08-16, revision 2), so the client page is rating rounds only - no
    chat pane, no uploads. */
 let ROUND_IDS = null;
-const ROUND_SIZE = 10;
+const ROUND_SIZE = 5;
 const ROUND_CAP = 12;           // rounds per sitting - then "we'll take it from here"
 
 /* ── Background-generation polling state ──────────────────────────────────
@@ -464,12 +464,11 @@ async function bootShare() {
 
 function renderShareHeader() {
   const title = document.querySelector(".sh-title");
-  if (title) title.textContent = `Train ${shareAgentName}`;
+  if (title) title.textContent = "Teach us your voice";
   const sub = document.querySelector(".train-sub");
   if (sub) {
-    sub.innerHTML = `Train your AI appointment setter in rounds of ${ROUND_SIZE} simulated conversations - `
-      + `rate each draft, and it learns your voice. You can stop at any time; everything you teach it is saved. `
-      + `Nothing here ever emails anyone. `
+    sub.innerHTML = `We reply to your leads for you - here you rate our drafts in rounds of ${ROUND_SIZE}, so every reply sounds just like you. `
+      + `Stop any time; everything you show us is saved, and nothing here ever emails anyone. `
       + `<span class="share-tut-link"><a id="shareTutorialLink" role="button">Show me how this works</a></span>`;
     const link = document.getElementById("shareTutorialLink");
     if (link) link.addEventListener("click", () => startTutorial());
@@ -764,7 +763,7 @@ async function pollReviewOnce() {
   clearError();
   view = "review";
   render();
-  renderReadinessPanel(false); // hides the panel's own "Review what it's learned" link while already reviewing
+  renderReadinessPanel(false); // hides the panel's own "Review what we've learned" link while already reviewing
 }
 
 async function startReview() {
@@ -798,7 +797,9 @@ async function startReview() {
 
 function isAnswered(caseId) {
   const a = ANSWERS[caseId];
-  return !!a && a.decision_ok !== undefined && a.decision_ok !== null;
+  // A skip counts as handled: it leaves the stream (never re-shown) but the
+  // server records it skipped and the readiness score ignores it.
+  return !!a && (a.skipped === true || (a.decision_ok !== undefined && a.decision_ok !== null));
 }
 function currentUnanswered() { return CASES.filter((c) => !isAnswered(c.id)); }
 function pendingFor(caseId) {
@@ -848,7 +849,7 @@ function renderReadinessPanel(animate) {
   if (nAnswers && score < 90) {
     etaLine = rawNow >= 90
       ? ` (about ${Math.max(1, Math.ceil((90 * 20) / rawNow) - nAnswers)} more ratings to reach 90 if you keep agreeing at this rate)`
-      : " (right now the agent needs to earn more of your agreement, not just more ratings, to reach 90)";
+      : " (right now we need to earn more of your agreement, not just more ratings, to reach 90)";
   }
   // Owner ruling 2026-07-14: a "remember" correction merges straight into
   // this agent's instructions (the single living manual) instead of growing
@@ -864,7 +865,7 @@ function renderReadinessPanel(animate) {
   }));
   const changes = edits.concat(legacyMemory).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
   const autopilotLine = SHARE_MODE
-    ? "At 90+ the Navreo team can switch the agent on."
+    ? "At 90+ we start replying to your leads for you."
     : "At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.";
   // Review mode (owner request 2026-07-14): "go back through some of the old
   // scenarios and messaging, just to check that it's now been trained to
@@ -872,7 +873,7 @@ function renderReadinessPanel(animate) {
   // actually been rated, and not while already looking at the review list.
   const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
   const reviewLink = (answeredCount && view !== "review")
-    ? `<div class="rp-review-link"><a id="panelReviewBtn" role="button">Review what it's learned &rarr;</a></div>`
+    ? `<div class="rp-review-link"><a id="panelReviewBtn" role="button">Review what we've learned &rarr;</a></div>`
     : "";
 
   // Owner ruling 2026-08-17: the CLIENT portal shows just the running
@@ -884,10 +885,10 @@ function renderReadinessPanel(animate) {
         <div class="rp-top">
           <div class="rp-num-wrap"><span class="rp-num ${ready ? "ready" : ""}" id="rpNum">0</span><span class="rp-num-max">/ 90</span></div>
           <div class="rp-headline">
-            <div class="rp-label">${ready ? "Trained" : "Getting to 90"}</div>
+            <div class="rp-label">${ready ? "Ready" : "Getting to 90"}</div>
             <div class="rp-explain">${ready
-              ? "Your AI is trained and ready. Keep going if you'd like to sharpen it further."
-              : "Every rating moves this score. At 90, your AI is trained."}</div>
+              ? "We've got your voice down and we're ready to reply for you. Keep going to sharpen it further."
+              : "This score is how often we get the reply right first time: Correct nudges it up, Needs work holds it back. At 90 we've got your voice down and can reply for you."}</div>
           </div>
         </div>
         <div class="rp-bar-wrap">
@@ -980,7 +981,7 @@ function renderEmpty() {
   const el = document.getElementById("trainApp");
   el.innerHTML = `
     <div class="empty-flow">
-      <p>This agent has no training scenarios yet. You'll get a batch to rate, drawn from real replies your campaigns have received and topped up with practice scenarios when real ones run out - the agent makes its call on each one, and you say whether it was right. Nothing here ever emails a lead.</p>
+      <p>No scenarios to rate yet. You'll get a batch drawn from real replies your campaigns have received, topped up with practice ones when real replies run out - for each, we show the reply we'd send and you say whether it's right. Nothing here ever emails a lead.</p>
       <button class="btn primary" id="emptyGenerateBtn" type="button">Get scenarios to rate</button>
     </div>
   `;
@@ -995,9 +996,9 @@ function renderDone() {
     <div class="done-banner">
       <div class="db-icon">✓</div>
       <div><b>All caught up.</b></div>
-      <div class="db-msg">You've rated ${answeredCount} of ${CASES.length} scenarios for this agent. Get the next batch, drawn from real replies and topped up with practice scenarios when needed - everything you've taught it so far is applied to how it handles them, and any unrated scenarios always stay.</div>
+      <div class="db-msg">You've rated ${answeredCount} of ${CASES.length} scenarios. Get the next batch, drawn from real replies and topped up with practice scenarios when needed - everything you've shown us so far shapes how we handle them, and any unrated scenarios always stay.</div>
       <button class="btn primary" id="doneGenerateBtn" type="button">Get more scenarios</button>
-      ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">Review what it's learned</button>` : ""}
+      ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">Review what we've learned</button>` : ""}
     </div>
   `;
   document.getElementById("doneGenerateBtn").addEventListener("click", () => generateMore());
@@ -1021,20 +1022,20 @@ function renderRoundDone() {
   const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
   const scoreLine = total
     ? `<div class="round-score">${right} of ${total} right</div>
-       <div class="db-msg">Round ${roundNum} done - your AI got ${right} of ${total} right this round.</div>`
+       <div class="db-msg">Round ${roundNum} done - we got ${right} of ${total} right this round.</div>`
     : "";
 
   let msg, buttons;
   if (trained) {
-    msg = `Your AI has reached ${score} - past the 90 goal, so it's trained and ready. Everything you've taught it is saved. `
-        + `You can stop here${capped ? "." : " - or keep going if you'd like to sharpen it further."}`;
+    msg = `We're at ${score}, past the 90 goal - we've got your voice down and can reply for you. Everything you've shown us is saved. `
+        + `You can stop here${capped ? "." : " - or keep going to sharpen it further."}`;
     buttons = capped ? "" : `<button class="btn" id="doneGenerateBtn" type="button">Keep training (optional)</button>`;
   } else if (capped) {
-    msg = `That's a lot for one sitting - thank you! Your AI is at ${score} of the 90 goal. `
+    msg = `That's a lot for one sitting - thank you! We're at ${score} of the 90 goal. `
         + `We'll take it from here; come back any time with this same link to keep going.`;
     buttons = "";
   } else {
-    msg = `Your AI is at ${score} of the 90 goal. Another round will get it closer.`;
+    msg = `We're at ${score} of the 90 goal. Another round will get us closer.`;
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
   }
 
@@ -1044,7 +1045,7 @@ function renderRoundDone() {
       ${scoreLine}
       <div class="db-msg">${msg}</div>
       ${buttons}
-      ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what it's learned</button>` : ""}
+      ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what we've learned</button>` : ""}
     </div>
   `;
   const genBtn = document.getElementById("doneGenerateBtn");
@@ -1145,7 +1146,7 @@ function renderReviewCard(c) {
       </div>
       <div class="review-teach">
         <label>Teach it more (optional)</label>
-        <textarea class="review-teach-input" placeholder="Tell it what should have happened">${esc(teach.text || "")}</textarea>
+        <textarea class="review-teach-input" placeholder="Tell us what you'd change">${esc(teach.text || "")}</textarea>
         <button class="btn review-teach-btn" type="button">Teach it</button>
       </div>
     </div>
@@ -1192,12 +1193,12 @@ async function teachFromReview(caseId, textarea, btn) {
   clearError();
   textarea.value = "";
   delete REVIEW_TEACH[caseId];
-  protoNote("The agent will remember this");
+  protoNote("Got it - we'll reply that way from now on");
 }
 
 async function generateMore() {
   if (generating) return;
-  const restores = markGenerateButtonsBusy("Building new scenarios and running the agent on them - under a minute…");
+  const restores = markGenerateButtonsBusy("Building new scenarios and drafting our replies - under a minute…");
   generating = true;
   const baselineCount = CASES.length;
   // Share mode trains in rounds of ROUND_SIZE; a fresh batch = a fresh round
@@ -1236,9 +1237,12 @@ async function generateMore() {
 // "Back then" / "With today's brain" panes (renderReview), which have a
 // decision/decision_reason pair to describe but no case object of their own.
 function callLineForDecision(decision, reason) {
-  if (decision === "auto_send") return { cls: "g", text: `The agent's call: answer on its own. ${reason || ""}`.trim() };
-  if (decision === "review") return { cls: "a", text: `The agent's call: leave it to a human. ${reason || "It wants a person to look first."}` };
-  return { cls: "n", text: `The agent's call: leave it to a human, and it suggests no reply is needed. ${reason || ""}`.trim() };
+  // Clients never see the raw routing reason (e.g. "Meets every autopilot
+  // condition") - that would expose automation. Reasons show to the Navreo team only.
+  const why = SHARE_MODE ? "" : (reason || "");
+  if (decision === "auto_send") return { cls: "g", text: `Our call: send this reply. ${why}`.trim() };
+  if (decision === "review") return { cls: "a", text: `Our call: leave it to a person. ${why || (SHARE_MODE ? "" : "We'd want a person to look first.")}`.trim() };
+  return { cls: "n", text: `Our call: leave it to a person, and no reply is needed. ${why}`.trim() };
 }
 function callLineFor(c) { return callLineForDecision(c.decision, c.decision_reason); }
 
@@ -1257,7 +1261,7 @@ function renderCase(unanswered, i) {
   const outreachBody = hasOutreach
     ? `${outreach.subject ? `<div class="tr-subj">${esc(outreach.subject)}</div>` : ""}${msgText(outreach.body)}`
     : (c.synthetic
-        ? "<i>Practice scenario: an invented reply in the style your campaigns receive, so there is no original email behind it. The agent's call and draft below are real.</i>"
+        ? "<i>Practice scenario: an invented reply in the style your campaigns receive, so there is no original email behind it. The call and reply below are real.</i>"
         : "<i>The original outreach could not be loaded for this one.</i>");
 
   const humanHist = c.human_answer_history || {};
@@ -1278,7 +1282,7 @@ function renderCase(unanswered, i) {
       })()
     : `Rated ${answeredCount} of ${CASES.length} in this batch`;
   // Portal thread view (owner founding case 2026-08-17): when the case
-  // carries a thread, render it via the shared renderer — max 4 emails,
+  // carries a thread, render it via the shared renderer - max 4 emails,
   // we-sent / they-sent, lead always last. Pre-thread cases (generated
   // before this shipped) keep the legacy outreach+reply layout.
   const threadHtml = (typeof renderThreadHtml === "function") ? renderThreadHtml(c) : "";
@@ -1306,10 +1310,10 @@ function renderCase(unanswered, i) {
         <summary>How a human answered a similar moment</summary>
         <div class="tr-details-body">${humanHist.subject ? `<div class="tr-subj">${esc(humanHist.subject)}</div>` : ""}${msgText(humanHist.body)}</div>
       </details>` : ""}
-      <div class="tr-call ${call.cls}">${esc(call.text)}</div>
+      ${(SHARE_MODE && c.decision === "auto_send") ? "" : `<div class="tr-call ${call.cls}">${esc(call.text)}</div>`}
       ${hasDraft ? `
       <div class="tr-block">
-        <div class="tr-block-lab">The agent's draft reply</div>
+        <div class="tr-block-lab">The reply we'd send</div>
         <div class="qc-draft">${c.draft_html}</div>
       </div>` : ""}
     </div>
@@ -1317,19 +1321,20 @@ function renderCase(unanswered, i) {
     ${SHARE_MODE ? `
     <div class="train-verdict">
       <div class="grade-q">
-        <div class="grade-q-label">Is this how you'd handle it? <span class="grade-q-hint">The call and draft above, together.</span></div>
+        <div class="grade-q-label">Is this how you'd handle it? <span class="grade-q-hint">The call and reply above, together.</span></div>
         <div class="grade-btns" id="clientVerdictBtns">
           <button type="button" class="btn big-yes ${p.verdict === "correct" ? "sel" : ""}" data-v="correct">✓ Correct</button>
           <button type="button" class="btn big-no ${p.verdict === "needs_work" ? "sel" : ""}" data-v="needs_work">✍️ Needs work</button>
         </div>
       </div>
       <div class="field" id="clientReasonField">
-        <label>Something off? Tell it what you'd say instead</label>
-        <textarea id="trNote" placeholder="Your AI remembers this and replies that way from now on (needed for Needs work)">${esc(p.note || "")}</textarea>
+        <label>Something off? Tell us what you'd change (no need to write the whole reply)</label>
+        <textarea id="trNote" placeholder="Just say what you'd do differently. Word for word is a bonus, not needed. (Required for Needs work.)">${esc(p.note || "")}</textarea>
       </div>
       <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
       <div class="grade-nav">
         <button type="button" class="btn" id="trPrevBtn" ${i === 0 ? "disabled" : ""}>&lsaquo; Previous</button>
+        <button type="button" class="btn" id="trSkipBtn">Skip this one</button>
         <button type="button" class="btn" id="midGenerateBtn" style="display:none">Get more scenarios</button>
       </div>
     </div>` : `
@@ -1394,7 +1399,7 @@ function wireCaseEvents(c, unanswered, i) {
         const noteEl2 = document.getElementById("trNote");
         const noteVal = noteEl2 ? noteEl2.value.trim() : "";
         if (v === "needs_work" && !noteVal) {
-          showNudge("Tell it what you'd say instead in the box above - that's how it learns.");
+          showNudge("Just tell us what you'd change in the box above - that's how we learn your voice.");
           if (noteEl2) noteEl2.focus();
           return;
         }
@@ -1421,6 +1426,8 @@ function wireCaseEvents(c, unanswered, i) {
     if (noteEl) noteEl.addEventListener("input", () => { p.note = noteEl.value; });
     const prevBtn = document.getElementById("trPrevBtn");
     if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
+    const skipBtn = document.getElementById("trSkipBtn");
+    if (skipBtn) skipBtn.addEventListener("click", () => skipAndAdvance(c));
     const midGenBtn = document.getElementById("midGenerateBtn");
     if (midGenBtn && i === unanswered.length - 1) {
       midGenBtn.style.display = "";
@@ -1531,7 +1538,7 @@ function submitAndAdvance(c) {
     if (p.verdict === "needs_work") {
       const nEl = document.getElementById("trNote");
       if (nEl) p.note = nEl.value.trim();
-      if (!p.note) { showNudge("Tell it what you'd say instead - that's how it learns."); return; }
+      if (!p.note) { showNudge("Just tell us what you'd change - that's how we learn."); return; }
     }
   }
   if (p.decision_ok === undefined) { showNudge("Answer \"Right call?\" first."); return; }
@@ -1588,8 +1595,55 @@ function submitAndAdvance(c) {
 
     // Feature B: ANY feedback (a note, or a "No" on either question) kicks
     // off a background retrain of the remaining unanswered scenarios.
+    // In the client Training Wizard the retrain is merge-only (owner ruling
+    // 2026-08-20): it never re-drafts the round's other cards, so there is
+    // nothing to poll for or refresh and the "updating scenarios" notice would
+    // be misleading - the brief "Saving…" indicator already covers it. The
+    // owner/CSM trainer still runs the usual notice+poll.
     const retrainStatus = res.data && res.data.retrain;
-    if (retrainStatus === "started" || retrainStatus === "queued") startRetrainNotice();
+    if (!SHARE_MODE && (retrainStatus === "started" || retrainStatus === "queued")) startRetrainNotice();
+  });
+}
+
+/* Skip: record the current card as handled-but-neutral and move on (owner
+   ruling 2026-08-20). The server stores skipped:true - it triggers no retrain,
+   teaches nothing, and compute_readiness ignores it, so a skip never moves the
+   score; it only takes the card out of the queue. Mirrors submitAndAdvance's
+   optimistic advance + background POST, with an undo on failure. */
+function skipAndAdvance(c) {
+  if (IN_FLIGHT_ANSWERS.has(c.id)) return;
+  clearError();
+  hideNudge();
+  IN_FLIGHT_ANSWERS.add(c.id);
+  ANSWERS[c.id] = { decision_ok: null, reply_ok: null, note: "", scope: "one_off", skipped: true };
+  delete PENDING[c.id];
+  markSaving();
+
+  const unanswered = currentUnanswered();
+  if (!unanswered.length) { view = "done"; } else {
+    if (idx >= unanswered.length) idx = unanswered.length - 1;
+    view = "stream";
+  }
+  render();
+
+  const body = { agent_id: selectedAgentId, case_id: c.id, skipped: true };
+  if (SHARE_MODE) body.share = SHARE_TOKEN;
+  fetchJson("/api/setter/training/answer", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).then((res) => {
+    IN_FLIGHT_ANSWERS.delete(c.id);
+    unmarkSaving();
+    if (!res.ok) {
+      if (SHARE_MODE && res.status === 401) { renderShareExpired(); return; }
+      const prevCaseId = currentCaseId();
+      delete ANSWERS[c.id];
+      showError("Couldn't skip that one - it's back in your queue. " + res.error);
+      restoreViewAfterRefresh(prevCaseId);
+      return;
+    }
+    clearError();
+    applyReadiness((res.data && res.data.readiness) || READINESS, { animate: false });
   });
 }
 
@@ -1608,13 +1662,13 @@ let tutStep = 0;
 
 const TUT_STEPS = [
   { title: "Welcome!", cta: "Show me around",
-    body: () => `Your team has already set up ${shareAgentName} - your AI assistant. This is where you fine-tune it to reply to leads the way YOU would. It takes about 10 minutes, you can stop at any time, and nothing here ever emails a real person.`,
+    body: () => "We reply to your leads for you - here you show us how you'd handle them, so every reply sounds just like you. It takes about 10 minutes, you can stop any time, and nothing here ever emails a real person.",
     target: () => null },
-  { title: "Rate what it wrote", cta: "Next", advanceOnVerdict: true,
-    body: () => "Each card shows a conversation and your AI's draft reply. Two buttons: Correct if you'd send it, Needs work if not - then tell it what YOU would say, and it learns your voice. Try rating this one now, or hit Next.",
+  { title: "Rate our reply", cta: "Next", advanceOnVerdict: true,
+    body: () => "Each card shows a conversation and the reply we'd send for you - hit Correct if you'd send it too, or Needs work and just tell us what you'd change. Try one now, or hit Next.",
     target: () => document.querySelector(".train-verdict") || document.querySelector(".train-card") || document.getElementById("trainApp") },
   { title: "The finish line", cta: "Let's go",
-    body: () => "Every rating moves this score. Cards come in rounds of 10 - at 90 your AI is trained and you're done. Stop whenever you like: everything you teach it is saved as you go. Off you go!",
+    body: () => "Cards come in rounds of 5 - after each one we take in everything you've shown us and draw a fresh set. At 90 we've got your voice down, and everything you show us is saved so you can stop whenever you like.",
     target: () => document.getElementById("readinessPanelHost") },
 ];
 
