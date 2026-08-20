@@ -1047,6 +1047,7 @@ document.addEventListener('click',e=>{
 
 function fmtTime(u){try{const d=u?new Date(u):new Date();return d.toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'});}catch(e){return '';}}
 function addUpdate(note,updated){
+  if(note==='Copy updated')note='Your edits were saved';  // friendlier wording (Bjion 2026-08-20)
   const chip=document.createElement('div');
   chip.className='tchip';
   chip.innerHTML=`<span class="lt-dot"></span><span>${note?'<b>'+esc(note)+'</b>':'Updated from chat'} · ${fmtTime(updated)}</span><button class="tchip-x" aria-label="Dismiss">&#215;</button>`;
