@@ -13026,12 +13026,9 @@ def route_training_generate(payload):
             gen0 = dict(marker_doc.get("generating") or {})
             gen0.pop("generate_queued", None)
             gen0.pop("kind", None)
-            gen0.update({
-                "status": "running",
-                "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-                "batch_size": batch_size,
-            })
-            marker_doc["generating"] = gen0
+            marker_doc["generating"] = _merge_running_marker(
+                gen0, status="running", batch_size=batch_size,
+                started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
             _save_training(agent_id, marker_doc)
         except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
             lock.release()
@@ -13444,6 +13441,18 @@ def _training_retrain_threadmain(agent_id, lock, redraft=True):
             pass
 
 
+def _merge_running_marker(existing: dict, **fields) -> dict:
+    """Fresh 'running' marker that PRESERVES queued flags (retrain_queued /
+    generate_queued - unless the caller pops them first) while dropping the
+    PREVIOUS pass's transient result keys, so a failed batch's error can't
+    haunt the next pass's marker (fastloop 2026-08-20)."""
+    gen = dict(existing or {})
+    for k in ("error", "finished_at", "added", "rechecked", "updated", "stale_recovered"):
+        gen.pop(k, None)
+    gen.update(fields)
+    return gen
+
+
 def _flag_training_generate_queued(agent_id: str, batch_size: int, is_share_mode: bool):
     """Flagger-thread body for route_training_generate's lock-held branch
     (same off-request pattern as _flag_training_retrain_queued): when the
@@ -13486,12 +13495,9 @@ def _maybe_run_queued_generate(agent_id):
         marker_doc = _load_training(agent_id)
         gen0 = dict(marker_doc.get("generating") or {})
         gen0.pop("kind", None)
-        gen0.update({
-            "status": "running",
-            "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-            "batch_size": batch_size,
-        })
-        marker_doc["generating"] = gen0
+        marker_doc["generating"] = _merge_running_marker(
+            gen0, status="running", batch_size=batch_size,
+            started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
         _save_training(agent_id, marker_doc)
         _training_generate_worker(agent_id, agent,
                                   [str(c) for c in (agent.get("campaign_ids") or [])],
@@ -14124,13 +14130,9 @@ def route_training_recheck(payload):
             marker_doc = _load_training(agent_id)
             # Merge-preserve (2026-08-20): queued flags survive this marker
             # write like every other one - see the retrain worker's loop-top.
-            gen0 = dict(marker_doc.get("generating") or {})
-            gen0.update({
-                "status": "running", "kind": "recheck",
-                "started_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-                "count": count,
-            })
-            marker_doc["generating"] = gen0
+            marker_doc["generating"] = _merge_running_marker(
+                marker_doc.get("generating"), status="running", kind="recheck", count=count,
+                started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
             _save_training(agent_id, marker_doc)
         except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
             lock.release()
@@ -14204,8 +14206,8 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             # fulfilment.
             gen0 = dict(marker_doc.get("generating") or {})
             gen0.pop("retrain_queued", None)
-            gen0.update({"status": "running", "kind": "retrain", "started_at": started_at})
-            marker_doc["generating"] = gen0
+            marker_doc["generating"] = _merge_running_marker(
+                gen0, status="running", kind="retrain", started_at=started_at)
             _save_training(agent_id, marker_doc)
 
             updated = 0
