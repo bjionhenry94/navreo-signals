@@ -2881,6 +2881,84 @@ def _push_to_subsequence(campaign_id, lead_email: str, smartlead_lead_id, sub_se
         return False, str(e)[:300]
 
 
+def _recipient_addrs(*values) -> list:
+    """Flatten Smartlead recipient fields into a de-duped list of lowercased
+    bare email addresses. Accepts any mix of: a string ("a@b.com", or a display
+    form like "Name <a@b.com>", possibly comma/semicolon-separated), a list of
+    {"address"/"email": ...} dicts (Smartlead's cc / to / reply_details shape),
+    or a list of strings. Anything without an "@" is dropped. Order preserved,
+    first occurrence wins."""
+    out: list = []
+
+    def _add(a):
+        a = str(a or "").strip().lower()
+        mm = re.search(r"<([^>]+)>", a)
+        if mm:
+            a = mm.group(1)
+        a = a.strip().strip("<>").strip()
+        if "@" in a and a not in out:
+            out.append(a)
+
+    for v in values:
+        if v is None:
+            continue
+        if isinstance(v, str):
+            for part in re.split(r"[,;]", v):
+                if part.strip():
+                    _add(part)
+        elif isinstance(v, dict):
+            _add(v.get("address") or v.get("email"))
+        elif isinstance(v, (list, tuple)):
+            for it in v:
+                if isinstance(it, dict):
+                    _add(it.get("address") or it.get("email"))
+                else:
+                    _add(it)
+    return out
+
+
+def _reply_all_cc(row: dict) -> str:
+    """The `cc` string for Smartlead's reply-email-thread so a send REPLIES TO
+    ALL, not just the sender. When the lead CC'd colleagues on the reply we're
+    answering, a reply that goes to the sender alone silently drops those
+    colleagues off the thread (owner report 2026-08-18: the setter replied to
+    the sender only, so when the sender CC'd their team our answer never reached
+    them). This returns everyone who was on that reply - its cc plus any other
+    To recipients - minus our own sending mailbox(es) and the lead themselves,
+    as a comma-separated string. Returns "" when there's no one to add, which
+    preserves the original sender-only behaviour.
+
+    Sourced from the thread the row already carries (each message keeps its cc /
+    to since the 2026-08-18 hydrate change), so it costs no extra Smartlead
+    call. A row hydrated BEFORE that change simply has no cc/to on its thread
+    and falls back to sender-only - graceful, never wrong."""
+    thread = row.get("thread")
+    if not isinstance(thread, list) or not thread:
+        return ""
+    # Our own addresses = every mailbox we have SENT from in this thread. The
+    # reply's To is normally exactly one of these, so it drops out below and we
+    # never CC ourselves.
+    ours = set()
+    for m in thread:
+        if isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT":
+            fe = str(m.get("from_email") or "").strip().lower()
+            if fe:
+                ours.add(fe)
+    replies = [m for m in thread
+               if isinstance(m, dict) and str(m.get("type") or "").upper() == "REPLY"]
+    if not replies:
+        return ""
+    # The exact reply we're answering (matched by id), else the most recent one.
+    ids = {str(row.get("message_id") or ""), str(row.get("source_message_id") or "")} - {""}
+    target = next((m for m in replies if str(m.get("message_id") or "") in ids), None) or replies[-1]
+    lead = str(row.get("lead_email") or "").strip().lower()
+    cc: list = []
+    for a in _recipient_addrs(target.get("cc"), target.get("to")):
+        if a and a != lead and a not in ours and a not in cc:
+            cc.append(a)
+    return ", ".join(cc)
+
+
 def hydrate_lead(campaign_id, email: str, message_id: str):
     """Mirrors db/smartlead_daily_sync.ts's slGet('/leads/', {email}) + per-lead
     message-history usage, defensively (Smartlead's exact wrapper shape isn't
@@ -2912,6 +2990,12 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
             if not isinstance(m, dict):
                 continue
             frm = m.get("from") if isinstance(m.get("from"), dict) else {}
+            # reply_details (present on newer REPLY messages) carries the fullest
+            # recipient lists; the flat cc/to are the fallback. We keep both cc
+            # and to so a send can reply-ALL (see _reply_all_cc) - a lead that
+            # CC'd colleagues must get an answer that reaches them, not just the
+            # sender (owner report 2026-08-18).
+            rd = m.get("reply_details") if isinstance(m.get("reply_details"), dict) else {}
             norm.append({
                 "type": str(m.get("type") or "").upper(),
                 "time": m.get("time") or m.get("sent_time") or m.get("created_at"),
@@ -2924,6 +3008,8 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
                 # identity the history carries (from_name vanished from the
                 # API); _thread_sender_first resolves it to a person.
                 "from_email": (m.get("from") if isinstance(m.get("from"), str) else None) or frm.get("email"),
+                "cc": _recipient_addrs(m.get("cc"), rd.get("cc")),
+                "to": _recipient_addrs(m.get("to"), rd.get("to")),
             })
         norm.sort(key=lambda x: x["time"] or "")
         replies = [m for m in norm if m["type"] == "REPLY"]
@@ -4218,6 +4304,14 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
             "to_first_name": row.get("lead_first_name") or "",
             "add_signature": False,
         }
+        # Reply-to-ALL: keep every colleague the lead CC'd on this thread on the
+        # reply (owner report 2026-08-18). Sender-only silently dropped them,
+        # so a "please liaise with my colleague" reply never reached the
+        # colleague. Empty string => no one to add => Smartlead sends
+        # sender-only exactly as before.
+        cc = _reply_all_cc(row)
+        if cc:
+            body["cc"] = cc
         resp = _sl_post(f"/campaigns/{row.get('smartlead_campaign_id')}/reply-email-thread", body)
         ok = isinstance(resp, dict) and not resp.get("error")
         if not ok:
