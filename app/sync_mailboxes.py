@@ -146,7 +146,7 @@ def pull_all_mailboxes(smartlead_key: str):
 def pull_metrics(smartlead_key: str, start_date_str: str, end_date_str: str) -> list:
     url = (f"{SMARTLEAD_BASE}/analytics/mailbox/name-wise-health-metrics"
            f"?api_key={smartlead_key}&start_date={start_date_str}&end_date={end_date_str}&full_data=true")
-    attempts = 3
+    attempts = 4
     for attempt in range(1, attempts + 1):
         try:
             # full_data=true on a ~9k-mailbox account is SLOW server-side and got
@@ -170,8 +170,12 @@ def pull_metrics(smartlead_key: str, start_date_str: str, end_date_str: str) -> 
         except Exception as e:  # noqa: BLE001
             log(f"Metrics pull attempt={attempt}: fetch error ({e}), retrying")
         if attempt < attempts:
-            time.sleep(2)
-    raise RuntimeError("Failed to pull name-wise-health-metrics after 3 attempts")
+            # The endpoint 524s when it runs long (Cloudflare kills it ~100s), and
+            # the account's 200-req/min cap then 429s a fast retry. Wait a full
+            # minute so the rate window resets and any server-side cache of the
+            # heavy computation can be served fast on the next attempt.
+            time.sleep(60)
+    raise RuntimeError(f"Failed to pull name-wise-health-metrics after {attempts} attempts")
 
 
 # ---------- pull 3: ACTIVE-campaign attachment counts ----------
@@ -422,6 +426,7 @@ def main():
         mailbox_rows, stats_rows = [], []
         ws_pulled: dict = {}
         ws_failed: list = []
+        stats_skipped: set = set()   # workspaces whose metrics failed → stats not rewritten this run
         no_metrics_count = 0
         warmup_statuses_seen = set()
         for w in workspaces:
@@ -480,6 +485,8 @@ def main():
                     if mailbox_row["warmup_status"]:
                         warmup_statuses_seen.add(mailbox_row["warmup_status"])
                 ws_pulled[wid] = len(mailboxes)
+                if not metrics_ok:
+                    stats_skipped.add(wid)
             except Exception as we:  # noqa: BLE001 — a client-workspace failure must never kill the navreo sweep
                 if wid == "navreo":
                     raise
@@ -524,8 +531,15 @@ def main():
             s_total = verify_count("mailbox_stats_daily",
                                    f"stat_date=eq.{today_str}&workspace=eq.{wid}",
                                    supabase_url, supabase_key)
-            log(f"[{wid}] pulled={pulled} mailboxes_written_this_run={m_run} stats_total_today={s_total}")
-            if not (m_run == pulled and (s_total or 0) >= pulled):
+            skipped_stats = wid in stats_skipped
+            log(f"[{wid}] pulled={pulled} mailboxes_written_this_run={m_run} "
+                f"stats_total_today={s_total}"
+                f"{' (metrics unavailable this run — stats left at last-known)' if skipped_stats else ''}")
+            # caps/roster must reconcile; the stats count only needs to reconcile
+            # when we actually rewrote stats (a skipped-metrics workspace keeps its
+            # last-known stats and must NOT fail the run — the caps/roster refresh
+            # is the thing that matters for the capacity chart).
+            if not (m_run == pulled and (skipped_stats or (s_total or 0) >= pulled)):
                 ver_ok = False
 
         # Null-rate check (in-memory, matches what was written)
