@@ -197,8 +197,12 @@
    the control internals are unscoped; only the sidebar's sunken CARD framing
    stays scoped to .lead-panel. */
 .lead-panel .lp-cat { background: var(--bg-sunken); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 14px 15px; }
-.lead-panel .lp-cat .lp-label { margin-bottom: 10px; }
-.lp-cat-now { margin-bottom: 11px; }
+/* Label + current-category pill share a header row, pill pushed to the top
+   corner (owner ask 2026-08-22), matching the prototype - it no longer takes its
+   own stacked line above the tiles. */
+.lead-panel .lp-cat .lp-cat-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+.lead-panel .lp-cat .lp-cat-head .lp-label { margin-bottom: 0; }
+.lp-cat-now { margin-bottom: 0; }
 .lp-cat-now .pill { font-size: 11.5px; padding: 4px 11px; }
 .lp-cat-now .pill.n { background: #fff; border: 1px solid var(--line-2); }
 /* The dropdown+Update row wraps: when the panel is too narrow to hold both
@@ -4194,8 +4198,10 @@ function categoryControlInner(row, compact) {
   // still have a home; it just carries no standing explanatory paragraph.
   const hint = "";
   return `
-      <div class="lp-label">Lead category</div>
-      <div class="lp-cat-now">${catPill}</div>
+      <div class="lp-cat-head">
+        <div class="lp-label">Lead category</div>
+        <div class="lp-cat-now">${catPill}</div>
+      </div>
       ${(() => {
         const monitor = (row.workspace || "navreo") !== "navreo";
         // Segmented tiles (owner ask 2026-08-22): the two file-and-clear labels
