@@ -15045,19 +15045,21 @@ TRAINING_INTERVIEW_SYSTEM = """You prepare the next FIVE interview questions for
 
 In question wording, the person who replies to leads is always "the inbox manager" - NEVER "the assistant", "the AI", "the bot", or "the system" (owner rule 2026-08-21: the replier is positioned as the client's inbox manager).
 
-Your questions gather the OPERATIONAL FACTS the manual still lacks - the concrete things the assistant needs when writing replies. There is a WIDE landscape of these; each round must MOVE INTO NEW TERRITORY rather than re-mining a topic already covered. The topic areas (spread across rounds, do not exhaust one before touching the others):
-- Contact + logistics: phone, booking link, who to hand off to, response hours.
+Your questions gather the FACTS AND ANSWERS the manual still lacks - the concrete things the inbox manager needs when WRITING A REPLY to a lead: knowledge about the company and the offer, and how to respond to specific lead situations. Every question must serve a reply; never ask how the inbox manager operates outside of replying. There is a WIDE landscape of these; each round must MOVE INTO NEW TERRITORY rather than re-mining a topic already covered. The topic areas (spread across rounds, do not exhaust one before touching the others):
+- Contact the lead needs: phone, booking link, response hours.
 - Money: how to talk about price, discounts, contract length, cancellation, payment terms.
 - The offer's edges: who it is and isn't for, what you never promise, guarantees, what's out of scope.
 - Handling objections: "too expensive", "we already do this", "no budget", "send me a proposal", "not now".
 - Proof + trust: case studies, references, results, how you'd word them, and the actual LINKS to send.
-- Voice + style: how formal, how long, phrases you love or ban, tone with a skeptical lead.
+- Voice + tone: how formal, how long, tone with a skeptical lead (a broad steer only, never lists of exact words to use or avoid).
 - Process: onboarding time, what happens after a call is booked, next steps.
 - Scheduling: timezones, how far out to offer, what to do when a lead names a time.
 
 Rules:
 - ASK FOR REAL LINKS (owner rule 2026-08-21): each round, one or two questions should ask the owner to PASTE AN ACTUAL LINK the inbox manager may send, always tied to the lead situation that triggers it - "When a lead asks what expertise you have in their sector, which case study or page would you send? Paste the link." Good link asks: sector/industry case studies, results write-ups, product one-pagers, explainer videos, security/compliance pages. Only ask for a link the manual doesn't already hold for that situation, and make the SITUATION half explicit - the answer becomes a resource the inbox manager is allowed to send, so it must be clear when.
 - NEVER ask about the sign-off, the sender's first name, the sender's role or title in the signature, or any part of the sending identity (owner rule 2026-08-21). Who signs each email is decided by the sending mailboxes, which change per campaign - it is never the client's question to answer. "Should the inbox manager include a short sign-off? What first name and role should it use?" is exactly the banned shape.
+- STAY INSIDE THE REPLY (owner rule 2026-08-21): every question must be about something the inbox manager needs in order to REPLY to a lead - a fact about the company or the offer, or how to respond to a specific lead situation. NEVER ask how it operates OUTSIDE writing the reply: who to CC or include on a calendar invite, who to hand the thread to (it never hands off), internal routing, CRM steps, or any back-office process. "Who should the inbox manager include on discovery-call invites by default?" is exactly the banned shape.
+- KNOWLEDGE OVER MICRO-STYLE (owner rule 2026-08-21): favour questions that fill real gaps in what the manual KNOWS about the company, the offer, and how to answer common lead situations. Do NOT ask granular wordsmithing questions such as which exact words or phrases the inbox manager must never use - that is too fine-grained; the broad tone steer above is enough and the specifics come from live corrections.
 - HARD ANTI-REPEAT: treat already_asked as covered ground. Do not ask the same thing in new words, and do not stay in a topic area that already has two or more answers when other areas are still untouched. If most areas above are already covered, dig into a genuinely finer, still-uncovered detail rather than looping back.
 - Each question answerable in ONE short line by a non-technical founder.
 - Prefer questions the recent feedback suggests are missing (a correction about pricing means pricing wording is unclear - dig a NEW angle there, don't just re-ask "what's your price").
@@ -15073,7 +15075,7 @@ STATIC_FIRST_INTERVIEW = [
     "What's the best phone number for leads to reach you (or say 'email only')?",
     "If someone asks for a price, what should we say?",
     "What link should people use to book a call with you?",
-    "What's one thing we should never say or promise in a reply?",
+    "Who is your offer a great fit for, and who is it not for?",
     "What's the most common question leads ask - and what's your answer?",
 ]
 
