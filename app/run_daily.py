@@ -217,6 +217,30 @@ def main():
     except Exception as e:  # noqa: BLE001 — the sweep must never kill the run
         print(f"client windows · FAILED: {str(e)[:200]}")
 
+    # Capacity-recording freshness check — piggybacked on this always-scheduled
+    # Render cron because the standalone navreo-capacity-check cron isn't reliably
+    # provisioned in the blueprint (Bjion 2026-08-22: only 3 of the navreo crons
+    # exist as Render services; the capacity chart freezing for 4 days went
+    # unnoticed for exactly this reason). Runs once per day, after 07:00 UTC so
+    # the 04:30 sync + 05:15/06:00 cap engines have already recorded today; the
+    # once-a-day gate also de-dupes if the standalone cron ever does fire.
+    try:
+        now = datetime.utcnow()
+        if now.hour < 7:
+            print("capacity check · deferred (before 07:00 UTC — today's data not in yet)")
+        else:
+            import check_capacity_fresh  # noqa: E402
+            seen = server.sb("GET", "app_activity_log?select=ts&action=eq.capacity-check"
+                                    "&order=ts.desc&limit=1")
+            ran_today = bool(seen) and str(seen[0].get("ts", ""))[:10] == now.date().isoformat()
+            if ran_today:
+                print("capacity check · already ran today")
+            else:
+                rc = check_capacity_fresh.main()
+                print(f"capacity check · {'ok' if rc == 0 else 'ALARM — see activity feed / webhook'}")
+    except Exception as e:  # noqa: BLE001 — observability must never kill the run
+        print(f"capacity check · FAILED: {str(e)[:200]}")
+
 
 if __name__ == "__main__":
     main()
