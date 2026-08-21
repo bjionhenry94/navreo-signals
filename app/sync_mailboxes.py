@@ -149,10 +149,12 @@ def pull_metrics(smartlead_key: str, start_date_str: str, end_date_str: str) -> 
     attempts = 3
     for attempt in range(1, attempts + 1):
         try:
-            # full_data=true on an ~9k-mailbox account can take well over 60s to
-            # compute server-side (observed 20-90s+); give it generous headroom
-            # rather than the default 60s used for the paginated mailbox pulls.
-            status, text, _ = _request("GET", url, {"User-Agent": server.UA}, timeout=180)
+            # full_data=true on a ~9k-mailbox account is SLOW server-side and got
+            # slower as the fleet grew — it crossed the old 180s ceiling around
+            # 2026-08-17 and timed the whole sync out every run after (Bjion). Give
+            # it a very generous ceiling; the caller now treats a failure here as
+            # non-fatal, so this only needs to succeed often, not every time.
+            status, text, _ = _request("GET", url, {"User-Agent": server.UA}, timeout=600)
             if 200 <= status < 300:
                 import json as _json
                 try:
@@ -432,15 +434,26 @@ def main():
                 log(f"[{wid}] Pull 1 complete: {pages_fetched} pages fetched, "
                     f"{len(mailboxes)} unique mailboxes pulled")
 
-                # Pull 2
+                # Pull 2 — metrics are BEST-EFFORT. The name-wise-health-metrics
+                # endpoint (full_data=true) can take minutes on a ~9k-box account,
+                # and a timeout here used to re-raise and abort the ENTIRE sync
+                # (caps + roster included) — the exact failure that froze the fleet
+                # snapshot from 2026-08-17. Now a metrics failure only skips THIS
+                # workspace's mailbox_stats_daily write, leaving last-known metrics
+                # in place; the mailboxes mirror (caps/roster) still refreshes so
+                # the capacity chart and manager never go stale on a slow metrics call.
                 log(f"[{wid}] Pulling 30d name-wise health metrics ...")
-                metrics_list = pull_metrics(wkey, start_date_str, today_str)
-                log(f"[{wid}] Pull 2 complete: {len(metrics_list)} metrics entries returned")
-
-                metrics_map = {}
-                for entry in metrics_list:
-                    if entry and entry.get("from_email"):
-                        metrics_map[str(entry["from_email"]).lower()] = entry
+                metrics_ok, metrics_map = True, {}
+                try:
+                    metrics_list = pull_metrics(wkey, start_date_str, today_str)
+                    for entry in metrics_list:
+                        if entry and entry.get("from_email"):
+                            metrics_map[str(entry["from_email"]).lower()] = entry
+                    log(f"[{wid}] Pull 2 complete: {len(metrics_list)} metrics entries returned")
+                except Exception as me:  # noqa: BLE001 — metrics must never kill the caps/roster refresh
+                    metrics_ok = False
+                    log(f"[{wid}] WARNING: metrics pull FAILED ({me!r}) — writing caps/roster only; "
+                        "mailbox_stats_daily left at last-known values for this workspace")
 
                 # Pull 3
                 log(f"[{wid}] Pulling ACTIVE-campaign attachment counts (per-campaign email-accounts sweep) ...")
@@ -458,9 +471,10 @@ def main():
                     mailbox_row, stats_row, has_metrics = transform_mailbox(
                         m, metrics_map, campaign_counts, today_str, now_iso_str)
                     mailbox_row["workspace"] = wid
-                    stats_row["workspace"] = wid
                     mailbox_rows.append(mailbox_row)
-                    stats_rows.append(stats_row)
+                    if metrics_ok:            # only refresh stats when metrics landed —
+                        stats_row["workspace"] = wid  # else keep last-known sent_30d etc.
+                        stats_rows.append(stats_row)
                     if not has_metrics:
                         no_metrics_count += 1
                     if mailbox_row["warmup_status"]:
