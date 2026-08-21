@@ -17096,43 +17096,62 @@ _CLIENT_CAP_TTL_S = 600
 _CLIENT_CAP_HIST_KEY = "client_capacity_hist_v1"   # rolling per-day blob (deliverability_audit_cache)
 
 
-def _navreo_cap_from_sweep(sweep: dict, score: list) -> dict:
-    """Pure: membership sweep + scorecard -> today's navreo-workspace total and
-    per-client sending capacity. Σ REAL per-box caps; a box counts once per client
-    and once for the pool. Navreo Smartlead workspace only (its key backs the
-    sweep) — asteri/krg/grout keep the mailbox_stats_daily RPC path (Bjion,
-    2026-08-21: Navreo first, roll out to the others once its verdict lands)."""
-    cl_of, ws_of = {}, {}
+def _mirror_pool_caps() -> dict:
+    """{workspace: {cap, boxes}} = Σ GLOBAL message_per_day over boxes attached to a
+    campaign (campaign_count>0), from the mailboxes mirror. A PAUSE writes cap 0
+    HERE (the global cap), so this reflects pauses — the sweep's per-campaign cap
+    is a stale copy a pause never updates (Bjion 2026-08-21). Fast: one DB read."""
+    rows = sb_get_all("mailboxes?select=workspace,message_per_day,campaign_count") or []
+    out: dict = {}
+    for r in rows:
+        if (r.get("campaign_count") or 0) > 0:
+            ws = r.get("workspace") or "navreo"
+            e = out.setdefault(ws, {"cap": 0, "boxes": 0})
+            e["cap"] += r.get("message_per_day") or 0
+            e["boxes"] += 1
+    return out
+
+
+def _navreo_box_caps() -> dict:
+    """{lower(email): global message_per_day} for ATTACHED navreo boxes (a paused
+    box is 0 here), so a paused mailbox contributes 0 to its client's total."""
+    rows = sb_get_all("mailboxes?select=email,message_per_day,campaign_count&workspace=eq.navreo") or []
+    return {(r.get("email") or "").lower(): (r.get("message_per_day") or 0)
+            for r in rows if r.get("email") and (r.get("campaign_count") or 0) > 0}
+
+
+def _navreo_cap_from_sweep(sweep: dict, score: list, box_caps: dict, pool: dict) -> dict:
+    """Per-client navreo capacity: the sweep says which client(s) each box serves;
+    the CAP comes from box_caps (the mirror's global, pause-aware cap), NEVER the
+    sweep's stale per-campaign copy. Pool comes straight from the mirror."""
+    cl_of = {}
     for r in score:
-        cid = str(r.get("smartlead_campaign_id"))
-        ws = (r.get("workspace") or "navreo")
-        ws_of[cid] = ws
-        cl = (r.get("client") or "").strip()
-        if ws == "navreo" and cl and not cl.startswith("__"):
-            cl_of[cid] = cl
+        if (r.get("workspace") or "navreo") == "navreo":
+            cl = (r.get("client") or "").strip()
+            if cl and not cl.startswith("__"):
+                cl_of[str(r.get("smartlead_campaign_id"))] = cl
     clients: dict = {}
-    ws_cap = ws_boxes = 0
-    for _email, rec in (sweep.get("accounts") or {}).items():
-        cap = rec.get("cap") or 0
-        camps = [str(c) for c in (rec.get("camps") or [])]
-        if any(ws_of.get(c, "navreo") == "navreo" for c in camps):
-            ws_cap += cap
-            ws_boxes += 1
+    for email, rec in (sweep.get("accounts") or {}).items():
+        cap = box_caps.get(email)
+        if cap is None:                      # not attached in the mirror → skip
+            continue
         seen = set()
-        for cid in camps:
+        for cid in [str(c) for c in (rec.get("camps") or [])]:
             cl = cl_of.get(cid)
             if cl and cl not in seen:
                 seen.add(cl)
                 e = clients.setdefault(cl, {"cap": 0, "boxes": 0})
                 e["cap"] += cap
                 e["boxes"] += 1
-    return {"workspace": {"navreo": {"cap": ws_cap, "boxes": ws_boxes}}, "clients": clients}
+    return {"workspace": pool, "clients": clients}
 
 
 def _navreo_capacity_breakdown(force_fresh: bool = False) -> dict:
-    """Live breakdown from the membership sweep. force_fresh runs the sweep
-    synchronously (the daily cron); otherwise it uses the cached sweep and returns
-    {} until it warms — an API read must never block on a ~2-min sweep."""
+    """Every workspace's pool capacity (mirror, pause-aware) + navreo per-client
+    (sweep membership × mirror caps). The pools need no sweep; only per-client does.
+    force_fresh runs the sweep synchronously (daily cron); otherwise it uses the
+    cached sweep — pools are still returned even before the sweep warms."""
+    pool = _mirror_pool_caps()
     with _RESTORE_SWEEP_LOCK:
         sweep = _RESTORE_SWEEP["data"]
         fresh = sweep is not None and (time.time() - _RESTORE_SWEEP["ts"]) < _RESTORE_SWEEP_TTL_S
@@ -17143,12 +17162,13 @@ def _navreo_capacity_breakdown(force_fresh: bool = False) -> dict:
     if sweep is None:
         if not force_fresh:
             _restore_sweep_start()
-        return {}
+        return {"workspace": pool, "clients": {}} if pool else {}
     try:
         score = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,client,workspace") or []
+        box_caps = _navreo_box_caps()
     except Exception:  # noqa: BLE001 — capacity map is an enhancement, never a 500
-        return {}
-    return _navreo_cap_from_sweep(sweep, score)
+        return {"workspace": pool, "clients": {}} if pool else {}
+    return _navreo_cap_from_sweep(sweep, score, box_caps, pool)
 
 
 def _navreo_caps_live() -> dict:
@@ -17195,83 +17215,39 @@ def _cap_blob_upsert(today: str, workspace_updates: dict, client_updates: dict |
     _blob_snapshot_save(_CLIENT_CAP_HIST_KEY, hist)
 
 
-def _workspace_capacity(ws: str) -> dict:
-    """Σ distinct per-box daily caps over boxes on ACTIVE campaigns in own-workspace
-    client `ws` (asteri/krg/grout) — the whole workspace IS the client. Uses that
-    workspace's Smartlead key. {} if its roster can't be read reliably."""
-    try:
-        camps = _smartlead_json("GET", "/campaigns", workspace=ws) or []
-    except Exception:  # noqa: BLE001
-        return {}
-    active = [c for c in camps if c.get("status") == "ACTIVE"]
-    box_cap, skipped = {}, 0
-    for c in active:
-        rows = None
-        for _try in range(2):
-            try:
-                rows = _smartlead_json("GET", f"/campaigns/{c['id']}/email-accounts", timeout=90, workspace=ws)
-                break
-            except Exception:  # noqa: BLE001 — retry once, then skip this campaign
-                rows = None
-                time.sleep(1.0)
-        if rows is None:
-            skipped += 1
-            continue
-        for a in rows if isinstance(rows, list) else []:
-            e = (a.get("from_email") or "").lower()
-            if e:
-                box_cap[e] = a.get("message_per_day") or 0
-        time.sleep(0.35)
-    if active and skipped > max(5, len(active) // 7):
-        return {}
-    return {"cap": sum(box_cap.values()), "boxes": len(box_cap)}
-
-
 def snapshot_navreo_capacity() -> dict:
-    """Persist TODAY's navreo-workspace + per-client capacity (merge). Called at the
-    end of the reply-rate cap crons so the estimate tracks the caps just applied."""
+    """Persist TODAY's navreo pool + per-client capacity (merge). Called at the end
+    of the reply-rate cap crons so the estimate tracks the caps just applied."""
     bd = _navreo_capacity_breakdown(force_fresh=True)
-    if not bd or not bd.get("workspace"):
-        return {"ok": False, "error": "no sweep/capacity data"}
+    nav = (bd.get("workspace") or {}).get("navreo")
+    if not nav:
+        return {"ok": False, "error": "no capacity data"}
     today = _dtmod.date.today().isoformat()
-    _cap_blob_upsert(today, {"navreo": bd["workspace"]["navreo"]}, bd["clients"])
+    _cap_blob_upsert(today, {"navreo": nav}, bd.get("clients") or {})
     _CLIENT_CAP.update(data=bd, ts=time.time())
-    return {"ok": True, "date": today,
-            "navreo_workspace_cap": bd["workspace"]["navreo"]["cap"],
-            "clients": len(bd["clients"])}
+    return {"ok": True, "date": today, "navreo_workspace_cap": nav["cap"],
+            "clients": len(bd.get("clients") or {})}
 
 
 def snapshot_all_capacity(workspaces: list | None = None) -> dict:
-    """Persist TODAY's capacity for EVERY enabled workspace — navreo (pool +
-    per-client) plus the own-workspace clients asteri/krg/grout. Called from the
+    """Persist TODAY's capacity for EVERY workspace — each pool straight from the
+    mailboxes mirror (pause-aware), plus navreo per-client. Called from the
     federated mailbox sync so every workspace gets a real per-day row (navreo is
-    additionally refreshed by the cap crons). Sweeps each with its own key."""
-    if workspaces is None:
-        try:
-            workspaces = [w.get("id") for w in ws_enabled() if w.get("id")]
-        except Exception:  # noqa: BLE001
-            workspaces = list(_FLEET_CAP_WS)
-    today = _dtmod.date.today().isoformat()
-    ws_updates, client_updates, done = {}, None, {}
-    for ws in workspaces:
-        if ws == "navreo":
-            bd = _navreo_capacity_breakdown(force_fresh=True)
-            if bd and bd.get("workspace"):
-                ws_updates["navreo"] = bd["workspace"]["navreo"]
-                client_updates = bd["clients"]
-                done["navreo"] = bd["workspace"]["navreo"]["cap"]
-        else:
-            wc = _workspace_capacity(ws)
-            if wc:
-                ws_updates[ws] = wc
-                done[ws] = wc["cap"]
-    if not ws_updates:
+    additionally refreshed by the cap crons). One breakdown = all pools + clients;
+    no per-workspace Smartlead sweep."""
+    bd = _navreo_capacity_breakdown(force_fresh=True)
+    pools = bd.get("workspace") or {}
+    if not pools:
         return {"ok": False, "error": "no capacity data for any workspace"}
+    if workspaces is None:
+        workspaces = list(_FLEET_CAP_WS)
+    ws_updates = {ws: pools[ws] for ws in workspaces if ws in pools}
+    client_updates = bd.get("clients") if "navreo" in workspaces else None
+    today = _dtmod.date.today().isoformat()
     _cap_blob_upsert(today, ws_updates, client_updates)
-    if "navreo" in ws_updates and client_updates is not None:
-        _CLIENT_CAP.update(data={"workspace": {"navreo": ws_updates["navreo"]},
-                                 "clients": client_updates}, ts=time.time())
-    return {"ok": True, "date": today, "workspaces": done,
+    _CLIENT_CAP.update(data=bd, ts=time.time())
+    return {"ok": True, "date": today,
+            "workspaces": {ws: v["cap"] for ws, v in ws_updates.items()},
             "clients": len(client_updates or {})}
 
 
@@ -17307,21 +17283,22 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
     except Exception:  # noqa: BLE001 — history is an enhancement, never a 500
         hist = {}
     days = out.get("days") or []
-    live_ws = (live.get("workspace") or {}).get("navreo", {}).get("cap")
-    if days and (hist or live_ws is not None or live_clients):
+    live_pools = live.get("workspace") or {}          # every workspace's live pool (mirror, pause-aware)
+    if days and (hist or live_pools or live_clients):
         today = _dtmod.date.today().isoformat()
         cap = dict(out.get("capacity") or {})
-        # Overlay EVERY workspace's real recorded per-day capacity; anchor navreo
-        # today to the live sweep. Non-navreo today comes from the blob (the daily
-        # sync writes it — a per-request live sweep of every workspace is too slow).
+        # Overlay EVERY workspace's real recorded per-day capacity, and anchor
+        # TODAY to the live mirror pool — a pause zeroes the global cap there, so
+        # this reflects pauses and is never a carried-forward value.
         for ws in _FLEET_CAP_WS:
             arr = list(cap.get(ws) or [None] * len(days))
+            live_ws = (live_pools.get(ws) or {}).get("cap")
             for i, d in enumerate(days):
                 rec = hist.get(d)
                 hv = rec.get("workspace", {}).get(ws, {}).get("cap") if rec else None
                 if hv is not None:
                     arr[i] = hv
-                if d == today and ws == "navreo" and live_ws is not None:
+                if d == today and live_ws is not None:
                     arr[i] = live_ws                 # today is never carried forward
             cap[ws] = arr
         clients_all = set(live_clients)
