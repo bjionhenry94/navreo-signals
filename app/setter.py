@@ -10436,6 +10436,15 @@ _NOTION_BASE = "https://api.notion.com/v1"
 _NOTION_VERSION = "2022-06-28"
 _CRM_LINK_CACHE = {}              # email(lower) -> (fetched_at, url)
 _CRM_LINK_TTL = 1800.0           # 30 min - a row's page url never changes once made
+_CRM_SCHEMA_CACHE = {}            # db_id -> (fetched_at, (prop_name, prop_type))
+_CRM_SCHEMA_TTL = 3600.0         # 1 h - a CRM's column layout rarely changes
+# The Notion property that holds the lead's email, in preference order. Client
+# CRMs don't all name it "Email" of type email (team report 2026-08-20: the link
+# landed on the DB root because the hard-coded {"Email": email} filter matched
+# nothing), so we resolve the real column from the DB schema and fall back
+# through these names for text/title-typed columns.
+_CRM_EMAIL_NAMES = ("email", "e-mail", "email address", "contact email",
+                    "work email", "lead email", "prospect email")
 
 
 def _notion_db_id(url_or_id: str) -> str:
@@ -10450,10 +10459,132 @@ def _notion_db_id(url_or_id: str) -> str:
     return m.group(0) if m else ""
 
 
+def _crm_schema(db_id: str, key: str) -> dict:
+    """The client CRM's Notion property map {name: {type: ...}}, fetched once and
+    cached per db_id. {} on any failure (callers fall back to the email guess)."""
+    if not db_id or not key:
+        return {}
+    now = _time.time()
+    hit = _CRM_SCHEMA_CACHE.get(db_id)
+    if hit and (now - hit[0]) < _CRM_SCHEMA_TTL:
+        return hit[1]
+    props = {}
+    try:
+        resp = _HTTP("GET", f"{_NOTION_BASE}/databases/{db_id}",
+                     {"Authorization": f"Bearer {key}",
+                      "Notion-Version": _NOTION_VERSION}, timeout=12)
+        props = (resp.get("properties") or {}) if isinstance(resp, dict) else {}
+    except Exception:  # noqa: BLE001 - a schema miss falls back to the email guess
+        props = {}
+    if props:  # only cache a real answer; a transient miss must retry next time
+        _CRM_SCHEMA_CACHE[db_id] = (now, props)
+    return props
+
+
+def _crm_email_prop(db_id: str, key: str):
+    """(property_name, property_type) of the column that holds the lead's email
+    in this client CRM. Prefers a true email-typed column; else the first
+    text/title column whose name looks like an email field; else the historical
+    ("Email", "email") assumption so an old-style query still runs."""
+    props = _crm_schema(db_id, key)
+    # 1st choice: a genuine email-typed column (any name).
+    for name, meta in props.items():
+        if isinstance(meta, dict) and meta.get("type") == "email":
+            return name, "email"
+    # 2nd choice: a text/title column named like an email field.
+    for name, meta in props.items():
+        if not isinstance(meta, dict):
+            continue
+        ptype = meta.get("type")
+        if ptype in ("rich_text", "title") and \
+                name.strip().lower() in _CRM_EMAIL_NAMES:
+            return name, ptype
+    return "Email", "email"   # last-ditch: the historical assumption
+
+
+def _crm_title_prop(db_id: str, key: str) -> str:
+    """Name of the CRM's title column (the one Notion requires on create).
+    Falls back to "Lead-Name" (the house-template title) when the schema
+    can't be read."""
+    for name, meta in _crm_schema(db_id, key).items():
+        if isinstance(meta, dict) and meta.get("type") == "title":
+            return name
+    return "Lead-Name"
+
+
+def _crm_create_lead_row(db_id: str, key: str, email: str, ctx: dict) -> str:
+    """Create the lead's OWN row in the client CRM and return its page url, so
+    "Open in CRM" always lands on a card ready for notes even when the reply
+    pipeline hasn't written one yet (owner ask 2026-08-20). Only sets columns
+    that actually exist in this CRM and that we have a value for - the required
+    title, the email, and whatever of name/company/website we hold. Never
+    raises; "" on any failure keeps the database-root fallback link."""
+    email = (email or "").strip().lower()
+    if not db_id or not key or not email:
+        return ""
+    props = _crm_schema(db_id, key)
+    if not props:
+        return ""
+    by_type = {}   # type -> [names], for matching non-title columns by intent
+    for n, m in props.items():
+        if isinstance(m, dict):
+            by_type.setdefault(m.get("type"), []).append(n)
+    title_name = _crm_title_prop(db_id, key)
+    email_name, email_type = _crm_email_prop(db_id, key)
+
+    def _find(*wanted):
+        """First existing property whose name matches one of `wanted` (case/space
+        insensitive)."""
+        want = {w.replace(" ", "").lower() for w in wanted}
+        for n in props:
+            if n.replace(" ", "").lower() in want:
+                return n
+        return ""
+
+    first = str(ctx.get("first") or "").strip()
+    last = str(ctx.get("last") or "").strip()
+    name = (f"{first} {last}".strip()) or email.split("@", 1)[0]
+    domain = str(ctx.get("domain") or "").strip().lower()
+
+    payload = {}
+    # Title is mandatory on create.
+    payload[title_name] = {"title": [{"text": {"content": name[:200]}}]}
+    # Email column, in whatever type this CRM uses.
+    if email_type == "email":
+        payload[email_name] = {"email": email}
+    elif email_type == "title" and email_name != title_name:
+        payload[email_name] = {"title": [{"text": {"content": email}}]}
+    elif email_name != title_name:
+        payload[email_name] = {"rich_text": [{"text": {"content": email}}]}
+    # Optional context columns - only when present in this CRM.
+    comp_name = _find("Company Name", "Company")
+    if comp_name and domain and props.get(comp_name, {}).get("type") == "rich_text":
+        payload[comp_name] = {"rich_text": [{"text": {"content": domain}}]}
+    site_name = _find("Website", "Company Website")
+    if site_name and domain and props.get(site_name, {}).get("type") == "url":
+        payload[site_name] = {"url": f"https://{domain}"}
+    camp_name = _find("Campaign Name", "Campaign")
+    camp_val = str(ctx.get("campaign") or "").strip()
+    if camp_name and camp_val and props.get(camp_name, {}).get("type") == "rich_text":
+        payload[camp_name] = {"rich_text": [{"text": {"content": camp_val[:200]}}]}
+    try:
+        resp = _HTTP("POST", f"{_NOTION_BASE}/pages",
+                     {"Authorization": f"Bearer {key}",
+                      "Notion-Version": _NOTION_VERSION},
+                     {"parent": {"database_id": db_id}, "properties": payload},
+                     timeout=15)
+        if isinstance(resp, dict) and resp.get("url"):
+            return str(resp.get("url"))
+    except Exception:  # noqa: BLE001 - a create hiccup keeps the DB-root link
+        return ""
+    return ""
+
+
 def _crm_lead_page_url(db_id: str, email: str) -> str:
-    """The Notion page url for this lead's row in the client CRM (matched on
-    the Email property), or "" when there is no such row yet. Cached per email;
-    short timeout; never raises - a miss just leaves the database-root link."""
+    """The Notion page url for this lead's row in the client CRM, matched on
+    whichever column actually holds the email (resolved from the DB schema), or
+    "" when there is no such row yet. Cached per email; short timeout; never
+    raises - a miss just leaves the database-root link."""
     email = (email or "").strip().lower()
     if not db_id or not email:
         return ""
@@ -10465,14 +10596,28 @@ def _crm_lead_page_url(db_id: str, email: str) -> str:
     try:
         key = _KEYS.get("NOTION_API_KEY") or os.environ.get("NOTION_API_KEY") or ""
         if key:
-            resp = _HTTP("POST", f"{_NOTION_BASE}/databases/{db_id}/query",
-                         {"Authorization": f"Bearer {key}",
-                          "Notion-Version": _NOTION_VERSION},
-                         {"filter": {"property": "Email", "email": {"equals": email}},
-                          "page_size": 1}, timeout=12)
-            res = resp.get("results") if isinstance(resp, dict) else None
-            if isinstance(res, list) and res:
-                url = str(res[0].get("url") or "")
+            prop_name, prop_type = _crm_email_prop(db_id, key)
+            # Filter shape depends on the column type; text/title columns get an
+            # exact-equals try then a case-insensitive contains fallback (their
+            # equals is case-sensitive, whereas the email-typed filter is not).
+            attempts = []
+            if prop_type == "email":
+                attempts.append({"property": prop_name, "email": {"equals": email}})
+            elif prop_type == "title":
+                attempts.append({"property": prop_name, "title": {"equals": email}})
+                attempts.append({"property": prop_name, "title": {"contains": email}})
+            else:
+                attempts.append({"property": prop_name, "rich_text": {"equals": email}})
+                attempts.append({"property": prop_name, "rich_text": {"contains": email}})
+            for flt in attempts:
+                resp = _HTTP("POST", f"{_NOTION_BASE}/databases/{db_id}/query",
+                             {"Authorization": f"Bearer {key}",
+                              "Notion-Version": _NOTION_VERSION},
+                             {"filter": flt, "page_size": 1}, timeout=12)
+                res = resp.get("results") if isinstance(resp, dict) else None
+                if isinstance(res, list) and res:
+                    url = str(res[0].get("url") or "")
+                    break
     except Exception:  # noqa: BLE001 - a Notion hiccup keeps the DB-root link
         url = ""
     _CRM_LINK_CACHE[email] = (now, url)
@@ -10484,15 +10629,19 @@ def route_setter_crm_link_get(params):
     the client's "All Campaign Responses" Notion CRM so the sidebar's
     "Open in CRM" lands on the prospect card, ready to log notes, instead of
     the database root (team feedback 2026-08-19). Returns {url, db_url}: url is
-    "" when the row isn't there yet, and the sidebar keeps the db_url link.
-    Cheap Supabase lookup + one cached Notion query; never raises."""
+    the lead's own card. When the reply pipeline hasn't written a row yet, we
+    CREATE one on demand (owner ask 2026-08-20) so the link is never just the
+    database root; only if creation also fails does url stay "" and the sidebar
+    keep the db_url link. Cheap Supabase lookup + cached Notion calls; never
+    raises."""
     try:
         qid = _qp(params, "id", "")
         if not qid:
             return 400, {"error": "id is required"}
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(str(qid), safe='')}"
                           f"&{_list_ws_filter()}"
-                          "&select=lead_email,is_test,smartlead_campaign_id,workspace") if _SB else None
+                          "&select=lead_email,is_test,smartlead_campaign_id,workspace,"
+                          "lead_first_name,lead_last_name,company_domain") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
             return 404, {"error": "Queue row not found."}
@@ -10504,7 +10653,20 @@ def route_setter_crm_link_get(params):
         crm_url = (_client_context(slug).get("crm_url") or "").strip()
         if not crm_url:
             return 200, {"url": "", "db_url": ""}
-        url = _crm_lead_page_url(_notion_db_id(crm_url), email)
+        db_id = _notion_db_id(crm_url)
+        url = _crm_lead_page_url(db_id, email)
+        if not url:
+            # No row yet - make one so the link opens a real card, then cache it
+            # against the same per-email key the resolver reads.
+            key = _KEYS.get("NOTION_API_KEY") or os.environ.get("NOTION_API_KEY") or ""
+            created = _crm_create_lead_row(db_id, key, email, {
+                "first": row.get("lead_first_name"),
+                "last": row.get("lead_last_name"),
+                "domain": row.get("company_domain"),
+            })
+            if created:
+                url = created
+                _CRM_LINK_CACHE[email] = (_time.time(), url)
         return 200, {"url": url, "db_url": crm_url}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:200]}
