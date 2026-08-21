@@ -1335,6 +1335,43 @@ function renderTrend() {
   // scope, or null when it isn't separable (shared-workspace clients / no data).
   var capFull = (state.on.sent && sentBars) ? capacityDailyFull() : null;
   var capBars = capFull ? pick(slice(capFull)) : null;
+  // ── Best-guess fill for missing / near-zero days ──────────────────────────
+  // Weekends (and any gap day) send ~0, so their bars vanish and their rate
+  // points are null — the chart shows holes. Bjion (2026-08-22) prefers a
+  // best-guess estimate over an empty slot, so interpolate those days from their
+  // real neighbours and FLAG them speculative (hatched bars, dashed ceiling,
+  // hollow line dots). Nothing real is overwritten — only holes are filled.
+  function _med(a) { var f = a.filter(function (v) { return v != null && v > 0; }).sort(function (x, y) { return x - y; }); return f.length ? f[Math.floor(f.length / 2)] : 0; }
+  function _fill(arr, triv) {
+    var out = arr.slice(), mask = [], i, j;
+    for (i = 0; i < arr.length; i++) mask[i] = false;
+    if (!arr.some(function (v, k) { return !triv(v, k); })) return { vals: out, mask: mask, any: false };
+    for (i = 0; i < arr.length; i++) {
+      if (!triv(arr[i], i)) continue;
+      mask[i] = true; var lo = null, hi = null;
+      for (j = i - 1; j >= 0; j--) { if (!triv(arr[j], j)) { lo = j; break; } }
+      for (j = i + 1; j < arr.length; j++) { if (!triv(arr[j], j)) { hi = j; break; } }
+      out[i] = (lo != null && hi != null) ? arr[lo] + (arr[hi] - arr[lo]) * (i - lo) / (hi - lo)
+             : lo != null ? arr[lo] : arr[hi];
+    }
+    return { vals: out, mask: mask, any: mask.some(Boolean) };
+  }
+  var sentGuess = null, capGuess = null, rateMask = {};
+  if (sentBars) {
+    var _sm = _med(sentBars), _st = function (v) { return v == null || v < Math.max(5, 0.15 * _sm); };
+    sentGuess = _fill(sentBars, _st);
+    sentBars = sentGuess.vals.map(function (v) { return Math.round(v || 0); });
+  }
+  if (capBars) { capGuess = _fill(capBars, function (v) { return v == null || v === 0; }); capBars = capGuess.vals; }
+  // rate/bounce lines: a day is unreliable if null OR its send that day was
+  // trivial (a 1-of-17 send makes a 60% "reply rate"). Fill both from neighbours.
+  lineVis.forEach(function (k) {
+    if (!RAXIS[k]) return;
+    var g = _fill(data[k], function (v, ii) { return v == null || (sentGuess && sentGuess.mask[ii]); });
+    data[k] = g.vals; rateMask[k] = g.mask;
+  });
+  var anySpec = (sentGuess && sentGuess.any) || (capGuess && capGuess.any) ||
+                Object.keys(rateMask).some(function (k) { return rateMask[k].some(Boolean); });
   var capMode = !!(capBars && capBars.some(function (v) { return v; }));
   var L = 40, R = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
   var max = 1;
@@ -1371,6 +1408,8 @@ function renderTrend() {
   function YR(v) { return T + (1 - v / rmax) * ph; }
   function CAPY(v) { return T + (1 - v / AXCAP) * ph; }
   var s = "";
+  // hatch fill used to mark best-guess (speculative) days
+  if (anySpec) s += '<defs><pattern id="specfill" width="5" height="5" patternTransform="rotate(45)" patternUnits="userSpaceOnUse"><rect width="5" height="5" fill="var(--line-2)" opacity="0.35"/><line x1="0" y1="0" x2="0" y2="5" stroke="var(--ink-3)" stroke-width="1" opacity="0.4"/></pattern></defs>';
   // SENT bars first, so every line paints on top of them. In capacity mode each
   // bar fills toward that day's sending capacity (solid = sent, ghost = idle,
   // with a drawn ceiling); otherwise it's the faint own-scale bar.
@@ -1380,6 +1419,15 @@ function renderTrend() {
       var cap = capBars[ii];
       if (cap == null) return;
       var xb = X(ii) - bwc / 2, yCap = CAPY(cap), ySent = CAPY(v || 0);
+      var spec = (capGuess && capGuess.mask[ii]) || (sentGuess && sentGuess.mask[ii]);
+      if (spec) {
+        // best-guess day: one hatched bar to the estimated sent height, dashed ceiling
+        s += '<rect x="' + xb.toFixed(1) + '" y="' + ySent.toFixed(1) + '" width="' + bwc.toFixed(1) +
+          '" height="' + Math.max(0, T + ph - ySent).toFixed(1) + '" fill="url(#specfill)" rx="1.5"/>';
+        s += '<line x1="' + xb.toFixed(1) + '" y1="' + yCap.toFixed(1) + '" x2="' + (xb + bwc).toFixed(1) +
+          '" y2="' + yCap.toFixed(1) + '" stroke="var(--ink-3)" stroke-width="1.25" stroke-dasharray="3 2" opacity="0.7"/>';
+        return;
+      }
       s += '<rect x="' + xb.toFixed(1) + '" y="' + yCap.toFixed(1) + '" width="' + bwc.toFixed(1) +
         '" height="' + Math.max(0, ySent - yCap - 1.5).toFixed(1) + '" fill="var(--line-2)" rx="1.5"/>';
       s += '<rect x="' + xb.toFixed(1) + '" y="' + ySent.toFixed(1) + '" width="' + bwc.toFixed(1) +
@@ -1392,8 +1440,9 @@ function renderTrend() {
     sentBars.forEach(function (v, ii) {
       if (!v) return;
       var bh = (v / sentMax) * ph, bx = X(ii) - bw / 2, by = T + ph - bh;
+      var spec = sentGuess && sentGuess.mask[ii];
       s += '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) +
-        '" height="' + bh.toFixed(1) + '" fill="' + COL.sent + '" opacity="0.13" rx="1.5"/>';
+        '" height="' + bh.toFixed(1) + '" fill="' + (spec ? 'url(#specfill)' : COL.sent) + '"' + (spec ? '' : ' opacity="0.13"') + ' rx="1.5"/>';
     });
     s += '<text x="' + (L + 2) + '" y="' + (T + 10) + '" font-size="10" fill="' + COL.sent + '" opacity="0.75">bars: emails sent/day · peak ' + fmtN(sentMax) + '</text>';
   }
@@ -1426,6 +1475,10 @@ function renderTrend() {
         seg += (seg ? " " : "") + X(ii).toFixed(1) + "," + lastY.toFixed(1);
       });
       if (seg) s += '<polyline points="' + seg + '" fill="none" stroke="' + COL[k] + '" stroke-width="2"' + dash + ' stroke-linejoin="round" stroke-linecap="round"/>';
+      // hollow dots flag best-guess (interpolated) points on the rate/bounce line
+      if (rateMask[k]) rateMask[k].forEach(function (m, ii) {
+        if (m && data[k][ii] != null) s += '<circle cx="' + X(ii).toFixed(1) + '" cy="' + YR(data[k][ii]).toFixed(1) + '" r="2.4" fill="var(--card)" stroke="' + COL[k] + '" stroke-width="1.3"/>';
+      });
       if (lastY != null) ends.push({ k: k, x: X(n - 1), y: lastY });
       return;
     }
@@ -1453,7 +1506,8 @@ function renderTrend() {
   var sub = (capMode ? "Bars fill to each day's sending capacity — solid is sent, grey is idle headroom; lines are counts per day"
                      : state.on.sent && sentFull ? "Faint bars are emails sent each day; lines are counts per day"
                      : "Every line is a count per day") +
-    (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
+    (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".") +
+    (anySpec ? " Hatched bars and hollow dots are best-guess estimates for near-zero days (e.g. weekends)." : "");
   if (capMode) {
     var capTot = 0, sBarsTot = 0;
     capBars.forEach(function (v, ii) { if (v) { capTot += v; sBarsTot += (sentBars[ii] || 0); } });
