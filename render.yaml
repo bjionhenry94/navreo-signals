@@ -106,6 +106,20 @@ services:
     envVars:
       - fromGroup: navreo-secrets
 
+  # Daily proof the sending-capacity chart is recorded freshly + accurately.
+  # Runs AFTER the sync (04:30) + cap engines (05:15/06:00) so today's data has
+  # landed; alarms if the sync is stale, a workspace's snapshot is missing, or
+  # the mirror carries dead weight — the failure that froze the chart Aug 17-21.
+  - type: cron
+    name: navreo-capacity-check
+    runtime: python
+    plan: starter
+    schedule: "0 7 * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python app/check_capacity_fresh.py
+    envVars:
+      - fromGroup: navreo-secrets
+
   # Live-confirmed collision census (the double-tap bar's true number). One full
   # Smartlead leads-export per active campaign, held in memory — too heavy for
   # the web instance, where it OOM-crash-looped the 512MB box ~120s after every

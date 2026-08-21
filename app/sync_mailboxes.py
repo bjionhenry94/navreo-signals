@@ -400,6 +400,32 @@ def verify_count(table: str, filter_query: str | None, supabase_url: str, supaba
         return None
 
 
+def prune_stale_attached(now_iso, ws_pulled, ws_failed, supabase_url, supabase_key):
+    """Zero campaign_count for mirror rows NOT refreshed this run — boxes still
+    marked attached but gone from Smartlead, which inflate the pool totals
+    (upserts never delete). Only campaign_count is touched (drops them from
+    capacity); message_per_day is left as last-known. GUARDED: skip any workspace
+    whose pull looks truncated (< 70% of its current mirror rows) or that failed,
+    so a partial/failed fetch can NEVER zero live boxes (Sol step 3, 2026-08-22)."""
+    from urllib.parse import quote as _q
+    for wid, pulled in ws_pulled.items():
+        if wid in (ws_failed or []):
+            continue
+        total = verify_count("mailboxes", f"workspace=eq.{wid}", supabase_url, supabase_key)
+        if not total or pulled < 0.7 * total:
+            log(f"[{wid}] prune SKIPPED — pulled {pulled} < 70% of {total} mirror rows (treating as incomplete)")
+            continue
+        filt = f"workspace=eq.{wid}&campaign_count=gt.0&last_synced_at=lt.{_q(now_iso)}"
+        stale = verify_count("mailboxes", filt, supabase_url, supabase_key)
+        if not stale:
+            continue
+        try:
+            server.sb("PATCH", f"mailboxes?{filt}", {"campaign_count": 0})
+            log(f"[{wid}] pruned {stale} stale-attached mailbox(es) → campaign_count 0 (removed from capacity)")
+        except Exception as e:  # noqa: BLE001 — pruning is hygiene, never fail the sync on it
+            log(f"[{wid}] prune FAILED (non-fatal): {e}")
+
+
 # ---------- main ----------
 def main():
     log("=== Smartlead -> Supabase mailbox sync: START ===")
@@ -507,6 +533,11 @@ def main():
         total_batches = mailbox_batches + stats_batches
         log(f"Total batches written: {total_batches} (mailboxes={mailbox_batches}, "
             f"mailbox_stats_daily={stats_batches})")
+
+        # Prune dead weight: drop mailboxes gone from Smartlead out of capacity.
+        # Runs only after a successful write and is itself guarded per workspace.
+        log("Pruning stale-attached mailboxes (dead-box reconciliation) ...")
+        prune_stale_attached(now_iso_str, ws_pulled, ws_failed, supabase_url, supabase_key)
 
         # Verification — per workspace: filtered counts must equal that
         # workspace's own pulled count (a whole-table count would mix
