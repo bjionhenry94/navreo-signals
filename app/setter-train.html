@@ -572,14 +572,10 @@ async function bootShare() {
 function renderShareHeader() {
   const title = document.querySelector(".sh-title");
   if (title) title.textContent = "Teach us your voice";
+  // Owner ruling 2026-08-21: no explainer blurb under the title - the page
+  // opens clean. The first-visit tutorial still auto-runs once per token.
   const sub = document.querySelector(".train-sub");
-  if (sub) {
-    sub.innerHTML = `We reply to your leads for you - here you rate our drafts in rounds of ${ROUND_SIZE}, so every reply sounds just like you. `
-      + `Stop any time; everything you show us is saved, and nothing here ever emails anyone. `
-      + `<span class="share-tut-link"><a id="shareTutorialLink" role="button">Show me how this works</a></span>`;
-    const link = document.getElementById("shareTutorialLink");
-    if (link) link.addEventListener("click", () => startTutorial());
-  }
+  if (sub) sub.style.display = "none";
 }
 
 /* Full-page friendly state for an expired/invalid/tampered token - never
