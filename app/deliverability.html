@@ -3025,9 +3025,13 @@ function boot() {
     if (--_coreLeft > 0) return;
     _firstPaint = true; renderAll();
   }
-  // Safety: never sit on the empty shell — force the unified paint after 5s even
-  // if a core read hangs. Any stragglers repaint via scheduleRender once it fires.
-  setTimeout(function () { if (!_firstPaint) { _firstPaint = true; renderAll(); } }, 5000);
+  // Safety: never sit on the empty shell — force the unified paint after 12s even
+  // if a core read hangs. Set ABOVE the cold-load latency of /api/fleet-capacity
+  // (~8s the first time the server computes per-day caps, ~0.6s warm) so a cold
+  // load still paints capacity TOGETHER with the rest rather than tripping the
+  // backstop early and letting capacity pop in late. Any straggler past 12s
+  // repaints via scheduleRender once it fires.
+  setTimeout(function () { if (!_firstPaint) { _firstPaint = true; renderAll(); } }, 12000);
   jShared("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; coreSettled(); }, function () { coreSettled(); });
   jShared("/api/fleet-capacity?days=30").then(function (d) { CAP = d && !d.error ? d : null; coreSettled(); if (!CAP || !(CAP.client_caps && Object.keys(CAP.client_caps).length)) setTimeout(loadCAP, 12000); }, function () { coreSettled(); setTimeout(loadCAP, 12000); });
   jShared("/api/cockpit/insights").then(function (d) { INS = d; coreSettled(); }, function () { coreSettled(); });
