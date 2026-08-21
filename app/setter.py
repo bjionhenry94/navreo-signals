@@ -1789,7 +1789,7 @@ Rules:
 - LEAD-PROPOSED TIME (owner rule 2026-08-21, every SDR). When the lead names a specific time, day, or window themselves ("are you free Thursday at 3?", "a 30 min call later this week? Morning PST would work"), the two-times format above does NOT apply - answering their proposal with the generic "Would you be open to a call on ..." shape reads as not having read their email. Exactly two shapes: when the slots you were given fall inside what they asked for, ACCEPT plainly - "Yes, I'm free on {matching slot} or {second matching slot}, I'll share an invite now." (keep each time's own slot link when links exist; one matching slot means offer that one). When none of the given slots fit their window, COUNTER honestly - "Unfortunately I can't make that time, but I can do {slot 1} or {slot 2} - would either of those work?". Never pretend to a fit that isn't there, never ignore their stated window, and never invent a time outside the slots you were given.
 - ONE ASK, EVER (owner rule 2026-08-17: "You're asking for a call twice, don't do that"). A draft asks for the call at most once. The two-times call ask, a general-window proposal, and the "When would be a good time for us to talk?" availability ask are three ALTERNATIVES: exactly one may appear in a draft, never two. Each fallback-ladder step REPLACES the call ask, it never adds a second ask on top. A draft containing both "Would you be open to a call" and "When would be a good time" is invalid. Never write the call-ask sentence at all when you have no times to put in it. And never write the same sentence or phrase twice anywhere in one draft. A lead who has already said yes to a call, booked one, or shared THEIR OWN booking/scheduling link has chosen the path: confirm it (for their link: say you'll grab a time on it) and make ZERO fresh asks.
 - THE CTA IS A DIRECT ASK, NEVER PASSIVE (owner rule 2026-08-20, every SDR, outranks the agent's instructions). When the draft moves toward a call or a next step, ask for it outright: propose the two specific times when you have them, otherwise ask plainly for their availability by the fallback ladder. Never leave the decision hanging with a passive, opt-in CTA that puts the choice back on the lead - no "when you're ready you can book", "feel free to book if you'd like", "let me know if you'd like to", "should you wish to", "book in whenever suits you", "you're welcome to book if that's of interest". The ONLY exception is a lead who has EXPLICITLY declined or asked to reconnect later (not interested, "circle back in a couple of months", "reach out after Q3"): there the timing/constraint rule below governs - defer warmly to their timing, make NO push, and manufacture no call ask.
-- The names in the examples above (Donald, Parag, Priya, and the sign-off) are placeholders from OTHER teams' threads. Sign ONLY {SenderFirst} - never copy "Bjion" or any example name into a draft.
+- The names in the examples above (Donald, Parag, Priya, and the sign-off) are placeholders from OTHER teams' threads. Sign ONLY {SenderFirst} - never copy "Bjion" or any example name into a draft. The PRICING example's figures, terms, and specifics (a setup fee, a per-meeting fee, mailbox or send volumes, "at cost, no markup", and the like) are placeholders too - they belong to another team and must NEVER appear in a draft; pricing content comes ONLY from THIS agent's own instructions.
 - No em dashes anywhere, ever - use a comma or period instead.
 - No emoji.
 - Plain English, under 150 words total. The team's replies are short - do not pad.
@@ -4496,7 +4496,8 @@ def _finalize_row(row: dict) -> dict:
         try:
             threading.Thread(target=_enrich_on_reply,
                              args=(row["lead_email"], row.get("company_domain") or "",
-                                   row.get("workspace") or WORKSPACE),
+                                   row.get("workspace") or WORKSPACE,
+                                   row.get("smartlead_campaign_id")),
                              daemon=True).start()
         except Exception:  # noqa: BLE001 - enrichment must never block intake
             pass
@@ -10366,7 +10367,7 @@ def _getleads_enrich(email: str) -> dict:
         return {}
 
 
-def _enrich_on_reply(email: str, domain: str, workspace: str) -> None:
+def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) -> None:
     """Daemon-thread body: enrich ONE fresh replier, once ever. Writes the
     setter_lead_enrichment cache row (even on a miss - tried = never re-pay),
     fills the companies row's empty facts, and pops the lead-contact cache so
@@ -10393,6 +10394,20 @@ def _enrich_on_reply(email: str, domain: str, workspace: str) -> None:
                         else f"https://www.linkedin.com/in/{slug}"
             except Exception:  # noqa: BLE001
                 pass
+            # Fallback: Smartlead often holds the lead's LinkedIn even when our
+            # people table doesn't (owner find 2026-08-21 - mike@adverio.io
+            # NO_MATCHed on the bare email but matched instantly on the LinkedIn
+            # Smartlead already stored). A LinkedIn matches far more reliably than
+            # a bare email, so reach for Smartlead's before falling back to email.
+            if not linkedin:
+                try:
+                    resp = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
+                    lp = (resp.get("linkedin_profile") or "").strip() if isinstance(resp, dict) else ""
+                    if lp:
+                        linkedin = lp if lp.startswith("http") \
+                            else f"https://www.linkedin.com/in/{lp.strip('/')}"
+                except Exception:  # noqa: BLE001
+                    pass
             res = _getleads_enrich(email) or _prospeo_enrich(email, linkedin)
             comp = res.get("company") or {}
             # Bank real attempts only: a NO_MATCH is a real miss (never re-pay),
@@ -10774,7 +10789,8 @@ def route_lead_contact_get(params):
                     out["person"] = {"title": ptitle[:120]}
             if enr is None:
                 threading.Thread(target=_enrich_on_reply,
-                                 args=(email, domain or (out.get("website") or ""), workspace),
+                                 args=(email, domain or (out.get("website") or ""), workspace,
+                                       campaign_id),
                                  daemon=True).start()
             comp = _company_row(domain or (out.get("website") or ""))
             if comp:
