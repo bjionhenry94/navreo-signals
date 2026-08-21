@@ -153,6 +153,7 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
 .train-verdict { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
 .grade-q { margin: 0 0 18px; }
 .grade-q-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
+.sr-hidden-label { display: none; }
 .grade-btns { display: flex; gap: 10px; }
 .grade-btns .btn { flex: 1; justify-content: center; padding: 12px 14px; font-size: 13.5px; }
 .grade-btns .btn.sel.big-yes { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
@@ -1369,11 +1370,15 @@ function startTransitionPoll() {
   transitionStartedAt = Date.now();
   transitionPollHandle = setInterval(async () => {
     if (view !== "done") { stopTransitionPoll(); return; }
-    if (Date.now() - transitionStartedAt > 45 * 1000) {
+    // Hard cap (2026-08-21): never spin more than 12s. If the brain never
+    // produces a strictly-fresh card in that window (a stalled covers, a
+    // wedged retrain), force the next round open with whatever spares exist
+    // rather than trapping the trainer behind a spinner forever.
+    if (Date.now() - transitionStartedAt > 12 * 1000) {
       stopTransitionPoll();
       const spare = CASES.filter((c) => !isAnswered(c.id));
       if (!spare.length) { generateMore(); }
-      else { render(); } // open with what exists rather than blocking forever
+      else { unlockRoundDoneButton(); } // let them start with what exists
       return;
     }
     const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
@@ -1383,7 +1388,10 @@ function startTransitionPoll() {
     }
     mergeCasesSnapshot(res.data, { replaceUnanswered: true });
     const freshSpares = CASES.filter((c) => !isAnswered(c.id) && caseFresh(c));
-    if (freshSpares.length) { stopTransitionPoll(); if (view === "done") unlockRoundDoneButton(); }
+    // Open as soon as a fresh card lands, OR the brain has gone idle (its
+    // redraft is done - no point waiting for a freshness that won't come).
+    const idleNow = !(GENERATING && GENERATING.status === "running");
+    if (freshSpares.length || idleNow) { stopTransitionPoll(); if (view === "done") unlockRoundDoneButton(); }
   }, 1000);
 }
 
@@ -1779,17 +1787,20 @@ async function startNextRoundOrGenerate() {
     const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
     if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
     const spare = CASES.filter((c) => !isAnswered(c.id));
-    // Freshness is enforced HERE, the one door every entry point uses -
+    // Freshness is preferred HERE, the one door every entry point uses -
     // live-verify 2026-08-20: the >=90 "Keep training (optional)" button
-    // took the trained branch, which skipped the round gate and opened on
-    // drafts older than the note taught 2s earlier. Stale-only pool: hold
-    // the done screen and let the transition poll open it when the sweep
-    // lands.
+    // skipped the round gate and opened on drafts older than the note taught
+    // 2s earlier. But freshness must NEVER trap the trainer (live incident
+    // 2026-08-21: covers stalled behind the last answer, no fresh card ever
+    // appeared, "Start round" did nothing). So we WAIT only while a brain
+    // pass is genuinely still RUNNING; if it's idle and still nothing is
+    // fresh, the redraft already did what it could - open with the best
+    // spares we have rather than blocking. A slightly-stale draft beats a
+    // dead button.
     if (spare.length && !spare.some(caseFresh)) {
-      view = "done";
-      render();
-      startTransitionPoll();
-      return;
+      const running = (GENERATING && GENERATING.status === "running");
+      if (running) { view = "done"; render(); startTransitionPoll(); return; }
+      // idle + nothing fresh -> proceed to open with what exists (fall through)
     }
     if (spare.length) {
       stopPrefetchPoll();
@@ -1939,7 +1950,7 @@ function renderCase(unanswered, i) {
         <summary>How a human answered a similar moment</summary>
         <div class="tr-details-body">${humanHist.subject ? `<div class="tr-subj">${esc(humanHist.subject)}</div>` : ""}${msgText(humanHist.body)}</div>
       </details>` : ""}
-      ${(SHARE_MODE && c.decision === "auto_send") ? "" : `<div class="tr-call ${call.cls}">${esc(call.text)}</div>`}
+      ${SHARE_MODE ? "" : `<div class="tr-call ${call.cls}">${esc(call.text)}</div>`}
       ${hasDraft ? (SHARE_MODE ? `
       <div class="tr-block">
         <div class="tr-block-lab">The reply we'd send</div>
@@ -1957,7 +1968,7 @@ function renderCase(unanswered, i) {
     ${SHARE_MODE ? `
     <div class="train-verdict">
       <div class="grade-q">
-        <div class="grade-q-label">Is this how you'd handle it? <span class="grade-q-hint">Correct = we send replies like this. Needs work = tell us or show us, and we learn right away.</span></div>
+        <div class="grade-q-label">Is this how you'd handle it?</div>
         <div class="grade-btns" id="clientVerdictBtns">
           <button type="button" class="btn big-yes ${p.verdict === "correct" ? "sel" : ""}" data-v="correct" ${p.edited_body ? "disabled" : ""}>✓ Correct</button>
           <button type="button" class="btn big-no ${p.verdict === "needs_work" ? "sel" : ""}" data-v="needs_work">✍️ Needs work</button>
@@ -1965,12 +1976,10 @@ function renderCase(unanswered, i) {
         <div class="correct-blocked-hint" id="correctBlockedHint" style="display:${p.edited_body ? "" : "none"}">You've changed the reply - pick Needs work so we learn from your version.</div>
       </div>
       <div class="field" id="clientReasonField">
-        <label id="trNoteLabel">${p.edited_body
-          ? "Anything else? Your rewrite already teaches us - add a note only if you want."
-          : "Something off? Tell us what you'd change (no need to write the whole reply)"}</label>
+        <label id="trNoteLabel" class="sr-hidden-label"></label>
         <textarea id="trNote" placeholder="${p.edited_body
           ? "Optional - your edited reply is the feedback."
-          : "Just say what you'd do differently. Word for word is a bonus, not needed. (Required for Needs work.)"}">${esc(p.note || "")}</textarea>
+          : "Tell us what you'd change, or rewrite the reply above."}">${esc(p.note || "")}</textarea>
       </div>
       <div class="small" id="trNudge" style="display:none;color:var(--amber,#9a6a00);margin-bottom:6px"></div>
       <div class="grade-nav">
@@ -2068,14 +2077,10 @@ function wireCaseEvents(c, unanswered, i) {
           : `✏️ Not quite right? Click the reply and rewrite it your way - we learn from your version.`;
         wireRevert();
       }
-      const noteLabel = document.getElementById("trNoteLabel");
       const noteEl3 = document.getElementById("trNote");
-      if (noteLabel) noteLabel.textContent = edited
-        ? "Anything else? Your rewrite already teaches us - add a note only if you want."
-        : "Something off? Tell us what you'd change (no need to write the whole reply)";
       if (noteEl3) noteEl3.placeholder = edited
         ? "Optional - your edited reply is the feedback."
-        : "Just say what you'd do differently. Word for word is a bonus, not needed. (Required for Needs work.)";
+        : "Tell us what you'd change, or rewrite the reply above.";
       if (edited && p.verdict === "correct") { p.verdict = undefined; clientWrap.querySelectorAll("button").forEach((b) => b.classList.remove("sel")); }
     };
     if (draftEl) {
