@@ -13473,7 +13473,7 @@ def _log_synthetic_usage(agent_id: str, count: int, trigger: str, is_share_mode:
         pass
 
 
-def _recycle_bank_cases(agent, doc, count, start_idx):
+def _recycle_bank_cases(agent, doc, count, start_idx, allow_unanswered=False):
     """Bank wrap-around (owner ruling 2026-08-20): clone the next `count`
     ANSWERED root scenarios in original order (recycle_cursor wraps
     forever), give each clone a new id + recycled_from lineage, and re-run
@@ -13487,6 +13487,16 @@ def _recycle_bank_cases(agent, doc, count, start_idx):
         answers = dict(doc.get("answers") or {})
         roots = [c for c in (doc.get("cases") or [])
                  if not c.get("recycled_from") and _is_case_answered(c.get("id"), answers)]
+        # Answered roots carry the trainer's signal and are preferred. But when
+        # nothing is answered yet (or the answered set is momentarily empty) and
+        # the synthetic pool has run dry, allow_unanswered lets the caller wrap
+        # ANY original scenario so a round is still filled by re-drafting rather
+        # than failing with "couldn't generate any more scenarios" (owner
+        # report 2026-08-21, final-test agent dead-ended at round 3). Only the
+        # post-assembly top-up passes this; the pre-invention recycle stays
+        # answered-only so invention still runs for fresh variety.
+        if not roots and allow_unanswered:
+            roots = [c for c in (doc.get("cases") or []) if not c.get("recycled_from")]
         if not roots or count <= 0:
             return [], None
         train_agent = {**agent, "mode": "autopilot", "enabled": True}
@@ -13760,7 +13770,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                     doc["recycle_cursor"] = recycle_cursor
                 _topup, _topup_cursor = _recycle_bank_cases(
                     agent, doc, batch_size - _produced,
-                    start_idx=len(existing_cases) + _produced)
+                    start_idx=len(existing_cases) + _produced, allow_unanswered=True)
                 if _topup:
                     recycled_cases = list(recycled_cases) + _topup
                     recycle_cursor = _topup_cursor
