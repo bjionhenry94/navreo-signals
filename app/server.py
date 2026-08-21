@@ -8585,41 +8585,6 @@ def _demo_cockpit_detail(cid):
     }
 
 
-def _demo_perf_daily(campaign, days):
-    """Per-day series for a demo Acme campaign's detail graph — matches perf_daily's
-    shape (days + sent/leads_added/positives/meetings/reply_rate/bounce_rate arrays)."""
-    c = _DEMO_ACME_BY_ID.get(str(campaign or ""))
-    try:
-        n = max(7, min(120, int(days or 30)))
-    except (TypeError, ValueError):
-        n = 30
-    today = _dtmod.datetime.now(_dtmod.timezone.utc).date()
-    dates = [(today - _dtmod.timedelta(days=n - 1 - i)).isoformat() for i in range(n)]
-    if not c:
-        return {"days": dates, "campaign": campaign, "sent": [None] * n, "leads_added": [None] * n,
-                "positives": [None] * n, "meetings": [None] * n, "reply_rate": [None] * n,
-                "bounce_rate": [None] * n}
-    share = c["sent"] / float(sum(x["sent"] for x in _DEMO_ACME))
-    base = max(1, round(_DEMO_ACME_WINDOW_30D["sent"] * share / 30.0))
-    sent = [0 if (i % 7) in (5, 6) else round(base * (0.8 + 0.4 * ((i % 5) / 4.0))) for i in range(n)]
-    leads_added = [round(s * 0.92) for s in sent]
-    positives = [0] * n
-    for j in range(max(1, round(c["positives"] * 0.5))):
-        k = (j * 3 + 2) % n
-        if sent[k]:
-            positives[k] += 1
-    meetings = [0] * n
-    for j in range(max(0, round((c.get("meetings") or 0) * 0.5))):
-        k = (j * 5 + 4) % n
-        if sent[k]:
-            meetings[k] += 1
-    reply_rate = [1.5 if s else None for s in sent]
-    bounce_rate = [1.8 if s else None for s in sent]
-    return {"days": dates, "campaign": campaign, "sent": sent, "leads_added": leads_added,
-            "positives": positives, "meetings": meetings, "reply_rate": reply_rate,
-            "bounce_rate": bounce_rate}
-
-
 def _demo_who_replies(days):
     """Full 'Who actually replies?' payload for the Acme demo — role/size mix, answer
     speed and subsequence stats — so the Analytics reply lane looks like a real client's."""
@@ -8780,222 +8745,6 @@ def _campaign_source_ids(smartlead_id) -> list:
             if str(s.get("campaign_id") or "") in draft_ids and s.get("id")]
 
 
-# ── Per-day performance series (campaigns homepage graph) ──────────────────
-# FIVE per-day series, each from its REAL Supabase store (nothing estimated):
-#   sent        — sent_messages archive by sent_at UTC date
-#   leads_added — signal_leads by pulled_at UTC date (scoped to the campaign's
-#                 source ids when a campaign is selected)
-#   positives   — replies in POSITIVE_CATEGORIES by replied_at UTC date
-#   meetings    — Call Booked ONLY (a Meeting Request is never a meeting).
-#                 Calendly-synced rows (raw.source='calendly') count one per
-#                 booking DAY at true booking time; legacy-only leads count
-#                 once, dated by their first Call Booked reply (one per person —
-#                 reply-row counting inflated chatty threads)
-#   reply_rate  — fleet: mailbox_stats_daily 30d rolling; per-campaign: 30d
-#                 trailing replies÷sent over the archive (bounded, campaign-scoped)
-# Accepts days (7/30/90/…) OR explicit start/end, plus an optional campaign
-# (smartlead_campaign_id; absent/"all" = fleet). A series with no data in the
-# window is an all-null (labelled ABSENT) line; a real zero-activity day inside
-# an active run stays 0 — the two never get confused. Bounce is still returned
-# for any other consumer but the homepage graph no longer plots it.
-def perf_daily(p: dict) -> dict:
-    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
-    today = _dt.now(_tz.utc).date()
-    end = today
-    start = None
-    s_in, e_in = p.get("start"), p.get("end")
-    if s_in and e_in:
-        try:
-            start = _dt.fromisoformat(str(s_in)[:10]).date()
-            end = _dt.fromisoformat(str(e_in)[:10]).date()
-        except Exception:  # noqa: BLE001
-            start = None
-    if start is None:
-        try:
-            days = max(7, min(120, int(p.get("days") or 30)))
-        except Exception:  # noqa: BLE001
-            days = 30
-        start = end - _td(days=days - 1)
-    if end < start:
-        start, end = end, start
-    ndays = (end - start).days + 1
-    dates = [(start + _td(days=i)).isoformat() for i in range(ndays)]
-
-    camp_raw = p.get("campaign")
-    campaign = str(camp_raw).strip() if camp_raw not in (None, "", "all", "All") else None
-    src_ids = _campaign_source_ids(campaign) if campaign else None
-    cw_sent: dict = {}  # fleet-sent override map, filled in the fleet branch below
-
-    # DB-side aggregation (rpc/…_v2) = one exact row per day, no client-side
-    # pagination. p_source_ids scopes leads_added to the campaign's sources.
-    rows = sb("POST", "rpc/perf_daily_series_v2",
-              {"p_start": start.isoformat(), "p_end": end.isoformat(),
-               "p_campaign": campaign, "p_source_ids": src_ids})
-    if not isinstance(rows, list):
-        return {"error": "Supabase read failed", "days": dates, "campaign": campaign,
-                "sent": [None] * ndays, "leads_added": [None] * ndays,
-                "positives": [None] * ndays, "meetings": [None] * ndays,
-                "reply_rate": [None] * ndays, "bounce_rate": [None] * ndays}
-
-    by = {r.get("d"): r for r in rows if r.get("d")}
-    def col(name):
-        return {d: _sc_int(by.get(d, {}).get(name)) for d in dates}
-    sent_m, pos_m, mtg_m, la_m = col("sent"), col("positives"), col("meetings"), col("leads_added")
-
-    def bounded(m):
-        # real count (incl 0) between the first and last active day IN the visible
-        # window; null outside (unknown); all-null when the series never fires —
-        # that's the labelled ABSENT line, never a fabricated zero.
-        active = [d for d in dates if m.get(d, 0) > 0]
-        if not active:
-            return [None] * ndays
-        lo, hi = min(active), max(active)
-        return [(m.get(d, 0) if lo <= d <= hi else None) for d in dates]
-
-    # Fleet ("All campaigns") sent / reply-rate / positives come from the
-    # PERMANENT day-by-day record in Supabase — fleet_daily_stats, sourced from
-    # Smartlead's own day-wise analytics (same source as the deliverability tab),
-    # backfilled and refreshed daily by the mailbox-sync cron. Full history (the
-    # old mailbox_stats_daily snapshot method only reached back to the first sweep,
-    # 2026-07-08, which is why Campaigns showed nothing older than the 9th).
-    # A day Smartlead reports 0 sent for is a real 0; a day with no stored row is
-    # null (absent). If the table isn't populated yet (pre-backfill), fall back to
-    # the live deliverability series so the graph never blanks. A single campaign
-    # has no fleet-analytics dimension → sent stays on the sent_messages archive,
-    # positives on the replies table, reply-rate absent (no reliable denominator).
-    if campaign:
-        sent = bounded(sent_m)
-        positives = bounded(pos_m)
-        reply_rate = [None] * ndays
-        bounce_rate = [None] * ndays
-    else:
-        frows = sb("GET", ("fleet_daily_stats?select=stat_date,sent,replies,positives,bounced,reply_rate"
-                           f"&stat_date=gte.{start.isoformat()}&stat_date=lte.{end.isoformat()}"))
-        fmap = {r.get("stat_date"): r for r in (frows or []) if isinstance(r, dict)}
-        if fmap:
-            def _fg(field):
-                return [(fmap[d].get(field) if (d in fmap and fmap[d].get(field) is not None) else None) for d in dates]
-            sent = [int(v) if v is not None else None for v in _fg("sent")]
-            positives = [int(v) if v is not None else None for v in _fg("positives")]
-            # A % needs a real denominator: on a near-idle day (weekend dribble)
-            # replies land against a handful of sends and the stored "rate" reads
-            # 30%+ (2026-07-18: 6 replies / 16 sent = 37.5). Below the floor the
-            # day is null — a labelled "no data" gap, never a fake spike. Raw
-            # counts in fleet_daily_stats stay untouched.
-            RATE_MIN_SENT = 1000
-            _rr = _fg("reply_rate")
-            reply_rate = [(float(_rr[i]) if (_rr[i] is not None and (sent[i] or 0) >= RATE_MIN_SENT) else None)
-                          for i in range(ndays)]
-            bounce_rate = [(round(int(fmap[d]["bounced"]) * 100.0 / int(fmap[d]["sent"]), 2)
-                            if (d in fmap and int(fmap[d].get("sent") or 0) >= RATE_MIN_SENT) else None)
-                           for d in dates]
-        else:
-            # Table not populated yet → live deliverability series (Smartlead day-wise).
-            lookback = min(90, max(7, (today - start).days + 1))
-            _tr, _ = deliv_trends_get(lookback)
-            _ser = (_tr or {}).get("series") or {}
-            _days = _ser.get("days") or []
-            _sm = dict(zip(_days, _ser.get("sent") or []))
-            _rm = dict(zip(_days, _ser.get("reply_pct") or []))
-            _bm = dict(zip(_days, _ser.get("bounce_pct") or []))
-            sent = [_sm.get(d) for d in dates]
-            reply_rate = [_rm.get(d) for d in dates]
-            bounce_rate = [_bm.get(d) for d in dates]
-            positives = bounded(pos_m)
-        # Fleet SENT truth (consolidation 2026-08-02): fleet_daily_stats is
-        # navreo-workspace-only, but the client-windows sweep already carries
-        # an every-workspace daily sent line (series.__all — the same series
-        # the analytics page draws). When that blob is warm, its days override
-        # the navreo-only numbers day-for-day; days outside its 30-day window
-        # (and a cold blob) keep the fleet_daily_stats fallback. Weekend
-        # stripping below applies unchanged.
-        try:
-            # Panel fix (BE-2 HIGH, 2026-08-02): after a restart nothing had
-            # restored the blob before this read, so every post-boot perf-daily
-            # silently degraded to Navreo-only numbers (9-18% undercount) until
-            # someone opened the analytics page. The restore is a no-op when warm.
-            _client_win_restore()
-            _cw = _CLIENT_WIN.get("data") or {}
-            _cw_all = (_cw.get("series") or {}).get("__all") or {}
-            cw_sent = {d: v for d, v in zip(_cw.get("days") or [], _cw_all.get("sent") or [])
-                       if v is not None}
-            # Completeness gate (panel FE-1, 2026-08-02): the builder deletes
-            # incomplete series before persisting, but a restored older blob
-            # has no such guarantee — mirror deliverability.html's cwTrusted gate:
-            # refuse a daily line whose sum is materially short of the same
-            # blob's verified 30d window total (a 429-burst sweep once shipped
-            # ~10% of the true fleet as a plausible-looking series).
-            _w30 = ((_cw.get("windows") or {}).get("30") or {}).get("__all") or {}
-            if _w30.get("sent") and sum(v or 0 for v in cw_sent.values()) < 0.8 * _w30["sent"]:
-                cw_sent = {}
-        except Exception:  # noqa: BLE001 — the override is best-effort, never a 500
-            cw_sent = {}
-        if cw_sent:
-            sent = [cw_sent.get(d, sent[i]) for i, d in enumerate(dates)]
-    leads_added = bounded(la_m)
-    meetings = bounded(mtg_m)
-
-    # Weekends off: the fleet doesn't send Sat/Sun, so those days are dead air
-    # (0 sent, a few stray replies) that saw-tooths every trend line. The series
-    # is weekdays only — the chart joins Fri→Mon directly; nothing is invented.
-    # COUNT series (meetings/positives/leads) must not lose weekend events,
-    # though — a Saturday-booked call is still a booked call (panel fix BE-2,
-    # 2026-08-02: displayed meetings summed 13 vs 14 truth). Roll Sat/Sun
-    # counts into the following Monday so totals stay exact; RATE series and
-    # sent keep the plain strip (weekend rates are noise on ~0 sends).
-    last_synced = max([d for d in dates if sent_m.get(d, 0)], default=None)
-    keep = [i for i in range(ndays) if (start + _td(days=i)).weekday() < 5]
-
-    def wkd(a):
-        return [a[i] for i in keep]
-
-    def wkd_roll(a):
-        out, carry = list(a), 0
-        for i in range(ndays):
-            if (start + _td(days=i)).weekday() >= 5:
-                carry += out[i] or 0
-            elif carry and (start + _td(days=i)).weekday() == 0:
-                out[i] = (out[i] or 0) + carry
-                carry = 0
-        return [out[i] for i in keep]
-    dates_kept = wkd(dates)
-    sent, reply_rate, bounce_rate = wkd(sent), wkd(reply_rate), wkd(bounce_rate)
-    positives, leads_added, meetings = wkd_roll(positives), wkd_roll(leads_added), wkd_roll(meetings)
-    dates = dates_kept
-
-    return {"days": dates, "campaign": campaign,
-            "sent": sent, "leads_added": leads_added, "positives": positives,
-            "meetings": meetings, "reply_rate": reply_rate, "bounce_rate": bounce_rate,
-            "labels": {
-                "sent": ("Emails sent/day (this campaign — sent_messages archive)"
-                         if campaign else
-                         ("Emails sent/day (whole fleet, every workspace — client-windows day-wise sweep; "
-                          "days older than its 30-day window are Navreo-workspace fleet_daily_stats)"
-                          if cw_sent else
-                          "Emails sent/day (Navreo workspace — Smartlead day-wise, stored daily in Supabase fleet_daily_stats)")),
-                "leads_added": ("Leads added/day (signal_leads — this campaign's sources)"
-                                if campaign else "Leads added/day (signal_leads pulled_at, all sources)"),
-                "positives": ("Positive replies/day (replies: Interested / Call Booked / Meeting Request / Information Request)"
-                              if campaign else "Positive replies/day (whole fleet — Smartlead day-wise positive replies, stored in fleet_daily_stats)"),
-                "meetings": "Meetings/day (calls booked that day — Calendly bookings at true booking time, else first Call Booked reply; weekend bookings roll into Monday)",
-                "reply_rate": ("Reply rate % — fleet-wide only (no reliable per-campaign daily rate in the data layer)"
-                               if campaign else "Reply rate % (whole fleet — Smartlead day-wise replies÷sent, stored in fleet_daily_stats)"),
-                "bounce_rate": "Bounce rate % (whole fleet — Smartlead day-wise bounced÷sent, stored in fleet_daily_stats)"},
-            "last_synced_day": last_synced}
-
-
-def _perf_daily_cached(key) -> dict:
-    days, start, end, campaign = key
-    return perf_daily({"days": days, "start": start, "end": end, "campaign": campaign})
-
-
-# The perf RPC intermittently hits the DB's 8s statement timeout under load;
-# SWR keeps the last good series per parameter set and refreshes in the
-# background, so one slow read never blanks the graph for everyone.
-_PERF_DAILY_SWR = _SWRKeyedCache(
-    _perf_daily_cached, 600,
-    is_degraded=lambda p: not isinstance(p, dict) or bool(p.get("error")),
-    name="perf-daily")
 
 
 # ── Campaign scorecard shared helpers ───────────────────────────────────────
@@ -11614,8 +11363,8 @@ def _campaign_insights_findings(sid: str, ro: dict, per_source: list,
 
 
 def _compute_campaign_insights(sid: str) -> dict:
-    """PROXY per-source attribution (labelled - see the perf_daily comment
-    block at ~5579 for why: sent_messages has no source_id) + deterministic
+    """PROXY per-source attribution (labelled - sent_messages has no
+    source_id, so attribution is source-id scoped) + deterministic
     findings for one Smartlead campaign. Cached 10min per campaign id via
     _CAMPAIGN_INSIGHTS_SWR below."""
     sources = _campaign_sources_full(sid)
@@ -15419,18 +15168,6 @@ def _mailbox_sync_bg():
            {"actor": "cron", "endpoint": "/api/cron/mailbox-sync",
             "action": "mailbox_sync_done" if code == 0 else "mailbox_sync_failed",
             "entity": "mailboxes", "payload": {"exit": code}})
-        # Going-forward capture of the fleet day-by-day record (sent / replies /
-        # reply-rate / positives). Runs on the same daily schedule; refreshes a
-        # trailing window so late-corrected days settle. Best-effort — a Smartlead
-        # hiccup here never fails the mailbox sweep.
-        try:
-            fs = fleet_stats_sync_recent(14)
-            sb("POST", "app_activity_log",
-               {"actor": "cron", "endpoint": "/api/cron/mailbox-sync",
-                "action": "fleet_stats_done" if fs.get("ok") else "fleet_stats_failed",
-                "entity": "fleet_daily_stats", "payload": fs})
-        except Exception as fe:  # noqa: BLE001
-            print(f"[fleet-stats] FAILED: {fe}", file=sys.stderr)
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[mailbox-sync] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",
@@ -17315,12 +17052,28 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
                 arr.append(v)
             ccd[cl] = arr
         out["client_caps_daily"] = ccd
+        # 'All' capacity = the sum of the individual clients/businesses, never the
+        # pooled workspace figure (Bjion 2026-08-21: the Navreo pool is meaningless
+        # — capacity is always client-by-client, business-by-business). navreo side
+        # = Σ its per-client caps where recorded, else the navreo pool as a history
+        # fallback; asteri/krg/grout each stand for one business.
         total = [0] * len(days)
         seen = [False] * len(days)
-        for ws in _FLEET_CAP_WS:
-            arr = cap.get(ws) or []
-            for i in range(len(days)):
+        navarr = cap.get("navreo") or []
+        for i in range(len(days)):
+            navsum, havenav = 0, False
+            for arr in ccd.values():
                 v = arr[i] if i < len(arr) else None
+                if v:
+                    navsum += v
+                    havenav = True
+            nav = navsum if havenav else (navarr[i] if i < len(navarr) else None)
+            if nav:
+                total[i] += nav
+                seen[i] = True
+            for ws in ("asteri", "krg", "grout"):
+                a = cap.get(ws) or []
+                v = a[i] if i < len(a) else None
                 if v:
                     total[i] += v
                     seen[i] = True
@@ -18720,73 +18473,6 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
 # on stat_date. Smartlead dates come back as "6 Jul" (no year) — a within-one-
 # calendar-year call keeps (day,month) unique, so we walk the exact date range
 # and match by (day,month).
-_FLEET_MONTHS = {m: i + 1 for i, m in enumerate(
-    ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"])}
-
-
-def _fleet_daywise(path: str, start_iso: str, end_iso: str) -> dict:
-    """{(day,month): email_engagement_metrics} for a Smartlead day-wise endpoint.
-    navreo-fleet-only BY DESIGN: OUR fleet's day-wise history."""
-    url = (f"{SMARTLEAD_BASE}/analytics/{path}"
-           f"?api_key={KEYS.get('SMARTLEAD_API_KEY', '')}"
-           f"&start_date={start_iso}&end_date={end_iso}")
-    data = http_json("GET", url, {}, timeout=45)
-    out = {}
-    for r in (((data or {}).get("data") or {}).get("day_wise_stats") or []):
-        try:
-            d, mon = str(r.get("date", "")).split()
-            out[(int(d), _FLEET_MONTHS.get(mon[:3], 0))] = r.get("email_engagement_metrics") or {}
-        except (ValueError, AttributeError):
-            continue
-    return out
-
-
-def fleet_stats_sync(start_iso: str, end_iso: str) -> dict:
-    """Pull Smartlead day-wise overall + positive stats for [start,end] (must be
-    within ONE calendar year) and upsert public.fleet_daily_stats. Idempotent."""
-    from datetime import date as _date, timedelta as _td2
-    overall = _fleet_daywise("day-wise-overall-stats", start_iso, end_iso)
-    positive = _fleet_daywise("day-wise-positive-reply-stats", start_iso, end_iso)
-    if not overall:
-        return {"ok": False, "error": "smartlead day-wise returned no data", "upserted": 0}
-    start = _date.fromisoformat(start_iso[:10])
-    end = _date.fromisoformat(end_iso[:10])
-    rows, cur = [], start
-    while cur <= end:
-        k = (cur.day, cur.month)
-        m = overall.get(k) or {}
-        sent = int(m.get("sent") or 0)
-        replied = int(m.get("replied") or 0)
-        bounced = int(m.get("bounced") or 0)
-        pos = int((positive.get(k) or {}).get("positive_replied") or 0)
-        rows.append({"stat_date": cur.isoformat(), "sent": sent, "replies": replied,
-                     "positives": pos, "bounced": bounced,
-                     "reply_rate": round(replied * 100.0 / sent, 2) if sent else None,
-                     "updated_at": _dtmod.datetime.utcnow().isoformat() + "Z"})
-        cur += _td2(days=1)
-    n = 0
-    for i in range(0, len(rows), 300):
-        chunk = rows[i:i + 300]
-        r = sb("POST", "fleet_daily_stats?on_conflict=stat_date", chunk,
-               prefer="resolution=merge-duplicates,return=minimal")
-        if r is None:
-            return {"ok": False, "error": "supabase upsert failed", "upserted": n}
-        n += len(chunk)
-    return {"ok": True, "upserted": n, "start": start.isoformat(), "end": end.isoformat()}
-
-
-def fleet_stats_sync_recent(days: int = 14) -> dict:
-    """Trailing-window refresh for the daily cron. Splits across a year boundary
-    if the window straddles Jan 1 (keeps each Smartlead call within one year so
-    the yearless 'day month' labels stay unambiguous)."""
-    from datetime import date as _date, timedelta as _td2
-    end = _date.today()
-    start = end - _td2(days=max(1, days) - 1)
-    if start.year != end.year:
-        a = fleet_stats_sync(start.isoformat(), _date(start.year, 12, 31).isoformat())
-        b = fleet_stats_sync(_date(end.year, 1, 1).isoformat(), end.isoformat())
-        return {"ok": a.get("ok") and b.get("ok"), "upserted": a.get("upserted", 0) + b.get("upserted", 0)}
-    return fleet_stats_sync(start.isoformat(), end.isoformat())
 
 
 # ── Restore queue + warm-up capacity forecast ────────────────────────────────
@@ -20233,7 +19919,7 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                     "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/cron/reply-caps",
+                     "/api/cron/reply-sync", "/api/cron/reply-caps",
                      # A cron path must appear in BOTH this set and the token-gate
                      # tuple in do_POST: this one clears the session gate, that one
                      # makes the handler reachable and token-guarded. Missing from
@@ -21692,21 +21378,6 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             refresh = (q.get("refresh") or [""])[0].lower() in ("1", "true", "yes")
             return self._json(campaigns_unified({"refresh": refresh}))
-        if path == "/api/perf-daily":
-            # Homepage 5-line graph: per-day sent / leads-added / reply-rate /
-            # positives / meetings from the Supabase data layer. Optional
-            # ?campaign=<smartlead_id> (default fleet) and ?days=N or
-            # ?start=&end=. Nulls (labelled absent), never fake zeros.
-            from urllib.parse import parse_qs, urlparse
-            q = parse_qs(urlparse(self.path).query)
-            _pcamp = (q.get("campaign") or [None])[0]
-            if show_demo_clients() and str(_pcamp or "") in _DEMO_ACME_BY_ID:
-                return self._json(_demo_perf_daily(_pcamp, (q.get("days") or ["30"])[0]))
-            return self._json(_PERF_DAILY_SWR.get((
-                (q.get("days") or ["30"])[0],
-                (q.get("start") or [None])[0],
-                (q.get("end") or [None])[0],
-                _pcamp)))
         if path == "/api/analytics-hub":
             # Analytics hub page: client-splittable daily series + weekday +
             # setter speed + monthly meetings, one round trip (analytics_hub_v1).
@@ -22369,7 +22040,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                   "/api/cron/fleet-stats", "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/setter/poll",
+                   "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/setter/poll",
                    # Both provider-scoped cap engines. Their handlers live INSIDE
                    # this gate, so a path missing here is not merely unguarded —
                    # it is unreachable. google-reply-caps shipped 07-28 without
@@ -22531,25 +22202,6 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, actor="cron", action="reply_sync", entity="replies")
                 threading.Thread(target=_reply_sync_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
-            if path == "/api/cron/fleet-stats":
-                # Fleet day-by-day record sync. Synchronous (a couple of Smartlead
-                # calls + one upsert), so a manual backfill returns its counts:
-                #   ?start=YYYY-MM-DD&end=YYYY-MM-DD  (backfill, one calendar year)
-                #   ?days=N                            (trailing refresh, default 14)
-                from urllib.parse import parse_qs, urlparse
-                q = parse_qs(urlparse(self.path).query)
-                start = (q.get("start") or [None])[0]
-                end = (q.get("end") or [None])[0]
-                try:
-                    res = (fleet_stats_sync(start, end) if (start and end)
-                           else fleet_stats_sync_recent(int((q.get("days") or ["14"])[0])))
-                except Exception as e:  # noqa: BLE001
-                    return self._json({"ok": False, "error": str(e)[:300]}, 500)
-                sb("POST", "app_activity_log",
-                   {"actor": "cron", "endpoint": "/api/cron/fleet-stats",
-                    "action": "fleet_stats_done" if res.get("ok") else "fleet_stats_failed",
-                    "entity": "fleet_daily_stats", "payload": res})
-                return self._json(res, 200 if res.get("ok") else 502)
             if path == "/api/setter/poll":
                 if _SETTER_POLL_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
