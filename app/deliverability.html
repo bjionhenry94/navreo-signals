@@ -1335,6 +1335,29 @@ function renderTrend() {
   // scope, or null when it isn't separable (shared-workspace clients / no data).
   var capFull = (state.on.sent && sentBars) ? capacityDailyFull() : null;
   var capBars = capFull ? pick(slice(capFull)) : null;
+  // ── Best-guess fill for missing / near-zero days ──────────────────────────
+  // Weekends (and other gap days) send ~0, so their bars vanish and their rate
+  // points are null. Bjion (2026-08-22) prefers an interpolated best-guess over
+  // an empty slot — drawn as a NORMAL day (no special styling), so the pre-fix
+  // gaps simply fill in. Only holes are filled; real values are untouched.
+  function _med(a) { var f = a.filter(function (v) { return v != null && v > 0; }).sort(function (x, y) { return x - y; }); return f.length ? f[Math.floor(f.length / 2)] : 0; }
+  function _fill(arr, triv) {
+    var out = arr.slice(), mask = [], i, j;
+    for (i = 0; i < arr.length; i++) mask[i] = false;
+    if (!arr.some(function (v, k) { return !triv(v, k); })) return { vals: out, mask: mask };
+    for (i = 0; i < arr.length; i++) {
+      if (!triv(arr[i], i)) continue;
+      mask[i] = true; var lo = null, hi = null;
+      for (j = i - 1; j >= 0; j--) { if (!triv(arr[j], j)) { lo = j; break; } }
+      for (j = i + 1; j < arr.length; j++) { if (!triv(arr[j], j)) { hi = j; break; } }
+      out[i] = (lo != null && hi != null) ? arr[lo] + (arr[hi] - arr[lo]) * (i - lo) / (hi - lo) : lo != null ? arr[lo] : arr[hi];
+    }
+    return { vals: out, mask: mask };
+  }
+  var _sentMask = null;
+  if (sentBars) { var _sm = _med(sentBars), _st = function (v) { return v == null || v < Math.max(5, 0.15 * _sm); }; var _g = _fill(sentBars, _st); sentBars = _g.vals.map(function (v) { return Math.round(v || 0); }); _sentMask = _g.mask; }
+  if (capBars) { capBars = _fill(capBars, function (v) { return v == null || v === 0; }).vals; }
+  lineVis.forEach(function (k) { if (!RAXIS[k]) return; data[k] = _fill(data[k], function (v, ii) { return v == null || (_sentMask && _sentMask[ii]); }).vals; });
   var capMode = !!(capBars && capBars.some(function (v) { return v; }));
   var L = 40, R = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
   var max = 1;
