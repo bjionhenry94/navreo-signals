@@ -6292,11 +6292,15 @@ CP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 # its OWN channel; unmapped → the hook's default (#interested-replies). The
 # EVER_POSITIVE_HOOK scenario (9558449) posts to {{ifempty(1.channel; default)}},
 # so a client with a dedicated channel lands there and everything else stays
-# internal. Grout → #grouts-navreo (Bjion 2026-08-05). asteri/krg already get a
-# card in their own channel via their Make routers, so they stay on the internal
-# default here (a non-duplicate safety net), not mapped.
+# internal. Grout → #grouts-navreo (Bjion 2026-08-05). krg → #krg-advisors-navreo
+# (2026-08-21: KRG's Make client-card router went dark on Aug 4 — 17 days / 184
+# replies / 0 cards — so this sweep is now KRG's ONLY path to its own channel;
+# double-post risk is nil while that router stays dead). asteri still gets a card
+# in its own channel via its Make router, so it stays on the internal default here
+# (a non-duplicate safety net), not mapped.
 CLIENT_ALERT_CHANNELS = {
     "grout": "C0BEGAKS8TX",   # #grouts-navreo
+    "krg": "C0A7EJ4DL9K",     # #krg-advisors-navreo
 }
 
 
