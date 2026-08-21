@@ -1213,7 +1213,6 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
       <div class="sh-spacer"></div>
       <div class="stats-inline" id="statsInline"><span class="muted"><span class="btnspin"></span> Loading…</span></div>
       <span class="small muted" id="lastCheckedNote"></span>
-      <span class="pill autopilot-pill" id="autopilotPill" title="Open agents &amp; settings"></span>
       <button class="btn icon-btn" id="openAgentsBtn" type="button" title="Agents &amp; settings" aria-label="Agents and settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z"/></svg></button>
     </div>
 
@@ -1540,7 +1539,6 @@ const INBOX_PAGE_SIZE = 25;
 const FILTER_PILLS = [
   { key: "needs_review", label: "Needs review", count: "needs_review" },
   { key: "sent", label: "Sent", count: "sent" },
-  { key: "auto_sent", label: "Auto-sent", count: "auto_sent" },
   { key: "dismissed", label: "Dismissed", count: "dismissed" },
   { key: "", label: "All", count: "all" },
 ];
@@ -2694,7 +2692,6 @@ function clientPillRows(all, status) {
 /* ── Slim stats row ────────────────────────────────────── */
 function renderKpis() {
   const el = document.getElementById("statsInline");
-  const as = KPIS.auto_sent_today ?? 0;
   const avg = KPIS.avg_response_mins_7d;
   // Raw minutes past an hour read as noise ("1778m" — panel report
   // 2026-08-09); say it like a person would.
@@ -2707,7 +2704,6 @@ function renderKpis() {
   // below carries the live count and is also the control that filters to it,
   // so this strip keeps only the facts the chips don't already state.
   el.innerHTML = `
-    <span class="mchip" title="Auto-sent today"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 2 11 13"/><path d="M22 2 15 22l-4-9-9-4Z"/></svg> Auto-sent <b>${fmt(as)}</b></span>
     <span class="mchip" title="Average response time (last 7 days)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg> <b>${esc(avgTxt)}</b></span>
   `;
 }
@@ -6832,7 +6828,6 @@ function openDrawer(id) { document.getElementById(id).classList.add("on"); }
 function closeDrawer(id) { document.getElementById(id).classList.remove("on"); }
 
 document.getElementById("openAgentsBtn").addEventListener("click", () => { clearAssignAgent(); openDrawer("agentsDrawerOverlay"); });
-document.getElementById("autopilotPill").addEventListener("click", () => { clearAssignAgent(); openDrawer("agentsDrawerOverlay"); });
 document.getElementById("agentsDrawerClose").addEventListener("click", () => { closeDrawer("agentsDrawerOverlay"); clearAssignAgent(); });
 document.getElementById("agentsDrawerOverlay").addEventListener("click", (e) => {
   if (e.target.id === "agentsDrawerOverlay") { closeDrawer("agentsDrawerOverlay"); clearAssignAgent(); }
