@@ -4857,11 +4857,24 @@ function convoHtml(row) {
   // cache-first): CHECKING (bounded — actively looking, ~5s), UP TO DATE
   // (nothing newer exists — stop waiting), or COULDN'T CONFIRM (server
   // unreachable — showing the last saved copy, with Retry).
+  //
+  // "We spoke last" short-circuit (owner report 2026-08-22): on a Sent thread
+  // the newest message on screen is usually OUR follow-up — there is nothing
+  // inbound to wait for, yet the pending loader still made the reviewer wait
+  // for a reply that isn't coming. When our own SENT is the newest message,
+  // the loader's whole purpose (surface our just-sent follow-up) is already
+  // met, so skip "Checking…" and say "Up to date" straight away.
+  let newestT = row.replied_at ? new Date(row.replied_at).getTime() : 0;
+  let weSpokeLast = false;   // the pinned reply is inbound (Them)
+  older.forEach((m) => {
+    const t = m && m.time ? new Date(m.time).getTime() : 0;
+    if (t >= newestT) { newestT = t; weSpokeLast = (m.type === "SENT"); }
+  });
   let latestLoading = "";
-  if (row._thread_pending) {
+  if (row._thread_pending && !weSpokeLast) {
     latestLoading = `<div class="thread-verdict checking muted small" style="padding:8px 0 2px">`
       + `<span class="btnspin"></span> Checking for newer messages… <span class="muted">(usually under 5s)</span></div>`;
-  } else if (row._thread_verdict === "fresh") {
+  } else if (row._thread_verdict === "fresh" || (row._thread_pending && weSpokeLast)) {
     latestLoading = `<div class="thread-verdict uptodate muted small" style="padding:8px 0 2px">`
       + `&#10003; Up to date — you're seeing the latest message.</div>`;
   } else if (row._thread_verdict === "stalled") {
