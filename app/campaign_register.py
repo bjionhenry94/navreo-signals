@@ -31,9 +31,12 @@ register() is idempotent so a double-register is a no-op upsert.
 
 This module imports `server` for its Supabase (`server.sb`) and Smartlead
 (`server.SMARTLEAD_BASE`, `server.ws_*`, `server._smartlead_get_retry`) layers,
-so it shares the app's keys, retries and rate-limit pacing. It performs NO
-Smartlead writes — only GETs from Smartlead and upserts to the tool's own
-Supabase tables. It never sends anything.
+so it shares the app's keys, retries and rate-limit pacing. Registration itself
+only GETs from Smartlead and upserts to the tool's own Supabase tables. The one
+Smartlead write it makes is `ensure_client_router_webhooks()` — the self-healing
+reconciler that attaches each client workspace's reply-router webhook to any of
+its campaigns that lack it (see that function for the incident it closes). It
+never sends email.
 """
 from __future__ import annotations
 
@@ -440,8 +443,194 @@ def reconcile(window_h: int = RECONCILE_WINDOW_H, only_ids=None) -> dict:
     return summary
 
 
+# ── client-workspace reply-router webhook reconciler ────────────────────────
+# A CLIENT workspace's replies are categorised ONLY by its Make reply-router,
+# attached to each campaign as a Smartlead EMAIL_REPLY webhook. Smartlead has NO
+# account-level webhook API (only per-campaign), so the router has to be
+# registered on every new campaign — a manual launch step that has silently
+# lapsed at least three times (KRG 2026-08-04 + 08-19 + 08-21, Grout 08-19),
+# each time leaving a whole batch of replies uncategorised with NO backstop
+# (client workspaces have no reply-sync net — the categoriser webhook is the
+# single point of failure). This reconciler makes it self-healing: every cron
+# tick it attaches the workspace's router to any of its campaigns that lack it,
+# so a launch that forgets the webhook is repaired within the tick.
+#
+# navreo is DELIBERATELY absent from the map: navreo categorises via a
+# WORKSPACE-level webhook + a server-side reply-sync backstop, and adding
+# per-campaign webhooks there SUPPRESSED that workspace categoriser once (the
+# ~73-campaign 2026-07-15 breakage). Only connected CLIENT workspaces — whose
+# only categoriser IS the per-campaign router — belong here.
+CLIENT_ROUTER_HOOKS = {
+    "krg":    "https://hook.eu2.make.com/wvqbmh5dyvhyw61ou4gkciijvwlrfsv2",
+    "asteri": "https://hook.eu2.make.com/mi39u1ax894q3r3y2b4uxblajginn4je",
+    "grout":  "https://hook.eu2.make.com/4mlkjiuly67am9qkpxcos5emxhaxehuo",
+}
+ROUTER_WEBHOOK_NAME = "Navreo positive-reply router"
+
+# Attach-check every campaign that can still draw a reply. ACTIVE/PAUSED/DRAFTED
+# are always checked (a draft can go live between ticks); a COMPLETED campaign is
+# checked only while recent — a long-finished one that already carries the router
+# keeps it and rarely draws new replies, so re-listing its webhooks every tick is
+# wasted Smartlead quota. Wider than the register window so a just-completed batch
+# is still swept.
+ROUTER_WEBHOOK_WINDOW_H = 60 * 24  # 60 days
+ROUTER_ATTACH_PACE_S = 0.6         # serial: Smartlead drops concurrent webhook POSTs on one key
+
+
+def _smartlead_post(url: str, body: dict, attempts: int = 4) -> dict:
+    """Smartlead POST mirroring server._smartlead_get_retry's SSL / UA / backoff.
+    campaign_register is otherwise GET-only; this is its single write path, used
+    solely to attach a client workspace's reply-router webhook."""
+    import json as _json
+    import urllib.error
+    import urllib.request
+    data = _json.dumps(body).encode()
+    last = None
+    for attempt in range(1, attempts + 1):
+        try:
+            req = urllib.request.Request(
+                url, data=data, method="POST",
+                headers={"User-Agent": server.UA, "Content-Type": "application/json"})
+            with urllib.request.urlopen(req, timeout=30, context=server.SSL_CTX) as resp:
+                return _json.loads(resp.read().decode() or "{}")
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code in (429, 500, 502, 503, 504) and attempt < attempts:
+                time.sleep(min(3 * attempt, 20))
+                continue
+            try:
+                detail = _json.loads(e.read().decode()).get("message")
+            except Exception:  # noqa: BLE001
+                detail = None
+            raise RuntimeError(f"Smartlead HTTP {e.code}"
+                               + (f": {str(detail)[:150]}" if detail else f": {e.reason}")) from e
+        except Exception as e:  # noqa: BLE001 — transient network: one more try
+            last = e
+            if attempt < attempts:
+                time.sleep(3 * attempt)
+                continue
+            raise
+    if last:
+        raise last
+    return {}
+
+
+def _campaign_has_router(cid, sl_key: str, router_url: str):
+    """True/False whether the campaign already carries the router webhook; None on
+    a fetch error so an API blip is never mistaken for 'missing' and re-POSTed."""
+    url = f"{server.SMARTLEAD_BASE}/campaigns/{cid}/webhooks?api_key={sl_key}"
+    try:
+        resp = server._smartlead_get_retry(url)
+    except Exception:  # noqa: BLE001 — a transient GET failure is not a verdict
+        return None
+    hooks = resp if isinstance(resp, list) else (resp.get("data") if isinstance(resp, dict) else None)
+    if not isinstance(hooks, list):
+        return None
+    return any(router_url in ((h or {}).get("webhook_url") or "") for h in hooks if isinstance(h, dict))
+
+
+def _attach_router(cid, sl_key: str, router_url: str) -> None:
+    """Attach the router webhook (EMAIL_REPLY, all categories). The `categories`
+    field is deliberately OMITTED: Smartlead's create API rejects an explicit
+    `[]`, but omitting it defaults to `[]` = fire on EVERY reply — including the
+    still-uncategorised ones a category filter would skip, which is precisely
+    what the categoriser must receive."""
+    url = f"{server.SMARTLEAD_BASE}/campaigns/{cid}/webhooks?api_key={sl_key}"
+    _smartlead_post(url, {"name": ROUTER_WEBHOOK_NAME, "webhook_url": router_url,
+                          "event_types": ["EMAIL_REPLY"]})
+
+
+def _router_check_due(campaign: dict, cutoff: dt.datetime) -> bool:
+    st = (campaign.get("status") or "").upper()
+    if st in ("ACTIVE", "PAUSED", "START", "STARTED", "DRAFTED"):
+        return True
+    return _within_window(campaign.get("created_at"), cutoff)
+
+
+def ensure_client_router_webhooks(window_h: int = ROUTER_WEBHOOK_WINDOW_H,
+                                  only_ws=None) -> dict:
+    """Self-healing: attach each client workspace's reply-router webhook to every
+    one of its campaigns that lacks it. THE durable fix for the recurring
+    'client-workspace replies uncategorised' incident — a new campaign no longer
+    depends on someone remembering to wire the router at launch.
+
+    Idempotent and best-effort: a campaign that already has the router is left
+    untouched, and one bad campaign or workspace never aborts the rest. POSTs are
+    serial (Smartlead silently drops concurrent webhook writes on one key).
+    Returns a summary and records a `signal_cron_runs` row.
+
+    `only_ws` — restrict to these workspace ids (a targeted run); default is every
+    enabled workspace present in CLIENT_ROUTER_HOOKS (navreo is never included)."""
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=window_h)
+    want_ws = {str(w).lower() for w in only_ws} if only_ws else None
+    summary = {"ts": _now(), "checked": 0, "attached": [], "already": 0,
+               "errors": [], "skipped_ws": [], "workspaces": []}
+
+    for w in server.ws_enabled():
+        wid = (w.get("id") or "").lower()
+        router = CLIENT_ROUTER_HOOKS.get(wid)
+        if not router:
+            continue  # navreo + any workspace without a known router hook
+        if want_ws is not None and wid not in want_ws:
+            continue
+        wkey = server.ws_key(wid)
+        if not wkey:
+            summary["skipped_ws"].append({"id": wid, "note": "no api key"})
+            continue
+        camps = server._sl_campaigns_for_ws(wkey)
+        if camps is None:
+            summary["errors"].append(f"{wid}: /campaigns unavailable")
+            summary["workspaces"].append({"id": wid, "note": "campaigns unavailable"})
+            continue
+        attached = already = errs = 0
+        for c in camps:
+            if not _router_check_due(c, cutoff):
+                continue  # long-finished campaigns keep whatever they already carry
+            cid = c.get("id")
+            summary["checked"] += 1
+            has = _campaign_has_router(cid, wkey, router)
+            if has is None:
+                errs += 1
+                summary["errors"].append(f"{wid}/{cid}: webhook fetch failed")
+                continue
+            if has:
+                already += 1
+                continue
+            try:
+                _attach_router(cid, wkey, router)
+                attached += 1
+                summary["attached"].append({"id": str(cid), "workspace": wid,
+                                            "name": (c.get("name") or "")[:80]})
+            except Exception as e:  # noqa: BLE001 — one bad attach must not kill the sweep
+                errs += 1
+                summary["errors"].append(f"{wid}/{cid}: {type(e).__name__}: {str(e)[:120]}")
+            time.sleep(ROUTER_ATTACH_PACE_S)
+        summary["already"] += already
+        summary["workspaces"].append({"id": wid, "attached": attached,
+                                      "already": already, "errors": errs,
+                                      "campaigns_seen": len(camps)})
+
+    # durable, queryable record in the same table run_daily's summaries land in
+    try:
+        server.sb("POST", "signal_cron_runs",
+                  {"summary": {"kind": "client_router_webhook_reconcile",
+                               "ok": not summary["errors"],
+                               "ts": summary["ts"],
+                               "attached": len(summary["attached"]),
+                               "checked": summary["checked"],
+                               "errors": summary["errors"][:10]}})
+    except Exception:  # noqa: BLE001 — observability must never block the reconcile
+        pass
+    return summary
+
+
 if __name__ == "__main__":
     import json
-    ids = [a for a in sys.argv[1:] if a.isdigit()]
-    out = reconcile(only_ids=ids or None)
+    argv = sys.argv[1:]
+    if "--webhooks" in argv:
+        ws = [a for a in argv if not a.startswith("-")]
+        out = ensure_client_router_webhooks(only_ws=ws or None)
+    else:
+        ids = [a for a in argv if a.isdigit()]
+        out = reconcile(only_ids=ids or None)
     print(json.dumps(out, indent=2))

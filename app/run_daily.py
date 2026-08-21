@@ -159,6 +159,23 @@ def main():
     except Exception as e:  # noqa: BLE001 — registration must never kill the run
         print(f"campaign register · FAILED: {str(e)[:200]}")
 
+    # Self-heal the client-workspace reply-router webhooks (KRG/Asteri/Grout).
+    # Smartlead has no account-level webhook API, so a new client campaign only
+    # gets categorised replies if its router webhook is attached at launch — a
+    # manual step that has lapsed repeatedly, silently leaving whole batches of
+    # replies uncategorised (no client-workspace backstop catches it). This
+    # attaches the router to any client campaign missing it, every tick. Cheap in
+    # steady state (one /campaigns list + one webhook GET per recent campaign per
+    # client workspace, no writes when already covered) — so it runs with no gate.
+    try:
+        rw = campaign_register.ensure_client_router_webhooks()
+        att = ", ".join(x["id"] for x in rw["attached"][:8]) or "none"
+        print(f"client router webhooks · checked {rw['checked']}, attached "
+              f"{len(rw['attached'])} ({att}), {rw['already']} already covered"
+              + (f", {len(rw['errors'])} error(s)" if rw["errors"] else ""))
+    except Exception as e:  # noqa: BLE001 — webhook reconcile must never kill the run
+        print(f"client router webhooks · FAILED: {str(e)[:200]}")
+
     # No live campaign without a subsequence (Bjion 2026-08-10): put an "Add a
     # subsequence" card on every ACTIVE campaign that has no Interested Reply /
     # Meeting Request child, and clear it the moment one appears. Cheap — one
