@@ -45,6 +45,14 @@ def main() -> int:
                                      "domains": r.get("domains"),
                                      "tierCount": r.get("tierCount")},
                             actor="cron", action="reply-caps", entity="deliverability")
+        # Record the estimated daily sending capacity per client now that this
+        # engine has moved the caps (outlook runs last, so this is the day's
+        # authoritative capacity row) — real per-day value, never carried forward.
+        try:
+            cap = server.snapshot_navreo_capacity()
+            print(f"[outlook-caps] capacity snapshot: {cap}")
+        except Exception as e:  # noqa: BLE001 — snapshot is best-effort, never fail the cron
+            print(f"[outlook-caps] capacity snapshot failed: {e}", file=sys.stderr)
     return 0
 
 

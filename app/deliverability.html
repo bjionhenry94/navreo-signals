@@ -991,25 +991,47 @@ function clientCapValue() {
   for (var key in cc) if (key.toLowerCase() === lc) return cc[key];
   return null;
 }
-// shared navreo-workspace client shown against its own current-capacity flat line
+// case-insensitive lookup of the client's REAL per-day capacity line, written
+// daily by the reply-rate cap crons (CAP.client_caps_daily). null until it lands.
+function ccdKey() {
+  var cc = CAP && CAP.client_caps_daily;
+  if (!cc) return null;
+  if (cc[state.client]) return state.client;
+  var lc = state.client.toLowerCase();
+  for (var key in cc) if (key.toLowerCase() === lc) return key;
+  return null;
+}
+function clientCapRealDaily() {   // aligned real per-day client capacity, or null
+  var kk = ccdKey();
+  if (!kk) return null;
+  var a = alignCap(CAP.client_caps_daily[kk], CAP.days);
+  return (a && a.some(function (v) { return v != null; })) ? a : null;
+}
+// shared navreo-workspace client: an ESTIMATE only until the daily per-client
+// capacity history (client_caps_daily) has filled in for this client.
 function capEstimated() {
-  return state.client !== "All" && !capWsKey() && clientCapValue() != null;
+  if (state.client === "All" || capWsKey() || clientCapValue() == null) return false;
+  return clientCapRealDaily() == null;
 }
 function capacityDailyFull() {   // full 30-day capacity array for the client, or null
   if (!CAP || !CAP.capacity || !CAP.days) return null;
   var k = capWsKey();
   if (k) return alignCap(CAP.capacity[k], CAP.days);          // All + own-workspace: exact per-day
-  // shared navreo-workspace client: scale the navreo per-day series (its real
-  // warm-up ramp) to the client's CURRENT capacity, so the daily SHAPE varies
-  // like the fleet while the level matches the client's campaign-attached caps —
-  // not a flat line (Bjion: capacity changes day-to-day).
+  // shared navreo-workspace client. Prefer the REAL per-day series the daily cap
+  // crons record (client_caps_daily); fall back per-day to scaling the navreo
+  // series to the client's current cap where a real value isn't recorded yet, so
+  // the line stays continuous and converges to fully-real as history accrues
+  // (Bjion 2026-08-21 capacity audit — replaces the borrowed fleet shape).
+  var real = clientCapRealDaily();
   var navCap = alignCap(CAP.capacity.navreo, CAP.days), clientCur = clientCapValue();
-  if (!navCap || clientCur == null) return null;
-  var navCur = null;
-  for (var i = navCap.length - 1; i >= 0; i--) if (navCap[i] != null) { navCur = navCap[i]; break; }
-  if (!navCur) return null;
-  var ratio = clientCur / navCur;
-  return navCap.map(function (v) { return v == null ? null : Math.round(v * ratio); });
+  var est = null;
+  if (navCap && clientCur != null) {
+    var navCur = null;
+    for (var i = navCap.length - 1; i >= 0; i--) if (navCap[i] != null) { navCur = navCap[i]; break; }
+    if (navCur) { var ratio = clientCur / navCur; est = navCap.map(function (v) { return v == null ? null : Math.round(v * ratio); }); }
+  }
+  if (!real) return est;
+  return real.map(function (v, i) { return v != null ? v : (est ? est[i] : null); });
 }
 // ── Days-of-leads runway inputs (Bjion 2026-08-21) ────────────────────────
 // CURRENT per-day sending capacity for the selected client (latest non-null of

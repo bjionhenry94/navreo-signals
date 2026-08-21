@@ -17093,49 +17093,111 @@ _CLIENT_CAP = {"data": {}, "ts": 0.0}
 _CLIENT_CAP_TTL_S = 600
 
 
-def _client_capacity_now() -> dict:
-    """Current per-client sending capacity for the shared navreo workspace:
-    Σ message_per_day of the mailboxes on that client's ACTIVE campaigns
-    (restore-sweep membership joined to campaign_scorecard.client — the same
-    attribution the Mailboxes filter uses). REAL caps, not a sent-share estimate
-    (that badly mis-sized clients who under-send their dedicated infra, e.g.
-    TouchPoint/Altius). {} until the sweep warms; a box on several of a client's
-    campaigns counts once for that client. Own 10-min cache so it refreshes as
-    soon as the sweep lands, independent of the 1h capacity-series TTL."""
-    if _CLIENT_CAP["data"] and (time.time() - _CLIENT_CAP["ts"]) < _CLIENT_CAP_TTL_S:
-        return _CLIENT_CAP["data"]
-    sweep = None
+_CLIENT_CAP_HIST_KEY = "client_capacity_hist_v1"   # rolling per-day blob (deliverability_audit_cache)
+
+
+def _navreo_cap_from_sweep(sweep: dict, score: list) -> dict:
+    """Pure: membership sweep + scorecard -> today's navreo-workspace total and
+    per-client sending capacity. Σ REAL per-box caps; a box counts once per client
+    and once for the pool. Navreo Smartlead workspace only (its key backs the
+    sweep) — asteri/krg/grout keep the mailbox_stats_daily RPC path (Bjion,
+    2026-08-21: Navreo first, roll out to the others once its verdict lands)."""
+    cl_of, ws_of = {}, {}
+    for r in score:
+        cid = str(r.get("smartlead_campaign_id"))
+        ws = (r.get("workspace") or "navreo")
+        ws_of[cid] = ws
+        cl = (r.get("client") or "").strip()
+        if ws == "navreo" and cl and not cl.startswith("__"):
+            cl_of[cid] = cl
+    clients: dict = {}
+    ws_cap = ws_boxes = 0
+    for _email, rec in (sweep.get("accounts") or {}).items():
+        cap = rec.get("cap") or 0
+        camps = [str(c) for c in (rec.get("camps") or [])]
+        if any(ws_of.get(c, "navreo") == "navreo" for c in camps):
+            ws_cap += cap
+            ws_boxes += 1
+        seen = set()
+        for cid in camps:
+            cl = cl_of.get(cid)
+            if cl and cl not in seen:
+                seen.add(cl)
+                e = clients.setdefault(cl, {"cap": 0, "boxes": 0})
+                e["cap"] += cap
+                e["boxes"] += 1
+    return {"workspace": {"navreo": {"cap": ws_cap, "boxes": ws_boxes}}, "clients": clients}
+
+
+def _navreo_capacity_breakdown(force_fresh: bool = False) -> dict:
+    """Live breakdown from the membership sweep. force_fresh runs the sweep
+    synchronously (the daily cron); otherwise it uses the cached sweep and returns
+    {} until it warms — an API read must never block on a ~2-min sweep."""
     with _RESTORE_SWEEP_LOCK:
-        if _RESTORE_SWEEP["data"] is not None:
+        sweep = _RESTORE_SWEEP["data"]
+        fresh = sweep is not None and (time.time() - _RESTORE_SWEEP["ts"]) < _RESTORE_SWEEP_TTL_S
+    if force_fresh and not fresh:
+        _restore_sweep_run_bg()
+        with _RESTORE_SWEEP_LOCK:
             sweep = _RESTORE_SWEEP["data"]
     if sweep is None:
-        _restore_sweep_start()
+        if not force_fresh:
+            _restore_sweep_start()
         return {}
     try:
         score = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,client,workspace") or []
     except Exception:  # noqa: BLE001 — capacity map is an enhancement, never a 500
-        return _CLIENT_CAP["data"] or {}
-    cl_of = {}
-    for r in score:
-        if (r.get("workspace") or "navreo") != "navreo":
-            continue
-        cl = (r.get("client") or "").strip()
-        if cl and not cl.startswith("__"):
-            cl_of[str(r.get("smartlead_campaign_id"))] = cl
-    caps: dict = {}
-    for _email, rec in (sweep.get("accounts") or {}).items():
-        cap = rec.get("cap") or 0
-        if not cap:
-            continue
-        seen = set()
-        for cid in rec.get("camps") or []:
-            cl = cl_of.get(str(cid))
-            if cl and cl not in seen:
-                seen.add(cl)
-                caps[cl] = caps.get(cl, 0) + cap
-    if caps:
-        _CLIENT_CAP.update(data=caps, ts=time.time())
-    return caps
+        return {}
+    return _navreo_cap_from_sweep(sweep, score)
+
+
+def _navreo_caps_live() -> dict:
+    """Read path: cached (10-min) live breakdown {workspace, clients}. {} until warm."""
+    if _CLIENT_CAP["data"] and (time.time() - _CLIENT_CAP["ts"]) < _CLIENT_CAP_TTL_S:
+        return _CLIENT_CAP["data"]
+    bd = _navreo_capacity_breakdown(force_fresh=False)
+    if bd and (bd.get("clients") or bd.get("workspace", {}).get("navreo", {}).get("cap")):
+        _CLIENT_CAP.update(data=bd, ts=time.time())
+        return bd
+    cur = _CLIENT_CAP["data"]
+    return cur if isinstance(cur, dict) and cur.get("clients") else {}
+
+
+def _client_capacity_now() -> dict:
+    """Back-compat: {client: cap} for the shared navreo workspace, today, live."""
+    return {c: v["cap"] for c, v in (_navreo_caps_live().get("clients") or {}).items()}
+
+
+def _client_cap_history() -> dict:
+    """The rolling per-day capacity blob written by the daily cap crons:
+    {date: {"workspace": {navreo:{cap,boxes}}, "clients": {client:{cap,boxes}}}}."""
+    return (_blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}).get("days") or {}
+
+
+def snapshot_navreo_capacity() -> dict:
+    """Persist TODAY's navreo-workspace + per-client capacity into the rolling
+    history blob. Idempotent per day. Called at the end of the daily reply-rate cap
+    crons (run_google_caps.py / run_outlook_caps.py) so the recorded estimate
+    tracks the caps the engines just applied — this is what stops the chart from
+    carrying a stale value forward and gives every client a real per-day series."""
+    bd = _navreo_capacity_breakdown(force_fresh=True)
+    if not bd or not bd.get("workspace"):
+        return {"ok": False, "error": "no sweep/capacity data"}
+    today = _dtmod.date.today().isoformat()
+    hist = _blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}
+    days = hist.get("days") or {}
+    days[today] = {"asof": _dtmod.datetime.utcnow().isoformat() + "Z",
+                   "workspace": bd["workspace"], "clients": bd["clients"]}
+    if len(days) > 130:                       # keep ~120 days of history
+        for d in sorted(days)[:-120]:
+            days.pop(d, None)
+    hist["days"] = days
+    hist["updated"] = today
+    _blob_snapshot_save(_CLIENT_CAP_HIST_KEY, hist)
+    _CLIENT_CAP.update(data=bd, ts=time.time())
+    return {"ok": True, "date": today,
+            "navreo_workspace_cap": bd["workspace"]["navreo"]["cap"],
+            "clients": len(bd["clients"])}
 
 
 def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
@@ -17158,7 +17220,56 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
     # per-client caps ride outside the 1h series cache so they populate as soon
     # as the restore sweep warms (own 10-min cache).
     out = dict(base)
-    out["client_caps"] = _client_capacity_now()
+    live = _navreo_caps_live()                       # {} until the sweep warms
+    live_clients = {c: v["cap"] for c, v in (live.get("clients") or {}).items()}
+    out["client_caps"] = live_clients
+    # Real per-day history from the daily cap-cron snapshot: overlay the navreo
+    # pool series (replace carried-forward days, anchor TODAY to live) and add
+    # per-client daily lines so shared-client charts stop borrowing the fleet
+    # shape (Bjion 2026-08-21 capacity audit).
+    try:
+        hist = _client_cap_history()
+    except Exception:  # noqa: BLE001 — history is an enhancement, never a 500
+        hist = {}
+    days = out.get("days") or []
+    live_ws = (live.get("workspace") or {}).get("navreo", {}).get("cap")
+    if days and (hist or live_ws is not None or live_clients):
+        today = _dtmod.date.today().isoformat()
+        cap = dict(out.get("capacity") or {})
+        nav = list(cap.get("navreo") or [None] * len(days))
+        for i, d in enumerate(days):
+            rec = hist.get(d)
+            hv = rec.get("workspace", {}).get("navreo", {}).get("cap") if rec else None
+            if hv is not None:
+                nav[i] = hv
+            if d == today and live_ws is not None:
+                nav[i] = live_ws                     # today is never carried forward
+        cap["navreo"] = nav
+        clients_all = set(live_clients)
+        for rec in hist.values():
+            clients_all.update((rec.get("clients") or {}).keys())
+        ccd: dict = {}
+        for cl in clients_all:
+            arr = []
+            for d in days:
+                rec = hist.get(d)
+                v = rec.get("clients", {}).get(cl, {}).get("cap") if rec else None
+                if d == today and cl in live_clients:
+                    v = live_clients[cl]
+                arr.append(v)
+            ccd[cl] = arr
+        out["client_caps_daily"] = ccd
+        total = [0] * len(days)
+        seen = [False] * len(days)
+        for ws in _FLEET_CAP_WS:
+            arr = cap.get(ws) or []
+            for i in range(len(days)):
+                v = arr[i] if i < len(arr) else None
+                if v:
+                    total[i] += v
+                    seen[i] = True
+        cap["__all"] = [total[i] if seen[i] else None for i in range(len(days))]
+        out["capacity"] = cap
     return out, 200
 
 
@@ -19367,8 +19478,19 @@ def _restore_sweep_run_bg():
         camps = _smartlead_json("GET", "/campaigns") or []
         active = [c for c in camps if c.get("status") == "ACTIVE"]
         att = {}   # email(lower) -> {"cap": n, "camps": [ids]}
+        skipped = 0
         for c in active:
-            rows = _smartlead_json("GET", f"/campaigns/{c['id']}/email-accounts", timeout=120)
+            rows = None
+            for _try in range(2):   # a single slow campaign must not sink the whole sweep
+                try:
+                    rows = _smartlead_json("GET", f"/campaigns/{c['id']}/email-accounts", timeout=90)
+                    break
+                except Exception:  # noqa: BLE001 — retry once, then skip this campaign
+                    rows = None
+                    time.sleep(1.0)
+            if rows is None:
+                skipped += 1
+                continue
             for a in rows if isinstance(rows, list) else []:
                 e = (a.get("from_email") or "").lower()
                 if not e:
@@ -19376,7 +19498,11 @@ def _restore_sweep_run_bg():
                 rec = att.setdefault(e, {"cap": a.get("message_per_day") or 0, "camps": []})
                 rec["camps"].append(c["id"])
             time.sleep(0.35)
-        data = {"accounts": att,
+        # A few blips are fine; a badly-incomplete roster would understate capacity,
+        # so refuse to persist it and let the caller serve stale / retry.
+        if active and skipped > max(5, len(active) // 7):
+            raise RuntimeError(f"restore-sweep: {skipped}/{len(active)} campaigns unreadable — refusing partial roster")
+        data = {"accounts": att, "skipped": skipped,
                 "campaigns": {str(c["id"]): (c.get("name") or "").strip() for c in active}}
         with _RESTORE_SWEEP_LOCK:
             _RESTORE_SWEEP.update(data=data, ts=time.time(), running=False, error=None)

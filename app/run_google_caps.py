@@ -39,6 +39,14 @@ def main() -> int:
                                      "domains": r.get("domains"),
                                      "tierCount": r.get("tierCount")},
                             actor="cron", action="reply-caps", entity="deliverability")
+        # Record the estimated daily sending capacity per client now that this
+        # engine has moved the caps, so the analytics chart shows a real per-day
+        # value instead of carrying yesterday's forward (Bjion 2026-08-21).
+        try:
+            cap = server.snapshot_navreo_capacity()
+            print(f"[google-caps] capacity snapshot: {cap}")
+        except Exception as e:  # noqa: BLE001 — snapshot is best-effort, never fail the cron
+            print(f"[google-caps] capacity snapshot failed: {e}", file=sys.stderr)
     return 0
 
 
