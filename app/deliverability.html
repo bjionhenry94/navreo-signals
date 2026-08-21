@@ -2983,7 +2983,9 @@ function loadCAP() {
 // module globals, so calling it repeatedly is safe and idempotent — a debounce
 // coalesces the burst of near-simultaneous resolutions into one paint.
 var _renderT = 0;
+var _firstPaint = false;   // false until the synchronized first data paint has fired
 function scheduleRender() {
+  if (!_firstPaint) return;   // hold intermediate paints until the fast core group lands together
   if (_renderT) return;
   _renderT = setTimeout(function () { _renderT = 0; renderAll(); }, 16);
 }
@@ -3010,16 +3012,32 @@ function boot() {
     .then(function () { criticalSettled(); scheduleRender(); });
   j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
     .then(function () { criticalSettled(); scheduleRender(); });
-  jShared("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; scheduleRender(); }, function () {});
-  jShared("/api/fleet-capacity?days=30").then(function (d) { CAP = d && !d.error ? d : null; scheduleRender(); if (!CAP || !(CAP.client_caps && Object.keys(CAP.client_caps).length)) setTimeout(loadCAP, 12000); }, function () { setTimeout(loadCAP, 12000); });
-  jShared("/api/cockpit/insights").then(function (d) { INS = d; scheduleRender(); }, function () {});
-  j("/api/campaigns-unified").then(function (d) { UNI = d; scheduleRender(); }, function () {});
-  jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; scheduleRender(); }, function () {});
-  j("/api/sources?slim=1").then(function (d) { SRC = d; scheduleRender(); }, function () {});
+  // Synchronized first paint: the fast core reads below all land sub-second and
+  // share the chart (capacity rides in it as the headroom bars). Hold the first
+  // DATA paint until they've ALL settled, then paint once — so capacity appears
+  // in the SAME frame as the rest instead of popping in a beat later (user ruling
+  // 2026-08-22 "everything loads at the same time"). The two genuinely-slow reads
+  // (analytics-hub + scorecard, 30-70s) stay OFF this barrier and fill in via
+  // their own databar treatment, so the page is never held hostage to them.
+  var _coreLeft = 8;
+  function coreSettled() {
+    if (_firstPaint) { scheduleRender(); return; }   // late arrival after the barrier already fired
+    if (--_coreLeft > 0) return;
+    _firstPaint = true; renderAll();
+  }
+  // Safety: never sit on the empty shell — force the unified paint after 5s even
+  // if a core read hangs. Any stragglers repaint via scheduleRender once it fires.
+  setTimeout(function () { if (!_firstPaint) { _firstPaint = true; renderAll(); } }, 5000);
+  jShared("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; coreSettled(); }, function () { coreSettled(); });
+  jShared("/api/fleet-capacity?days=30").then(function (d) { CAP = d && !d.error ? d : null; coreSettled(); if (!CAP || !(CAP.client_caps && Object.keys(CAP.client_caps).length)) setTimeout(loadCAP, 12000); }, function () { coreSettled(); setTimeout(loadCAP, 12000); });
+  jShared("/api/cockpit/insights").then(function (d) { INS = d; coreSettled(); }, function () { coreSettled(); });
+  j("/api/campaigns-unified").then(function (d) { UNI = d; coreSettled(); }, function () { coreSettled(); });
+  jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; coreSettled(); }, function () { coreSettled(); });
+  j("/api/sources?slim=1").then(function (d) { SRC = d; coreSettled(); }, function () { coreSettled(); });
   // jShared so any second hub read of /_audit reuses this boot promise
   // instead of issuing an identical request.
-  jShared("/api/deliverability/_audit").then(function (d) { AUDIT = d; scheduleRender(); }, function () {});
-  j("/api/collisions").then(function (d) { COLL = d && !d.error ? d : null; scheduleRender(); }, function () {});
+  jShared("/api/deliverability/_audit").then(function (d) { AUDIT = d; coreSettled(); }, function () { coreSettled(); });
+  j("/api/collisions").then(function (d) { COLL = d && !d.error ? d : null; coreSettled(); }, function () { coreSettled(); });
   j("/api/client-windows").then(function (d) {
     if (d && !d.building && d.windows) { CW = d; scheduleRender(); }
     else setTimeout(loadCW, 20000);
