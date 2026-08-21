@@ -2120,13 +2120,51 @@ async function _loadQueueInner(prefetch) {
       if (!ALL_ROWS.some((r) => String(r.id) === k)) ALL_ROWS.push(ROW_OVERRIDES[k].row);
     });
   }
-  renderKpis();
-  renderQueueFilters();
-  renderClientFilter();
-  renderQueue();
+  // Payload-signature gate (perf pass R1): the 60s poll re-runs this cascade
+  // every tick even when the returned data and the view state are byte-identical,
+  // and renderQueue() tears down + rebuilds the whole inbox innerHTML each time.
+  // Sign the full row payload (minus the huge per-row `thread`, which the list
+  // never reads) plus every view-state input any of the four renders depends on,
+  // and skip them when nothing changed. refreshOpenDetail already self-gates and
+  // the tray/hydrate calls are independent, so those always run.
+  const _sig = _queueRenderSignature(!res.ok);
+  if (_sig !== _lastQueueRenderSig) {
+    _lastQueueRenderSig = _sig;
+    renderKpis();
+    renderQueueFilters();
+    renderClientFilter();
+    renderQueue();
+  }
   refreshOpenDetail();
   hydrateAllRows();  // background: full corpus (threads + search + instant pills)
   loadUnresolvedTray();
+}
+
+/* Signs everything the queue render cascade reads (perf pass R1). Full rows
+   minus `thread` guarantees any list/KPI/filter-relevant field change flips the
+   signature — no per-field allow-list to fall out of date — while view state,
+   the campaign/client maps (late-arriving names), overrides, selection and the
+   error flag cover the client-only repaints. Equal signature ⇒ nothing on any of
+   the four surfaces could differ, so the rebuild is safely skipped. */
+let _lastQueueRenderSig = null;
+function _queueRenderSignature(hadError) {
+  const rows = (QUEUE_ROWS || []).map((r) => {
+    if (!r) return r;
+    const { thread, ...rest } = r;   // thread is huge and never read by the list
+    return rest;
+  });
+  return JSON.stringify({
+    rows,
+    kcounts: (typeof KPIS !== "undefined" && KPIS && KPIS.counts) || null,
+    status: currentStatus, client: currentClient,
+    cats: [...selectedCategories].sort(), uncat: UNCAT_ONLY,
+    q: inboxSearchQuery, page: inboxPage,
+    camp: Object.keys(campaignMap || {}).length,
+    cparent: Object.keys(campaignParentMap || {}).length,
+    clients: (typeof clientList !== "undefined" && clientList ? clientList.length : 0),
+    err: !!hadError, allLoaded: _allRowsLoaded, allLen: (ALL_ROWS || []).length,
+    ovr: Object.keys(ROW_OVERRIDES || {}).length, sel: selectedRowId,
+  });
 }
 
 /* The OPEN conversation is a fourth surface, and it used to be the only one
@@ -2841,11 +2879,22 @@ document.addEventListener("keydown", (e) => {
    This is the FULL matching set across every page - pagedInboxRows() below
    slices it for display, but keyboard nav and the KPI counts always work off
    this complete list so paging never hides a match. */
+/* Per-tick memo (perf pass R3): one loadQueue/render cascade calls this 4-5×
+   (renderInboxList, prefetchQueueThreads, renderQueueFilters ×2,
+   smartleadSectionHtml), each re-filtering the whole corpus — the full ALL_ROWS
+   set while a search is active. Nothing that feeds the result can mutate inside
+   a single synchronous cascade, so we cache the array and clear it on the next
+   microtask: identical output, one filter pass instead of five. No caller
+   mutates the returned array (pagedInboxRows slices a copy; the rest iterate). */
+let _visRowsMemo = null;
 function visibleInboxRows() {
+  if (_visRowsMemo !== null) return _visRowsMemo;
   let rows = inboxRowsBeforeCategory();
   if (selectedCategories.size) {
     rows = rows.filter((r) => selectedCategories.has(categoryKeyForRow(r)));
   }
+  _visRowsMemo = rows;
+  Promise.resolve().then(() => { _visRowsMemo = null; });   // survives exactly one sync cascade
   return rows;
 }
 
@@ -2912,18 +2961,32 @@ async function prefetchQueueThreads() {
       .filter((r) => r && r.thread === undefined && !r.is_test
                      && !_QUEUE_THREAD_TRIED.has(String(r.id)))
       .map((r) => String(r.id));
-    for (let i = 0; i < todo.length; i += 3) {
-      await Promise.all(todo.slice(i, i + 3).map(async (id) => {
-        _QUEUE_THREAD_TRIED.add(id);
-        const res = await fetchJson(`/api/setter/thread?id=${encodeURIComponent(id)}`, { _retries: 1 });
-        if (res.ok && res.data && Array.isArray(res.data.thread) && res.data.thread.length) {
-          const fresh = res.data.thread;
-          [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
-            const r = (list || []).find((x) => x && String(x.id) === String(id));
-            if (r && r.thread === undefined) r.thread = fresh;   // never clobber a live thread
-          });
+    // Warm the whole page in ONE request instead of a 3-at-a-time fan of N
+    // (perf pass R13). The batch is cache-first (stored snapshots only), so a
+    // row it doesn't return simply opens via /api/setter/thread as before.
+    const warmInto = (id, fresh) => {
+      if (!(Array.isArray(fresh) && fresh.length)) return;
+      [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
+        const r = (list || []).find((x) => x && String(x.id) === String(id));
+        if (r && r.thread === undefined) r.thread = fresh;   // never clobber a live thread
+      });
+    };
+    for (let i = 0; i < todo.length; i += 25) {
+      const chunk = todo.slice(i, i + 25);
+      chunk.forEach((id) => _QUEUE_THREAD_TRIED.add(id));
+      const res = await fetchJson(
+        `/api/setter/thread/batch?ids=${encodeURIComponent(chunk.join(","))}`, { _retries: 1 });
+      if (res.ok && res.data && res.data.threads) {
+        Object.keys(res.data.threads).forEach((id) => warmInto(id, res.data.threads[id]));
+      } else {
+        // Fallback (older backend / batch failure): the pre-R13 per-row fan.
+        for (let j = 0; j < chunk.length; j += 3) {
+          await Promise.all(chunk.slice(j, j + 3).map(async (id) => {
+            const one = await fetchJson(`/api/setter/thread?id=${encodeURIComponent(id)}`, { _retries: 1 });
+            if (one.ok && one.data && Array.isArray(one.data.thread)) warmInto(id, one.data.thread);
+          }));
         }
-      }));
+      }
     }
     if (_QUEUE_THREAD_TRIED.size > 400) _QUEUE_THREAD_TRIED.clear();   // bound across long sessions
   } finally { _queueThreadPrefetching = false; }
@@ -3101,24 +3164,37 @@ function renderInboxList() {
     testNoteEl.style.display = onlyTest ? "block" : "none";
     testNoteEl.textContent = onlyTest ? "These are simulated test replies. Real replies will appear here." : "";
   }
-  if (!paged.rows.length) {
+  const html = (!paged.rows.length
     // While a fetch is in flight an empty list means "still loading", not
     // "nothing here" - never show the misleading empty state during a load
     // (loader ruling 2026-07-16).
-    el.innerHTML = (_queueLoading
-      ? `<div class="empty"><span class="btnspin"></span> Loading replies…</div>`
-      : `<div class="empty">No replies here. New ones will show up after the next check.</div>`)
-      + smartleadSectionHtml();
-  } else {
-    el.innerHTML = paged.rows.map(inboxItemHtml).join("") + smartleadSectionHtml();
+    ? (_queueLoading
+        ? `<div class="empty"><span class="btnspin"></span> Loading replies…</div>`
+        : `<div class="empty">No replies here. New ones will show up after the next check.</div>`)
+    : paged.rows.map(inboxItemHtml).join(""))
+    + smartleadSectionHtml();
+  // Identical-HTML skip (perf pass R2): only touch the DOM when the markup
+  // actually differs. An identical string rebuilds a byte-for-byte identical
+  // list, so skipping the innerHTML assignment is invisible but saves the parse/
+  // layout/paint — this also covers the direct renderInboxList() calls (search,
+  // pager) that don't pass through loadQueue's R1 gate.
+  if (el._lastHtml !== html) {
+    el.innerHTML = html;
+    el._lastHtml = html;
   }
-  // One wiring pass for BOTH kinds of row: local queue rows open via
-  // selectRow, Smartlead-section hits via openSmartleadHit (which routes
-  // in-setter hits back through selectRow itself).
-  el.querySelectorAll(".inbox-item").forEach((item) => {
-    const slk = item.getAttribute("data-slkey");
-    item.addEventListener("click", () => slk ? openSmartleadHit(slk) : selectRow(item.getAttribute("data-id")));
-  });
+  // One DELEGATED click listener for BOTH kinds of row (perf pass R2): local
+  // queue rows open via selectRow, Smartlead-section hits via openSmartleadHit
+  // (which routes in-setter hits back through selectRow itself). Bound once, so
+  // a render no longer re-wires N per-row listeners on every rebuild.
+  if (!el._rowClickDelegated) {
+    el.addEventListener("click", (e) => {
+      const item = e.target.closest && e.target.closest(".inbox-item");
+      if (!item || !el.contains(item)) return;
+      const slk = item.getAttribute("data-slkey");
+      if (slk) openSmartleadHit(slk); else selectRow(item.getAttribute("data-id"));
+    });
+    el._rowClickDelegated = true;
+  }
   renderInboxPager(paged.total, paged.totalPages);
 }
 
@@ -6597,6 +6673,12 @@ function pollResultNote(done) {
   if (!n) return "No new replies";
   return n === 1 ? "1 new reply" : `${n} new replies`;
 }
+// Debounce ONLY the expensive local render (perf pass R4): a non-empty query
+// switches the source to the full ALL_ROWS corpus, so re-filtering + rebuilding
+// the list innerHTML on every keystroke was the cost. State (query, page) and
+// the note affordance update immediately; the list/KPIs repaint once the typing
+// pauses (~130ms), the same trailing-debounce shape scheduleSmartleadSearch uses.
+let _localSearchTimer = null;
 document.getElementById("inboxSearch").addEventListener("input", (e) => {
   inboxSearchQuery = e.target.value || "";
   inboxPage = 1;
@@ -6609,8 +6691,12 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   // predates the Smartlead escalation and taught the opposite).
   if (note && searching) note.textContent = "+ searching all of Smartlead";
   scheduleSmartleadSearch();
-  renderInboxList();
-  renderKpis();
+  if (_localSearchTimer) clearTimeout(_localSearchTimer);
+  _localSearchTimer = setTimeout(() => {
+    _localSearchTimer = null;
+    renderInboxList();
+    renderKpis();
+  }, 130);
 });
 
 /* ── Keyboard nav: ArrowUp/ArrowDown and j/k move the selection ────────── */

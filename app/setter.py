@@ -2924,10 +2924,18 @@ def _push_to_subsequence(campaign_id, lead_email: str, smartlead_lead_id, sub_se
         # campaign_id routes the POST to the owning workspace's key — the
         # path carries no /campaigns/{id}, so without it the map_id would be
         # resolved with the client's key and the push posted with navreo's.
+        # sub_sequence_delay_time is the INITIAL wait (in days) before the
+        # subsequence's first step fires, and it OVERRIDES that step's own
+        # seq_delay_details.delayInDays at enrollment. It was hardcoded 0, which
+        # collapsed the subsequence's configured 1-day step-1 delay to zero and
+        # sent the first follow-up the same day, often within minutes of the
+        # push (audit 2026-08-22: John Logue pushed 12:48 -> sent 13:02 = 14min).
+        # Default to 1 so we honour the 1-day delay the subsequences are built
+        # with instead of stripping it.
         resp = _sl_post("/master-inbox/push-to-subsequence", {
             "email_lead_map_id": map_id,
             "sub_sequence_id": sub_sequence_id,
-            "sub_sequence_delay_time": 0,
+            "sub_sequence_delay_time": 1,
             "stop_lead_on_parent_campaign_reply": True,
         }, campaign_id=campaign_id)
         if not isinstance(resp, dict):
@@ -3226,6 +3234,10 @@ def hydrate_lead(campaign_id, email: str, message_id: str):
 # regenerate-after-regenerate. Keyed per token+event so agents never mix.
 _CAL_AVAIL_CACHE = {}
 _CAL_AVAIL_TTL = 60.0
+# Slug -> event_type uri rarely changes, so it outlives the 60s slot cache
+# (perf pass R7). Keyed per token+event like the availability cache.
+_CAL_EVENT_TYPE_CACHE = {}
+_CAL_EVENT_TYPE_TTL = 3600.0
 
 
 def get_calendly_availability(agent: dict, settings: dict, now_utc):
@@ -3267,18 +3279,29 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
                 return "error", [], "Couldn't connect to Calendly with this token."
             settings["_calendly_user_uri"] = user_uri
 
-        ev = _HTTP("GET", f"https://api.calendly.com/event_types?user={quote(user_uri, safe='')}", headers)
-        items = (ev or {}).get("collection") or [] if isinstance(ev, dict) else []
-        target_slug = (agent.get("calendly_event_url") or "").rstrip("/").rsplit("/", 1)[-1]
-        event_type_uri = None
-        for it in items:
-            uri = it.get("uri") or ""
-            slug = it.get("slug") or uri.rstrip("/").rsplit("/", 1)[-1]
-            if target_slug and (slug == target_slug or target_slug in uri):
-                event_type_uri = uri
-                break
-        if not event_type_uri:
-            return "error", [], "Couldn't find this agent's Calendly event type."
+        # The event-type resolution (users/me + event_types) maps a slug to a
+        # Calendly event_type uri and changes ~never, yet it was re-run on every
+        # 60s availability-cache miss. Cache it far longer than the slot data
+        # (perf pass R7) so a refresh skips those two round-trips; slot freshness
+        # is unaffected because availability keeps its own 60s TTL below.
+        et_key = (token[-16:], agent.get("calendly_event_url") or "")
+        et_hit = _CAL_EVENT_TYPE_CACHE.get(et_key)
+        if et_hit and et_hit[0] > _time.time():
+            event_type_uri = et_hit[1]
+        else:
+            ev = _HTTP("GET", f"https://api.calendly.com/event_types?user={quote(user_uri, safe='')}", headers)
+            items = (ev or {}).get("collection") or [] if isinstance(ev, dict) else []
+            target_slug = (agent.get("calendly_event_url") or "").rstrip("/").rsplit("/", 1)[-1]
+            event_type_uri = None
+            for it in items:
+                uri = it.get("uri") or ""
+                slug = it.get("slug") or uri.rstrip("/").rsplit("/", 1)[-1]
+                if target_slug and (slug == target_slug or target_slug in uri):
+                    event_type_uri = uri
+                    break
+            if not event_type_uri:
+                return "error", [], "Couldn't find this agent's Calendly event type."
+            _CAL_EVENT_TYPE_CACHE[et_key] = (_time.time() + _CAL_EVENT_TYPE_TTL, event_type_uri)
 
         now_utc = _parse_iso(now_utc) if not isinstance(now_utc, _dt.datetime) else (
             now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
@@ -3290,17 +3313,43 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
         # existed. Start a few minutes ahead, and surface chunk errors.
         cursor = now_utc + _dt.timedelta(minutes=5)
         end_of_range = now_utc + _dt.timedelta(days=span_days)
-        avail = []
         chunk_days = 7
-        chunk_errors = []
+        # The date-range chunks are independent GETs, so fetch them concurrently
+        # instead of serially (perf pass R7). Results are reassembled in chunk
+        # order below, so the flattened `avail` is byte-identical to the old
+        # serial walk (each chunk is already chronological, chunk 0 < chunk 1).
+        windows = []
         while cursor < end_of_range:
             chunk_end = min(cursor + _dt.timedelta(days=chunk_days), end_of_range)
+            windows.append((cursor, chunk_end))
+            cursor = chunk_end
+
+        def _fetch_window(win):
+            c0, c1 = win
             params = {
                 "event_type": event_type_uri,
-                "start_time": cursor.strftime("%Y-%m-%dT%H:%M:%S.000000Z"),
-                "end_time": chunk_end.strftime("%Y-%m-%dT%H:%M:%S.000000Z"),
+                "start_time": c0.strftime("%Y-%m-%dT%H:%M:%S.000000Z"),
+                "end_time": c1.strftime("%Y-%m-%dT%H:%M:%S.000000Z"),
             }
-            data = _HTTP("GET", f"https://api.calendly.com/event_type_available_times?{urlencode(params)}", headers)
+            return _HTTP("GET", f"https://api.calendly.com/event_type_available_times?{urlencode(params)}", headers)
+
+        results = [None] * len(windows)
+        if len(windows) <= 1:
+            if windows:
+                results[0] = _fetch_window(windows[0])
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(windows))) as pool:
+                fut_idx = {pool.submit(_fetch_window, w): i for i, w in enumerate(windows)}
+                for fut in concurrent.futures.as_completed(fut_idx):
+                    i = fut_idx[fut]
+                    try:
+                        results[i] = fut.result()
+                    except Exception as e:  # noqa: BLE001 - one window's failure is handled like a serial miss
+                        results[i] = f"error: {type(e).__name__}"
+
+        avail = []
+        chunk_errors = []
+        for data in results:   # chunk order preserved -> identical flattened order
             if isinstance(data, dict) and isinstance(data.get("collection"), list):
                 for slot in data["collection"]:
                     st = slot.get("start_time")
@@ -3308,7 +3357,6 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
                         avail.append(st)
             else:
                 chunk_errors.append(str(data)[:150])
-            cursor = chunk_end
         if chunk_errors and not avail:
             return "error", [], f"Calendly availability lookup failed: {chunk_errors[0]}"
         # Only real answers are cached - errors keep retrying at full price.
@@ -3322,13 +3370,31 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
 
 # ── Supabase-backed agent/settings/queue CRUD ───────────────────────────────
 
+# Primitive read caches (perf pass R12). _load_settings/_load_agents were
+# uncached, so the webhook path (handle_inbound -> _agent_for_campaign ->
+# _load_agents, + _load_settings) re-scanned every ~15KB agent doc and the
+# settings row on EVERY inbound. The route-level SWR cache only covered the
+# UI-shaped payload; caching the primitives lets the webhook + pipeline share
+# the same 30s window without changing their (full-shape) return values. Every
+# write path already calls _bust_agents_cache(), which clears these too.
+_SETTINGS_PRIM_TTL = 30.0
+_SETTINGS_PRIM_CACHE = {"at": 0.0, "val": None}
+_AGENTS_PRIM_CACHE = {"at": 0.0, "val": None}
+
+
 def _load_settings() -> dict:
     if not _SB:
         return {}
+    c = _SETTINGS_PRIM_CACHE
+    if c["val"] is not None and (_time.time() - c["at"]) < _SETTINGS_PRIM_TTL:
+        return dict(c["val"])   # copy: callers read-modify-write the settings doc
     try:
         rows = _SB("GET", f"{AGENTS_TABLE}?id=eq.{SETTINGS_ID}&select=doc")
         if isinstance(rows, list) and rows:
-            return dict(rows[0].get("doc") or {})
+            doc = dict(rows[0].get("doc") or {})
+            c["val"] = doc
+            c["at"] = _time.time()
+            return dict(doc)
     except Exception:  # noqa: BLE001
         pass
     return {}
@@ -3345,6 +3411,9 @@ def _save_settings(doc: dict):
 def _load_agents() -> list:
     if not _SB:
         return []
+    c = _AGENTS_PRIM_CACHE
+    if c["val"] is not None and (_time.time() - c["at"]) < _SETTINGS_PRIM_TTL:
+        return c["val"]   # agent docs are treated as immutable throughout
     try:
         # Reserved doc rows (double-underscore ids like __settings__, plus
         # training-<agent_id>) live in the same table but are never real
@@ -3352,9 +3421,12 @@ def _load_agents() -> list:
         # agents list or campaign assignment lookups.
         rows = _SB("GET", f"{AGENTS_TABLE}?select=id,doc")
         if isinstance(rows, list):
-            return [r.get("doc") or {} for r in rows
+            out = [r.get("doc") or {} for r in rows
                    if isinstance(r, dict) and not str(r.get("id") or "").startswith("__")
                    and not str(r.get("id") or "").startswith(TRAINING_ID_PREFIX)]
+            c["val"] = out
+            c["at"] = _time.time()
+            return out
     except Exception:  # noqa: BLE001
         pass
     return []
@@ -4183,14 +4255,30 @@ def _apply_patch(row: dict, patch: dict) -> bool:
     return wrote
 
 
+_COMPANY_HINTS_CACHE = {}
+_COMPANY_HINTS_TTL = 600.0  # geo rarely moves; a poll tick's replies often share a domain
+
+
 def _company_hints(domain: str) -> dict:
     if not domain or not _SB:
         return {}
+    domain = domain.strip().lower()
+    if not domain:
+        return {}
+    # Multiple replies in one tick (and tick-after-tick) frequently share a
+    # domain; cache the geo lookup so we hit companies once per domain per TTL
+    # (perf pass R11). Only successful, behaviourally-equivalent results are
+    # cached — a miss/error falls through and is retried next call.
+    hit = _COMPANY_HINTS_CACHE.get(domain)
+    if hit and hit[0] > _time.time():
+        return dict(hit[1])
     try:
         rows = _SB("GET", f"companies?domain=eq.{domain}&select=city,state,country&limit=1")
         if isinstance(rows, list) and rows:
             r = rows[0]
-            return {"city": r.get("city"), "state": r.get("state"), "country": r.get("country")}
+            out = {"city": r.get("city"), "state": r.get("state"), "country": r.get("country")}
+            _COMPANY_HINTS_CACHE[domain] = (_time.time() + _COMPANY_HINTS_TTL, dict(out))
+            return out
     except Exception:  # noqa: BLE001
         pass
     return {}
@@ -4955,7 +5043,13 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     # claiming a new one and let _finalize_row PATCH the result in place.
     redrive_id = reply.get("_redrive_id")
 
-    if not is_test and redrive_id is None:
+    # The poll loop already ran this exact _existing_row check before calling
+    # in, and nothing inserts this reply's row between there and here, so it
+    # sets reply["_existing_checked"] to skip the duplicate read (perf pass R8).
+    # The claim-insert below still dedupes via the unique constraint, so a
+    # concurrent insert can't slip through. Every other caller (webhooks, redraft)
+    # leaves the flag unset and pays the check as before.
+    if not is_test and redrive_id is None and not reply.get("_existing_checked"):
         existing = _existing_row(workspace, campaign_id, email, message_id)
         if existing:
             return existing
@@ -7013,9 +7107,14 @@ def run_poll() -> dict:
         # them oldest-first so a thread's replies still intake in order.
         replies = sorted([r for r in replies if isinstance(r, dict)],
                          key=lambda r: r.get("replied_at") or "")
-        processed = 0
+        # Phase A — serial gating (perf pass R5). Walk oldest-first, apply every
+        # filter/backlog-gate/dedup check exactly as before, and collect up to 15
+        # ready tasks. The gating stays serial so the 15-cap accounting and the
+        # cheap _existing_row prechecks are byte-for-byte identical to the old
+        # loop; only the expensive per-reply pipeline (Phase B) is parallelised.
+        tasks = []   # each: {"kind": "agent"|"agentless", "reply": ..., "agent": ...}
         for r in replies:
-            if processed >= 15:
+            if len(tasks) >= 15:
                 break
             if not isinstance(r, dict):
                 continue
@@ -7062,36 +7161,79 @@ def run_poll() -> dict:
                         pass
                 if _existing_row(WORKSPACE, cid, email, mid):
                     continue
-                processed += 1
-                summary["checked"] += 1
-                try:
-                    row = process_reply(reply, agent, settings)
-                    summary["queued"] += 1
-                    status = (row or {}).get("status")
-                    if status == "auto_sent":
-                        summary["auto_sent"] += 1
-                    elif status == "needs_review":
-                        summary["needs_review"] += 1
-                    elif status == "no_action":
-                        summary["no_action"] += 1
-                except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
-                    summary["errors"] += 1
-                    print(f"[setter] poll error for {email}/{cid}: {e}", file=sys.stderr)
+                # Tell the pipeline we've already confirmed no existing row so it
+                # doesn't repeat the same read (perf pass R8).
+                reply["_existing_checked"] = True
+                tasks.append({"kind": "agent", "reply": reply, "agent": agent})
             else:
                 # Agentless intake (owner ruling 2026-07-14): no campaign_assigned_at
                 # concept without an agent doc - the reply just goes straight in.
                 if _existing_row(WORKSPACE, cid, email, mid):
                     continue
-                processed += 1
-                summary["checked"] += 1
+                tasks.append({"kind": "agentless", "reply": reply, "agent": None})
+        summary["checked"] += len(tasks)
+
+        # Phase B — run the gated tasks. Each reply claims its own queue row
+        # atomically (unique constraint dedupes), so distinct leads are fully
+        # independent and run concurrently. Replies for the SAME lead+campaign
+        # stay in one group and run sequentially, preserving the oldest-first
+        # in-thread intake order the serial loop guaranteed.
+        def _run_one(t):
+            if t["kind"] == "agent":
+                row = process_reply(t["reply"], t["agent"], settings)
+                return ("agent", row)
+            row = _intake_agentless(t["reply"])
+            return ("agentless", row)
+
+        from collections import OrderedDict as _OD
+        groups = _OD()
+        for t in tasks:
+            groups.setdefault((t["reply"]["email"], t["reply"]["campaign_id"]), []).append(t)
+
+        def _run_group(group_tasks):
+            out = []
+            for t in group_tasks:   # sequential within a thread -> intake order kept
                 try:
-                    row = _intake_agentless(reply)
-                    summary["agentless"] += 1
-                    if (row or {}).get("status") == "needs_review":
-                        summary["needs_review"] += 1
+                    out.append(("ok", t, _run_one(t)))
                 except Exception as e:  # noqa: BLE001 - one bad reply must never stop the sweep
-                    summary["errors"] += 1
-                    print(f"[setter] poll agentless-intake error for {email}/{cid}: {e}", file=sys.stderr)
+                    out.append(("err", t, e))
+            return out
+
+        results = []
+        if len(groups) <= 1:
+            for g in groups.values():
+                results.extend(_run_group(g))
+        else:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=min(5, len(groups))) as pool:
+                futs = [pool.submit(_run_group, g) for g in groups.values()]
+                for fut in concurrent.futures.as_completed(futs):
+                    results.extend(fut.result())
+
+        for outcome, t, payload in results:
+            email = t["reply"].get("email")
+            cid = t["reply"].get("campaign_id")
+            if outcome == "err":
+                summary["errors"] += 1
+                if t["kind"] == "agent":
+                    print(f"[setter] poll error for {email}/{cid}: {payload}", file=sys.stderr)
+                else:
+                    print(f"[setter] poll agentless-intake error for {email}/{cid}: {payload}",
+                          file=sys.stderr)
+                continue
+            kind, row = payload
+            if kind == "agent":
+                summary["queued"] += 1
+                status = (row or {}).get("status")
+                if status == "auto_sent":
+                    summary["auto_sent"] += 1
+                elif status == "needs_review":
+                    summary["needs_review"] += 1
+                elif status == "no_action":
+                    summary["no_action"] += 1
+            else:
+                summary["agentless"] += 1
+                if (row or {}).get("status") == "needs_review":
+                    summary["needs_review"] += 1
         # Stragglers the categoriser never labelled (ship 2026-07-20): resolve
         # queued ones whose category has since arrived, then intake new ones
         # past the grace window. Runs AFTER the positive sweep so the 15-cap
@@ -7495,6 +7637,12 @@ def _agents_payload_cached() -> dict:
 def _bust_agents_cache():
     _AGENTS_CACHE["at"] = 0.0
     _AGENTS_CACHE["val"] = None
+    # Primitive read caches ride along (perf pass R12) so a save is never
+    # served stale from the webhook/pipeline path either.
+    _SETTINGS_PRIM_CACHE["at"] = 0.0
+    _SETTINGS_PRIM_CACHE["val"] = None
+    _AGENTS_PRIM_CACHE["at"] = 0.0
+    _AGENTS_PRIM_CACHE["val"] = None
 
 
 def route_agents_get(_params):
@@ -10159,6 +10307,42 @@ def route_thread_get(params):
         except Exception:  # noqa: BLE001 - persisting is best-effort; the response is what matters
             pass
         return 200, {"thread": thread, "refreshed": True}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_thread_batch_get(params):
+    """GET /api/setter/thread/batch?ids=a,b,c - warm a whole page of stored
+    thread snapshots in ONE read instead of N (perf pass R13). The prefetch's
+    only job is cache-warming, so this is cache-first ONLY: it returns
+    {id: thread} for rows that already carry a stored snapshot and kicks each
+    the same background rehydrate as the single-row cache-first path, exactly
+    preserving per-row behaviour. Rows with no stored snapshot are simply
+    omitted — they warm nothing here and still open via /api/setter/thread as
+    before, so no legacy row is starved. Never hydrates inline (a batch must not
+    serialize slow Smartlead calls). Workspace-scoped + capped like every read."""
+    try:
+        raw = _qp(params, "ids", "")
+        ids = [s for s in (raw.split(",") if raw else []) if s][:50]  # bound the batch
+        if not ids or not _SB:
+            return 200, {"threads": {}}
+        in_list = ",".join(quote(str(i), safe="") for i in ids)
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=in.({in_list})&{_list_ws_filter()}&select=*")
+        out = {}
+        if isinstance(rows, list):
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                stored = r.get("thread") or []
+                if not stored:
+                    continue   # not warmed here; opens via the single-row endpoint
+                out[str(r.get("id"))] = stored
+                if not r.get("is_test"):
+                    try:
+                        _kick_thread_rehydrate(r)   # same background refresh as the single path
+                    except Exception:  # noqa: BLE001
+                        pass
+        return 200, {"threads": out}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -15706,6 +15890,7 @@ GET_ROUTES = {
     "/api/setter/smartlead-thread": route_smartlead_thread_get,
     "/api/setter/categories": route_categories_get,
     "/api/setter/thread": route_thread_get,
+    "/api/setter/thread/batch": route_thread_batch_get,
     "/api/setter/lead-contact": route_lead_contact_get,
     "/api/setter/crm-link": route_setter_crm_link_get,
     "/api/setter/training": route_training_get,
