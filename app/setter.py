@@ -15055,33 +15055,33 @@ TRAINING_INTERVIEW_SCHEMA = {
     "required": ["questions"],
 }
 
-TRAINING_INTERVIEW_SYSTEM = """You prepare the next FIVE interview questions for a business owner who is training the inbox manager that replies to their leads. You are given the inbox manager's current instruction manual, every question the owner has already been asked (with their answers), and the owner's most recent training feedback.
+TRAINING_INTERVIEW_SYSTEM = """You prepare the next interview questions (up to FIVE, fewer or none when the offer is already covered) for a business owner who is training the inbox manager that replies to their leads. You are given the inbox manager's current instruction manual, every question the owner has already been asked (with their answers), and the owner's most recent training feedback.
 
 In question wording, the person who replies to leads is always "the inbox manager" - NEVER "the assistant", "the AI", "the bot", or "the system" (owner rule 2026-08-21: the replier is positioned as the client's inbox manager).
 
-Your questions gather the FACTS AND ANSWERS the manual still lacks - the concrete things the inbox manager needs when WRITING A REPLY to a lead: knowledge about the company and the offer, and how to respond to specific lead situations. Every question must serve a reply; never ask how the inbox manager operates outside of replying. There is a WIDE landscape of these; each round must MOVE INTO NEW TERRITORY rather than re-mining a topic already covered. The topic areas (spread across rounds, do not exhaust one before touching the others):
-- Contact the lead needs: phone, booking link, response hours.
-- Money facts: the real price, discounts, contract length, cancellation and payment terms, and what may be shared before a call (ask for the numbers/policy, not for the wording).
-- The offer's edges: who it is and isn't for, what you never promise, guarantees, what's out of scope.
-- Objection facts: the true differentiator or fact that answers "too expensive", "we already do this", "no budget", "send me a proposal", "not now" (ask what to know, not how to word it).
-- Proof + trust: case studies, references, results, how you'd word them, and the actual LINKS to send.
-- Voice + tone: how formal, how long, tone with a skeptical lead (a broad steer only, never lists of exact words to use or avoid).
-- Process: onboarding time, what happens after a call is booked, next steps.
-- Scheduling: timezones, how far out to offer, what to do when a lead names a time.
+Your questions gather the FACTS the manual still lacks so the inbox manager can ANSWER A PROSPECT'S QUESTION about the offer. Scope is strictly PROSPECT-FACING: only what a lead would ask about to decide whether to engage. NEVER ask about the business's INTERNAL operations - the inbox manager does not need, and must not be trained on, reply-speed or response-time SLAs, what hours or timezone you answer email, what happens AFTER a booking (calendar invites, connection or intake steps, onboarding, next steps), internal routing, or any back-office process. Each round must MOVE INTO GENUINELY NEW TERRITORY, never rehashing a fact already asked or already answered in the manual. The prospect-facing areas (spread across rounds):
+- What the offer is: what you do, who it is for and who it is not for, what you never promise, guarantees, what is out of scope.
+- Pricing policy: the real price, range or model, and whether a number may be shared before a call or it is strictly on the call (the policy and numbers, never the wording).
+- Proof: the case studies, references or results a prospect asks for, and the actual LINK to send for each.
+- Security and trust: data residency, hosting, compliance, and the exact page LINK to send when a lead raises it.
+- Differentiators: the true fact that answers "too expensive", "we already do this", "no budget", "send me a proposal" (what the lead should hear, never how to phrase it).
+- Hard disqualifiers: the conditions under which a lead is not a fit and the thread should close.
+- The booking link: the exact URL a lead is sent when they want to schedule.
 
 Rules:
 - ASK FOR REAL LINKS (owner rule 2026-08-21): each round, one or two questions should ask the owner to PASTE AN ACTUAL LINK the inbox manager may send, always tied to the lead situation that triggers it - "When a lead asks what expertise you have in their sector, which case study or page would you send? Paste the link." Good link asks: sector/industry case studies, results write-ups, product one-pagers, explainer videos, security/compliance pages. Only ask for a link the manual doesn't already hold for that situation, and make the SITUATION half explicit - the answer becomes a resource the inbox manager is allowed to send, so it must be clear when.
 - NEVER ask about the sign-off, the sender's first name, the sender's role or title in the signature, or any part of the sending identity (owner rule 2026-08-21). Who signs each email is decided by the sending mailboxes, which change per campaign - it is never the client's question to answer. "Should the inbox manager include a short sign-off? What first name and role should it use?" is exactly the banned shape.
 - STAY INSIDE THE REPLY (owner rule 2026-08-21): every question must be about a fact, number, policy, stance, link or resource the inbox manager needs in order to REPLY to a lead. Ask for the KNOWLEDGE that determines the reply, never the reply itself. NEVER ask how it operates OUTSIDE writing the reply: who to CC or include on a calendar invite, who to hand the thread to (it never hands off), internal routing, CRM steps, or any back-office process. "Who should the inbox manager include on discovery-call invites by default?" is exactly the banned shape.
 - ASK FOR THE FACT, NEVER THE WORDING (owner rule 2026-08-21, live-confirmed): NEVER ask the owner to write or supply the reply itself. Any question shaped "what one-sentence / one-line / single-sentence reply should the inbox manager send / say / use when X?" is BANNED - that asks them to draft wording (the HOW), which the inbox manager composes on its own from the facts. Ask instead for the underlying fact, number, policy or stance (the WHAT) that decides the reply. Transform every situation question this way: not "what reply to decline a price?" but "is there any price information you are willing to share, or is it strictly on the call?"; not "what reply when spend is under 50k?" but "is under 50k a month a hard disqualifier, or are there exceptions?"; not "what reply to we-already-do-this?" but "what is the one difference from your competitors you most want leads to hear?". The words reply, sentence, line, say, respond, word it, or phrase it must never be the thing a question asks the owner to provide.
-- KNOWLEDGE OVER MICRO-STYLE (owner rule 2026-08-21): favour questions that fill real gaps in what the manual KNOWS about the company, the offer, and the facts behind common lead situations. Do NOT ask granular wordsmithing questions such as which exact words or phrases the inbox manager must never use - that is too fine-grained; the broad tone steer above is enough and the specifics come from live corrections.
-- HARD ANTI-REPEAT: treat already_asked as covered ground. Do not ask the same thing in new words, and do not stay in a topic area that already has two or more answers when other areas are still untouched. If most areas above are already covered, dig into a genuinely finer, still-uncovered detail rather than looping back.
+- NO TONE OR STYLE QUESTIONS (owner rule 2026-08-21, live-confirmed): never ask about tone, voice, formality, length, or how the reply should come across. "What brief tone should the inbox manager use, concise or warm?" is HOW, not WHAT, and is BANNED. Do NOT ask which exact words or phrases to use or avoid either. Tone and wording are the inbox manager's job; you only gather facts.
+- HARD ANTI-REPEAT (semantic, not just verbatim): treat already_asked AND the manual as covered ground. NEVER ask a question whose answer is already in already_asked or already in the manual, in any wording. Do not re-mine a topic that already has an answer while another prospect-facing area is untouched. Each question must open a genuinely NEW fact-gap.
+- RETURN ONLY GENUINELY-NEW QUESTIONS, FEWER IS CORRECT: return between 0 and 5 questions - ONLY the ones that open a new prospect-facing fact-gap. If fewer than five new gaps remain, return only those. If every prospect-facing fact above is already covered, return an EMPTY list: it is CORRECT for the interview to end rather than pad the round with repeats. Never invent filler to reach five.
 - Each question answerable in ONE short line by a non-technical founder.
-- Prefer questions the recent feedback suggests are missing (a correction about pricing means pricing wording is unclear - dig a NEW angle there, don't just re-ask "what's your price").
+- Prefer questions the recent feedback suggests are missing (a correction about pricing means a pricing FACT is missing - dig a NEW pricing fact, don't re-ask "what's your price").
 - Plain 16-year-old-simple English. No jargon, no compound questions.
-- Exactly 5 questions, each from a DIFFERENT topic area where possible.
+- Each question from a DIFFERENT prospect-facing area where possible; quality and novelty over hitting a count.
 
-Output STRICT JSON: {"questions": ["...", "...", "...", "...", "..."]}"""
+Output STRICT JSON with 0 to 5 genuinely-new questions (an empty list is valid when the offer is fully covered): {"questions": ["...", "..."]}"""
 
 # Deterministic first-visit fallback (no OpenAI key, or the call failed):
 # the five facts every offer needs before scenario one (owner ruling
@@ -15213,8 +15213,10 @@ def route_training_interview(payload):
 
 
 def _generate_interview_questions(agent: dict, doc: dict) -> list:
-    """One gpt-5-mini call -> 5 fresh question strings; the static first-set
-    on any failure. Never raises, never returns an empty list."""
+    """One gpt-5-mini call -> 0 to 5 fresh question strings (EMPTY when the
+    offer is already fully covered, so the interview ends instead of repeating).
+    The static first-set only seeds a FIRST interview when the call cannot run;
+    it is never re-served on a later round. Never raises."""
     try:
         key = _KEYS.get("OPENAI_API_KEY")
         if not key:
@@ -15242,11 +15244,17 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
         if isinstance(r, dict) and not r.get("error"):
             data = json.loads(r["choices"][0]["message"]["content"])
             out = [str(q).strip() for q in (data.get("questions") or []) if str(q).strip()]
-            if out:
-                return out[:5]
-    except Exception:  # noqa: BLE001 - fall through to the static set
+            # A successful call that returns nothing means the offer is already
+            # covered: END the interview (empty), never pad with the static set
+            # (owner rule 2026-08-21: stop rather than repeat).
+            return out[:5]
+    except Exception:  # noqa: BLE001 - fall through only on a genuine failure
         pass
-    return list(STATIC_FIRST_INTERVIEW)
+    # Genuine failure (no key / HTTP / JSON error): seed a FIRST interview from
+    # the static set, but on any later round return empty rather than re-serving
+    # round one's questions as repeats.
+    has_prior = any((i or {}).get("questions") for i in (doc.get("interviews") or []) if isinstance(i, dict))
+    return [] if has_prior else list(STATIC_FIRST_INTERVIEW)
 
 
 def route_training_share(payload):

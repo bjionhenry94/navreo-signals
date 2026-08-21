@@ -742,6 +742,34 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .lp-desc summary { cursor: pointer; font-size: 12px; font-weight: 600; color: var(--ink-3); }
 .lp-desc .lp-company-desc { margin-top: 6px; }
 .lp-call-btn span { white-space: nowrap; }
+/* Multi-number call control: the primary tel: button plus a caret that opens a
+   menu of the other numbers we hold. The group is a single flex item so it sits
+   in the quick-links row like any one button; the primary keeps the flex-grow. */
+.lp-call-group { position: relative; display: inline-flex; align-items: stretch; flex: 1 1 auto; min-width: 0; gap: 0; }
+.lp-call-group .lp-call-btn { flex: 1 1 auto; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.lp-call-more {
+  flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; min-width: 30px;
+  margin-left: -1px; padding: 0 8px; border: 1px solid var(--line-2); border-top-left-radius: 0; border-bottom-left-radius: 0;
+  border-top-right-radius: 10px; border-bottom-right-radius: 10px;
+  background: transparent; color: var(--ink-2); font-size: 12px; line-height: 1; cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.lp-call-more:hover { background: var(--bg-sunken); border-color: var(--ink-3); color: var(--ink); }
+.lp-call-more:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
+.lp-call-group.open .lp-call-more { background: var(--bg-sunken); border-color: var(--ink-3); color: var(--ink); }
+.lp-call-menu {
+  display: none; position: absolute; z-index: 40; top: calc(100% + 6px); left: 0; min-width: 220px; max-width: 320px;
+  padding: 6px; border: 1px solid var(--line-2); border-radius: 12px; background: var(--bg, #fff);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
+.lp-call-group.open .lp-call-menu { display: block; }
+.lp-call-menu-head { padding: 4px 8px 6px; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--ink-3); }
+.lp-call-item { display: flex; flex-direction: column; gap: 1px; padding: 7px 8px; border-radius: 8px; text-decoration: none; color: var(--ink); }
+.lp-call-item:hover { background: var(--bg-sunken); }
+.lp-call-item:focus-visible { outline: none; box-shadow: var(--focus); }
+.lp-call-num { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.lp-call-src { font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; color: var(--ink-3); }
+.lp-call-item.is-primary .lp-call-src { color: var(--orange); }
 .lp-phone-bad { color: var(--ink-3); }
 .lp-kind-bad { background: #f7e8e4; color: #a33b25; }
 .lp-said { font-size: 12px; font-style: italic; color: var(--ink-2, inherit); line-height: 1.45; margin-bottom: 12px; }
@@ -1170,7 +1198,7 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
           <div class="tray-body" id="trayBody"></div>
         </div>
         <div class="il-search">
-          <input type="text" id="inboxSearch" placeholder="Search name, email, campaign, reply…">
+          <input type="search" id="inboxSearch" name="inbox-search" placeholder="Search name, email, campaign, reply…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore>
           <div class="il-search-notes">
             <span class="small muted">&uarr;&darr; to move between replies</span>
             <span class="small muted" id="searchAllNote" style="display:none">searching this filter only</span>
@@ -2838,8 +2866,46 @@ function pagedInboxRows() {
   return { rows: rows.slice(start, start + INBOX_PAGE_SIZE), total: rows.length, totalPages };
 }
 
+/* Warm the threads of the rows the reviewer can SEE (instant-load fix
+   2026-08-22). hydrateAllRows() is a deliberate no-op — the 512MB web instance
+   can't hold the whole multi-MB thread corpus (OOM) — so every list-row open
+   used to pay a full /api/setter/thread round-trip (~300ms+) before the
+   conversation painted: the "stagnated" gap the reviewer feels. This prefetches
+   ONLY the current visible page's threads into row.thread, bounded hard so
+   memory stays tiny: at most one page of rows, 3 requests in flight, each id
+   fetched once per session. An opened warmed row paints from cache in the first
+   frame; refreshThreadFor still confirms freshness in the background. Never
+   clobbers a row that already carries a thread. */
+const _QUEUE_THREAD_TRIED = new Set();
+let _queueThreadPrefetching = false;
+async function prefetchQueueThreads() {
+  if (_queueThreadPrefetching) return;
+  _queueThreadPrefetching = true;
+  try {
+    const todo = (pagedInboxRows().rows || [])
+      .filter((r) => r && r.thread === undefined && !r.is_test
+                     && !_QUEUE_THREAD_TRIED.has(String(r.id)))
+      .map((r) => String(r.id));
+    for (let i = 0; i < todo.length; i += 3) {
+      await Promise.all(todo.slice(i, i + 3).map(async (id) => {
+        _QUEUE_THREAD_TRIED.add(id);
+        const res = await fetchJson(`/api/setter/thread?id=${encodeURIComponent(id)}`, { _retries: 1 });
+        if (res.ok && res.data && Array.isArray(res.data.thread) && res.data.thread.length) {
+          const fresh = res.data.thread;
+          [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
+            const r = (list || []).find((x) => x && String(x.id) === String(id));
+            if (r && r.thread === undefined) r.thread = fresh;   // never clobber a live thread
+          });
+        }
+      }));
+    }
+    if (_QUEUE_THREAD_TRIED.size > 400) _QUEUE_THREAD_TRIED.clear();   // bound across long sessions
+  } finally { _queueThreadPrefetching = false; }
+}
+
 function renderQueue() {
   renderInboxList();
+  prefetchQueueThreads();   // background: warm the visible page so opens feel instant
   // A read-only Smartlead conversation is open with NO selected queue row —
   // blanking the pane here (60s reload path) would clobber it mid-read.
   if (selectedRowId == null) { if (!SL_OPEN) renderDetail(null); return; }
@@ -3219,6 +3285,33 @@ document.addEventListener("change", (e) => {
     if (b) b.disabled = !e.target.value;
   }
 });
+
+// Warm-call number dropdown (the caret beside the call button). Delegated so it
+// survives the .lp-quick innerHTML swaps on hydration. Caret toggles its own
+// group open; any other click, and Escape, closes every open group. Picking a
+// number is a plain tel: link - it dials and the outside-click branch closes.
+function closeCallMenus(except) {
+  document.querySelectorAll(".lp-call-group.open").forEach((g) => {
+    if (g === except) return;
+    g.classList.remove("open");
+    const b = g.querySelector(".lp-call-more");
+    if (b) b.setAttribute("aria-expanded", "false");
+  });
+}
+document.addEventListener("click", (e) => {
+  const more = e.target.closest && e.target.closest(".lp-call-more");
+  if (more) {
+    e.preventDefault();
+    const grp = more.closest(".lp-call-group");
+    const willOpen = !grp.classList.contains("open");
+    closeCallMenus(grp);
+    grp.classList.toggle("open", willOpen);
+    more.setAttribute("aria-expanded", String(willOpen));
+    return;
+  }
+  closeCallMenus(null);
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCallMenus(null); });
 
 function inboxItemHtml(row) {
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
@@ -3897,6 +3990,37 @@ function leadLinkedIn(row) {
    used to get a "Website" button pointing at google's inbox login. The real
    domain arrives from the enrichment layer via hydrateLeadContact. */
 const FREEMAIL_RE = /^(gmail|googlemail|yahoo|ymail|rocketmail|hotmail|outlook|live|msn|icloud|me|mac|aol|gmx|web|mail|proton|protonmail|pm|zoho|yandex|wp|onet|interia|o2|op|seznam|t-online|orange|wanadoo|free|laposte|libero|virgilio|comcast|verizon|att|sbcglobal|bellsouth|cox|shaw|rogers|btinternet|sky|talktalk)\.[a-z.]{2,6}$/i;
+// The warm-call dial control. With one number it's the same single tel: button
+// it always was (one-tap, no regression). With more than one - the provider
+// mobile plus the numbers we used to discard (Smartlead-listed, any direct/
+// office line already in the payload) - the primary stays the one-tap button
+// and a caret opens a menu to dial any of the others. Source is labelled so the
+// rep knows which line they're ringing. Numbers arrive primary-first from the
+// server; menu marks the primary. The dropdown is opened by a delegated handler
+// (see the .lp-call-more listener) so it survives the quick-links re-render.
+function telHref(num) { return "tel:" + String(num || "").replace(/[^+\d]/g, ""); }
+function callButtonHtml(primary, phones) {
+  const primaryBtn = `<a class="lp-qbtn lp-call-btn" href="${telHref(primary)}" title="Call ${esc(primary)}"><span>📞 ${esc(primary)}</span></a>`;
+  const list = Array.isArray(phones) ? phones : [];
+  if (list.length <= 1) return primaryBtn;
+  const primaryDigits = String(primary).replace(/[^+\d]/g, "");
+  const items = list.map((p) => {
+    const isPrimary = String(p.number).replace(/[^+\d]/g, "") === primaryDigits;
+    const src = String(p.source || "").trim() || (p.kind === "mobile" ? "Mobile" : "On file");
+    return `<a class="lp-call-item${isPrimary ? " is-primary" : ""}" href="${telHref(p.number)}" role="menuitem" title="Call ${esc(p.number)}">
+      <span class="lp-call-num">📞 ${esc(p.number)}</span>
+      <span class="lp-call-src">${esc(src)}${isPrimary ? " · default" : ""}</span>
+    </a>`;
+  }).join("");
+  return `<span class="lp-call-group">
+    ${primaryBtn}
+    <button type="button" class="lp-call-more" aria-haspopup="menu" aria-expanded="false" aria-label="Other numbers for this lead" title="Other numbers (${list.length})">▾</button>
+    <div class="lp-call-menu" role="menu">
+      <div class="lp-call-menu-head">Call this lead</div>
+      ${items}
+    </div>
+  </span>`;
+}
 function leadQuickLinksHtml(row) {
   const rawDomain = row.company_domain || "";
   const realDomain = (rawDomain && !FREEMAIL_RE.test(rawDomain)) ? rawDomain : "";
@@ -3920,8 +4044,8 @@ function leadQuickLinksHtml(row) {
   // on phones the sidebar phone was toggle-then-tap - two taps).
   const wcSticky = warmcallFor(row);
   const wcPh = String(wcSticky.phone || "").trim();
-  const callBtn = wcPh
-    ? `<a class="lp-qbtn lp-call-btn" href="tel:${esc(wcPh.replace(/[^+\d]/g, ""))}" title="Call ${esc(wcPh)}"><span>📞 ${esc(wcPh)}</span></a>` : "";
+  const wcPhones = Array.isArray(wcSticky.phones) ? wcSticky.phones.filter((p) => p && p.number) : [];
+  const callBtn = wcPh ? callButtonHtml(wcPh, wcPhones) : "";
   // No CRM button here (owner 2026-08-17): the sidebar's "Open in CRM" link
   // is the one entry point - the bar keeps lead-level links only.
   return callBtn + websiteBtn + linkedinBtn + smartleadBtn;
@@ -4329,6 +4453,9 @@ async function hydrateLeadContact(row) {
   WARMCALL[wcKey] = { ...wcPrev, done: true,
     phone: String(res.data.phone || ""),
     phone_kind: String(res.data.phone_kind || ""),
+    // Every number we already hold for this lead (primary first) - powers the
+    // one-tap call dropdown in the warm-call bar. Empty/one-long = single button.
+    phones: Array.isArray(res.data.phones) ? res.data.phones.filter((p) => p && p.number) : [],
     person_title: String((res.data.person || {}).title || ""),
     company: res.data.company || {},
     // Smartlead's own company_name, kept as a name fallback so the Profile's
@@ -4721,8 +4848,27 @@ function convoHtml(row) {
   // follow-up). Say so AT THE BOTTOM, where the latest email will appear —
   // a thread that looks complete while the latest email is missing is the
   // exact "I never replied" bug. refreshThreadFor clears the flag.
-  const latestLoading = row._thread_pending
-    ? `<div class="muted small" style="padding:8px 0 2px"><span class="btnspin"></span> Loading the latest emails…</div>` : "";
+  //
+  // Definitive verdict (instant-load fix 2026-08-22): the old open-ended
+  // "Loading the latest emails…" spinner could sit ~20s and then vanish
+  // SILENTLY, so the reviewer never knew whether more mail was coming or the
+  // check had simply finished. Now the bottom line is always one of three
+  // conclusive states, resolved from the first /thread response (<1s,
+  // cache-first): CHECKING (bounded — actively looking, ~5s), UP TO DATE
+  // (nothing newer exists — stop waiting), or COULDN'T CONFIRM (server
+  // unreachable — showing the last saved copy, with Retry).
+  let latestLoading = "";
+  if (row._thread_pending) {
+    latestLoading = `<div class="thread-verdict checking muted small" style="padding:8px 0 2px">`
+      + `<span class="btnspin"></span> Checking for newer messages… <span class="muted">(usually under 5s)</span></div>`;
+  } else if (row._thread_verdict === "fresh") {
+    latestLoading = `<div class="thread-verdict uptodate muted small" style="padding:8px 0 2px">`
+      + `&#10003; Up to date — you're seeing the latest message.</div>`;
+  } else if (row._thread_verdict === "stalled") {
+    latestLoading = `<div class="thread-verdict stalled small" style="padding:8px 0 2px;color:#b45309">`
+      + `&#9888; Couldn't reach the mail server — showing the last saved copy. `
+      + `<a href="#" class="thread-retry" data-id="${esc(row.id)}">Retry</a></div>`;
+  }
   return `
     <div class="msg-card">
       <div class="msg-card-lab">Conversation</div>
@@ -6011,7 +6157,14 @@ async function runRedraftJob(payload, onTick, prior) {
       }
       return { ok: true, data: { row: got, feedback_note: "" } };
     }
-    if (state === "error") return { ok: false, error: (st.data && st.data.error) || "the regenerate failed" };
+    if (state === "error") {
+      // Name the stage that failed so the reviewer knows why instantly
+      // (instant-load fix 2026-08-22): "draft: The read operation timed out"
+      // beats a bare "the regenerate failed".
+      const why = (st.data && st.data.error) || "the regenerate failed";
+      const stage = st.data && st.data.stage;
+      return { ok: false, error: stage ? `${stage} step — ${why}` : why };
+    }
     return { ok: true, data: st.data };         // done
   }
   return { ok: false, error: "this is taking longer than usual - the draft may still land, give it a moment and reload" };
@@ -6109,9 +6262,29 @@ async function runSendJob(payload, onTick, opts) {
     "the send did not go through - your reply is still here, nothing was lost" };
 }
 
+/* A button label that ticks every 250ms on its own, independent of the job
+   poll cadence (instant-load fix 2026-08-22). The old label only moved when a
+   status poll returned AND only showed seconds past 10s, so a slow poll or the
+   final gap read as a FROZEN timer that then "jumped" when the draft landed.
+   This advances smoothly from t=0 and is torn down by the returned stop(). */
+function tickingLabel(btn, verb) {
+  const t0 = Date.now();
+  const paint = () => {
+    const secs = Math.floor((Date.now() - t0) / 1000);
+    // Rebuild the same spinner+label markup busyBtn installed (innerHTML, not
+    // textContent — the latter would delete the spinner span).
+    btn.dataset.tick = "1";
+    btn.innerHTML = `<span class="btnspin"></span>${esc(verb)}${secs < 1 ? "…" : `… ${secs}s`}`;
+  };
+  paint();
+  const iv = setInterval(paint, 250);
+  return () => { clearInterval(iv); delete btn.dataset.tick; };
+}
+
 async function doRedraft(btn, feedback, scope) {
   const restore = busyBtn(btn, "Regenerating…");
   if (!restore) return;
+  const stopTick = tickingLabel(btn, "Regenerating");
   const id = btn.getAttribute("data-id");
   const payload = { id: Number(id) };
   // Agent hint: lets the server load the agent doc in parallel with the row
@@ -6123,10 +6296,11 @@ async function doRedraft(btn, feedback, scope) {
   // scope: "remember" persists this feedback into the agent's own memory, so
   // every future draft applies it too - not just this one regeneration.
   if (scope === "remember" && feedback) payload.scope = "remember";
-  const res = await runRedraftJob(payload, (secs) => {
-    // 40 seconds of a silent spinner reads as broken; say it is still working.
-    btn.textContent = secs < 10 ? "Regenerating…" : `Regenerating… ${secs}s`;
-  }, hintRow ? { draft_body: hintRow.draft_body, draft_subject: hintRow.draft_subject } : null);
+  // onTick left as a no-op: the local ticker above owns the label now, so a
+  // slow poll can't freeze it.
+  const res = await runRedraftJob(payload, null,
+    hintRow ? { draft_body: hintRow.draft_body, draft_subject: hintRow.draft_subject } : null);
+  stopTick();
   restore();
   if (!res.ok) {
     showError("Couldn't regenerate the draft: " + res.error);
@@ -6195,15 +6369,16 @@ function applyRedraftedRow(id, fresh) {
 async function doDraftAnyway(btn) {
   const restore = busyBtn(btn, "Drafting…");
   if (!restore) return;
+  const stopTick = tickingLabel(btn, "Drafting");
   const id = btn.getAttribute("data-id");
   // Same background job as Regenerate - this is the very path that 502'd,
   // since a row with no draft has no stored classification either.
   const hintRow2 = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
                    ALL_ROWS.find((r) => String(r.id) === String(id));
   const res = await runRedraftJob(hintRow2 && hintRow2.agent_id
-      ? { id: Number(id), agent_hint: hintRow2.agent_id } : { id: Number(id) }, (secs) => {
-    btn.textContent = secs < 10 ? "Drafting…" : `Drafting… ${secs}s`;
-  }, hintRow2 ? { draft_body: hintRow2.draft_body, draft_subject: hintRow2.draft_subject } : null);
+      ? { id: Number(id), agent_hint: hintRow2.agent_id } : { id: Number(id) }, null,
+    hintRow2 ? { draft_body: hintRow2.draft_body, draft_subject: hintRow2.draft_subject } : null);
+  stopTick();
   restore();
   if (!res.ok) {
     showError("Couldn't draft a reply: " + res.error);
@@ -7112,17 +7287,29 @@ async function refreshThreadFor(row, isRepoll) {
   // own sent follow-up. Clearing repaints once so the loader leaves even
   // when the thread content didn't change. Never clears mid-typing repaint
   // safety: the repaint below already honours isTypingIn.
-  const clearPending = () => {
-    let had = false;
+  // verdict (instant-load fix 2026-08-22): stamp a conclusive outcome on every
+  // row copy so the bottom-of-thread line flips from "Checking…" straight to a
+  // definitive "Up to date" (fresh) or "Couldn't reach the mail server"
+  // (stalled) — never a silent disappearance the reviewer has to guess at.
+  const clearPending = (verdict) => {
+    let changed = false;
     [row, currentDetailRowObj(),
      ...[QUEUE_ROWS, ALL_ROWS].map((l) => (l || []).find((x) => x && String(x.id) === String(row.id)))]
-      .forEach((r) => { if (r && String(r.id) === String(row.id) && r._thread_pending) { r._thread_pending = false; had = true; } });
-    return had;
+      .forEach((r) => {
+        if (r && String(r.id) === String(row.id)) {
+          if (r._thread_pending) { r._thread_pending = false; changed = true; }
+          // A newly-stamped verdict is a visible change too, so even a row that
+          // was never "pending" (an already-loaded needs-review thread) gets its
+          // one-time "Up to date" confirmation instead of a silent bottom edge.
+          if (verdict && r._thread_verdict !== verdict) { r._thread_verdict = verdict; changed = true; }
+        }
+      });
+    return changed;
   };
   if (!res.ok || !res.data || !Array.isArray(res.data.thread)) {
     // Fetch failed: give up honestly rather than spin forever — show what we
-    // have, loader off.
-    if (clearPending() && String(selectedRowId) === String(row.id) && !isTypingIn(row.id)) {
+    // have, and say the server couldn't be reached (loader off, verdict set).
+    if (clearPending("stalled") && String(selectedRowId) === String(row.id) && !isTypingIn(row.id)) {
       const live = currentDetailRowObj();
       renderDetail(live && String(live.id) === String(row.id) ? live : row);
     }
@@ -7149,13 +7336,16 @@ async function refreshThreadFor(row, isRepoll) {
                     ? currentDetailRowObj() : row);
       if (live && live !== row) live._thread_polls = row._thread_polls;
       refreshThreadFor(live, true);
-    }, 4000);
+    }, 2500);   // instant-load fix 2026-08-22: was 4000; cache-first reads are
+                // cheap and the server self-throttles its own rehydrate, so a
+                // tighter poll resolves the verdict faster (5×2.5s ≈ 12.5s cap,
+                // still covers the 11s rehydrate seen live).
   } else if (!res.data.stale || isRepoll) {
     // Confirmed fresh — or out of re-polls: the loader must not outlive its
     // usefulness. Repaint (below, or here when the content didn't change) so
     // it disappears.
     row._thread_polls = 0;
-    if (clearPending()
+    if (clearPending("fresh")
         && !(fresh.length && threadKey(fresh) !== threadKey(row.thread))
         && String(selectedRowId) === String(row.id) && !isTypingIn(row.id)) {
       const live = currentDetailRowObj();
@@ -7372,6 +7562,26 @@ async function openPermalink() {
     if (!msg || !mq.matches) return;
     if (e.target.closest("a")) return; // links inside a clamped message still work
     msg.classList.add("tm-open");
+  });
+  // Retry the latest-mail check after a "couldn't reach the mail server"
+  // verdict (instant-load fix 2026-08-22): re-arm the pending state, clear the
+  // per-row throttle so the fetch actually runs, repaint back to "Checking…",
+  // then re-run the cache-first refresh.
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest && e.target.closest(".thread-retry");
+    if (!link) return;
+    e.preventDefault();
+    const id = link.getAttribute("data-id");
+    const row = QUEUE_ROWS.find((x) => String(x.id) === String(id))
+             || ALL_ROWS.find((x) => String(x.id) === String(id))
+             || (currentDetailRowObj() && String(currentDetailRowObj().id) === String(id) ? currentDetailRowObj() : null);
+    if (!row) return;
+    row._thread_pending = true;
+    row._thread_verdict = undefined;
+    row._thread_polls = 0;
+    THREAD_FETCHED_AT.delete(String(id));   // bypass the 10s per-row throttle
+    if (String(selectedRowId) === String(id) && !isTypingIn(id)) renderDetail(row);
+    refreshThreadFor(row);
   });
   // On a phone LIST view there is no chrome to dock the poll toast into, so
   // "Checking for new replies…" / "N new replies" kept landing on row text —
