@@ -1057,6 +1057,22 @@ function followupPerDay() {
   var e = ft[state.client];
   return e ? Math.max(0, (e.total14 || 0) - (e.ft14 || 0)) / 10 : null;
 }
+// Per-WEEKDAY first-touch rate = new leads we're ALREADY starting each day (seq-1
+// sends), the floor under new-lead headroom: when a client's recorded capacity is
+// understated (below what it actually sends, e.g. KRG borrowing shared infra),
+// capacity - follow-ups can go to ~0 and invent a runway of thousands of days —
+// but we can never start FEWER new leads than we demonstrably already are.
+function firstTouchPerDay() {
+  var ft = CW && CW.first_touch;
+  if (!ft) return null;
+  if (state.client === "All") {
+    var tot = 0, has = false;
+    for (var k in ft) { tot += (ft[k].ft14 || 0); has = true; }
+    return has ? tot / 10 : null;
+  }
+  var e = ft[state.client];
+  return e ? (e.ft14 || 0) / 10 : null;
+}
 function niceCeil(x) {   // ceiling with clean quarter-ticks: 4 × a nice quarter step,
   if (x <= 0) return 1;  // so per-client axes (2k … 50k) all fill tight and label round
   var q = x / 4, p = Math.pow(10, Math.floor(Math.log10(q))), f = q / p;
@@ -1809,7 +1825,11 @@ function renderRunway(v) {
   // 2026-08-21). Falls back to no day-count when the split hasn't built yet.
   var cap = capacityNow();
   var fup = followupPerDay();
-  var headroom = (cap != null && fup != null) ? Math.max(1, cap - fup) : null;
+  var ftr = firstTouchPerDay();                          // measured new-lead rate, the floor
+  var capHR = (cap != null && fup != null) ? cap - fup : null;
+  var headroom = (capHR != null || ftr != null)
+    ? Math.max(1, capHR != null ? capHR : 0, ftr != null ? ftr : 0)
+    : null;
   var days = headroom ? Math.floor(v.leadsLeft / headroom) : null;
   var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
   var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
