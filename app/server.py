@@ -17174,30 +17174,105 @@ def _client_cap_history() -> dict:
     return (_blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}).get("days") or {}
 
 
-def snapshot_navreo_capacity() -> dict:
-    """Persist TODAY's navreo-workspace + per-client capacity into the rolling
-    history blob. Idempotent per day. Called at the end of the daily reply-rate cap
-    crons (run_google_caps.py / run_outlook_caps.py) so the recorded estimate
-    tracks the caps the engines just applied — this is what stops the chart from
-    carrying a stale value forward and gives every client a real per-day series."""
-    bd = _navreo_capacity_breakdown(force_fresh=True)
-    if not bd or not bd.get("workspace"):
-        return {"ok": False, "error": "no sweep/capacity data"}
-    today = _dtmod.date.today().isoformat()
+def _cap_blob_upsert(today: str, workspace_updates: dict, client_updates: dict | None) -> None:
+    """Merge today's capacity into the rolling blob WITHOUT clobbering other
+    workspaces already written this day (the federated mailbox sync writes every
+    workspace at 04:30; the navreo cap crons then refresh just navreo at 05:15 /
+    06:00). client_updates (navreo sub-clients) replace wholesale when provided."""
     hist = _blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}
     days = hist.get("days") or {}
-    days[today] = {"asof": _dtmod.datetime.utcnow().isoformat() + "Z",
-                   "workspace": bd["workspace"], "clients": bd["clients"]}
+    rec = days.get(today) or {"workspace": {}, "clients": {}}
+    rec.setdefault("workspace", {}).update(workspace_updates or {})
+    if client_updates is not None:
+        rec["clients"] = client_updates
+    rec["asof"] = _dtmod.datetime.utcnow().isoformat() + "Z"
+    days[today] = rec
     if len(days) > 130:                       # keep ~120 days of history
         for d in sorted(days)[:-120]:
             days.pop(d, None)
     hist["days"] = days
     hist["updated"] = today
     _blob_snapshot_save(_CLIENT_CAP_HIST_KEY, hist)
+
+
+def _workspace_capacity(ws: str) -> dict:
+    """Σ distinct per-box daily caps over boxes on ACTIVE campaigns in own-workspace
+    client `ws` (asteri/krg/grout) — the whole workspace IS the client. Uses that
+    workspace's Smartlead key. {} if its roster can't be read reliably."""
+    try:
+        camps = _smartlead_json("GET", "/campaigns", workspace=ws) or []
+    except Exception:  # noqa: BLE001
+        return {}
+    active = [c for c in camps if c.get("status") == "ACTIVE"]
+    box_cap, skipped = {}, 0
+    for c in active:
+        rows = None
+        for _try in range(2):
+            try:
+                rows = _smartlead_json("GET", f"/campaigns/{c['id']}/email-accounts", timeout=90, workspace=ws)
+                break
+            except Exception:  # noqa: BLE001 — retry once, then skip this campaign
+                rows = None
+                time.sleep(1.0)
+        if rows is None:
+            skipped += 1
+            continue
+        for a in rows if isinstance(rows, list) else []:
+            e = (a.get("from_email") or "").lower()
+            if e:
+                box_cap[e] = a.get("message_per_day") or 0
+        time.sleep(0.35)
+    if active and skipped > max(5, len(active) // 7):
+        return {}
+    return {"cap": sum(box_cap.values()), "boxes": len(box_cap)}
+
+
+def snapshot_navreo_capacity() -> dict:
+    """Persist TODAY's navreo-workspace + per-client capacity (merge). Called at the
+    end of the reply-rate cap crons so the estimate tracks the caps just applied."""
+    bd = _navreo_capacity_breakdown(force_fresh=True)
+    if not bd or not bd.get("workspace"):
+        return {"ok": False, "error": "no sweep/capacity data"}
+    today = _dtmod.date.today().isoformat()
+    _cap_blob_upsert(today, {"navreo": bd["workspace"]["navreo"]}, bd["clients"])
     _CLIENT_CAP.update(data=bd, ts=time.time())
     return {"ok": True, "date": today,
             "navreo_workspace_cap": bd["workspace"]["navreo"]["cap"],
             "clients": len(bd["clients"])}
+
+
+def snapshot_all_capacity(workspaces: list | None = None) -> dict:
+    """Persist TODAY's capacity for EVERY enabled workspace — navreo (pool +
+    per-client) plus the own-workspace clients asteri/krg/grout. Called from the
+    federated mailbox sync so every workspace gets a real per-day row (navreo is
+    additionally refreshed by the cap crons). Sweeps each with its own key."""
+    if workspaces is None:
+        try:
+            workspaces = [w.get("id") for w in ws_enabled() if w.get("id")]
+        except Exception:  # noqa: BLE001
+            workspaces = list(_FLEET_CAP_WS)
+    today = _dtmod.date.today().isoformat()
+    ws_updates, client_updates, done = {}, None, {}
+    for ws in workspaces:
+        if ws == "navreo":
+            bd = _navreo_capacity_breakdown(force_fresh=True)
+            if bd and bd.get("workspace"):
+                ws_updates["navreo"] = bd["workspace"]["navreo"]
+                client_updates = bd["clients"]
+                done["navreo"] = bd["workspace"]["navreo"]["cap"]
+        else:
+            wc = _workspace_capacity(ws)
+            if wc:
+                ws_updates[ws] = wc
+                done[ws] = wc["cap"]
+    if not ws_updates:
+        return {"ok": False, "error": "no capacity data for any workspace"}
+    _cap_blob_upsert(today, ws_updates, client_updates)
+    if "navreo" in ws_updates and client_updates is not None:
+        _CLIENT_CAP.update(data={"workspace": {"navreo": ws_updates["navreo"]},
+                                 "clients": client_updates}, ts=time.time())
+    return {"ok": True, "date": today, "workspaces": done,
+            "clients": len(client_updates or {})}
 
 
 def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
@@ -17236,15 +17311,19 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
     if days and (hist or live_ws is not None or live_clients):
         today = _dtmod.date.today().isoformat()
         cap = dict(out.get("capacity") or {})
-        nav = list(cap.get("navreo") or [None] * len(days))
-        for i, d in enumerate(days):
-            rec = hist.get(d)
-            hv = rec.get("workspace", {}).get("navreo", {}).get("cap") if rec else None
-            if hv is not None:
-                nav[i] = hv
-            if d == today and live_ws is not None:
-                nav[i] = live_ws                     # today is never carried forward
-        cap["navreo"] = nav
+        # Overlay EVERY workspace's real recorded per-day capacity; anchor navreo
+        # today to the live sweep. Non-navreo today comes from the blob (the daily
+        # sync writes it — a per-request live sweep of every workspace is too slow).
+        for ws in _FLEET_CAP_WS:
+            arr = list(cap.get(ws) or [None] * len(days))
+            for i, d in enumerate(days):
+                rec = hist.get(d)
+                hv = rec.get("workspace", {}).get(ws, {}).get("cap") if rec else None
+                if hv is not None:
+                    arr[i] = hv
+                if d == today and ws == "navreo" and live_ws is not None:
+                    arr[i] = live_ws                 # today is never carried forward
+            cap[ws] = arr
         clients_all = set(live_clients)
         for rec in hist.values():
             clients_all.update((rec.get("clients") or {}).keys())

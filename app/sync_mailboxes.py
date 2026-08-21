@@ -540,6 +540,16 @@ def main():
             log(f"WARNING: {len(ws_failed)} client workspace sweep(s) FAILED this run: {', '.join(ws_failed)}")
         if success:
             log("Verification PASSED: per-workspace mailboxes and mailbox_stats_daily counts equal pulled counts")
+            # Record today's estimated daily sending capacity for EVERY workspace
+            # (navreo pool + per-client, plus asteri/krg/grout), so the analytics
+            # chart shows a real per-day value rather than carrying a stale snapshot
+            # forward (Bjion 2026-08-21 capacity audit). Best-effort — never fails
+            # the sync; the navreo cap crons refresh navreo again at 05:15/06:00.
+            try:
+                cap = server.snapshot_all_capacity()
+                log(f"Capacity snapshot: {cap}")
+            except Exception as e:  # noqa: BLE001 — best-effort
+                log(f"Capacity snapshot failed: {e!r}")
             log("=== Smartlead -> Supabase mailbox sync: END (exit 0) ===")
             sys.exit(0)
         else:
