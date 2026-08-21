@@ -1020,6 +1020,13 @@ function animateNumber(el, from, to, duration) {
   requestAnimationFrame(step);
 }
 
+/* Client-facing score display (owner ruling 2026-08-21, COSMETIC ONLY): the
+   engine's 0-100 score with 90 = ready shows to clients rescaled so the goal
+   reads 100. Every threshold, gate, and stored value stays raw. */
+function displayScore(s) {
+  return Math.min(100, Math.round(((Number(s) || 0) * 100) / 90));
+}
+
 function renderReadinessPanel(animate) {
   const host = document.getElementById("readinessPanelHost");
   const score = Number(READINESS.score) || 0;
@@ -1051,7 +1058,7 @@ function renderReadinessPanel(animate) {
   }));
   const changes = edits.concat(legacyMemory).sort((a, b) => String(b.at || "").localeCompare(String(a.at || "")));
   const autopilotLine = SHARE_MODE
-    ? "At 90+ we start replying to your leads for you."
+    ? "At 100 we start replying to your leads for you."
     : "At 90+ nothing switches on by itself: you turn autopilot on yourself in Setter &rarr; Agents when you're ready.";
   // Review mode (owner request 2026-07-14): "go back through some of the old
   // scenarios and messaging, just to check that it's now been trained to
@@ -1063,18 +1070,20 @@ function renderReadinessPanel(animate) {
     : "";
 
   // Owner ruling 2026-08-17: the CLIENT portal shows just the running
-  // score toward 90 - no formula, no stat tiles, no memory accordion.
-  // The full diagnostic panel stays owner-only.
+  // score - no formula, no stat tiles, no memory accordion. The full
+  // diagnostic panel stays owner-only. Owner ruling 2026-08-21: the client
+  // scale reads out of 100 (COSMETIC ONLY - displayScore maps the engine's
+  // 90-ready threshold to a shown 100; nothing under the hood changes).
   if (SHARE_MODE) {
     host.innerHTML = `
       <div class="readiness-panel rp-compact">
         <div class="rp-top">
-          <div class="rp-num-wrap"><span class="rp-num ${ready ? "ready" : ""}" id="rpNum">0</span><span class="rp-num-max">/ 90</span></div>
+          <div class="rp-num-wrap"><span class="rp-num ${ready ? "ready" : ""}" id="rpNum">0</span><span class="rp-num-max">/ 100</span></div>
           <div class="rp-headline">
-            <div class="rp-label">${ready ? "Ready" : "Getting to 90"}</div>
+            <div class="rp-label">${ready ? "Ready" : "Getting to 100"}</div>
             <div class="rp-explain">${ready
               ? "We've got your voice down and we're ready to reply for you. Keep going to sharpen it further."
-              : "This score is how often we get the reply right first time: Correct nudges it up, Needs work holds it back. At 90 we've got your voice down and can reply for you."}</div>
+              : "This score is how often we get the reply right first time: Correct nudges it up, Needs work holds it back. At 100 we've got your voice down and can reply for you."}</div>
           </div>
         </div>
         <div class="rp-bar-wrap">
@@ -1085,8 +1094,8 @@ function renderReadinessPanel(animate) {
       </div>
     `;
     const numElC = document.getElementById("rpNum");
-    if (animate) animateNumber(numElC, lastRenderedScore, score, 550);
-    else numElC.textContent = String(score);
+    if (animate) animateNumber(numElC, displayScore(lastRenderedScore), displayScore(score), 550);
+    else numElC.textContent = String(displayScore(score));
     const fillElC = document.getElementById("rpBarFill");
     requestAnimationFrame(() => { fillElC.style.width = Math.max(0, Math.min(100, (score / 90) * 100)) + "%"; });
     lastRenderedScore = score;
@@ -1306,20 +1315,21 @@ function renderRoundDone() {
   const freshSpares = CASES.filter((c) => !isAnswered(c.id) && caseFresh(c));
   const ready = freshSpares.length > 0;
 
+  const disp = displayScore(score); // cosmetic /100 scale (owner ruling 2026-08-21)
   let msg, buttons, updating = "";
   if (trained) {
-    msg = `We're at ${score}, past the 90 goal - we've got your voice down and can reply for you. Everything you've shown us is saved. `
+    msg = `We're at ${disp} of 100 - we've got your voice down and can reply for you. Everything you've shown us is saved. `
         + `You can stop here${capped ? "." : " - or keep going to sharpen it further."}`;
     buttons = capped ? "" : `<button class="btn" id="doneGenerateBtn" type="button">Keep training (optional)</button>`;
   } else if (capped) {
-    msg = `That's a lot for one sitting - thank you! We're at ${score} of the 90 goal. `
+    msg = `That's a lot for one sitting - thank you! We're at ${disp} of the 100 goal. `
         + `We'll take it from here; come back any time with this same link to keep going.`;
     buttons = "";
   } else if (ready) {
-    msg = `We're at ${score} of the 90 goal. The next round was drafted with everything you just taught us.`;
+    msg = `We're at ${disp} of the 100 goal. The next round was drafted with everything you just taught us.`;
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
   } else {
-    msg = `We're at ${score} of the 90 goal.`;
+    msg = `We're at ${disp} of the 100 goal.`;
     updating = `<div class="round-updating" id="roundUpdating"><span class="spin"></span><span>Updating your AI with what you just taught it - the next round will already know…</span></div>`;
     buttons = "";
   }
@@ -2445,7 +2455,7 @@ const TUT_STEPS = [
     body: () => "The reply itself is editable - click into it and change anything, like you're fixing an email a colleague drafted. We learn from your version on the spot (you'll see \"Got it\" confirm what we took in), and once you've changed it, Needs work is the button to press.",
     target: () => document.getElementById("trDraft") || document.querySelector(".train-card") },
   { title: "The finish line", cta: "Let's go",
-    body: () => `Cards come in rounds of ${ROUND_SIZE}, and between rounds we might ask a couple of quick questions about your offer - every answer and every rating goes into the very next drafts, within seconds. At 90 we've got your voice down; stop whenever you like, everything is saved as you go.`,
+    body: () => `Cards come in rounds of ${ROUND_SIZE}, and between rounds we might ask a couple of quick questions about your offer - every answer and every rating goes into the very next drafts, within seconds. At 100 we've got your voice down; stop whenever you like, everything is saved as you go.`,
     target: () => document.getElementById("readinessPanelHost") },
 ];
 
