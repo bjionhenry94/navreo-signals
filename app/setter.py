@@ -15139,10 +15139,25 @@ def route_training_interview(payload):
                 interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
                 if not interviews:
                     return 404, {"error": "No interview questions have been asked yet."}
-                latest = interviews[-1]
+                # Match the answers to the interview the qids actually belong
+                # to, not just interviews[-1]: a newer round can be generated
+                # (CSM and client both training, or a background generate)
+                # while the client still has an earlier round open, and their
+                # filled answers must land on THAT round rather than bounce as
+                # "no answers matched" (owner report 2026-08-21: a full form
+                # rejected with "answer at least one question"). Newest-first
+                # so the current round still wins when a qid is ambiguous.
+                target = None
+                for iv in reversed(interviews):
+                    ivq = {str((q or {}).get("id")) for q in (iv.get("questions") or [])}
+                    if any(str(qid) in ivq for qid in raw):
+                        target = iv
+                        break
+                if target is None:
+                    target = interviews[-1]
                 by_id = {str((q or {}).get("id")): str((q or {}).get("q") or "")
-                         for q in (latest.get("questions") or [])}
-                stored = dict(latest.get("answers") or {})
+                         for q in (target.get("questions") or [])}
+                stored = dict(target.get("answers") or {})
                 for qid, ans in raw.items():
                     ans = str(ans or "").strip()[:500]
                     if ans and str(qid) in by_id:
@@ -15150,8 +15165,8 @@ def route_training_interview(payload):
                         qa_lines.append(f"Q: {by_id[str(qid)]}\nA: {ans}")
                 if not qa_lines:
                     return 400, {"error": "No answers matched the current questions."}
-                latest["answers"] = stored
-                latest["answered_at"] = at
+                target["answers"] = stored
+                target["answered_at"] = at
                 # ONE combined merge for the whole questionnaire - five
                 # separate gpt-5-mini merges would burn 5x the latency for the
                 # same manual (the digest already carries each Q&A verbatim in

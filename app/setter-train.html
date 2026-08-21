@@ -1489,10 +1489,14 @@ async function fetchInterviewQuestions() {
 async function submitInterviewAnswers(iv, onDone) {
   const answers = {};
   let n = 0;
-  (iv.questions || []).forEach((q) => {
-    const inp = document.getElementById(`iv-${String(q.id)}`);
-    const val = inp ? inp.value.trim() : "";
-    if (val) { answers[String(q.id)] = val; n++; }
+  // Read what is ACTUALLY on screen (data-qid), not iv.questions: IV_CURRENT
+  // can be reassigned to a newer round while this form stays mounted, which
+  // made every getElementById miss and falsely report an empty form (owner
+  // report 2026-08-21: a full form bounced with "answer at least one question").
+  document.querySelectorAll("#ivForm .iv-q input[data-qid]").forEach((inp) => {
+    const qid = inp.getAttribute("data-qid");
+    const val = (inp.value || "").trim();
+    if (qid && val) { answers[qid] = val; n++; }
   });
   if (!n) { showError("Answer at least one question - or hit skip."); return; }
   const body = { agent_id: selectedAgentId, action: "answers", answers };
