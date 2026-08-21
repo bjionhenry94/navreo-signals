@@ -14838,12 +14838,13 @@ Your questions gather the OPERATIONAL FACTS the manual still lacks - the concret
 - Money: how to talk about price, discounts, contract length, cancellation, payment terms.
 - The offer's edges: who it is and isn't for, what you never promise, guarantees, what's out of scope.
 - Handling objections: "too expensive", "we already do this", "no budget", "send me a proposal", "not now".
-- Proof + trust: case studies, references, results, how you'd word them.
+- Proof + trust: case studies, references, results, how you'd word them, and the actual LINKS to send.
 - Voice + style: how formal, how long, phrases you love or ban, tone with a skeptical lead.
 - Process: onboarding time, what happens after a call is booked, next steps.
 - Scheduling: timezones, how far out to offer, what to do when a lead names a time.
 
 Rules:
+- ASK FOR REAL LINKS (owner rule 2026-08-21): each round, one or two questions should ask the owner to PASTE AN ACTUAL LINK the inbox manager may send, always tied to the lead situation that triggers it - "When a lead asks what expertise you have in their sector, which case study or page would you send? Paste the link." Good link asks: sector/industry case studies, results write-ups, product one-pagers, explainer videos, security/compliance pages. Only ask for a link the manual doesn't already hold for that situation, and make the SITUATION half explicit - the answer becomes a resource the inbox manager is allowed to send, so it must be clear when.
 - NEVER ask about the sign-off, the sender's first name, the sender's role or title in the signature, or any part of the sending identity (owner rule 2026-08-21). Who signs each email is decided by the sending mailboxes, which change per campaign - it is never the client's question to answer. "Should the inbox manager include a short sign-off? What first name and role should it use?" is exactly the banned shape.
 - HARD ANTI-REPEAT: treat already_asked as covered ground. Do not ask the same thing in new words, and do not stay in a topic area that already has two or more answers when other areas are still untouched. If most areas above are already covered, dig into a genuinely finer, still-uncovered detail rather than looping back.
 - Each question answerable in ONE short line by a non-technical founder.
