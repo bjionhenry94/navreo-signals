@@ -1011,6 +1011,30 @@ function capacityDailyFull() {   // full 30-day capacity array for the client, o
   var ratio = clientCur / navCur;
   return navCap.map(function (v) { return v == null ? null : Math.round(v * ratio); });
 }
+// ── Days-of-leads runway inputs (Bjion 2026-08-21) ────────────────────────
+// CURRENT per-day sending capacity for the selected client (latest non-null of
+// its capacity series; the flat client-cap value as a fallback).
+function capacityNow() {
+  var arr = capacityDailyFull();
+  if (arr) for (var i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i];
+  return clientCapValue();
+}
+// Per-WEEKDAY follow-up load = sends owed to leads already in flight (all steps
+// bar the first), from the sweep's 14-day first-touch split. 10 = weekdays in a
+// 14-day window, matching the capacity cap (a per-sending-day number). null when
+// the split hasn't been built yet (old cache) → the widget hides the day count
+// rather than inventing a runway.
+function followupPerDay() {
+  var ft = CW && CW.first_touch;
+  if (!ft) return null;
+  if (state.client === "All") {
+    var tot = 0, has = false;
+    for (var k in ft) { tot += Math.max(0, (ft[k].total14 || 0) - (ft[k].ft14 || 0)); has = true; }
+    return has ? tot / 10 : null;
+  }
+  var e = ft[state.client];
+  return e ? Math.max(0, (e.total14 || 0) - (e.ft14 || 0)) / 10 : null;
+}
 function niceCeil(x) {   // ceiling with clean quarter-ticks: 4 × a nice quarter step,
   if (x <= 0) return 1;  // so per-client axes (2k … 50k) all fill tight and label round
   var q = x / 4, p = Math.pow(10, Math.floor(Math.log10(q))), f = q / p;
@@ -1754,20 +1778,24 @@ function renderRunway(v) {
   // not individual"). Fleet keeps its tested weekday average; a client's rate
   // comes from ITS window sent ÷ the weekdays in the window — the sweep has
   // per-client window sent for every client, so days-left now works per client.
-  var cwR = cwFor(state.client);
-  var wkdaysInWin = Math.max(1, Math.round(state.range * 5 / 7));
-  var sentDay = isAll ? weekdayAvgSent(14)
-                      : (cwR && cwR.sent ? cwR.sent / wkdaysInWin : null);
-  var epl = v.completed > 0 ? v.sentLT / v.completed : null;   // lifetime — burn is a sequence property, not a window one
-  var burn = (sentDay && epl) ? sentDay / epl : null;
-  var days = burn && burn > 0 ? Math.floor(v.leadsLeft / burn) : null;
+  // NEW-lead headroom = daily sending capacity minus the follow-up load already
+  // owed to leads in flight. Follow-ups don't burn NEW leads (they go to people
+  // already started) and eat a fixed slice of capacity, so the rate we can START
+  // fresh leads is capacity - follow-ups. Days of leads = leads-not-yet-worked /
+  // that headroom. Replaces the old sent/completed emails-per-lead burn, which
+  // ballooned for mid-sequence clients and overstated the runway ~2-4x (Bjion
+  // 2026-08-21). Falls back to no day-count when the split hasn't built yet.
+  var cap = capacityNow();
+  var fup = followupPerDay();
+  var headroom = (cap != null && fup != null) ? Math.max(1, cap - fup) : null;
+  var days = headroom ? Math.floor(v.leadsLeft / headroom) : null;
   var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
   var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
   if (days != null) {
     $("run-kick").textContent = "Days of leads left";
     $("run-big").innerHTML = fmtN(days) + "<small> days</small>";
     $("run-big").className = "bignum num" + (days <= 21 ? " warn" : "");
-    $("run-sub").textContent = fmtN(v.leadsLeft) + " leads still to work · about " + fmtN(burn) + " used a day";
+    $("run-sub").textContent = fmtN(v.leadsLeft) + " leads still to work · about " + fmtN(headroom) + " new leads started a day";
     $("run-svg").style.display = "";
     var x = 12 + Math.min(1, days / 45) * 318;
     $("run-poly").setAttribute("points", "12,20 " + x.toFixed(0) + ",96 12,96");

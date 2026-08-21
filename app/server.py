@@ -9955,6 +9955,31 @@ _SL_SEQS_SWR = _SWRKeyedCache(
     name="sl-seqs", neg_ttl=15)
 
 
+def _campaign_first_touch_split(cid, start, end_iso):
+    """(seq1_sent, total_sent) for a campaign over [start, end_iso] from Smartlead
+    sequence-analytics. seq1 = the FIRST-touch step (seq_number==1) — how many
+    NEW leads were first-emailed in the window; total = every step. Powers the
+    days-of-leads runway (leads-not-worked / (capacity - follow-up load)). The
+    sequence-analytics row order is NOT step order, so the seq_number==1 ids come
+    from the (cached) sequences list, never from array position. (0, 0) on any
+    failure, so the caller just drops that campaign's first-touch signal."""
+    try:
+        seqs = _SL_SEQS_SWR.get(str(cid)) or []
+        step1_ids = {str(s.get("id")) for s in seqs if s.get("seq_number") == 1}
+        if not step1_ids:
+            return 0, 0
+        an = _smartlead_json("GET", f"/campaigns/{cid}/sequence-analytics"
+                                    f"?start_date={start}&end_date={end_iso}",
+                             timeout=30, attempts=3)
+        rows = an.get("data", []) if isinstance(an, dict) else []
+        seq1 = sum(int(float(r.get("sent_count") or 0)) for r in rows
+                   if str(r.get("email_campaign_seq_id")) in step1_ids)
+        total = sum(int(float(r.get("sent_count") or 0)) for r in rows)
+        return seq1, total
+    except Exception:  # noqa: BLE001 — first-touch is additive, never fatal to the sweep
+        return 0, 0
+
+
 def _variant_paths(n: int, seqs: list | None = None, history_budget: int = 0) -> dict:
     """Per-COPY meeting attribution + opener\u2192follow-up journeys, deduced from
     the copy each replying lead saw. `combinations` counts booked meetings per
@@ -17634,6 +17659,30 @@ def _client_win_build():
         # the fleet sent tens of thousands this month — a sweep with zero
         # campaign rows is a fault, not a fact; never cache or persist it
         raise RuntimeError(f"sweep found no sending campaigns against a non-zero fleet (errors: {errs[:2]})")
+    # First-touch split per client (days-of-leads runway). For each currently-
+    # sending campaign, how many of the last-14d sends were FIRST emails (a NEW
+    # lead started) vs follow-ups to leads already in flight. The runway divides
+    # leads-not-yet-worked by NEW-lead headroom = capacity - follow-up load, so a
+    # client mid-sequence (mostly follow-ups) shows a shorter, honest runway.
+    # Only ACTIVE-in-14d campaigns cost a call; failures degrade to no signal for
+    # that client (the FE then hides the day count rather than lying).
+    first_touch: dict = {}
+    try:
+        ft_start = (end - _dtmod.timedelta(days=13)).isoformat()
+        ft_end = end.isoformat()
+        for row in campaigns.get("14", []):
+            cl = row.get("client")
+            if not cl or cl == _CLIENT_UNASSIGNED or _client_hidden(cl):
+                continue
+            s1, tot = _campaign_first_touch_split(row["id"], ft_start, ft_end)
+            if tot <= 0:
+                continue
+            acc = first_touch.setdefault(cl, {"ft14": 0, "total14": 0})
+            acc["ft14"] += s1
+            acc["total14"] += tot
+            time.sleep(0.12)  # stay under the shared 200/min Smartlead cap
+    except Exception as e:  # noqa: BLE001 — additive, never fatal to the sweep
+        print(f"[client-win] first-touch split failed: {e}", file=sys.stderr)
     # label → workspace slug for every connected client workspace, so the page's
     # mailbox/domain lens resolves a client chip to its workspace without a
     # hardcoded list of its own.
@@ -17674,7 +17723,7 @@ def _client_win_build():
             daywise_errs.append(f"series {k} missing entirely")
             print(f"[client-win] daily series {k} missing — build gated", file=sys.stderr)
     data = {"days": days_out, "series": out_series, "windows": windows,
-            "_series_gated": gated,
+            "_series_gated": gated, "first_touch": first_touch,
             "campaigns": campaigns, "ws_labels": ws_labels,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
             "_debug": {"candidates": len(cands), "calls": calls, "errors": errs,
