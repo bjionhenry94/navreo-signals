@@ -173,6 +173,16 @@ OPENAI_EFFORT = os.environ.get("OPENAI_EFFORT", "minimal")
 # same fixes out of gpt-5-nano, ~20-40% less wall clock than gpt-5-mini - and
 # proofread was the single longest stage of a regenerate (7.4s of 16.6s).
 PROOFREAD_MODEL = os.environ.get("SETTER_PROOFREAD_MODEL", "gpt-5-nano")
+# Interactive-regenerate proofread SAFETY NET (instant-load fix 2026-08-22,
+# revised same day per owner: "I'd rather wait than have nothing"). Proofread is
+# the longest single stage (7.4s of 16.6s worst case). This deadline is NOT a
+# tight 5s budget enforcer — it is a backstop against a genuinely HUNG call, set
+# well above normal proofread wall-clock so the polish pass finishes normally in
+# the common case and is never dropped prematurely. Even when it DOES trip, the
+# regenerate still returns the complete drafted email (proofread_draft degrades
+# to the guard-railed unproofed draft, never nothing). Automated intake/self-heal
+# paths keep the full 45s budget. Set to 45 to match old no-cap behaviour.
+REGEN_PROOFREAD_TIMEOUT = float(os.environ.get("SETTER_REGEN_PROOFREAD_TIMEOUT", "12"))
 # Priority processing (measured 2026-07-28 on a draft-shaped call: 2.5s ->
 # 1.4s). Costs more per token, but every setter call is a few hundred tokens
 # of gpt-5-mini/nano - cents a day for a reviewer no longer watching a
@@ -2562,7 +2572,7 @@ def _visible_digit_runs(html: str) -> set:
     return set(re.findall(r"\d+", plain))
 
 
-def proofread_draft(html: str, sender_first: str = "", booking_link: str = ""):
+def proofread_draft(html: str, sender_first: str = "", booking_link: str = "", *, timeout: float = None):
     """Second sweep (owner brief 2026-07-14: "drafts need a second sweep so
     they read correctly without errors") - one extra gpt-5-mini call that
     proofreads an already-drafted email body for grammar, spelling,
@@ -2595,7 +2605,13 @@ def proofread_draft(html: str, sender_first: str = "", booking_link: str = ""):
                      "messages": [{"role": "system", "content": PROOFREAD_SYSTEM},
                                  {"role": "user", "content": json.dumps({"html": original})}],
                      "response_format": {"type": "json_schema", "json_schema": {
-                         "name": "setter_proofread", "strict": True, "schema": PROOFREAD_SCHEMA}}}, key)
+                         "name": "setter_proofread", "strict": True, "schema": PROOFREAD_SCHEMA}}}, key,
+                    timeout=timeout,
+                    # A capped proofread must FAIL FAST when it blows its deadline
+                    # (instant-load fix 2026-08-22): the default one retry would
+                    # double a timeout wait; here a miss just degrades to the
+                    # unproofed draft, so no retry.
+                    retries=0 if timeout else 1)
         if not isinstance(r, dict) or r.get("error"):
             return original, False
         data = json.loads(r["choices"][0]["message"]["content"])
@@ -10383,6 +10399,54 @@ def _getleads_enrich(email: str) -> dict:
         return {}
 
 
+def _phone_provider_label(source: str) -> str:
+    """Human label for a stored phone_source ('prospeo' -> 'Prospeo')."""
+    return {"prospeo": "Prospeo", "getleads": "Get Leads",
+            "bettercontact": "Better Contact"}.get(
+        (source or "").strip().lower(), (source or "").strip() or "On file")
+
+
+def _harvest_phones(enr: dict, sl_phone: str) -> list:
+    """Every DISTINCT number we ALREADY hold for this lead, as
+    [{number, kind, source}] - no new provider spend, just stops us discarding
+    the ones we fetched. Historically the provider mobile OVERWROTE the
+    Smartlead-listed number (setter.py hydrate); both now ride along so the
+    warm-call bar can offer a one-tap dial to each. The caller reorders so the
+    primary dial number sits first; order here is only preference for the rest.
+
+    kind: 'mobile' (provider-verified), 'direct' (person direct-dial in the
+    payload), 'office' (company line in the payload), 'listed' (on-file, type
+    unknown). Numbers with < 7 real digits are dropped as junk."""
+    out, seen = [], set()
+
+    def add(number, kind, source):
+        number = str(number or "").strip()
+        key = re.sub(r"[^+\d]", "", number)
+        if not key or len(re.sub(r"\D", "", key)) < 7 or key in seen:
+            return
+        seen.add(key)
+        out.append({"number": number, "kind": kind, "source": source})
+
+    enr = enr or {}
+    src = (enr.get("phone_source") or "").lower()
+    label = _phone_provider_label(src)
+    # 1) The provider number the sidebar already treats as primary.
+    if (enr.get("phone") or "").strip():
+        add(enr["phone"], "mobile" if src in ("prospeo", "getleads") else "listed", label)
+    # 2) Extra numbers already sitting in the stored provider payload - never
+    #    invented, only surfaced if they are actually there.
+    payload = enr.get("payload") if isinstance(enr.get("payload"), dict) else {}
+    person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
+    company = payload.get("company") if isinstance(payload.get("company"), dict) else {}
+    for cand in (person.get("direct_dial"), person.get("phone"), person.get("phone_number")):
+        add(cand, "direct", f"{label} · direct")
+    add(company.get("phone") or company.get("phone_number"), "office",
+        f"{(company.get('name') or 'Company')} · office")
+    # 3) The Smartlead-listed number - the one we used to overwrite and lose.
+    add(sl_phone, "listed", "Smartlead")
+    return out[:6]
+
+
 def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) -> None:
     """Daemon-thread body: enrich ONE fresh replier, once ever. Writes the
     setter_lead_enrichment cache row (even on a miss - tried = never re-pay),
@@ -10732,7 +10796,7 @@ def route_lead_contact_get(params):
         domain = (row.get("company_domain") or "").strip().lower()
         workspace = (row.get("workspace") or WORKSPACE or "navreo").lower()
         empty = {"linkedin": "", "website": "", "company_name": "", "phone": "", "lead_map": "",
-                 "phone_kind": "", "person": {}, "company": {}, "qualified": {}, "client": {}, "notes": ""}
+                 "phone_kind": "", "phones": [], "person": {}, "company": {}, "qualified": {}, "client": {}, "notes": ""}
         if not email or row.get("is_test"):
             return 200, empty
         now = _time.time()
@@ -10759,13 +10823,15 @@ def route_lead_contact_get(params):
                     out["website"] = dom
         except Exception:  # noqa: BLE001 - Supabase miss just falls through to Smartlead
             pass
+        sl_phone = ""  # kept so the call-list can offer it even once a mobile wins primary
         try:
             resp = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
             if isinstance(resp, dict):
                 out["linkedin"] = out["linkedin"] or (resp.get("linkedin_profile") or "").strip()
                 out["website"] = out["website"] or (resp.get("website") or "").strip()
                 out["company_name"] = (resp.get("company_name") or "").strip()
-                out["phone"] = str(resp.get("phone_number") or "").strip()
+                sl_phone = str(resp.get("phone_number") or "").strip()
+                out["phone"] = sl_phone
                 # The conversation id: this lead's campaign_lead_map_id inside
                 # THIS campaign (same one-call resolution _sl_lead_map_id_by_email
                 # proved live 2026-07-17).
@@ -10796,6 +10862,16 @@ def route_lead_contact_get(params):
                 out["phone_kind"] = "mobile" if (enr.get("phone_source") or "") in ("prospeo", "getleads") else "listed"
             elif out.get("phone"):
                 out["phone_kind"] = "listed"
+            # Every OTHER number we already hold, so the warm-call bar can offer
+            # a one-tap dial to each (owner ask 2026-08-21). No new provider
+            # spend - purely the numbers we fetched and used to discard. Only
+            # built when there IS a primary number, and the primary is pinned
+            # first so one-tap dialling is unchanged.
+            if out.get("phone"):
+                phones = _harvest_phones(enr, sl_phone)
+                pd = re.sub(r"[^+\d]", "", out["phone"])
+                phones.sort(key=lambda p: 0 if re.sub(r"[^+\d]", "", p["number"]) == pd else 1)
+                out["phones"] = phones
             # The replier's role: the people table first, else whatever the
             # enrichment payload knows (Prospeo current_job_title/headline).
             if not (out.get("person") or {}).get("title") and isinstance((enr or {}).get("payload"), dict):
@@ -11438,6 +11514,11 @@ def _redraft_sync(payload):
     # be attributed without guessing (which call is it THIS time?). Cheap:
     # a handful of _time.time() reads on a path that costs seconds.
     stages, _t_start = {}, _time.time()
+    # Which stage is in flight right now (instant-load fix 2026-08-22): a model
+    # call that raises leaves no _stage() entry, so the error couldn't name where
+    # it died. _cur is stamped before each risky stage and surfaced in the error
+    # body, so the reviewer sees "regenerate failed at draft: <reason>" instantly.
+    _cur = {"s": "startup"}
 
     def _stage(name, since):
         stages[name] = int((_time.time() - since) * 1000)
@@ -11561,6 +11642,7 @@ def _redraft_sync(payload):
             company_location = ", ".join([v for v in (comp_hints.get("country"), comp_hints.get("state"),
                                                       comp_hints.get("city")) if v])
             mem_hints = _prefix_latest_rules(_latest_owner_rules(agent), _agent_memory_digest(agent))
+            _cur["s"] = "classify"
             _t = _time.time()
             try:
                 classification = classify({"subject": row.get("reply_subject"), "body": body_text,
@@ -11664,6 +11746,7 @@ def _redraft_sync(payload):
                             if isinstance(m, dict) and str(m.get("type") or "").upper() != "SENT")
         call_ask = "required" if time_plan else call_ask_for(
             classification, redraft_body_text, thread_text, first_touch=inbound_turns <= 1)
+        _cur["s"] = "draft"
         _t = _time.time()
         d = draft_reply(
             {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"), "body": row.get("reply_body"),
@@ -11676,9 +11759,14 @@ def _redraft_sync(payload):
         draft_html = d.get("html")
         if draft_html:
             # Second sweep (owner brief 2026-07-14): proofread before this
-            # regenerated draft is saved.
+            # regenerated draft is saved. Hard deadline on this interactive path
+            # (instant-load fix 2026-08-22): a reviewer is watching, so a slow
+            # proofread degrades to the unproofed (still guard-railed) draft
+            # rather than blowing the 5s budget.
+            _cur["s"] = "proofread"
             _t = _time.time()
-            draft_html, _proofread_changed = proofread_draft(draft_html, sender_first, _booking_link(agent))
+            draft_html, _proofread_changed = proofread_draft(
+                draft_html, sender_first, _booking_link(agent), timeout=REGEN_PROOFREAD_TIMEOUT)
             _stage("proofread", _t)
         # Re-stamped, not preserved: the baseline for an Approve-time diff is
         # the LATEST thing the agent wrote, not its first attempt. Edits the
@@ -11768,7 +11856,11 @@ def _redraft_sync(payload):
         return 200, {"row": {**row, **patch}, "feedback_note": note, "stages": stages}
     except Exception as e:  # noqa: BLE001
         _stage("total", _t_start)
-        return 500, {"error": str(e)[:300], "stages": stages}
+        # Name where it died so the reviewer knows why instantly, not just "it
+        # failed" (instant-load fix 2026-08-22). A urllib read timeout stringifies
+        # to "The read operation timed out"; prefixing the stage turns that into
+        # "draft timed out" at the UI.
+        return 500, {"error": str(e)[:300], "stage": _cur.get("s"), "stages": stages}
 
 
 def route_test_inject(payload):
