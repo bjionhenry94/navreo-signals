@@ -2284,10 +2284,27 @@ function submitAndAdvance(c) {
   }
   render();
 
-  fetchJson("/api/setter/training/answer", {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(answerBody),
-  }).then((res) => {
+  // Transient-failure retry (live incident 2026-08-21): a rating POSTed
+  // while the server restarts mid-deploy can fail with a one-off load error
+  // ("Agent not found") - retry quietly twice with backoff before undoing
+  // the optimistic save and alarming the trainer. A real 401 (expired
+  // token) never retries.
+  const postAnswer = async () => {
+    let res = await fetchJson("/api/setter/training/answer", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(answerBody),
+    });
+    for (const delay of [2000, 5000]) {
+      if (res.ok || res.status === 401) break;
+      await new Promise((r) => setTimeout(r, delay));
+      res = await fetchJson("/api/setter/training/answer", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(answerBody),
+      });
+    }
+    return res;
+  };
+  postAnswer().then((res) => {
     IN_FLIGHT_ANSWERS.delete(c.id);
     if (carriesFeedback) pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
     unmarkSaving();
