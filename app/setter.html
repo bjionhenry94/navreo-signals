@@ -238,6 +238,32 @@
 }
 .lp-cat-actions .btn.danger { background: var(--red); border-color: var(--red); color: #fff; }
 .lp-cat-actions .btn.danger:hover { background: #a52f1a; border-color: #a52f1a; }
+/* Segmented one-tap tiles (owner ask 2026-08-22): Call booked / Out of office /
+   Not qualified as three equal targets, so the most-common outcomes - the
+   positive one included - are one tap with no dropdown. Idle tiles are white
+   with a coloured icon chip; committing paints the whole tile in its semantic
+   tone (green = positive/keeps in flow, amber = OOO, red = reject), matching the
+   category pill's own tone language. The "Change category…" select sits below,
+   deliberately quieter. */
+.lp-cat-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 2px 0 10px; }
+.lp-cat-tile {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 7px;
+  min-height: 74px; padding: 11px 6px; border: 1px solid var(--line-2); background: var(--bg);
+  border-radius: 11px; cursor: pointer; font-family: inherit; font-weight: 600; font-size: 12px;
+  color: var(--ink); text-align: center; line-height: 1.2;
+  transition: transform .14s ease, border-color .14s ease, background-color .14s ease;
+}
+.lp-cat-tile:hover { transform: translateY(-1px); border-color: var(--ink-3); }
+.lp-cat-tile:focus-visible { outline: none; box-shadow: var(--focus); border-color: var(--orange); }
+.lp-cat-tile.busy { opacity: .6; pointer-events: none; }
+.lp-tile-ico { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; flex-shrink: 0; }
+.lp-tile-ico svg { width: 17px; height: 17px; }
+.lp-cat-tile.pos  .lp-tile-ico { background: var(--green-bg); color: var(--green); }
+.lp-cat-tile.warn .lp-tile-ico { background: var(--amber-bg); color: var(--amber); }
+.lp-cat-tile.neg  .lp-tile-ico { background: var(--red-bg);   color: var(--red); }
+.lp-cat-tile.pos:hover  { border-color: var(--green-line); }
+.lp-cat-tile.warn:hover { border-color: var(--amber-line); }
+.lp-cat-tile.neg:hover  { border-color: var(--red-line); }
 .lp-cat-hint { margin-top: 10px; font-size: 12px; color: var(--ink-3); line-height: 1.5; }
 .lp-cat-hint:empty { margin-top: 0; }
 .lp-cat-hint.lp-hint-err { color: var(--red); }
@@ -3931,6 +3957,13 @@ const NQ_CATEGORY_NAME = "Not a qualified lead";
    button: NQ + OOO are the two most-common one-click outcomes. Matching is
    case-insensitive, so this resolves whatever casing the workspace uses. */
 const OOO_CATEGORY_NAME = "Out Of Office";
+/* One-click "Call booked" (owner ask 2026-08-22). Unlike NQ/OOO this is a
+   POSITIVE category ("Call Booked", a MEETING category - see build_notifications
+   POSITIVE/MEETING sets and setter.py), so filing it does NOT clear the lead:
+   the recategorise route returns action="converted" and keeps/rescues it in the
+   normal positive flow. Resolved live against /api/setter/categories like the
+   others; no-ops with an error hint if the workspace has no such label. */
+const BOOKED_CATEGORY_NAME = "Call Booked";
 const CAT_NEGATIVE_RE = /(not interested|do not contact|do-not-contact|unsubscrib|opt.?out|bounce|wrong|blacklist|spam|unqualif|invalid|junk|no longer|left the company)/i;
 function leadFirstNameOr(row, fallback) {
   const fn = String((row && row.lead_first_name) || "").trim();
@@ -4086,18 +4119,33 @@ function categoryControlInner(row, compact) {
       <div class="lp-cat-now">${catPill}</div>
       ${(() => {
         const monitor = (row.workspace || "navreo") !== "navreo";
-        const oneClickBtn = (catName, cls, label) => curCat.toLowerCase() === catName.toLowerCase() ? "" :
-          `<button type="button" class="btn danger sm ${cls}" title="${sent
-            ? `Relabels this sent lead as '${esc(catName)}'${monitor ? " in the tool" : " in Smartlead"} - the sent reply is untouched, and a non-positive label removes it from the follow-up reminder.`
+        // Segmented tiles (owner ask 2026-08-22): the two file-and-clear labels
+        // (NQ, OOO) now sit beside a POSITIVE Call-booked tile as three equal
+        // one-tap targets, and the "Change category…" dropdown is demoted below.
+        // `tone` drives the consequence colour the design system already uses
+        // (orange = commit a positive/keeps in flow, amber = OOO, red = reject);
+        // `positive` steers the tooltip so a keep never reads like a removal.
+        const tile = (catName, cls, label, tone, icon, positive) =>
+          curCat.toLowerCase() === catName.toLowerCase() ? "" :
+          `<button type="button" class="lp-cat-tile ${tone} ${cls}" title="${sent
+            ? `Relabels this sent lead as '${esc(catName)}'${monitor ? " in the tool" : " in Smartlead"} - the sent reply is untouched${positive ? " and it stays in the follow-up flow" : ", and a non-positive label removes it from the follow-up reminder"}.`
             : monitor
-            ? `Files this lead as '${esc(catName)}' in the tool and clears it from the queue - monitor workspaces are never written to the client's Smartlead.`
-            : `Files this lead as '${esc(catName)}' in Smartlead and clears it from the queue - one click, no dropdown.`}">${label}</button>`;
-        const actionsHtml = oneClickBtn(NQ_CATEGORY_NAME, "lp-cat-nq", "Not qualified")
-          + oneClickBtn(OOO_CATEGORY_NAME, "lp-cat-ooo", "Out of office");
-        return `<div class="lp-cat-edit">
+            ? `Files this lead as '${esc(catName)}' in the tool${positive ? " and keeps it in the normal flow" : " and clears it from the queue"} - monitor workspaces are never written to the client's Smartlead.`
+            : `Files this lead as '${esc(catName)}' in Smartlead${positive ? " and keeps it in the normal follow-up flow" : " and clears it from the queue"} - one click, no dropdown.`}" aria-label="${esc(label)}">
+            <span class="lp-tile-ico">${icon}</span>
+            <span class="lp-tile-lab">${label}</span>
+          </button>`;
+        const ICO_BOOKED = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><rect x="3" y="4.5" width="18" height="16" rx="2.5"/><path d="M3 9h18M8 2.5v4M16 2.5v4M9 14l2 2 4-4"/></svg>`;
+        const ICO_OOO = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>`;
+        const ICO_NQ = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg>`;
+        const tilesHtml = tile(BOOKED_CATEGORY_NAME, "lp-cat-booked", "Call booked", "pos", ICO_BOOKED, true)
+          + tile(OOO_CATEGORY_NAME, "lp-cat-ooo", "Out of office", "warn", ICO_OOO, false)
+          + tile(NQ_CATEGORY_NAME, "lp-cat-nq", "Disqualify", "neg", ICO_NQ, false);
+        return `
+      ${tilesHtml ? `<div class="lp-cat-tiles">${tilesHtml}</div>` : ""}
+      <div class="lp-cat-edit">
         <select class="lp-cat-sel" aria-label="Change lead category"><option value="">Loading…</option></select>
       </div>
-      ${actionsHtml ? `<div class="lp-cat-actions">${actionsHtml}</div>` : ""}
       <div class="lp-cat-hint">${hint}</div>`;
       })()}`;
 }
@@ -4668,6 +4716,7 @@ function wireCategoryControls(root, row) {
     block.dataset.catWired = "1";
     hydrateCategoryOptions(sel, row);
     sel.addEventListener("change", () => onCategoryPicked(block, row));
+    wireOneClickCat(block, ".lp-cat-booked", BOOKED_CATEGORY_NAME);
     wireOneClickCat(block, ".lp-cat-nq", NQ_CATEGORY_NAME);
     wireOneClickCat(block, ".lp-cat-ooo", OOO_CATEGORY_NAME);
   });
