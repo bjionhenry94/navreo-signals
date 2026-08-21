@@ -42,9 +42,12 @@ const ICONS = {
   settings: ic8("settings.svg", "lg"),
 };
 
+// "Lists" moved out of the main rail into the Settings sub-bar (owner ask
+// 2026-08-22): it's an admin/config surface, so it lives beside Workspaces and
+// Email Infrastructure now. lists.html renders the settings section (rail's
+// settings icon active + the sub-bar) rather than a top-level rail tab.
 const NAV = [
   ["campaigns.html", "campaigns", "Campaigns"],
-  ["lists.html", "lists", "Lists"],
   ["deliverability.html", "deliverability", "Analytics"],
   ["mailboxes.html", "mailboxes", "Mailboxes"],
   ["setter.html", "setter", "Setter"],
