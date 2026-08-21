@@ -13732,6 +13732,28 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                 _c["staged_key"] = scenarios[_i]["staged_key"]
         new_synthetic_cases = [c for c in synthetic_results if c]
 
+        # FULL-ROUND GUARANTEE (owner ruling 2026-08-21: "some rounds don't
+        # ask questions"). Invention can under-deliver on variety, and the
+        # shortfall recycle is sized BEFORE invention runs, so when invention
+        # returns fewer scenarios than asked the round comes back thin or
+        # empty. Top up from the answered-case bank AFTER assembly, continuing
+        # the recycle cursor so the top-ups are different scenarios, not
+        # repeats of what recycled_cases already holds. Same wrap-around the
+        # shortfall path uses; only reaches for the bank when a round would
+        # otherwise be short, and no-ops until the trainer has answered
+        # something to recycle (a brand-new doc still leans on invention).
+        if is_share_mode:
+            _produced = len(new_cases) + len(new_synthetic_cases) + len(recycled_cases)
+            if _produced < batch_size:
+                if recycle_cursor is not None:
+                    doc["recycle_cursor"] = recycle_cursor
+                _topup, _topup_cursor = _recycle_bank_cases(
+                    agent, doc, batch_size - _produced,
+                    start_idx=len(existing_cases) + _produced)
+                if _topup:
+                    recycled_cases = list(recycled_cases) + _topup
+                    recycle_cursor = _topup_cursor
+
         if not new_cases and not new_synthetic_cases and not recycled_cases:
             _finish_training_generation(agent_id, "failed",
                 error="Couldn't build any scenarios just now - try again in a minute.")
