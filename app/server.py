@@ -16932,18 +16932,61 @@ def _client_cap_history() -> dict:
     return (_blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}).get("days") or {}
 
 
-def _cap_blob_upsert(today: str, workspace_updates: dict, client_updates: dict | None) -> None:
+def _cap_hw_merge(prev: dict | None, new: dict, src: str, asof: str) -> dict:
+    """High-water merge of ONE entity's (workspace or client) daily capacity.
+    Appends an immutable provenance snap and keeps:
+      cap_max  the high-water — the highest authorized cap in force that day.
+               Used for DISPLAY (chart ceiling) and as the VIOLATION threshold.
+      cap_min  the lowest POSITIVE authorized cap in force that day — the ONLY
+               value that may CLEAR a day as within-cap (a total at or below it
+               is safe under any intraday ordering).
+      cap      kept = cap_max for back-compat readers.
+    SENT is never an input here, so this value only ever rises via a genuine
+    authorized snapshot — the high-water can never silently absorb an over-send
+    (Bjion 2026-08-22, capacity>=sent invariant). A later same-day snapshot the
+    tiering engine LOWERED can no longer erase an earlier, higher ceiling that
+    sends already went out under."""
+    ncap = int(new.get("cap") or 0)
+    snap = {"cap": ncap, "asof": asof, "src": src}
+    if not prev:
+        return {"cap": ncap, "boxes": new.get("boxes"),
+                "cap_min": ncap, "cap_max": ncap, "snaps": [snap]}
+    pmax = int(prev.get("cap_max", prev.get("cap") or 0))
+    _pm = prev.get("cap_min")
+    pmin = int(_pm) if _pm is not None else pmax
+    cap_max = max(pmax, ncap)
+    # a 0 (whole fleet paused / cold read) is not a real "authorized cap in
+    # force" floor, so it never drops cap_min; only positive snaps fold in.
+    if ncap > 0:
+        cap_min = min(pmin, ncap) if pmin > 0 else ncap
+    else:
+        cap_min = pmin
+    snaps = (prev.get("snaps") or [])[-23:] + [snap]      # keep last 24 snaps/day
+    return {"cap": cap_max, "boxes": new.get("boxes"),
+            "cap_min": cap_min, "cap_max": cap_max, "snaps": snaps}
+
+
+def _cap_blob_upsert(today: str, workspace_updates: dict, client_updates: dict | None,
+                     src: str = "sync") -> None:
     """Merge today's capacity into the rolling blob WITHOUT clobbering other
     workspaces already written this day (the federated mailbox sync writes every
     workspace at 04:30; the navreo cap crons then refresh just navreo at 05:15 /
-    06:00). client_updates (navreo sub-clients) replace wholesale when provided."""
+    06:00). Every entity is HIGH-WATER merged (see _cap_hw_merge) — a later,
+    lower same-day snapshot can no longer overwrite an earlier higher ceiling,
+    and each entity carries immutable provenance snaps so the authorized cap in
+    force is auditable."""
     hist = _blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}
     days = hist.get("days") or {}
     rec = days.get(today) or {"workspace": {}, "clients": {}}
-    rec.setdefault("workspace", {}).update(workspace_updates or {})
+    asof = _dtmod.datetime.utcnow().isoformat() + "Z"
+    ws_rec = rec.setdefault("workspace", {})
+    for ws, val in (workspace_updates or {}).items():
+        ws_rec[ws] = _cap_hw_merge(ws_rec.get(ws), val or {}, src, asof)
     if client_updates is not None:
-        rec["clients"] = client_updates
-    rec["asof"] = _dtmod.datetime.utcnow().isoformat() + "Z"
+        cl_rec = rec.setdefault("clients", {})
+        for cl, val in client_updates.items():
+            cl_rec[cl] = _cap_hw_merge(cl_rec.get(cl), val or {}, src, asof)
+    rec["asof"] = asof
     days[today] = rec
     if len(days) > 130:                       # keep ~120 days of history
         for d in sorted(days)[:-120]:
@@ -16961,7 +17004,7 @@ def snapshot_navreo_capacity() -> dict:
     if not nav:
         return {"ok": False, "error": "no capacity data"}
     today = _dtmod.date.today().isoformat()
-    _cap_blob_upsert(today, {"navreo": nav}, bd.get("clients") or {})
+    _cap_blob_upsert(today, {"navreo": nav}, bd.get("clients") or {}, src="navreo-caps")
     _CLIENT_CAP.update(data=bd, ts=time.time())
     return {"ok": True, "date": today, "navreo_workspace_cap": nav["cap"],
             "clients": len(bd.get("clients") or {})}
@@ -16982,7 +17025,7 @@ def snapshot_all_capacity(workspaces: list | None = None) -> dict:
     ws_updates = {ws: pools[ws] for ws in workspaces if ws in pools}
     client_updates = bd.get("clients") if "navreo" in workspaces else None
     today = _dtmod.date.today().isoformat()
-    _cap_blob_upsert(today, ws_updates, client_updates)
+    _cap_blob_upsert(today, ws_updates, client_updates, src="sync")
     _CLIENT_CAP.update(data=bd, ts=time.time())
     return {"ok": True, "date": today,
             "workspaces": {ws: v["cap"] for ws, v in ws_updates.items()},
@@ -17037,7 +17080,11 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
                 if hv is not None:
                     arr[i] = hv
                 if d == today and live_ws is not None:
-                    arr[i] = live_ws                 # today is never carried forward
+                    # today is never carried forward, but the live pause-aware
+                    # pool must not DROP the ceiling below caps already recorded
+                    # today (a late pause can't retroactively un-authorize sends
+                    # already banked) — take the high-water.
+                    arr[i] = max(arr[i] or 0, live_ws)
             cap[ws] = arr
         clients_all = set(live_clients)
         for rec in hist.values():
@@ -17049,7 +17096,7 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
                 rec = hist.get(d)
                 v = rec.get("clients", {}).get(cl, {}).get("cap") if rec else None
                 if d == today and cl in live_clients:
-                    v = live_clients[cl]
+                    v = max(v or 0, live_clients[cl])   # high-water, never drop below recorded
                 arr.append(v)
             ccd[cl] = arr
         out["client_caps_daily"] = ccd
@@ -17081,6 +17128,87 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
         cap["__all"] = [total[i] if seen[i] else None for i in range(len(days))]
         out["capacity"] = cap
     return out, 200
+
+
+def capacity_invariant_check(days: int = 30) -> tuple[dict, int]:
+    """Enforce capacity >= sent per (client_label, day), honestly, given Smartlead
+    exposes only DAILY sent totals (no intraday send timeline).
+
+    Each stored day carries the authorized-cap snapshots taken by the crons:
+      cap_min  lowest POSITIVE authorized cap in force that day
+      cap_max  high-water (highest authorized cap in force that day)
+    Neither is ever derived from sent, so neither can silently absorb an over-send.
+    Verdict per (client, day):
+      clean      sent <= cap_min          safe under any intraday ordering
+      suspect    cap_min < sent <= cap_max  daily totals can't prove/disprove an
+                                           intraday breach — flagged, NOT cleared
+      violation  sent > cap_max           no authorized cap in force explains it →
+                                           a genuine hard-cap enforcement defect
+      no_capacity  a day with sent but no recorded capacity snapshot (a missed/
+                                           failed writer run — a data gap, flagged)
+    Only cap_min clears a day; the display high-water never clears one. Returns
+    non-clean rows newest-first plus a summary, so the frontend/audit can surface
+    genuine over-sends without hiding them and Step 8 has an independent yardstick."""
+    try:
+        hist = _client_cap_history()          # {date: {"workspace":{}, "clients":{}}}
+    except Exception as e:  # noqa: BLE001
+        return {"error": "capacity_history_unavailable", "message": str(e)[:200]}, 502
+    cw, _st = client_windows_get()
+    axis = (cw or {}).get("days") or []
+    series = (cw or {}).get("series") or {}
+    if not axis:
+        return {"error": "sent_series_unavailable"}, 502
+    # A sent label is EITHER a navreo sub-client (stored under day["clients"]) or a
+    # connected workspace (stored under day["workspace"] by slug — e.g. "KRG"->"krg"
+    # via ws_labels). Resolve BOTH so connected-workspace days aren't all no_capacity.
+    ws_labels = (cw or {}).get("ws_labels") or {}      # {"KRG":"krg", "Grout":"grout", ...}
+
+    def _cap_rec(day: str, label: str):
+        drec = hist.get(day) or {}
+        r = (drec.get("clients") or {}).get(label)
+        if r:
+            return r
+        slug = ws_labels.get(label) or label.lower()
+        return (drec.get("workspace") or {}).get(slug)
+
+    horizon = set(axis[-max(7, min(120, days)):])
+    rows = []
+    counts = {"clean": 0, "suspect": 0, "violation": 0, "no_capacity": 0}
+    for label, s in series.items():
+        if label.startswith("__"):            # __all / __navreo_ws aggregates — skip
+            continue
+        sent_arr = (s or {}).get("sent") or []
+        for i, d in enumerate(axis):
+            if d not in horizon:
+                continue
+            sent = int(sent_arr[i] or 0) if i < len(sent_arr) else 0
+            if sent <= 0:
+                continue
+            rec = _cap_rec(d, label)
+            if not rec:
+                counts["no_capacity"] += 1
+                rows.append({"client": label, "day": d, "sent": sent,
+                             "cap_min": None, "cap_max": None, "verdict": "no_capacity",
+                             "excess": sent, "snaps": []})
+                continue
+            cap_max = int(rec.get("cap_max", rec.get("cap") or 0))
+            cap_min = int(rec.get("cap_min", cap_max))
+            if sent <= cap_min:
+                counts["clean"] += 1
+                continue
+            verdict = "violation" if sent > cap_max else "suspect"
+            counts[verdict] += 1
+            rows.append({"client": label, "day": d, "sent": sent,
+                         "cap_min": cap_min, "cap_max": cap_max, "verdict": verdict,
+                         "excess": sent - cap_max if verdict == "violation" else sent - cap_min,
+                         "snaps": rec.get("snaps") or []})
+    rows.sort(key=lambda r: (r["day"], r["client"]), reverse=True)
+    ok = counts["violation"] == 0 and counts["suspect"] == 0 and counts["no_capacity"] == 0
+    return {"ok": ok, "counts": counts, "rows": rows,
+            "checked_days": sorted(horizon, reverse=True),
+            "note": "Smartlead exposes daily sent only; 'suspect' = a day daily totals "
+                    "cannot prove clean or in-violation without intraday send checkpoints.",
+            "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}, 200
 
 
 # ── Client windows: per-client sent/replies/bounces for 7/14/30 days ────────
@@ -17707,8 +17835,25 @@ def client_windows_cron_refresh() -> dict:
     if not gated:
         _client_win_persist(data)
     dbg = data.get("_debug") or {}
+    inv = None
+    if not gated:
+        # Ongoing detection: the moment fresh sent lands, check capacity>=sent.
+        # A genuine over-send (violation) or an un-provable day (suspect) or a
+        # missed writer run (no_capacity) is logged for the day's audit — never
+        # silently swallowed (Bjion 2026-08-22 capacity invariant).
+        try:
+            chk, _ = capacity_invariant_check(30)
+            c = chk.get("counts") or {}
+            inv = c
+            if not chk.get("ok"):
+                worst = [r for r in (chk.get("rows") or []) if r["verdict"] == "violation"][:5]
+                print(f"[capacity-invariant] NOT CLEAN counts={c} "
+                      f"top_violations={[(r['client'], r['day'], r['sent'], r['cap_max']) for r in worst]}",
+                      file=sys.stderr)
+        except Exception as e:  # noqa: BLE001 — detection is never fatal to the sweep
+            print(f"[capacity-invariant] check failed: {e}", file=sys.stderr)
     return {"ok": not gated, "gated": gated, "secs": dbg.get("secs"),
-            "errors": (dbg.get("daywise_errors") or [])[:4]}
+            "errors": (dbg.get("daywise_errors") or [])[:4], "invariant": inv}
 
 
 _CLIENT_WIN_STALL_S = 4 * 3600  # cron cadence 3h + build time + headroom
@@ -19510,15 +19655,14 @@ _TAGPERF_TTL_S = 900  # 15 min
 
 def _tagperf_compute() -> dict:
     from datetime import date, timedelta
-    boxes = sb_get_all("mailboxes?select=smartlead_id,workspace,tags") or []
-    tags_of = {}
+    boxes = sb_get_all("mailboxes?select=smartlead_id,workspace,tags,message_per_day") or []
+    box_tags = {}
     for b in boxes:
         raw = b.get("tags") if isinstance(b.get("tags"), list) else []
-        # Tags are Smartlead tag OBJECTS ({tag_name/name, ...}); tolerate strings.
         names = [t for t in ((t.get("tag_name") or t.get("name")) if isinstance(t, dict)
                              else str(t) for t in raw) if t]
         if names:
-            tags_of[(b.get("workspace"), b.get("smartlead_id"))] = names
+            box_tags[(b.get("workspace"), b.get("smartlead_id"))] = (names, b.get("message_per_day") or 0)
     today = date.today()
     since = (today - timedelta(days=max(_DELIV_BUNDLE_WINDOWS) + 1)).isoformat()
     stats = sb_get_all(
@@ -19532,42 +19676,64 @@ def _tagperf_compute() -> dict:
 
     def delta(h, col, bound):
         cur = (h[-1].get(col) or 0)
-        if bound is None:                       # 30d = the rolling counter itself
+        if bound is None:                       # 30d window = the rolling counter itself
             return cur
         base = next((s for s in h if str(s.get("stat_date")) >= bound), None)
         return cur if base is None else max(0, cur - (base.get(col) or 0))
+
+    # RATES use the trailing-30d COHORT (both numerator and denominator from the
+    # same latest rolling-30d counters), NOT windowed deltas. Replies/bounces
+    # LAG their sends, so windowed-replies / windowed-sends is not a valid rate
+    # and blows past 100% (seen live: a 23-send / 58-reply tag read 252%). The
+    # cohort ratio is always bounded (replies/bounces never exceed sends over the
+    # same 30d) and comparable across tags. Volume (sent, positives) and capacity
+    # utilisation stay windowed, so the 7/14/30 toggle still shows recent pace.
+    cohort = {}  # tag -> {s,r,b,p}  latest-snapshot 30d sums
+    for k, (names, _cap) in box_tags.items():
+        h = hist.get(k)
+        if not h:
+            continue
+        latest = h[-1]
+        for n in names:
+            c = cohort.setdefault(n, {"s": 0, "r": 0, "b": 0, "p": 0})
+            c["s"] += latest.get("sent_30d") or 0
+            c["r"] += latest.get("replies_30d") or 0
+            c["b"] += latest.get("bounces_30d") or 0
+            c["p"] += latest.get("positive_replies_30d") or 0
 
     out = {}
     for days in _DELIV_BUNDLE_WINDOWS:
         bound = None if days >= 30 else (today - timedelta(days=days)).isoformat()
         agg = {}
-        for k, names in tags_of.items():
+        for k, (names, cap) in box_tags.items():
             h = hist.get(k)
-            if not h:
-                continue
-            sent = delta(h, "sent_30d", bound)
-            rep = delta(h, "replies_30d", bound)
-            bnc = delta(h, "bounces_30d", bound)
-            pos = delta(h, "positive_replies_30d", bound)
+            sent = delta(h, "sent_30d", bound) if h else 0
+            pos = delta(h, "positive_replies_30d", bound) if h else 0
             for n in names:
-                a = agg.setdefault(n, {"mailboxes": 0, "sent": 0, "rep": 0, "bnc": 0, "pos": 0})
+                a = agg.setdefault(n, {"mailboxes": 0, "sent": 0, "positive": 0, "cap": 0})
                 a["mailboxes"] += 1
                 a["sent"] += sent
-                a["rep"] += rep
-                a["bnc"] += bnc
-                a["pos"] += pos
+                a["positive"] += pos
+                a["cap"] += cap
         rows = []
         for n, a in agg.items():
-            s = a["sent"]
-            pct = lambda v: round(100.0 * v / s, 2) if s else 0
-            rows.append({"tag": n, "mailboxes": a["mailboxes"], "sent": s,
-                         "positive": a["pos"], "reply_rate": pct(a["rep"]),
-                         "bounce_rate": pct(a["bnc"]),
-                         "per_positive": round(s / a["pos"]) if a["pos"] else None})
+            c = cohort.get(n, {"s": 0, "r": 0, "b": 0, "p": 0})
+            s30 = c["s"]
+            reply = round(100.0 * c["r"] / s30, 2) if s30 else 0
+            bounce = round(100.0 * c["b"] / s30, 2) if s30 else 0
+            perpos = round(s30 / c["p"]) if c["p"] else None
+            # Capacity utilisation: average daily sends in the window / total
+            # daily cap of the tag's mailboxes. "—" when the pool has no cap
+            # (e.g. an all-rested tag). Can exceed 100 if caps were cut below
+            # the pace they were actually sending at — surfaced, not hidden.
+            util = round(100.0 * (a["sent"] / days) / a["cap"]) if a["cap"] else None
+            rows.append({"tag": n, "mailboxes": a["mailboxes"], "sent": a["sent"],
+                         "positive": a["positive"], "capacity": a["cap"], "utilisation": util,
+                         "reply_rate": reply, "bounce_rate": bounce, "per_positive": perpos})
         rows.sort(key=lambda r: -r["sent"])
         out[str(days)] = rows
     return {"tagStats": out, "asof": today.isoformat(),
-            "mailboxes": len(tags_of), "tags": len(out.get("30", []))}
+            "mailboxes": len(box_tags), "tags": len(out.get("30", []))}
 
 
 def _tagperf_run_bg():
@@ -21764,6 +21930,15 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 days = 30
             body, status = fleet_capacity_get(days)
+            return self._json(body, status)
+        if path == "/api/capacity-invariant":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                days = int((q.get("days") or ["30"])[0])
+            except ValueError:
+                days = 30
+            body, status = capacity_invariant_check(days)
             return self._json(body, status)
         if path == "/api/client-windows":
             from urllib.parse import parse_qs, urlparse
