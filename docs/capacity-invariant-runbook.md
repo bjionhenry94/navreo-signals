@@ -49,6 +49,23 @@ roster (detached boxes' past sends lose their ceiling); and the live pause-aware
 - Independence: the check reads capacity from the stored blob and sent straight from the
   `client_windows` Smartlead series — not the writer's own intermediate output.
 
+## Fix 2 — per-client capacity attribution undercount (2026-08-22)
+
+Confirmed cause of the Amplifyy `sent > capacity` flags: `_navreo_cap_from_sweep`
+**dropped** every mailbox that was on the client's active campaigns (present in the
+Smartlead membership sweep, which already stores each box's real `message_per_day`) but
+**absent from the pause-aware mirror** (`box_caps`) — `if cap is None: continue`. Mirror
+sync gaps therefore silently undercounted a client's capacity. Amplifyy physically sent
+7,203 in a day (a lower bound on true capacity) while its recorded per-client capacity
+read 5,590.
+
+Fix: keep the mirror cap as primary; when a swept box is missing from the mirror, fall
+back to its Smartlead cap from the sweep instead of dropping it. Pause-safe — a
+paused/parked mailbox reports `message_per_day = 0` in both the mirror and the sweep, so
+the `cap <= 0` skip drops it; only a mirror-absent box with a POSITIVE cap (confirmed
+active) is added. Improves today + future per-client capacity; already-snapshotted
+historical days keep their recorded value.
+
 ## Deferred — needs the user's authed DB session (Steps 7 + remaining root causes)
 
 These need live Supabase (OAuth) and/or a migration + backfill:

@@ -16867,9 +16867,17 @@ def _navreo_box_caps() -> dict:
 
 
 def _navreo_cap_from_sweep(sweep: dict, score: list, box_caps: dict, pool: dict) -> dict:
-    """Per-client navreo capacity: the sweep says which client(s) each box serves;
-    the CAP comes from box_caps (the mirror's global, pause-aware cap), NEVER the
-    sweep's stale per-campaign copy. Pool comes straight from the mirror."""
+    """Per-client navreo capacity: the sweep says which client(s) each box serves.
+    The CAP is the mirror's global, pause-aware cap (box_caps) when present — but a
+    box the sweep found on an ACTIVE campaign yet MISSING from the mirror (a sync
+    gap) is no longer dropped: it falls back to the sweep's own Smartlead cap
+    (rec['cap'] = that mailbox's message_per_day). Dropping such boxes silently
+    UNDER-counted a client's capacity — the Amplifyy case where recorded per-client
+    capacity sat below the client's actual daily sends (Bjion 2026-08-22). This is
+    pause-safe: a paused/parked mailbox reports message_per_day 0 in BOTH the mirror
+    and the sweep, so it contributes 0 either way and the `cap <= 0` skip drops it.
+    Only a mirror-absent box with a POSITIVE Smartlead cap (confirmed active) is
+    added. Pool comes straight from the mirror."""
     cl_of = {}
     for r in score:
         if (r.get("workspace") or "navreo") == "navreo":
@@ -16879,7 +16887,11 @@ def _navreo_cap_from_sweep(sweep: dict, score: list, box_caps: dict, pool: dict)
     clients: dict = {}
     for email, rec in (sweep.get("accounts") or {}).items():
         cap = box_caps.get(email)
-        if cap is None:                      # not attached in the mirror → skip
+        if cap is None:                      # box absent from the mirror (sync gap)
+            cap = int(rec.get("cap") or 0)   # fall back to the sweep's Smartlead cap
+        else:
+            cap = int(cap or 0)
+        if cap <= 0:                         # paused/parked (mpd 0) or unknown → skip
             continue
         seen = set()
         for cid in [str(c) for c in (rec.get("camps") or [])]:
