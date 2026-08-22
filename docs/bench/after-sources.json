@@ -1,0 +1,188 @@
+{
+  "label": "after-sources",
+  "port": "7901",
+  "reps": 10,
+  "ts": 1787407018,
+  "rows": [
+    {
+      "target": "/app/setter.html",
+      "status": 200,
+      "bytes": 130554,
+      "cold_s": 0.1364,
+      "warm_p50_s": 0.0088,
+      "warm_p95_s": 0.0224,
+      "warm_min_s": 0.0038,
+      "reps": 10
+    },
+    {
+      "target": "/app/campaigns.html",
+      "status": 200,
+      "bytes": 149840,
+      "cold_s": 0.0491,
+      "warm_p50_s": 0.0049,
+      "warm_p95_s": 0.0146,
+      "warm_min_s": 0.0034,
+      "reps": 10
+    },
+    {
+      "target": "/app/deliverability.html",
+      "status": 200,
+      "bytes": 58556,
+      "cold_s": 0.0214,
+      "warm_p50_s": 0.0042,
+      "warm_p95_s": 0.007,
+      "warm_min_s": 0.0027,
+      "reps": 10
+    },
+    {
+      "target": "/app/optimise.html",
+      "status": 200,
+      "bytes": 33153,
+      "cold_s": 0.0141,
+      "warm_p50_s": 0.003,
+      "warm_p95_s": 0.0045,
+      "warm_min_s": 0.0023,
+      "reps": 10
+    },
+    {
+      "target": "/app/lists.html",
+      "status": 200,
+      "bytes": 28762,
+      "cold_s": 0.0114,
+      "warm_p50_s": 0.0031,
+      "warm_p95_s": 0.0039,
+      "warm_min_s": 0.0022,
+      "reps": 10
+    },
+    {
+      "target": "/app/strategy.html",
+      "status": 200,
+      "bytes": 69195,
+      "cold_s": 0.0223,
+      "warm_p50_s": 0.0037,
+      "warm_p95_s": 0.0376,
+      "warm_min_s": 0.0024,
+      "reps": 10
+    },
+    {
+      "target": "/app/report.html",
+      "status": 200,
+      "bytes": 14949,
+      "cold_s": 0.0121,
+      "warm_p50_s": 0.0032,
+      "warm_p95_s": 0.0043,
+      "warm_min_s": 0.0025,
+      "reps": 10
+    },
+    {
+      "target": "/app/mailboxes-hub.html",
+      "status": 200,
+      "bytes": 10101,
+      "cold_s": 0.0064,
+      "warm_p50_s": 0.0019,
+      "warm_p95_s": 0.0032,
+      "warm_min_s": 0.0014,
+      "reps": 10
+    },
+    {
+      "target": "/app/infrastructure.html",
+      "status": 200,
+      "bytes": 5215,
+      "cold_s": 0.0037,
+      "warm_p50_s": 0.0018,
+      "warm_p95_s": 0.0036,
+      "warm_min_s": 0.0014,
+      "reps": 10
+    },
+    {
+      "target": "/api/collisions",
+      "status": 200,
+      "bytes": 203,
+      "cold_s": 6.2194,
+      "warm_p50_s": 0.0031,
+      "warm_p95_s": 0.005,
+      "warm_min_s": 0.0022,
+      "reps": 10
+    },
+    {
+      "target": "/api/notifications",
+      "status": 200,
+      "bytes": 183776,
+      "cold_s": 2.868,
+      "warm_p50_s": 0.1927,
+      "warm_p95_s": 0.453,
+      "warm_min_s": 0.0633,
+      "reps": 10
+    },
+    {
+      "target": "/api/sources?slim=1",
+      "status": 200,
+      "bytes": 51934,
+      "cold_s": 0.0222,
+      "warm_p50_s": 0.0186,
+      "warm_p95_s": 0.0445,
+      "warm_min_s": 0.0127,
+      "reps": 10
+    },
+    {
+      "target": "/api/sources",
+      "status": 200,
+      "bytes": 51934,
+      "cold_s": 0.0471,
+      "warm_p50_s": 0.0141,
+      "warm_p95_s": 0.018,
+      "warm_min_s": 0.0121,
+      "reps": 10
+    },
+    {
+      "target": "/api/campaigns-unified",
+      "status": 200,
+      "bytes": 38270,
+      "cold_s": 10.2002,
+      "warm_p50_s": 0.0086,
+      "warm_p95_s": 0.0252,
+      "warm_min_s": 0.0042,
+      "reps": 10
+    },
+    {
+      "target": "/api/analytics-hub",
+      "status": 200,
+      "bytes": 4080,
+      "cold_s": 0.97,
+      "warm_p50_s": 0.0018,
+      "warm_p95_s": 0.0027,
+      "warm_min_s": 0.0017,
+      "reps": 10
+    },
+    {
+      "target": "/api/clients",
+      "status": 200,
+      "bytes": 723,
+      "cold_s": 1.6512,
+      "warm_p50_s": 0.0012,
+      "warm_p95_s": 0.0028,
+      "warm_min_s": 0.0011,
+      "reps": 10
+    },
+    {
+      "target": "/api/workspaces",
+      "status": 200,
+      "bytes": 342,
+      "cold_s": 1.9293,
+      "warm_p50_s": 0.0009,
+      "warm_p95_s": 0.0018,
+      "warm_min_s": 0.0007,
+      "reps": 10
+    },
+    {
+      "target": "/api/deliverability-trends",
+      "status": 200,
+      "bytes": 464,
+      "cold_s": 2.1285,
+      "warm_p50_s": 0.0042,
+      "warm_p95_s": 0.0141,
+      "warm_min_s": 0.0015,
+      "reps": 10
+    }
+  ]
+}

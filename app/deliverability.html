@@ -3351,7 +3351,7 @@ boot();
   }
 
   function boot4() {
-    fetch("/api/notifications?slim=1", { credentials: "same-origin" })
+    fetch("/api/notifications?slim=1&finding_type=variant_call", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : []; })
       .then(function (rows) {
         CAND = (Array.isArray(rows) ? rows : []).filter(function (n) {
