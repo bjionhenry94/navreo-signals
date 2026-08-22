@@ -13950,9 +13950,19 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         recycled_cases = []
         recycle_cursor = None
         if shortfall > 0 and is_share_mode:
-            recycled_cases, recycle_cursor = _recycle_bank_cases(
-                agent, doc, shortfall, start_idx=len(existing_cases))
-            shortfall -= len(recycled_cases)
+            # Leave MOST of the batch for fresh invention so rounds are varied,
+            # not the same answered cards re-drafted every round (owner report
+            # 2026-08-22, live: rounds 5 and 6 both showed only the 4 staged
+            # cards - once they were rated, this recycle filled the WHOLE batch
+            # from them and invention never ran, so only 4 unique scenarios ever
+            # appeared). Cap the pre-invention recycle to ~1/3 of the shortfall;
+            # invention fills the rest with NEW scenarios, and the post-assembly
+            # top-up still guarantees a full round if invention under-delivers.
+            recycle_cap = shortfall // 3
+            if recycle_cap > 0:
+                recycled_cases, recycle_cursor = _recycle_bank_cases(
+                    agent, doc, recycle_cap, start_idx=len(existing_cases))
+                shortfall -= len(recycled_cases)
 
         # REAL-CAMPAIGNS-ONLY GATE (owner ruling 2026-08-20: "You should
         # never, ever give training based on campaigns which don't exist").
