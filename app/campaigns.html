@@ -3064,31 +3064,18 @@
     h.push('<div class="rows-crossstatus" id="rows-crossstatus" hidden><span id="rows-crossstatus-text"></span> <button type="button" id="rows-crossstatus-btn">Show all statuses</button></div>');
     loadSignalsByCamp(); // one-shot; the signal lines paint in when the rollup lands
 
-    /* footer */
-    h.push('<p class="footer-fine">Every number on this page comes from the live Supabase cache and the daily Smartlead sync. ' +
-      "Verdicts and teasers are written by Lilly on the morning crunch; the app only renders them. " +
-      "The stat columns are always campaign lifetime; a teaser that names its own window (for example since relaunch, after a sequence re-save reset the counters) is a different counter, not a contradiction. " +
-      "Ring = share of sending capacity used (sent &divide; (leads &times; 2)). Sends/positive under 1,500 is healthy; bounce above 2% is the bar. " +
-      "Meetings count people, not emails: every lead with a Call Booked reply in the archive, once each, however many times the thread went back and forth. Call Booked only — a Meeting Request is not a meeting until the call is booked. Its own counter, not a Smartlead column.</p>");
-    /* Coverage guard. The list used to render only what Lilly had crunched, so a
-       campaign she had not reached was simply absent and nothing said so. Now the
-       inventory drives the rows and this line reconciles the three counts out
-       loud. Unaccounted-for is rows the inventory has that the page did not draw:
-       it must be 0, and it shouts if it is not. */
+    /* Footer removed (owner ruling): the explanatory fine print, the coverage
+       tally, and the crunched/synced stamp no longer render. The coverage guard
+       survives as a SILENT safety net — nothing shows in the healthy case, and
+       it only shouts if the inventory has rows the page failed to draw. */
     var cov = STATE.coverage || { tracked: 0, reviewed: 0 };
     var drawn = (STATE.campaigns || []).length;
     var unaccounted = Math.max(0, cov.tracked - drawn);
-    h.push('<p class="footer-updated' + (unaccounted ? " coverage-warn" : "") + '">' +
-      (unaccounted
-        ? "<strong>Coverage problem: " + fmtInt(unaccounted) + " tracked campaign" +
-          (unaccounted === 1 ? "" : "s") + " did not render. Tell Lilly in chat.</strong> "
-        : "") +
-      fmtInt(cov.tracked) + " campaigns tracked &middot; " + fmtInt(drawn) + " loaded into the list &middot; " +
-      fmtInt(cov.reviewed) + " reviewed by Lilly &middot; " + fmtInt(unaccounted) + " unaccounted for. " +
-      "Reviewed means she has written a verdict; the rest still show their real Smartlead numbers. " +
-      "Every workspace under management is here (Navreo and every connected client); filter by Client to see one workspace at a time.</p>");
-    h.push('<p class="footer-updated">Verdicts crunched ' + esc(localStamp(crunchAt)) + " &middot; numbers synced " + esc(localStamp(statsAt)) + " &middot; refreshed on every /lilly-optimiser run." +
-      (STATE.midSync ? " <strong>Smartlead sync in progress: " + STATE.midSync + " row" + (STATE.midSync === 1 ? "" : "s") + " showing the morning-crunch snapshot until it finishes.</strong>" : "") + "</p>");
+    if (unaccounted) {
+      h.push('<p class="footer-updated coverage-warn"><strong>Coverage problem: ' +
+        fmtInt(unaccounted) + " tracked campaign" + (unaccounted === 1 ? "" : "s") +
+        " did not render. Tell Lilly in chat.</strong></p>");
+    }
 
     root.innerHTML = h.join("");
     renderRows();
