@@ -2142,6 +2142,14 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     feedback_note = (str(data.get("feedback_note") or "").strip()
                      if payload.get("reviewer_feedback") else "")
     html_body = demarkdown_links(html_body)
+    # Deterministic backstop (owner report 2026-08-22, every SDR): under
+    # call_ask="avoid" the two-times "Would you be open to a call on ..."
+    # paragraph must not appear, but the model leaks it (e.g. on a phone-number
+    # ask where the lead said they'll call). Strip it in code. The
+    # lead-proposed-time counter names times under "avoid" legitimately and
+    # uses a different opener, so guard on lead_proposed_time.
+    if call_ask == "avoid" and not (classification or {}).get("lead_proposed_time"):
+        html_body = strip_two_times_ask(html_body)
     html_body = enforce_signoff(html_body, sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
 
@@ -2247,6 +2255,30 @@ _ASK_PHRASES = ("would you be free", "would it be worth", "are you free",
                 "do you have time")
 _AVAIL_Q = "when would be a good time"
 _DIV_BLOCK_RE = re.compile(r"<div\b[^>]*>.*?</div>", re.I | re.S)
+
+
+_TWO_TIMES_PARA_RE = re.compile(r"<div>\s*Would you be open to a call on\b.*?</div>", re.IGNORECASE | re.DOTALL)
+_IF_TIMES_PARA_RE = re.compile(r"<div>\s*If those times aren'?t suitable\b.*?</div>", re.IGNORECASE | re.DOTALL)
+
+
+def strip_two_times_ask(html: str) -> str:
+    """Deterministic backstop (owner report 2026-08-22, every SDR): under
+    call_ask="avoid" the generic two-fresh-times "Would you be open to a call
+    on ..." paragraph must never appear, but the model leaks it anyway (a
+    phone-number ask still got the two-times push even though the lead said
+    they would call). Remove that paragraph and its "If those times aren't
+    suitable" companion. The lead-proposed-time COUNTER names times under
+    "avoid" legitimately but uses a different opener ("Unfortunately I can't
+    make ..."), so it is untouched; the caller also guards on
+    lead_proposed_time. Never raises."""
+    try:
+        out = _TWO_TIMES_PARA_RE.sub("", html or "")
+        out = _IF_TIMES_PARA_RE.sub("", out)
+        out = re.sub(r"(?:\s*<br>\s*){2,}", "<br>", out)   # collapse breaks left by the removed paragraph
+        out = re.sub(r"^(?:\s*<br>\s*)+|(?:\s*<br>\s*)+$", "", out)
+        return out.strip() or (html or "")
+    except Exception:  # noqa: BLE001 - a repair helper must never break drafting
+        return html or ""
 
 
 def destack_call_ask(html: str) -> str:
