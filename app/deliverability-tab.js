@@ -383,6 +383,8 @@
     // ~2-min campaign-membership sweep on a cold server, so `computing`
     // responses re-poll until ready. status: idle | loading | ready | error.
     plan: { status: "idle", data: null, ts: 0, error: null, pollTimer: null },
+    // Performance by tag (GET /api/tag-performance): tagStats keyed by 7/14/30.
+    tagperf: { status: "idle", data: null, ts: 0, error: null, pollTimer: null },
     // "Across the book" cross-campaign insight cards (GET /api/cockpit/insights,
     // scope==="book") — moved here from the campaigns home. status: idle |
     // loading | ready | error; rows are the raw book insight rows.
@@ -1167,6 +1169,8 @@
     // windowDays: the floor flow's reporting window preset (7/14/30).
     // open: expanded domain groups (keyed by domain).
     mgr: { flow: "floor", windowDays: 7, search: "", sel: new Set(), open: new Set() },
+    // Performance-by-tag range preset (sticky): 7 / 14 / 30 days.
+    tag: { win: 7 },
     dh: { minSent: null, cutoff: null, start: null, end: null },
     sig: { batch: "", search: "", sel: new Set(), rows: [] },
     pn: { search: "", sel: new Set(), rows: [] },
@@ -1181,7 +1185,7 @@
   const DLV_SUBTABS = [
     ["overview", "Overview"],
     ["blacklist", "Blacklisted domains"],
-    ["batch", "Performance by batch"],
+    ["batch", "Performance by tag"],
   ];
   let dlvSubtab = "overview";
   function loadSubtab() {
@@ -1361,6 +1365,10 @@ table.dlv-bt th:not(:first-child),table.dlv-bt td:not(:first-child){text-align:r
 .dlv-bt-sum{font-size:12.5px;padding:9px 13px;border-radius:9px;border:1px solid var(--line);flex:1;min-width:240px}
 .dlv-bt-sum.best{background:var(--green-bg);border-color:var(--green-line);color:#195C3F}
 .dlv-bt-sum.worst{background:var(--red-bg);border-color:var(--red-line);color:#861E10}
+.dlv-tag-range{display:inline-flex;gap:4px}
+.dlv-tag-rbtn{font-size:12px;font-weight:600;padding:4px 11px;border-radius:7px;border:1px solid var(--line);background:var(--card);color:var(--ink-2);cursor:pointer}
+.dlv-tag-rbtn:hover{border-color:var(--ink-3)}
+.dlv-tag-rbtn.on{background:var(--ink-1,#00173C);border-color:var(--ink-1,#00173C);color:#fff}
 .dlv-rem-add{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
 .dlv-rem-add input[type=text]{flex:1;min-width:220px}
 .dlv-rem-add input[type=text],.dlv-rem-add input[type=date]{font-family:var(--font-sans);font-size:13px;padding:9px 11px;border:1px solid var(--line-2);border-radius:8px;background:var(--card);color:var(--ink)}
@@ -2432,10 +2440,10 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
         return { key: "trend-drift", level: "red", count: bits.length, short: "bounce/reply trend drifting",
           text: bits.join(" · ") + ".",
           actionLines: [
-            "Catch it before it crosses 3% and burns domains — check Performance by batch for the batches driving it.",
+            "Catch it before it crosses 3% and burns domains — check Performance by tag for the tags driving it.",
             "Worst batches: " + worstBounceBatches(),
           ],
-          action: "Catch it before it crosses 3% and burns domains — check Performance by batch for the batches driving it.",
+          action: "Catch it before it crosses 3% and burns domains — check Performance by tag for the tags driving it.",
           _openBatch: true };
       }
       case "dormant-noreminder": {
@@ -3087,7 +3095,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // missing/flat batchStats (this mock has one uniform batch) degrades to a
   // neutral pointer so the line never invents a culprit.
   function worstBounceBatches() {
-    const fallback = "per-batch breakdown in Performance by batch";
+    const fallback = "per-tag breakdown in Performance by tag";
     const bs = (S.A.batchStats || []).filter((b) => b && b.sent > 0 && b.bounce_rate != null);
     if (bs.length < 2) return fallback;
     let sentSum = 0, weighted = 0;
@@ -3724,7 +3732,7 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     // Technical-details fold it now lives inside) rather than inventing anything new.
     if (it._openFleetTech && !window.DLV_EMBED) btns.push(`<button class="btn sm" data-act="open-fleetdetails-tech">Fleet details → Technical ↓</button>`);
     if (it._openCaps) btns.push(`<button class="btn sm" data-act="open-caps-preview">Caps by reply rate…</button>`);
-    if (it._openBatch) btns.push(`<button class="btn sm" data-act="open-batch">Performance by batch ↓</button>`);
+    if (it._openBatch) btns.push(`<button class="btn sm" data-act="open-batch">Performance by tag ↓</button>`);
     if (it.key) btns.push(`<button class="btn sm" data-act="mark-done" data-key="${it.key}" data-count="${it.count || 0}" title="Mark done">✓ Mark done</button>`);
     // Item 3: multi-step cards render each numbered step on its own line —
     // single-action cards keep the one-line "→ action" form.
@@ -4738,75 +4746,75 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
   // Formerly a collapsible <details class="dlv-fold"> — now its own always-
   // visible "Performance by batch" tab panel (best/worst chips + full table +
   // CSV, unchanged).
+  // Performance by TAG (replaces the old by-batch table, whose numbers came
+  // from the ~59-domain-capped audit engine and never added up). Data: the
+  // native /api/tag-performance endpoint, straight from Supabase, keyed by a
+  // 7/14/30-day window. One row per Smartlead tag; a mailbox with N tags shows
+  // in all N groups. Efficiency column = Emails sent per positive.
   function renderBatchPanel() {
-    const bs = S.A.batchStats.filter((b) => b.mailboxes > 0);
-    // NOTE: this panel must always render, even with zero batches — the
-    // "▲▼ Best & worst batch ↓" signpost link (renderFleetTiles) switches to
-    // this tab unconditionally (fix: that early-return "" here was the one
-    // fold link, out of the four, whose target could vanish — clicking it
-    // then just left the page wherever it already was, which reads as
-    // "landed on the to-do list" right below the signpost).
-    let summary = "";
-    let body;
-    if (bs.length) {
-      const strictCand = bs.filter((b) => b.sent >= 1000);
-      let cand = strictCand; if (cand.length < 2) cand = bs.filter((b) => b.sent > 0);
-      if (cand.length >= 2) {
-        const byReply = [...cand].sort((a, b) => b.reply_rate - a.reply_rate);
-        // A batch bouncing at/over the 2% burn threshold can't be "Best" no
-        // matter its reply rate (seen live: 2.02%-bounce batch crowned Best
-        // over a 1.73%-reply / 0.45%-bounce one). Best = highest reply among
-        // sub-2%-bounce candidates (fall back to pure reply if none qualify);
-        // Worst = the over-threshold bouncer when one exists, else lowest reply.
-        const healthy = byReply.filter((b) => b.bounce_rate < 2);
-        const best = healthy[0] || byReply[0];
-        const burners = [...cand].filter((b) => b.bounce_rate >= 2).sort((a, b) => b.bounce_rate - a.bounce_rate);
-        const worst = (burners[0] && burners[0] !== best) ? burners[0] : byReply[byReply.length - 1];
-        // Fix #8a: only claim the ≥1,000-sent qualifier when that's actually the
-        // filter in effect — the low-volume fallback below (used when fewer than
-        // 2 batches clear 1,000 sent) would make the claim false otherwise.
-        // Fix #4b (panels 9-10): the volume floor now sits INLINE in the chip
-        // line itself ("▲ Best (≥1,000 sent): …") instead of trailing at the
-        // end where it read as fine print detached from the verdict.
-        const floor = cand === strictCand ? "(≥1,000 sent)" : "(any sends — too few clear 1,000)";
-        // Essentialism pass: a Best/Worst call-out on identical numbers is a
-        // false signal (panel flagged it 4/5) — skip it when the field is tied.
-        const _tied = best !== worst && best.reply_rate === worst.reply_rate && best.bounce_rate === worst.bounce_rate;
-        if (!_tied) summary = `<div class="dlv-bt-summary">
-          <span class="dlv-bt-sum best">▲ Best ${floor}${glossMark(BATCH_DEF)}: <b>${esc(best.batch)}</b> — ${best.reply_rate}% reply · ${best.bounce_rate}% bounce · last ${S.A.batchWindowDays || 7} days</span>
-          <span class="dlv-bt-sum worst">▼ Worst ${floor}${glossMark(BATCH_DEF)}: <b>${esc(worst.batch)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce${worst.bounce_rate >= 2 ? " (over the 2% limit)" : ""} · last ${S.A.batchWindowDays || 7} days</span>
-        </div>`;
-      }
-      body = renderBatchRows(bs);
+    const win = UI.tag.win || 7;
+    // Lazy-load on first paint of this tab (and after a range switch clears it).
+    if (DATA.tagperf.status === "idle" || (!DATA.tagperf.data && DATA.tagperf.status !== "loading" && DATA.tagperf.status !== "error")) {
+      loadTagPerf(false);
+    }
+    const winSel = `<span class="dlv-tag-range">${[7, 14, 30].map((d) =>
+      `<button class="dlv-tag-rbtn ${win === d ? "on" : ""}" data-act="dlv-tagwin" data-win="${d}">${d}d</button>`).join("")}</span>`;
+    let summary = "", body, hint;
+    const D = DATA.tagperf;
+    if (D.status === "error") {
+      body = `<div class="dlv-empty">Couldn't load tag performance — ${esc(D.error || "unknown error")}. <a class="dlv-dl" data-act="dlv-tagperf-retry">Retry</a></div>`;
+      hint = "error";
+    } else if (!D.data) {
+      body = `<div class="dlv-empty"><span class="dlv-spinner"></span> Building tag performance from live sends…</div>`;
+      hint = "loading…";
     } else {
-      body = `<div class="dlv-empty">No batch/provider data yet.</div>`;
+      const all = (D.data.tagStats && D.data.tagStats[String(win)]) || [];
+      const rows = all.filter((r) => r.mailboxes > 0);
+      if (rows.length) {
+        const strictCand = rows.filter((r) => r.sent >= 1000);
+        let cand = strictCand; if (cand.length < 2) cand = rows.filter((r) => r.sent > 0);
+        if (cand.length >= 2) {
+          const byReply = [...cand].sort((a, b) => b.reply_rate - a.reply_rate);
+          // Same rule as before: a tag bouncing ≥2% can't be crowned "Best".
+          const healthy = byReply.filter((r) => r.bounce_rate < 2);
+          const best = healthy[0] || byReply[0];
+          const burners = [...cand].filter((r) => r.bounce_rate >= 2).sort((a, b) => b.bounce_rate - a.bounce_rate);
+          const worst = (burners[0] && burners[0] !== best) ? burners[0] : byReply[byReply.length - 1];
+          const floor = cand === strictCand ? "(≥1,000 sent)" : "(any sends — too few clear 1,000)";
+          const _tied = best === worst || (best.reply_rate === worst.reply_rate && best.bounce_rate === worst.bounce_rate);
+          const pp = (r) => r.per_positive != null ? ` · ${fmtN(r.per_positive)} sent/positive` : "";
+          if (!_tied) summary = `<div class="dlv-bt-summary">
+            <span class="dlv-bt-sum best">▲ Best ${floor}: <b>${esc(best.tag)}</b> — ${best.reply_rate}% reply · ${best.bounce_rate}% bounce${pp(best)} · last ${win} days</span>
+            <span class="dlv-bt-sum worst">▼ Worst ${floor}: <b>${esc(worst.tag)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce${worst.bounce_rate >= 2 ? " (over the 2% limit)" : ""}${pp(worst)} · last ${win} days</span>
+          </div>`;
+        }
+        body = renderBatchRows(rows, win);
+        hint = rows.length + " tags · last " + win + " days";
+      } else {
+        body = `<div class="dlv-empty">No sends recorded for any tag in the last ${win} days.</div>`;
+        hint = "no data yet";
+      }
     }
     return `<div class="dlv-subtab-panel" id="dlv-fold-batch">
-      <div class="dlv-subtab-head">${headIc("chart")}Performance by batch (client / mailbox pool)${glossMark(BATCH_DEF)}<span class="hint">${bs.length ? bs.length + " batches · compare deliverability" : "no data yet"}</span></div>
+      <div class="dlv-subtab-head">${headIc("chart")}Performance by tag<span class="hint">${hint}</span><span style="margin-left:auto">${winSel}</span></div>
       <div class="dlv-fold-body">${summary}${body}</div>
     </div>`;
   }
-  function renderBatchRows(bs) {
+  function renderBatchRows(rows, win) {
     const rr = (v) => (v >= 1 ? "g" : v >= 0.5 ? "y" : "r");
     const brc = (v) => (v < 2 ? "g" : v < 3 ? "y" : "r");
-    const rowsHtml = bs.map((b) => {
-      const reply = b.sent ? `<span class="dlv-bt-${rr(b.reply_rate)}">${b.reply_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
-      const bounce = b.sent ? `<span class="dlv-bt-${brc(b.bounce_rate)}">${b.bounce_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
-      const blk = b.blacklisted ? `<span class="dlv-bt-r">${b.blacklisted}</span>` : `<span class="dlv-bt-mut">0</span>`;
-      const issues = b.dead + b.blocked;
-      // A warmed pool that's currently between campaigns (no sends in the
-      // latest window) gets an "idle" badge, and — since its window columns
-      // read "—" — its real trailing-30-day performance on a sub-line, so the
-      // row says "here's the pool, here's how it last performed" instead of
-      // looking blank. Regular active batches never carry these fields.
-      const idleBadge = b.idle ? ` <span class="dlv-bt-idle" title="Warmed mailboxes with no live campaign — nothing sent in the latest window">idle</span>` : "";
-      const sub = (!b.sent && b.sent30) ? `<div class="dlv-bt-sub">Last 30 days: ${fmtN(b.sent30)} sent · ${b.reply30}% reply · ${b.bounce30}% bounce</div>` : "";
-      return `<tr><td class="dlv-bt-name">${esc(b.batch)}${idleBadge}${sub}</td><td>${b.mailboxes}</td><td>${b.sending}</td><td>${b.warmup}</td><td>${b.sent ? fmtN(b.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${blk}</td><td>${issues ? `<span class="dlv-bt-y">${issues}</span>` : `<span class="dlv-bt-mut">0</span>`}</td></tr>`;
+    // Emails-sent-per-positive tone: fewer is better. <1k green, <2k amber, else red.
+    const ppc = (v) => (v == null ? "mut" : v < 1000 ? "g" : v < 2000 ? "y" : "r");
+    const rowsHtml = rows.map((r) => {
+      const reply = r.sent ? `<span class="dlv-bt-${rr(r.reply_rate)}">${r.reply_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
+      const bounce = r.sent ? `<span class="dlv-bt-${brc(r.bounce_rate)}">${r.bounce_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
+      const perPos = r.per_positive != null
+        ? `<span class="dlv-bt-${ppc(r.per_positive)}">${fmtN(r.per_positive)}</span>`
+        : `<span class="dlv-bt-mut">—</span>`;
+      return `<tr><td class="dlv-bt-name">${esc(r.tag)}</td><td>${r.mailboxes}</td><td>${r.sent ? fmtN(r.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${r.positive || `<span class="dlv-bt-mut">0</span>`}</td><td>${perPos}</td></tr>`;
     }).join("");
-    const w = S.A.batchWindowDays; // set when sent/reply/bounce were rebuilt from sweep deltas
-    const wLabel = w ? (w === 7 ? "7d" : w + "d") : "7d";
-    return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Batch</th><th>Mailboxes</th><th>Sending</th><th>Warmup</th><th>Sent (${wLabel})</th><th>Reply&nbsp;%</th><th>Bounce&nbsp;%</th><th>Blacklist</th><th>Issues</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
-      <div class="dlv-mb-count" style="margin-top:10px">Reply / Bounce are volume-weighted over the last 7 days. "Issues" = dead + blocked. <a class="dlv-dl" data-act="view-data" data-file="batch-stats">View batch performance</a></div>`;
+    return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Tag</th><th>Mailboxes</th><th>Sent (${win}d)</th><th>Reply&nbsp;%</th><th>Bounce&nbsp;%</th><th>Positives</th><th>Emails&nbsp;sent&nbsp;per&nbsp;positive</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+      <div class="dlv-mb-count" style="margin-top:10px">Sent / Reply / Bounce / Positives are summed over the last ${win} days from daily sending stats. "Emails sent per positive" = emails sent ÷ positive replies (lower is better; "—" when no positives yet).</div>`;
   }
 
   /* ============================================================
@@ -4842,6 +4850,30 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       paintPage();
     }).catch((e) => {
       DATA.plan = Object.assign(DATA.plan, { status: "error", error: String(e && e.message || e) });
+      paintPage();
+    });
+  }
+  // Performance by tag: GET /api/tag-performance (Supabase truth, NOT the
+  // capped audit engine). Server computes async on a cold call and returns
+  // {building:true}; poll until tagStats lands. One fetch feeds all 3 windows.
+  function loadTagPerf(force) {
+    if (DATA.tagperf.status === "loading") return;
+    if (!force && DATA.tagperf.data && Date.now() - DATA.tagperf.ts < 60000) return;
+    DATA.tagperf.status = "loading";
+    fetch("/api/tag-performance").then((r) => {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    }).then((j) => {
+      if (j && j.building) {
+        DATA.tagperf.status = "idle";
+        clearTimeout(DATA.tagperf.pollTimer);
+        DATA.tagperf.pollTimer = setTimeout(() => loadTagPerf(true), 4000);
+        return;
+      }
+      DATA.tagperf = Object.assign(DATA.tagperf, { status: "ready", data: j, ts: Date.now(), error: null });
+      paintPage();
+    }).catch((e) => {
+      DATA.tagperf = Object.assign(DATA.tagperf, { status: "error", error: String(e && e.message || e) });
       paintPage();
     });
   }
@@ -8118,6 +8150,14 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       });
       return;
     }
+    if (act === "dlv-tagwin") {
+      runAct(act, () => {
+        const w = parseInt(t.dataset.win, 10);
+        if (w && UI.tag.win !== w) { UI.tag.win = w; paintPage(); }
+      });
+      return;
+    }
+    if (act === "dlv-tagperf-retry") { runAct(act, () => loadTagPerf(true)); return; }
     if (act === "run-audit") { runAct(act, () => runLiveAudit()); return; }
     if (act === "copy-claude") { runAct(act, () => copyForClaude()); return; }
     if (act === "copy-ctx") { runAct(act, () => copyCtx(t)); return; }

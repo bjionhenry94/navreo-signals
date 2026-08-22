@@ -620,7 +620,8 @@ def _normalise_company_fields(path: str, body):
     return body
 
 
-_SB_TIMEOUT_S = 15  # explicit, saner than http_json's 60s default - a cold-start
+_SB_TIMEOUT_S = int(os.environ.get("SB_TIMEOUT_S") or 15)  # env-overridable for slow dev links
+# explicit, saner than http_json's 60s default - a cold-start
                      # Supabase stall used to burn ~60s per attempt (~120s across
                      # the two sequential calls a first page-load makes); capping
                      # this bounds the worst case even with the one retry below.
@@ -19490,6 +19491,113 @@ def api_mailbox_client_map():
             "clients": {labels[k]: sorted(v) for k, v in emails.items()}}
 
 
+# ── Performance by tag (fixes the broken "Performance by batch") ──────────
+# WHY THIS EXISTS: the old batch table derives its performance columns from the
+# external audit engine's domain-health set, hard-capped at ~59 domains, so most
+# of the fleet's sends were unattributed and the numbers "didn't make sense"
+# (see _deliv_fix_batch_stats' docstring). This endpoint ignores that path
+# entirely and computes straight from Supabase truth: group every mailbox by
+# EACH of its Smartlead tags, sum sent/replies/bounces/positives over the
+# 7/14/30-day window via the SAME sweep-delta method domain-health already uses
+# (newest minus the snapshot at the window boundary; rolling-30d counters clamp
+# at 0). Adds "per_positive" = round(sent / positive) — emails sent to buy one
+# positive reply, the one number that says which tag is actually working. A
+# mailbox with N tags counts in all N groups (per-tag lens; intended).
+_TAGPERF = {"data": None, "ts": 0.0, "running": False, "error": None}
+_TAGPERF_LOCK = threading.Lock()
+_TAGPERF_TTL_S = 900  # 15 min
+
+
+def _tagperf_compute() -> dict:
+    from datetime import date, timedelta
+    boxes = sb_get_all("mailboxes?select=smartlead_id,workspace,tags") or []
+    tags_of = {}
+    for b in boxes:
+        raw = b.get("tags") if isinstance(b.get("tags"), list) else []
+        # Tags are Smartlead tag OBJECTS ({tag_name/name, ...}); tolerate strings.
+        names = [t for t in ((t.get("tag_name") or t.get("name")) if isinstance(t, dict)
+                             else str(t) for t in raw) if t]
+        if names:
+            tags_of[(b.get("workspace"), b.get("smartlead_id"))] = names
+    today = date.today()
+    since = (today - timedelta(days=max(_DELIV_BUNDLE_WINDOWS) + 1)).isoformat()
+    stats = sb_get_all(
+        "mailbox_stats_daily?select=smartlead_id,workspace,stat_date,sent_30d,"
+        "replies_30d,bounces_30d,positive_replies_30d&stat_date=gte.%s" % since) or []
+    hist = {}
+    for s in stats:
+        hist.setdefault((s.get("workspace"), s.get("smartlead_id")), []).append(s)
+    for h in hist.values():
+        h.sort(key=lambda s: str(s.get("stat_date")))
+
+    def delta(h, col, bound):
+        cur = (h[-1].get(col) or 0)
+        if bound is None:                       # 30d = the rolling counter itself
+            return cur
+        base = next((s for s in h if str(s.get("stat_date")) >= bound), None)
+        return cur if base is None else max(0, cur - (base.get(col) or 0))
+
+    out = {}
+    for days in _DELIV_BUNDLE_WINDOWS:
+        bound = None if days >= 30 else (today - timedelta(days=days)).isoformat()
+        agg = {}
+        for k, names in tags_of.items():
+            h = hist.get(k)
+            if not h:
+                continue
+            sent = delta(h, "sent_30d", bound)
+            rep = delta(h, "replies_30d", bound)
+            bnc = delta(h, "bounces_30d", bound)
+            pos = delta(h, "positive_replies_30d", bound)
+            for n in names:
+                a = agg.setdefault(n, {"mailboxes": 0, "sent": 0, "rep": 0, "bnc": 0, "pos": 0})
+                a["mailboxes"] += 1
+                a["sent"] += sent
+                a["rep"] += rep
+                a["bnc"] += bnc
+                a["pos"] += pos
+        rows = []
+        for n, a in agg.items():
+            s = a["sent"]
+            pct = lambda v: round(100.0 * v / s, 2) if s else 0
+            rows.append({"tag": n, "mailboxes": a["mailboxes"], "sent": s,
+                         "positive": a["pos"], "reply_rate": pct(a["rep"]),
+                         "bounce_rate": pct(a["bnc"]),
+                         "per_positive": round(s / a["pos"]) if a["pos"] else None})
+        rows.sort(key=lambda r: -r["sent"])
+        out[str(days)] = rows
+    return {"tagStats": out, "asof": today.isoformat(),
+            "mailboxes": len(tags_of), "tags": len(out.get("30", []))}
+
+
+def _tagperf_run_bg():
+    try:
+        data = _tagperf_compute()
+        with _TAGPERF_LOCK:
+            _TAGPERF.update(data=data, ts=time.time(), error=None)
+    except Exception as e:  # noqa: BLE001
+        with _TAGPERF_LOCK:
+            _TAGPERF["error"] = str(e)
+        print("[tagperf] compute failed: %s" % e, file=sys.stderr)
+    finally:
+        with _TAGPERF_LOCK:
+            _TAGPERF["running"] = False
+
+
+def tag_performance_get(force: bool = False) -> tuple[dict, int]:
+    with _TAGPERF_LOCK:
+        ent, ts, err = _TAGPERF["data"], _TAGPERF["ts"], _TAGPERF["error"]
+        expired = ent is None or (time.time() - ts) >= _TAGPERF_TTL_S
+        kick = (force or expired) and not _TAGPERF["running"]
+        if kick:
+            _TAGPERF["running"] = True
+    if kick:
+        threading.Thread(target=_tagperf_run_bg, daemon=True).start()
+    if ent is None:
+        return {"building": True, "error": err}, 200
+    return dict(ent, stale=expired, error=err), 200
+
+
 def api_restore_plan():
     entries, rem_src, mbx, _bl = _restore_entries()
     forecast = _restore_forecast(entries, mbx)
@@ -21690,6 +21798,12 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(body, status)
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
+            return self._json(body, status)
+        if path == "/api/tag-performance":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
+            body, status = tag_performance_get(force=force)
             return self._json(body, status)
         if path == "/api/domain-auto/status":
             body, status = api_domain_auto_status()
