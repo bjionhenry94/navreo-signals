@@ -2738,20 +2738,26 @@
   function boot() {
     viewRestore(); /* sticky filters back before the first fleet render */
     document.getElementById("lw-error").hidden = true;
-    Promise.all([
-      getJSON("/api/cockpit/insights"),
-      getJSON("/api/campaign-scorecard")
-    ]).then(function (res) {
-      STATE.insights = res[0];
-      STATE.scorecard = res[1];
-      /* The inventory is what draws the rows now, so a degraded crunch cache is
-         no longer fatal: the list still renders, every row just reads "Not yet
-         reviewed". Only a missing INVENTORY can empty this page. */
-      if (!STATE.insights || STATE.insights.degraded) {
-        STATE.insights = { insights: [], track_record: [], meetings_by_campaign: {},
-                           generated_at: null, stats_updated_at: null };
-        STATE.insightsDown = true;
-      }
+
+    /* Time-to-content is bounded by the SCORECARD alone, never by the slow,
+       purely-decorative /api/cockpit/insights call. The inventory draws the
+       rows; insights only decorate them. So we render the list the moment the
+       scorecard lands and fold insights in when (if) they arrive — instead of
+       the old Promise.all that blocked first paint on BOTH, hanging the whole
+       page whenever the insights crunch cache was cold, slow, or down. */
+    STATE.insights = { insights: [], track_record: [], meetings_by_campaign: {},
+                       generated_at: null, stats_updated_at: null };
+
+    /* Insights in parallel, NON-blocking: decorate on arrival. */
+    getJSON("/api/cockpit/insights").then(function (ins) {
+      if (!ins || ins.degraded) { STATE.insightsDown = true; return; }
+      STATE.insights = ins;
+      if (STATE.scorecard) { join(); renderList(); } /* re-render with decorations */
+    }).catch(function () { STATE.insightsDown = true; });
+
+    /* Scorecard drives first paint. */
+    getJSON("/api/campaign-scorecard").then(function (sc) {
+      STATE.scorecard = sc;
       var scCount = Object.keys(((STATE.scorecard || {}).campaigns) || {}).length;
       if (!scCount) throw new Error("campaign inventory unavailable");
       join();
@@ -2953,7 +2959,6 @@
     ["quick funds", "Quick Funds"],
     ["alpine", "Navreo (secondary)"],
     ["property management", "Navreo (secondary)"],
-    ["acme", "Acme"],
     ["navreo", "Navreo"]
   ];
   var CLIENT_OTHER = "Other";
@@ -3885,7 +3890,7 @@
          The STATUS word is deliberately absent: the status control in the
          topbar carries it now (P2, Bjion 1 Aug 2026) — one place to read it,
          the same place you change it. Client-label fallback: a name-gated
-         client campaign (or demo Acme) must not read as Navreo either. */
+         client campaign must not read as Navreo either. */
       '<p class="campaign-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Navreo")) + " &middot; campaign " + esc(c.id) + "</p></div>" +
       "</div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
