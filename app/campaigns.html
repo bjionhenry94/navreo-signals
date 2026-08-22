@@ -2828,6 +2828,14 @@
         completedLeads: s ? s.completed : null,
         source: s ? "scorecard" : "crunch"
       };
+      /* House law: a booked meeting IS a positive (a Call Booked reply is a
+         positive reply). If the synced positive counter missed them, floor
+         positives at the meeting count so a card can never render more
+         meetings than positives — e.g. 3104027 arriving as pos 0 / meet 6.
+         Leaves a null/zero-meeting row untouched (never invents a positive). */
+      if (stats.meetings != null && stats.meetings > (stats.positives || 0)) {
+        stats.positives = stats.meetings;
+      }
       /* An un-crunched campaign gets an honest neutral state, never a made-up
          verdict: real numbers, no prose, "Not yet reviewed". */
       var tag = reviewed ? (vp.tag || "watch") : "unreviewed";
@@ -3068,7 +3076,7 @@
         ? "<strong>Coverage problem: " + fmtInt(unaccounted) + " tracked campaign" +
           (unaccounted === 1 ? "" : "s") + " did not render. Tell Lilly in chat.</strong> "
         : "") +
-      fmtInt(cov.tracked) + " campaigns tracked &middot; " + fmtInt(drawn) + " on this page &middot; " +
+      fmtInt(cov.tracked) + " campaigns tracked &middot; " + fmtInt(drawn) + " loaded into the list &middot; " +
       fmtInt(cov.reviewed) + " reviewed by Lilly &middot; " + fmtInt(unaccounted) + " unaccounted for. " +
       "Reviewed means she has written a verdict; the rest still show their real Smartlead numbers. " +
       "Every workspace under management is here (Navreo and every connected client); filter by Client to see one workspace at a time.</p>");
