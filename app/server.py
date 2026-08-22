@@ -2628,6 +2628,62 @@ _WORKSPACES_LIST_SWR = _SWRCache(
     is_degraded=lambda p: not isinstance(p, dict) or not p.get("workspaces"),
     name="workspaces-list")
 
+# /api/collisions powers the double-tap warning bar. Its two source rows
+# (collision_ledger daily census + app_activity_log collision_live) are written
+# at most every ~6h by collision_live_recount / the daily census, yet the
+# endpoint did two SYNCHRONOUS Supabase reads on EVERY page load (measured warm
+# p50 2.4s / p95 4.6s, cold 17s — audit 2026-08-22). Wrap it in the same SWR
+# layer as every other read: a 300s TTL serves instantly and refreshes in the
+# background; a failed read is marked degraded so it's never cached.
+def _compute_collisions() -> dict:
+    census = sb("GET", "collision_ledger?select=run_date,run_at,"
+                       "leads_colliding,per_client,double_sent_30d,"
+                       "stacked_generations&order=run_date.desc&limit=1")
+    live = sb("GET", "app_activity_log?select=payload,ts&"
+                     "actor=eq.collision_live&order=id.desc&limit=1")
+    degraded = census is None or live is None
+    crow = (census or [{}])[0] if isinstance(census, list) else {}
+    lrow = (live or [{}])[0] if isinstance(live, list) else {}
+    lp = lrow.get("payload") if isinstance(lrow.get("payload"), dict) else {}
+    if lp and lp.get("per_client") is not None:
+        stamp = lp.get("run_at") or lrow.get("ts") or ""
+        return {"run_date": stamp[:10] or crow.get("run_date"), "run_at": stamp,
+                "total": lp.get("total") or 0, "per_client": lp.get("per_client") or {},
+                "source": "live", "census_total": crow.get("leads_colliding") or 0,
+                "double_sent_30d": crow.get("double_sent_30d") or 0,
+                "stacked_generations": crow.get("stacked_generations") or 0,
+                "_degraded": degraded}
+    return {"run_date": crow.get("run_date"), "run_at": crow.get("run_at"),
+            "total": crow.get("leads_colliding") or 0,
+            "per_client": crow.get("per_client") or {}, "source": "census",
+            "double_sent_30d": crow.get("double_sent_30d") or 0,
+            "stacked_generations": crow.get("stacked_generations") or 0,
+            "_degraded": degraded}
+
+
+_COLLISIONS_SWR = _SWRCache(
+    _compute_collisions, 300,
+    is_degraded=lambda p: not isinstance(p, dict) or p.get("_degraded"),
+    name="collisions")
+
+
+# /api/pool-pulls (campaigns + optimise pages): the pool_pulls Supabase read is
+# the slow part (~0.8s warm, audit 2026-08-22) and its rows change slowly; the
+# live per-pool job status is overlaid separately from the in-memory JOBS map.
+# Cache just the DB rows (30s SWR); the handler applies the live overlay fresh
+# on every request so job progress stays real-time.
+def _compute_pool_pulls() -> dict:
+    rows = sb("GET", "pool_pulls?order=seg")
+    return {"rows": rows if isinstance(rows, list) else None,
+            "_degraded": not isinstance(rows, list)}
+
+
+_POOL_PULLS_SWR = _SWRCache(
+    _compute_pool_pulls, 30,
+    is_degraded=lambda p: not isinstance(p, dict) or p.get("_degraded"),
+    name="pool-pulls")
+
+
 _SOURCES_TTL_S = 30
 
 
@@ -2636,6 +2692,15 @@ def _compute_sources_full() -> tuple:
     fetch_failed = docs is None
     drafts = docs if docs is not None else _file_list(DRAFTS)
     result = sources_for_ui(drafts)
+    # Drop the per-source `prospects` arrays from the UI cache (audit 2026-08-22).
+    # sources_for_ui() derives counts from a separate signal_leads query and never
+    # reads `prospects`; no list-view caller fetches the non-slim endpoint; and the
+    # pull/dedup flow reads prospects through read_drafts()/_DRAFTS_READ_SWR, its own
+    # cache. Holding them here was a second 19.6MB copy of the same data sitting in
+    # the 512MB web instance (a documented OOM driver) - strip it so this cache holds
+    # ~220KB of meta instead. The name-level `_count_stale` marker (set by
+    # sources_for_ui on a failed overlay) is preserved.
+    result = [{k: v for k, v in s.items() if k != "prospects"} for s in result]
     return result, fetch_failed
 
 
@@ -3134,13 +3199,13 @@ _NOTIFICATIONS_TTL_S = 60  # G1/S1: unfiltered /api/notifications was a single
 
 
 def _compute_notifications_list(key: tuple) -> list:
-    """key = (slim, status, priority, client, client_id, campaign_id) - see api_notifications()."""
+    """key = (slim, status, priority, client, client_id, campaign_id, finding_type) - see api_notifications()."""
     from urllib.parse import quote
-    slim, status, priority, client, client_id, campaign_id = key
+    slim, status, priority, client, client_id, campaign_id, finding_type = key
     select_param = [f"select={quote(NOTIFICATIONS_SLIM_SELECT, safe=',')}"] if slim else []
     filters = [f"{k}=eq.{quote(v, safe='')}"
                for k, v in (("status", status), ("priority", priority), ("client", client),
-                            ("campaign_id", campaign_id)) if v]
+                            ("campaign_id", campaign_id), ("finding_type", finding_type)) if v]
 
     def _fetch(extra_filters: list):
         parts = select_param + filters + extra_filters + ["order=created_at.desc"]
@@ -3212,7 +3277,11 @@ def api_notifications(qs: dict) -> list:
     client = (qs.get("client") or [""])[0]
     client_id = (qs.get("client_id") or [""])[0].strip()
     campaign_id = (qs.get("campaign_id") or [""])[0].strip()
-    key = (slim, status, priority, client, client_id, campaign_id)
+    # finding_type pushes an eq. filter down to PostgREST so callers that only
+    # want one kind of finding (e.g. deliverability.html's variant_call feed)
+    # fetch just those rows instead of pulling all ~900 and filtering in JS.
+    finding_type = (qs.get("finding_type") or [""])[0].strip()
+    key = (slim, status, priority, client, client_id, campaign_id, finding_type)
     return _NOTIFICATIONS_SWR.get(key)
 
 
@@ -16946,10 +17015,22 @@ def _client_capacity_now() -> dict:
     return {c: v["cap"] for c, v in (_navreo_caps_live().get("clients") or {}).items()}
 
 
+def _client_cap_history_compute() -> dict:
+    return (_blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}).get("days") or {}
+
+
+# The cap-history blob is written once a day by the cap crons, yet it was read
+# from Supabase on EVERY /api/fleet-capacity call (the main ~1s cost behind that
+# endpoint once its 1h base series is warm, audit 2026-08-22). SWR-cache it 300s.
+_CLIENT_CAP_HIST_SWR = _SWRCache(_client_cap_history_compute, 300,
+                                 is_degraded=lambda p: not isinstance(p, dict),
+                                 name="client-cap-history")
+
+
 def _client_cap_history() -> dict:
     """The rolling per-day capacity blob written by the daily cap crons:
     {date: {"workspace": {navreo:{cap,boxes}}, "clients": {client:{cap,boxes}}}}."""
-    return (_blob_snapshot_load(_CLIENT_CAP_HIST_KEY) or {}).get("days") or {}
+    return _CLIENT_CAP_HIST_SWR.get() or {}
 
 
 def _cap_hw_merge(prev: dict | None, new: dict, src: str, asof: str) -> dict:
@@ -21496,35 +21577,12 @@ class Handler(SimpleHTTPRequestHandler):
             # contact_history census (collision_ledger) counts. Serve live when
             # present; fall back to the daily census (labelled approx) only
             # until the first live run lands.
-            census = sb("GET", "collision_ledger?select=run_date,run_at,"
-                               "leads_colliding,per_client,double_sent_30d,"
-                               "stacked_generations&order=run_date.desc&limit=1")
-            crow = (census or [{}])[0] if isinstance(census, list) else {}
-            live = sb("GET", "app_activity_log?select=payload,ts&"
-                             "actor=eq.collision_live&order=id.desc&limit=1")
-            lrow = (live or [{}])[0] if isinstance(live, list) else {}
-            lp = lrow.get("payload") if isinstance(lrow.get("payload"), dict) else {}
-            if lp and lp.get("per_client") is not None:
-                stamp = lp.get("run_at") or lrow.get("ts") or ""
-                return self._json({
-                    "run_date": stamp[:10] or crow.get("run_date"),
-                    "run_at": stamp,
-                    "total": lp.get("total") or 0,
-                    "per_client": lp.get("per_client") or {},
-                    "source": "live",
-                    "census_total": crow.get("leads_colliding") or 0,
-                    "double_sent_30d": crow.get("double_sent_30d") or 0,
-                    "stacked_generations": crow.get("stacked_generations") or 0,
-                })
-            return self._json({
-                "run_date": crow.get("run_date"),
-                "run_at": crow.get("run_at"),
-                "total": crow.get("leads_colliding") or 0,
-                "per_client": crow.get("per_client") or {},
-                "source": "census",
-                "double_sent_30d": crow.get("double_sent_30d") or 0,
-                "stacked_generations": crow.get("stacked_generations") or 0,
-            })
+            # SWR-cached (audit 2026-08-22): the two source rows change at most
+            # every ~6h, so a 300s cache serves instantly and refreshes in the
+            # background instead of paying 2-5s of live Supabase latency per load.
+            payload = dict(_COLLISIONS_SWR.get() or {})
+            payload.pop("_degraded", None)
+            return self._json(payload)
         if path == "/api/sources":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -21545,15 +21603,20 @@ class Handler(SimpleHTTPRequestHandler):
                 cmap = _campaign_client_map()
                 srcs = [s for s in srcs if s.get("client_id") == cid
                         or cmap.get(str(s.get("campaign_id"))) == cid]
-            if (q.get("slim") or [""])[0].lower() in ("1", "true", "yes"):
-                # List-view callers only read source meta/counts (name, type,
-                # campaign_id, total, last_pull, destination, _count_stale, etc.)
-                # - never the per-source `prospects` array, which is what makes
-                # this endpoint's payload heavy (baseline ~222KB). Strip just
-                # that one key; every other field is untouched so counts/meta
-                # stay byte-identical to the non-slim response. Derived from the
-                # same cached full result above - no second Supabase fetch.
-                srcs = [{k: v for k, v in s.items() if k != "prospects"} for s in srcs]
+            # The UI cache no longer carries `prospects` (audit 2026-08-22 - it
+            # was a 19.6MB duplicate of read_drafts()'s copy sitting in the 512MB
+            # instance). Slim callers (every list view) never wanted it, so they
+            # get the cache as-is. The non-slim response's contract DOES include
+            # prospects, so re-attach it there from the canonical read_drafts()
+            # cache (already in memory - no extra Supabase round-trip), keeping
+            # the endpoint byte-identical to before while prospects now live in
+            # exactly one cache instead of two.
+            if (q.get("slim") or [""])[0].lower() not in ("1", "true", "yes"):
+                by_id = {str(d.get("id")): d.get("prospects")
+                         for d in (_cached_read_drafts() or [])
+                         if d.get("prospects") is not None}
+                srcs = [({**s, "prospects": by_id[str(s.get("id"))]}
+                         if str(s.get("id")) in by_id else s) for s in srcs]
             return self._json(srcs)
         if path == "/api/leads":
             from urllib.parse import parse_qs, urlparse
@@ -21627,7 +21690,8 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/qa-history":
             return self._json(read_json_list(QA_HISTORY))
         if path == "/api/pool-pulls":
-            rows = sb("GET", "pool_pulls?order=seg") or []
+            cached = _POOL_PULLS_SWR.get() or {}
+            rows = cached.get("rows")
             if not isinstance(rows, list):
                 return self._json({"error": "supabase_unavailable",
                                     "message": "Couldn't reach the database - try again."}, 503)
@@ -21637,9 +21701,9 @@ class Handler(SimpleHTTPRequestHandler):
                                            "stage": j.get("stage")}
                        for j in JOBS.values() if j.get("kind") == "pool_pull"
                        and j["status"] in ("queued", "running")}
-            for r in rows:
-                r["active_job"] = act.get(r.get("id"))
-            return self._json({"pools": rows})
+            # Fresh dicts so the live overlay is never written onto cached rows.
+            pools = [{**r, "active_job": act.get(r.get("id"))} for r in rows]
+            return self._json({"pools": pools})
         if path == "/api/campaign-drafts":
             drafts, fetch_failed = _cached_campaign_drafts()
             if fetch_failed and not drafts:
