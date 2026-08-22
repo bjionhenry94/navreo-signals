@@ -13735,6 +13735,13 @@ def route_training_generate(payload):
 
         doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])
+        # BOUNDED POOL (owner ruling 2026-08-22): the session is a fixed bank of
+        # ~TRAINING_BANK_MAX scenarios built up front. Once the pool is full,
+        # stop generating - the wizard serves the remaining unrated cases and
+        # then ends. This stops the per-round prefetch from running past the
+        # pool (which is what made it feel endless / repetitive).
+        if is_share_mode and not bank and len(existing_cases) >= TRAINING_BANK_MAX:
+            return 200, {"ok": True, "status": "pool_complete"}
         answers = dict(doc.get("answers") or {})
         unanswered = [c for c in existing_cases if not _is_case_answered(c.get("id"), answers)]
         max_unanswered = TRAINING_MAX_UNANSWERED_SHARE if is_share_mode else TRAINING_MAX_UNANSWERED
@@ -15713,6 +15720,40 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
     return [] if has_prior else list(STATIC_FIRST_INTERVIEW)
 
 
+def _prebuild_training_pool(agent_id: str):
+    """Front-load the WHOLE training session (owner ruling 2026-08-22: "the
+    scenarios should be created BEFORE the link is ever shared, so the user
+    never has to wait"). Build up to TRAINING_BANK_MAX scenarios in the
+    background the moment the link is shared, so the client opens to a full
+    pool - rounds of ROUND_SIZE(3) consume it (~16 rounds) with zero per-round
+    generation wait, and the wizard ends cleanly when the pool is exhausted.
+    Loops the generator (batches of TRAINING_BATCH_MAX) until the pool is full
+    or stops growing; idempotent - a re-share tops up toward the target, never
+    past it. Best-effort; never raises out of the background thread."""
+    try:
+        agent = _load_agent(agent_id)
+        if not agent:
+            return
+        camp = [str(c) for c in (agent.get("campaign_ids") or [])]
+        lock = _get_training_gen_lock(agent_id)
+        for _ in range(7):
+            doc = _load_training(agent_id)
+            have = len(doc.get("cases") or [])
+            if have >= TRAINING_BANK_MAX:
+                return
+            if not lock.acquire(blocking=True, timeout=180):
+                return
+            try:
+                need = min(TRAINING_BATCH_MAX, TRAINING_BANK_MAX - have)
+                _training_generate_worker(agent_id, agent, camp, need, is_share_mode=True)
+            finally:
+                lock.release()
+            if len(_load_training(agent_id).get("cases") or []) <= have:
+                return  # pool stopped growing (no more unique scenarios) - stop
+    except Exception:  # noqa: BLE001 - background pre-build never raises
+        pass
+
+
 def route_training_share(payload):
     """OWNER-ONLY (reached through server.py's normal login gate - never
     added to any public route list). Mints a 30-day-default share token for
@@ -15738,6 +15779,10 @@ def route_training_share(payload):
             days = 30
         days = max(1, min(days, 365))
         token = mint_training_share(agent_id, days)
+        # Pre-build the whole scenario pool NOW, in the background, so the client
+        # opens to a full bank and never waits per round (owner ruling
+        # 2026-08-22). Fire-and-forget; the client polls cases as they land.
+        threading.Thread(target=_prebuild_training_pool, args=(agent_id,), daemon=True).start()
         # Decode the exp this exact token carries (rather than recomputing
         # it) so expires_at can never drift from what verify_training_share
         # will actually enforce.
