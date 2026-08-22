@@ -1835,7 +1835,7 @@ Rules:
 - The names in the examples above (Donald, Parag, Priya, and the sign-off) are placeholders from OTHER teams' threads. Sign ONLY {SenderFirst} - never copy "Bjion" or any example name into a draft. The PRICING example's figures, terms, and specifics (a setup fee, a per-meeting fee, mailbox or send volumes, "at cost, no markup", and the like) are placeholders too - they belong to another team and must NEVER appear in a draft; pricing content comes ONLY from THIS agent's own instructions.
 - No em dashes anywhere, ever - use a comma or period instead.
 - No emoji.
-- Plain English, under 150 words total. The team's replies are short - do not pad.
+- Plain English, HARD LIMIT 150 words total, even for technical, security, or multi-part questions (shared SDR rule, audit 2026-08-22). The team's replies are short. If a full answer would run long, give the single most important fact plainly and put the rest behind the call ("I can walk through the detail on a quick call") rather than writing a long paragraph; never list more than three items, and never pad.
 - Only include the resource link/anchor when send_resource is one of the intents to answer.
 - Resource links and when to send each one are in the instructions. When the lead should get a link, use the exact link from the instructions that matches the original_outreach and their ask. Never invent a link, never paste a link the instructions don't contain.
 - Anchor text reads like the examples above - natural, first-person, never the bare resource title.
@@ -2127,7 +2127,9 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     if r.get("error"):
         raise RuntimeError(f"OpenAI: {str(r['error'].get('message', r['error']))[:200]}")
     data = json.loads(r["choices"][0]["message"]["content"])
-    html_body = (data.get("html") or "").replace("—", ", ")
+    # No em-dash or en-dash (shared SDR rule, audit 2026-08-22): em-dash -> ", ",
+    # en-dash -> "-" (en-dashes survived in echoed time ranges like "10:00-12:00").
+    html_body = (data.get("html") or "").replace("—", ", ").replace("–", "-")
     # The model occasionally emits a C0 control byte where an apostrophe
     # belongs (seen live: U+0019 inside "Here's") - it renders as a broken
     # glyph in a real inbox. Scrub every control char except newline/tab.
@@ -2150,6 +2152,14 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     # uses a different opener, so guard on lead_proposed_time.
     if call_ask == "avoid" and not (classification or {}).get("lead_proposed_time"):
         html_body = strip_two_times_ask(html_body)
+    # Never name yourself in the third person (shared SDR rule, audit 2026-08-22):
+    # a confirmation close that says "speaking with <SenderFirst>" must be
+    # "speaking with me" - the attendee IS the sender. Only the sign-off line
+    # carries the name. Guard on a real sender name so this never touches the
+    # sign-off (that runs next, in enforce_signoff).
+    if sender_first and len(sender_first) > 1:
+        html_body = re.sub(r"\bspeaking with " + re.escape(sender_first) + r"\b",
+                           "speaking with me", html_body, flags=re.IGNORECASE)
     html_body = enforce_signoff(html_body, sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
 
