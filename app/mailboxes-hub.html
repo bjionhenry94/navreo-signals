@@ -523,7 +523,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   }
 
   function renderAll() {
-    renderVerdict(); renderKpis(); renderFix(); renderHeat(); renderTags(); renderMgrTabs();
+    renderVerdict(); renderKpis(); renderFix(); renderHeat(); renderMgrTabs();
   }
 
   /* ---------- events ---------- */
@@ -571,12 +571,28 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       .then(function (j) { if (j) S.tags = j; })
       .catch(function () {});
   }
+  // /_bundle returns { bundle:{ views:{warmupoff,inwarmup,reconnect,...} }, running }.
+  // It can still be building on first hit — poll a few times while running.
+  var bundleTries = 0;
+  function loadBundle() {
+    S.bundleLoading = true;
+    return fetch("/api/deliverability/_bundle", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.bundle) S.bundle = j.bundle;
+        S.bundleLoading = !!(j && j.running);
+        renderMgrTabs();
+        if (j && j.running && bundleTries < 8) { bundleTries++; setTimeout(loadBundle, 4000); }
+      })
+      .catch(function () { S.bundleLoading = false; });
+  }
 
   // paint immediately with placeholders/representative, then fill as data lands
   renderChips(); renderAll();
   loadCw().then(function () { renderChips(); renderAll(); });
   loadDeliv().then(function () { renderAll(); });
-  loadTags().then(function () { renderTags(); });
+  loadTags().then(function () { renderMgrTabs(); });
+  loadBundle();
 })();
 </script>
 </body>
