@@ -125,9 +125,6 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       <div class="sec-h"><h3>Fleet heat map</h3><span class="hint">every client × every check — scan in 5 seconds</span></div>
       <div class="card heatwrap" style="padding:10px" id="hub-heat"><div class="skel">Loading fleet…</div></div>
 
-      <div class="sec-h"><h3>Performance by tag</h3><span class="hint">which angles are worth the sends</span></div>
-      <div class="card" style="padding:0;overflow:hidden" id="hub-tags"><div class="skel">Building tag performance…</div></div>
-
       <div class="sec-h"><h3>Inbox &amp; domain manager</h3><span class="hint">the full detail, when you need it</span></div>
       <div class="card" style="padding:0;overflow:hidden">
         <div class="mgr-tabs" id="hub-mgr-tabs" style="padding:8px 10px 0"></div>
@@ -378,7 +375,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         '<span style="margin-left:auto">' + note + '</span></div>';
   }
 
-  function renderTags() {
+  function mgrTags() {
     var rows = null, D = S.tags;
     if (D && D.tagStats && D.tagStats[String(S.win)]) rows = D.tagStats[String(S.win)].filter(function (r) { return r.mailboxes > 0; });
     if (!rows || !rows.length) { USING_REP.tags = true; rows = REP_TAGS; } else { USING_REP.tags = false; }
@@ -394,111 +391,125 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         '<td class="num">' + (r.positive || 0) + '</td>' +
         '<td class="num">' + (pp == null ? '<span class="t-mut">—</span>' : span(pp < 1000 ? "g1" : pp < 2000 ? "a1" : "r1", comma(pp))) + '</td></tr>';
     }).join("");
-    el("hub-tags").innerHTML =
-      '<div style="overflow-x:auto"><table class="tbl" style="min-width:720px"><thead><tr>' +
+    return '<div style="overflow-x:auto"><table class="tbl" style="min-width:720px"><thead><tr>' +
       '<th>Tag</th><th class="num">Mailboxes</th><th class="num">Sent</th><th class="num">Capacity used</th><th class="num">Reply %</th><th class="num">Bounce %</th><th class="num">Positives</th><th class="num">Sent / positive</th>' +
       '</tr></thead><tbody>' + body + '</tbody></table></div>';
   }
 
-  /* ---------- manager tabs ---------- */
+  /* ---------- manager tabs ----------
+     Rows come from /api/deliverability/_bundle .views.{warmupoff,inwarmup,
+     reconnect} (each { rows:[{email,domain,tags[],cap,provider,reason,
+     warmup_status}] }); "Below reply floor" + "High bounce-rate" come from the
+     audit blob (lowrep / highbCamps). Exactly the owner's tab set + tags. */
   var MGR_TABS = [
-    { key: "problem", label: "Problem mailboxes", build: mgrProblem },
-    { key: "blacklist", label: "Blacklisted", build: mgrBlacklist },
-    { key: "inactive", label: "Inactive", build: mgrInactive },
-    { key: "warmup", label: "Warm-up off", build: mgrWarmup },
-    { key: "signature", label: "Signature issues", build: mgrSignature },
-    { key: "highb", label: "High-bounce campaigns", build: mgrHighb }
+    { key: "lowrep", label: "Below reply floor" },
+    { key: "warmupoff", label: "Not warming" },
+    { key: "inwarmup", label: "In warm-up" },
+    { key: "reconnect", label: "Needs reconnect" },
+    { key: "highb", label: "High bounce-rate" },
+    { key: "tags", label: "Performance by tag" }
   ];
-  var mgrActive = "problem";
+  var mgrActive = "warmupoff";
+  var MGR_CAP = 250; // rows shown per view (fleet lists run to thousands)
+
+  function bundleView(key) {
+    var b = S.bundle && S.bundle.views && S.bundle.views[key];
+    return (b && Array.isArray(b.rows)) ? b.rows : null;
+  }
   function mgrCount(key) {
-    var A = S.deliv; if (!A) return null;
-    if (key === "blacklist") return arrLen(A.blacklistRows || A.blacklist);
-    if (key === "inactive") return arrLen(A.inactive);
-    if (key === "warmup") return A.warmupConfig ? arrLen(A.warmupConfig.notWarming) : 0;
-    if (key === "signature") return A.signature ? arrLen(A.signature.missing) : 0;
-    if (key === "highb") return arrLen(A.campaignsFlagged || A.highbCamps);
-    if (key === "problem") return issuesCount(A);
-    return null;
+    if (key === "tags") return null;
+    if (key === "lowrep") return S.deliv ? (Number(S.deliv.lowrep) || 0) : null;
+    if (key === "highb") return S.deliv ? arrLen(S.deliv.highbCamps || S.deliv.campaignsFlagged) : null;
+    var rows = bundleView(key);
+    return rows ? rows.length : null;
   }
   function renderMgrTabs() {
     el("hub-mgr-tabs").innerHTML = MGR_TABS.map(function (t) {
       var c = mgrCount(t.key), badge = "";
-      if (c != null && c > 0) badge = ' <span class="tabbadge' + (t.key === "problem" ? " n" : "") + '">' + c + '</span>';
+      if (c != null) badge = ' <span class="tabbadge' + (c > 0 ? "" : " n") + '">' + comma(c) + '</span>';
       return '<button class="tab' + (mgrActive === t.key ? " on" : "") + '" data-tab="' + t.key + '">' + t.label + badge + '</button>';
     }).join("");
     renderMgrBody();
   }
-  function tableWrap(head, rows, empty) {
+  function tableWrap(head, rows, empty, foot) {
     if (!rows) return '<div class="mgr-empty">' + esc(empty || "Nothing here — all clear.") + '</div>';
-    return '<table class="tbl"><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table>';
+    return '<div style="overflow-x:auto"><table class="tbl" style="min-width:640px"><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      (foot ? '<div style="padding:11px 16px;font-size:11.5px;color:var(--ink-3)">' + foot + '</div>' : '');
   }
   function pill(cls, txt) { return '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(txt) + '</span>'; }
-  function mgrBlacklist(A) {
-    var rows = A.blacklistRows || (Array.isArray(A.blacklist) ? A.blacklist : []);
-    if (!rows.length) return null;
-    return tableWrap('<th>Domain</th><th class="num">Age (days)</th><th>Advice</th><th>Status</th>',
-      rows.map(function (b) {
-        return '<tr><td class="mono">' + esc(b.domain) + '</td><td class="num">' + (b.ageDays != null ? b.ageDays : "—") + '</td>' +
-          '<td>' + esc(b.advice || "PAUSE + FIX") + '</td><td>' + pill("r", "Blacklisted") + '</td></tr>';
-      }).join(""));
+  function tagChips(tags) {
+    if (!Array.isArray(tags) || !tags.length) return '<span class="t-mut">—</span>';
+    return tags.slice(0, 2).map(function (t) { return '<span class="pill n" style="margin-right:3px">' + esc(t) + '</span>'; }).join("") + (tags.length > 2 ? '<span class="t-mut"> +' + (tags.length - 2) + '</span>' : "");
   }
-  function mgrInactive(A) {
-    var rows = Array.isArray(A.inactive) ? A.inactive : [];
-    if (!rows.length) return null;
-    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Status</th>',
-      rows.map(function (m) {
-        return '<tr><td>' + esc(m.email || m.name || "—") + '</td><td class="mono">' + esc(m.domain || "") + '</td><td>' + pill("a", "Inactive") + '</td></tr>';
-      }).join(""));
+  function mgrMailboxView(key, statusPill, extraNote) {
+    var rows = bundleView(key);
+    if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">None right now — all clear.</div>';
+    var body = rows.slice(0, MGR_CAP).map(function (m) {
+      return '<tr><td>' + esc(m.email || "—") + '</td>' +
+        '<td class="mono">' + esc(m.domain || "") + '</td>' +
+        '<td>' + tagChips(m.tags) + '</td>' +
+        '<td class="num">' + (m.cap != null ? m.cap : "—") + '</td>' +
+        '<td>' + esc(m.provider || "—") + '</td>' +
+        '<td>' + statusPill(m) + '</td></tr>';
+    }).join("");
+    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + ". " : "") + (extraNote || "");
+    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Tags</th><th class="num">Cap/day</th><th>Provider</th><th>Status</th>', body, null, foot);
   }
-  function mgrWarmup(A) {
-    var rows = A.warmupConfig && Array.isArray(A.warmupConfig.notWarming) ? A.warmupConfig.notWarming : [];
-    if (!rows.length) return null;
-    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Reason</th><th>Status</th>',
-      rows.map(function (m) {
-        return '<tr><td>' + esc(m.email || "—") + '</td><td class="mono">' + esc(m.domain || "") + '</td><td>' + esc(m.reason || m.detail || "warm-up off") + '</td><td>' + pill("a", "Warm-up off") + '</td></tr>';
-      }).join(""));
+  function mgrWarmupOff() {
+    return mgrMailboxView("warmupoff", function (m) { return pill("a", m.maildoso ? "Warm-up off (Maildoso)" : "Warm-up off"); },
+      "Warm-up is OFF — these boxes aren’t warming or sending. Turn warm-up on to put the capacity to work.");
   }
-  function mgrSignature(A) {
-    var rows = A.signature && Array.isArray(A.signature.missing) ? A.signature.missing : [];
-    if (!rows.length) return null;
-    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Status</th>',
-      rows.map(function (m) {
-        var email = (typeof m === "string") ? m : (m.email || m.name || "—");
-        var dom = (typeof m === "string") ? "" : (m.domain || "");
-        return '<tr><td>' + esc(email) + '</td><td class="mono">' + esc(dom) + '</td><td>' + pill("a", "No signature") + '</td></tr>';
-      }).join(""));
+  function mgrInWarmup() {
+    return mgrMailboxView("inwarmup", function (m) { return pill("n", m.warmup_status || "Warming"); },
+      "Currently inside the warm-up window — building reputation before they carry full send volume.");
+  }
+  function mgrReconnect() {
+    var rows = bundleView("reconnect");
+    if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">None right now — every mailbox is connected.</div>';
+    var body = rows.slice(0, MGR_CAP).map(function (m) {
+      return '<tr><td>' + esc(m.email || "—") + '</td>' +
+        '<td class="mono">' + esc(m.domain || "") + '</td>' +
+        '<td>' + tagChips(m.tags) + '</td>' +
+        '<td class="t-r" style="max-width:340px">' + esc(shortReason(m.reason)) + '</td>' +
+        '<td>' + pill("r", "Disconnected") + '</td></tr>';
+    }).join("");
+    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Tags</th><th>Why it failed</th><th>Status</th>', body, null,
+      "These stopped authenticating — reconnect them to bring the capacity back.");
+  }
+  function shortReason(r) {
+    if (!r) return "Needs reconnect";
+    r = String(r).replace(/^RTPS[^:]*:-?\s*/, "");
+    return r.length > 90 ? r.slice(0, 88) + "…" : r;
+  }
+  function mgrLowRep(A) {
+    var c = A ? (Number(A.lowrep) || 0) : 0;
+    if (!c) return '<div class="mgr-empty">No mailboxes are below the reply floor right now.</div>';
+    return '<div class="mgr-empty"><b style="color:var(--ink);font-size:22px;font-family:var(--font-display)">' + comma(c) + '</b> mailbox' + (c > 1 ? "es are" : " is") +
+      ' below the reply floor — getting too few replies for the volume they send.<br><span style="font-size:12px">Park or slow these so they stop dragging domain reputation. Per-mailbox list wires in with the next bundle field.</span></div>';
   }
   function mgrHighb(A) {
-    var rows = A.campaignsFlagged || (Array.isArray(A.highbCamps) ? A.highbCamps : []);
-    if (!rows.length) return null;
-    return tableWrap('<th>Campaign</th><th class="num">Sent</th><th class="num">Bounce</th><th>Status</th>',
+    var rows = (A && (A.highbCamps || A.campaignsFlagged)) || [];
+    if (!rows.length) return '<div class="mgr-empty">No campaigns over the bounce limit right now.</div>';
+    return tableWrap('<th>Campaign</th><th class="num">Sent</th><th class="num">Bounce</th><th class="num">Reply</th><th>Status</th>',
       rows.map(function (c) {
-        return '<tr><td>' + esc(c.name || ("Campaign " + c.id)) + '</td><td class="num">' + comma(c.sent) + '</td>' +
-          '<td class="num t-r">' + (c.bounce_pct != null ? c.bounce_pct + "%" : "—") + '</td><td>' + pill("r", "High bounce") + '</td></tr>';
-      }).join(""));
-  }
-  function mgrProblem(A) {
-    // union of the flagged mailboxes/domains across the problem categories
-    var parts = [];
-    var bl = A.blacklistRows || (Array.isArray(A.blacklist) ? A.blacklist : []);
-    bl.forEach(function (b) { parts.push({ who: b.domain, dom: b.domain, st: ["r", "Blacklisted"] }); });
-    var nw = A.warmupConfig && Array.isArray(A.warmupConfig.notWarming) ? A.warmupConfig.notWarming : [];
-    nw.forEach(function (m) { parts.push({ who: m.email, dom: m.domain, st: ["a", "Warm-up off"] }); });
-    var inact = Array.isArray(A.inactive) ? A.inactive : [];
-    inact.forEach(function (m) { parts.push({ who: m.email || m.name, dom: m.domain, st: ["a", "Inactive"] }); });
-    if (!parts.length) return null;
-    return tableWrap('<th>Mailbox / domain</th><th>Domain</th><th>Status</th>',
-      parts.slice(0, 60).map(function (p) {
-        return '<tr><td>' + esc(p.who || "—") + '</td><td class="mono">' + esc(p.dom || "") + '</td><td>' + pill(p.st[0], p.st[1]) + '</td></tr>';
-      }).join(""));
+        return '<tr><td style="max-width:360px">' + esc(c.name || ("Campaign " + c.id)) + '</td>' +
+          '<td class="num">' + comma(c.sent) + '</td>' +
+          '<td class="num t-r">' + (c.bounce_pct != null ? c.bounce_pct + "%" : "—") + '</td>' +
+          '<td class="num">' + (c.reply_pct != null ? c.reply_pct + "%" : "—") + '</td>' +
+          '<td>' + pill("r", "High bounce") + '</td></tr>';
+      }).join(""), null, "Campaigns bouncing over the safe limit — pause or clean the list before they burn the sending domains.");
   }
   function renderMgrBody() {
-    var A = S.deliv;
-    if (!A) { el("hub-mgr-body").innerHTML = '<div class="mgr-empty">Sample view — live audit loads from /api/deliverability.</div>'; return; }
-    var t = MGR_TABS.filter(function (x) { return x.key === mgrActive; })[0] || MGR_TABS[0];
-    var html;
-    try { html = t.build(A); } catch (e) { html = null; }
-    el("hub-mgr-body").innerHTML = html || '<div class="mgr-empty">Nothing flagged here — all clear.</div>';
+    var host = el("hub-mgr-body"), A = S.deliv, html;
+    if (mgrActive === "tags") { host.innerHTML = mgrTags(); return; }
+    if (mgrActive === "highb") { host.innerHTML = mgrHighb(A); return; }
+    if (mgrActive === "lowrep") { host.innerHTML = mgrLowRep(A); return; }
+    var builder = mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrReconnect;
+    try { html = builder(); } catch (e) { html = null; }
+    if (html == null) { host.innerHTML = '<div class="skel" style="padding:18px">' + (S.bundleLoading ? "Loading mailboxes…" : "Sample view — live rows load from the audit bundle.") + '</div>'; return; }
+    host.innerHTML = html;
   }
 
   /* ---------- filter chips ---------- */
