@@ -366,7 +366,9 @@ let generating = false; // guards the POST /training/generate and /training/rech
    chat pane, no uploads. */
 let ROUND_IDS = null;
 const ROUND_SIZE = 3;   // owner ruling 2026-08-20: rounds of 3, was 5
-const ROUND_CAP = 12;           // rounds per sitting - then "we'll take it from here"
+const ROUND_CAP = 17;           // ~TRAINING_BANK_MAX(50) / ROUND_SIZE(3): consume the
+                                // whole pre-built pool, then end (owner ruling 2026-08-22)
+let POOL_COMPLETE = false;      // server said the bounded scenario pool is exhausted
 
 /* ── Fastloop state (owner ruling 2026-08-20) ─────────────────────────────
    The portal must never show a draft written BEFORE the client's latest
@@ -1318,7 +1320,11 @@ function renderRoundDone() {
 
   const disp = displayScore(score); // cosmetic /100 scale (owner ruling 2026-08-21)
   let msg, buttons, updating = "";
-  if (trained) {
+  if (POOL_COMPLETE) {
+    msg = `That's the whole set - we're at ${disp} of 100. We've got your voice and everything is saved. `
+        + `You can close this now; come back any time with this same link.`;
+    buttons = "";
+  } else if (trained) {
     msg = `We're at ${disp} of 100 - we've got your voice down and can reply for you. Everything you've shown us is saved. `
         + `You can stop here${capped ? "." : " - or keep going to sharpen it further."}`;
     buttons = capped ? "" : `<button class="btn" id="doneGenerateBtn" type="button">Keep training (optional)</button>`;
@@ -1853,6 +1859,16 @@ async function generateMore() {
   }
   clearError();
   const genStatus = res.data && res.data.status;
+  if (genStatus === "pool_complete") {
+    // The whole pre-built scenario pool has been trained through - end the
+    // session cleanly rather than trying to make more (owner ruling
+    // 2026-08-22: the pool is bounded; ending here is correct).
+    restores.forEach((r) => r());
+    POOL_COMPLETE = true;
+    stopPrefetchPoll(); stopTransitionPoll();
+    view = "done"; renderDone();
+    return;
+  }
   if (genStatus === "started" || genStatus === "already_running") {
     // The server kicked the batch off in the background (or one was
     // already running) - poll GET /api/setter/training until it lands
