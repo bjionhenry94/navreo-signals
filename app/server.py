@@ -14756,6 +14756,14 @@ def _cron_pull_bg():
         deliv_trends_get(30)
     except Exception as e:  # noqa: BLE001
         print(f"[analytics-hub] freshness ride-along failed: {e}", file=sys.stderr)
+    try:
+        # Performance-by-tag: recompute + persist the durable snapshot here so a
+        # user never pays the ~200k-row build on the request path. Runs in the
+        # cron thread (not a page thread) — bounds the blob staleness at ~one
+        # cron tick and keeps every page load instant off the snapshot.
+        _tagperf_run_bg()
+    except Exception as e:  # noqa: BLE001
+        print(f"[tagperf] cron refresh failed: {e}", file=sys.stderr)
 
 
 # ── HeyReach daily snapshot (pg_cron → pg_net → POST /api/cron/heyreach-sync) ─
@@ -19736,11 +19744,19 @@ def _tagperf_compute() -> dict:
             "mailboxes": len(box_tags), "tags": len(out.get("30", []))}
 
 
+_TAGPERF_SNAP_ID = "tag_performance"
+_TAGPERF_SEEDED = False
+
+
 def _tagperf_run_bg():
     try:
         data = _tagperf_compute()
         with _TAGPERF_LOCK:
             _TAGPERF.update(data=data, ts=time.time(), error=None)
+        # Durable cache: survives Render restarts/deploys so the next cold load
+        # serves instantly instead of paying the ~200k-row recompute. Cheap
+        # (~15KB blob). Best-effort; the in-memory result still stands if it fails.
+        _blob_snapshot_save(_TAGPERF_SNAP_ID, data)
     except Exception as e:  # noqa: BLE001
         with _TAGPERF_LOCK:
             _TAGPERF["error"] = str(e)
@@ -19751,6 +19767,17 @@ def _tagperf_run_bg():
 
 
 def tag_performance_get(force: bool = False) -> tuple[dict, int]:
+    global _TAGPERF_SEEDED
+    # First call after boot: adopt the persisted snapshot (if fresh enough) so
+    # the page paints immediately, then refresh in the background. The heavy
+    # compute never blocks a user request — it rides the bg thread / 3h cron.
+    if not _TAGPERF_SEEDED:
+        _TAGPERF_SEEDED = True
+        snap = _blob_snapshot_load_aged(_TAGPERF_SNAP_ID, _SNAP_SEED_MAX_AGE_S)
+        if snap:
+            with _TAGPERF_LOCK:
+                if _TAGPERF["data"] is None:
+                    _TAGPERF.update(data=snap, ts=0.0)  # ts 0 => stale => triggers a bg refresh
     with _TAGPERF_LOCK:
         ent, ts, err = _TAGPERF["data"], _TAGPERF["ts"], _TAGPERF["error"]
         expired = ent is None or (time.time() - ts) >= _TAGPERF_TTL_S
