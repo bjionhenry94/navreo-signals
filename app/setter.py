@@ -2160,6 +2160,21 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     if sender_first and len(sender_first) > 1:
         html_body = re.sub(r"\bspeaking with " + re.escape(sender_first) + r"\b",
                            "speaking with me", html_body, flags=re.IGNORECASE)
+    # Never invent a phone number (shared SDR rule, live audit 2026-08-22): if
+    # the draft states a number that is NOT in the agent's instructions, the
+    # model fabricated it (seen live: "+44 7700 900999" from a brain with no
+    # number). Replace the claim with a deferral rather than send a fake number.
+    try:
+        _instr_digits = re.sub(r"\D", "", _agent_instructions(agent) or "")
+        def _fix_num(m):
+            digs = re.sub(r"\D", "", m.group(1))
+            if len(digs) >= 7 and digs not in _instr_digits:
+                return "I'll share my direct number on the call"
+            return m.group(0)
+        html_body = re.sub(r"(?i)\b(?:my|our|the) (?:phone |direct )?number is\s*([+()\d][()\d\s\-]{6,}\d)",
+                           _fix_num, html_body)
+    except Exception:  # noqa: BLE001 - a repair helper must never break drafting
+        pass
     html_body = enforce_signoff(html_body, sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
 
@@ -15585,11 +15600,61 @@ def route_training_interview(payload):
         return 500, {"error": str(e)[:300]}
 
 
+_IV_TOPICS = [
+    ("booking-link", r"booking link|scheduling link|link.*to book|calendar link|calendly|which.*(scheduling|booking).*(url|link)"),
+    ("phone", r"phone number|what'?s your number|\bnumber\b[^.]*\bcall\b|call you"),
+    ("proof", r"case stud|results page|proof|customer result|outcome|reference|success stor|examples of results"),
+    ("security", r"security|compliance|data residency|sovereignty|hosting|privacy|gdpr|pci|retain (any of )?(our |your )?(billing|customer)? ?data"),
+    ("pricing", r"price|pricing|cost|how much|savings range|indicative price|discount|contract length|payment|tier threshold|\bfee\b|how much could (we|they) save"),
+    ("call-agenda", r"what (will|would) happen on.*call|discovery call.*(cover|include|agenda)|agenda item|on the (short )?(discovery )?call|what.*call.*cover"),
+    ("waste-cut", r"what would you cut|categories of waste|typical.*waste|what.*\bcut\b"),
+    ("differentiator", r"differentiator|why you|different(iate)?|\bversus\b|incumbent|flexera|apptio|corestack|why (choose|pick) you|one clear differ"),
+    ("timeline", r"how long|timeline|how soon|how quickly|how fast|days to|weeks to|time to (results|value|hire)"),
+    ("access", r"\baccess\b|permission|\broles\b|who.*attend|have (ready|available)|what.*need from (your|the lead)"),
+    ("deliverable", r"deliverable|what.*give you from|\breport\b|dashboard|raw export|what.*produce|what will we give"),
+    ("offer-what", r"what (exactly )?(is|does).*(offer|included)|who is it for|what do you do|what'?s included"),
+]
+
+
+def _iv_topic(q):
+    ql = (q or "").lower()
+    for name, pat in _IV_TOPICS:
+        if re.search(pat, ql):
+            return name
+    return None  # unrecognised -> treated as unique, never dropped
+
+
+def _dedupe_interview_questions(new_qs, prior_qs):
+    """Deterministic anti-repeat (owner report 2026-08-22, LIVE-confirmed): the
+    prompt's HARD ANTI-REPEAT leaks - the model re-asked the discovery-call
+    agenda, the case-study link and 'what would you cut' in a later round even
+    though they were in already_asked. Drop any new question whose canonical
+    topic was already asked in ANY prior interview, or already appears earlier
+    in this same batch. Questions with no recognised topic are kept (we cannot
+    prove them a repeat). Fewer is fine - the interview ends rather than
+    repeats. Never raises."""
+    try:
+        seen = set(t for q in (prior_qs or []) if (t := _iv_topic(q)))
+        out = []
+        for q in (new_qs or []):
+            tp = _iv_topic(q)
+            if tp and tp in seen:
+                continue
+            if tp:
+                seen.add(tp)
+            out.append(q)
+        return out
+    except Exception:  # noqa: BLE001
+        return list(new_qs or [])
+
+
 def _generate_interview_questions(agent: dict, doc: dict) -> list:
     """One gpt-5-mini call -> 0 to 5 fresh question strings (EMPTY when the
     offer is already fully covered, so the interview ends instead of repeating).
-    The static first-set only seeds a FIRST interview when the call cannot run;
-    it is never re-served on a later round. Never raises."""
+    Topic-deduped against every prior interview so the same question never
+    appears in two rounds. The static first-set only seeds a FIRST interview
+    when the call cannot run; it is never re-served on a later round. Never
+    raises."""
     try:
         key = _KEYS.get("OPENAI_API_KEY")
         if not key:
@@ -15617,9 +15682,11 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
         if isinstance(r, dict) and not r.get("error"):
             data = json.loads(r["choices"][0]["message"]["content"])
             out = [str(q).strip() for q in (data.get("questions") or []) if str(q).strip()]
-            # A successful call that returns nothing means the offer is already
-            # covered: END the interview (empty), never pad with the static set
-            # (owner rule 2026-08-21: stop rather than repeat).
+            # Deterministic topic-dedup vs every prior interview (the prompt's
+            # anti-repeat leaks, live-confirmed 2026-08-22). Fewer/empty is fine.
+            out = _dedupe_interview_questions(out, [p["q"] for p in prior])
+            # A call that returns nothing NEW means the offer is already covered:
+            # END the interview (empty), never pad with the static set.
             return out[:5]
     except Exception:  # noqa: BLE001 - fall through only on a genuine failure
         pass
