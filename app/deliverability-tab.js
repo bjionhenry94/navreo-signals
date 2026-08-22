@@ -4784,8 +4784,8 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
           const _tied = best === worst || (best.reply_rate === worst.reply_rate && best.bounce_rate === worst.bounce_rate);
           const pp = (r) => r.per_positive != null ? ` · ${fmtN(r.per_positive)} sent/positive` : "";
           if (!_tied) summary = `<div class="dlv-bt-summary">
-            <span class="dlv-bt-sum best">▲ Best ${floor}: <b>${esc(best.tag)}</b> — ${best.reply_rate}% reply · ${best.bounce_rate}% bounce${pp(best)} · last ${win} days</span>
-            <span class="dlv-bt-sum worst">▼ Worst ${floor}: <b>${esc(worst.tag)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce${worst.bounce_rate >= 2 ? " (over the 2% limit)" : ""}${pp(worst)} · last ${win} days</span>
+            <span class="dlv-bt-sum best">▲ Best ${floor}: <b>${esc(best.tag)}</b> — ${best.reply_rate}% reply · ${best.bounce_rate}% bounce${pp(best)} · trailing 30 days</span>
+            <span class="dlv-bt-sum worst">▼ Worst ${floor}: <b>${esc(worst.tag)}</b> — ${worst.reply_rate}% reply · ${worst.bounce_rate}% bounce${worst.bounce_rate >= 2 ? " (over the 2% limit)" : ""}${pp(worst)} · trailing 30 days</span>
           </div>`;
         }
         body = renderBatchRows(rows, win);
@@ -4805,16 +4805,22 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
     const brc = (v) => (v < 2 ? "g" : v < 3 ? "y" : "r");
     // Emails-sent-per-positive tone: fewer is better. <1k green, <2k amber, else red.
     const ppc = (v) => (v == null ? "mut" : v < 1000 ? "g" : v < 2000 ? "y" : "r");
+    // Capacity-used tone: too idle wastes warmed inboxes (<25% amber), a healthy
+    // band is green, and >100% means sends outran the current cap (red flag).
+    const utc = (v) => (v == null ? "mut" : v > 100 ? "r" : v >= 25 ? "g" : "y");
     const rowsHtml = rows.map((r) => {
-      const reply = r.sent ? `<span class="dlv-bt-${rr(r.reply_rate)}">${r.reply_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
-      const bounce = r.sent ? `<span class="dlv-bt-${brc(r.bounce_rate)}">${r.bounce_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
+      const reply = r.reply_rate ? `<span class="dlv-bt-${rr(r.reply_rate)}">${r.reply_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
+      const bounce = (r.reply_rate || r.bounce_rate) ? `<span class="dlv-bt-${brc(r.bounce_rate)}">${r.bounce_rate}%</span>` : `<span class="dlv-bt-mut">—</span>`;
       const perPos = r.per_positive != null
         ? `<span class="dlv-bt-${ppc(r.per_positive)}">${fmtN(r.per_positive)}</span>`
         : `<span class="dlv-bt-mut">—</span>`;
-      return `<tr><td class="dlv-bt-name">${esc(r.tag)}</td><td>${r.mailboxes}</td><td>${r.sent ? fmtN(r.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${reply}</td><td>${bounce}</td><td>${r.positive || `<span class="dlv-bt-mut">0</span>`}</td><td>${perPos}</td></tr>`;
+      const util = r.utilisation != null
+        ? `<span class="dlv-bt-${utc(r.utilisation)}">${r.utilisation}%</span>`
+        : `<span class="dlv-bt-mut">—</span>`;
+      return `<tr><td class="dlv-bt-name">${esc(r.tag)}</td><td>${r.mailboxes}</td><td>${r.sent ? fmtN(r.sent) : `<span class="dlv-bt-mut">—</span>`}</td><td>${util}</td><td>${reply}</td><td>${bounce}</td><td>${r.positive || `<span class="dlv-bt-mut">0</span>`}</td><td>${perPos}</td></tr>`;
     }).join("");
-    return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Tag</th><th>Mailboxes</th><th>Sent (${win}d)</th><th>Reply&nbsp;%</th><th>Bounce&nbsp;%</th><th>Positives</th><th>Emails&nbsp;sent&nbsp;per&nbsp;positive</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
-      <div class="dlv-mb-count" style="margin-top:10px">Sent / Reply / Bounce / Positives are summed over the last ${win} days from daily sending stats. "Emails sent per positive" = emails sent ÷ positive replies (lower is better; "—" when no positives yet).</div>`;
+    return `<div class="dlv-bt-wrap"><table class="dlv-bt"><thead><tr><th>Tag</th><th>Mailboxes</th><th>Sent (${win}d)</th><th>Capacity&nbsp;used (${win}d)</th><th>Reply&nbsp;% (30d)</th><th>Bounce&nbsp;% (30d)</th><th>Positives (${win}d)</th><th>Emails&nbsp;sent&nbsp;per&nbsp;positive (30d)</th></tr></thead><tbody>${rowsHtml}</tbody></table></div>
+      <div class="dlv-mb-count" style="margin-top:10px"><b>Sent</b>, <b>Positives</b> and <b>Capacity used</b> are for the last ${win} days (Capacity used = average daily sends ÷ the tag's total daily cap). <b>Reply&nbsp;%</b>, <b>Bounce&nbsp;%</b> and <b>Emails sent per positive</b> are trailing-30-day figures — replies and bounces lag their sends, so a short-window rate isn't a real rate; the 30-day cohort keeps them honest and comparable. "Emails sent per positive" = emails sent ÷ positive replies (lower is better).</div>`;
   }
 
   /* ============================================================
