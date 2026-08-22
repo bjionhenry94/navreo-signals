@@ -18865,15 +18865,38 @@ OUTLOOK_CAP_TIERS = (         # Outlook boxes sit an order of magnitude below
     (1.0, 2),                 # serve both, which is why these are two systems.
     (0.7, 1),
 )
-OUTLOOK_CAP_PAUSE = None      # below the lowest tier: LEAVE ALONE (never park).
+OUTLOOK_CAP_PAUSE = 0         # below the lowest tier (<0.7%): park into warm-up.
+# Owner ruling 2026-08-23: Outlook now parks to 0 below 0.7%, exactly like
+# Google — the earlier "never park" posture (pause=None) is retired as part of
+# consolidating all cap tiering under this one in-tool engine. The 500-send
+# park floor below still gates it, so a fresh domain is never parked on a thin
+# sample; ordinary tier-downs (4/2/1) still fire off OUTLOOK_CAP_MIN_SENDS.
 # Outlook's floor has to be far lower than Google's: a 4/day box tops out at
 # ~120 sends a month, so a 300-send floor would skip most domains outright.
 OUTLOOK_CAP_MIN_SENDS = 100
-# Outlook's engine never parks (pause=None), so this floor is dormant here; it
-# exists so the profile shape matches Google's and so the day Outlook parking
-# is turned on (in the standalone audit service) it carries the same 500-send
-# fair-chance bar. Judged at DOMAIN level like Google's.
+# Domain must have SENT >= this before an auto-park verdict fires. Judged at
+# DOMAIN level like Google's.
 OUTLOOK_CAP_PARK_MIN_SENDS = 500
+
+                              # ── Maildoso (SMTP) ────────────────────────────
+# Owner ruling 2026-08-23: the Maildoso fleet (account_type=SMTP, ~600 boxes)
+# gets its own reply-rate cap engine under this same roof. Its own tiers, set by
+# the owner: >=1.0% -> 20/day, 0.5-1.0% -> 15/day, park below 0.5%. Note the
+# park threshold is 0.5% (not 0.7% like Google/Outlook) — a deliberately more
+# forgiving floor for a pool that warms externally on Instantly. This engine
+# only ever writes max_email_per_day (the campaign send cap); it NEVER touches
+# warm-up settings, which stay owned by Instantly.
+MAILDOSO_CAP_TIERS = (        # (min reply rate %, cap/day) — first match wins, descending
+    (1.0, 20),
+    (0.5, 15),                # carries down to the 0.5% park boundary
+)
+MAILDOSO_CAP_PAUSE = 0        # below 0.5%: park the domain into warm-up
+MAILDOSO_CAP_MIN_SENDS = 300  # floor before ANY move fires (like Google's)
+MAILDOSO_CAP_PARK_MIN_SENDS = 500  # fair-chance park floor, domain level
+# SMTP is broader than Maildoso (Boomerang etc. can also be SMTP), so this
+# profile post-filters to boxes whose smtp_host names Maildoso — nothing else
+# in the SMTP class is touched.
+MAILDOSO_HOST_CONTAINS = "maildoso"
 
 # Workspaces excluded from AUTOMATIC cap tiering (owner ruling 2026-07-28).
 # Asteri runs its own caps — 73 of its boxes sit at 15/day, a setting nothing in
@@ -18892,6 +18915,10 @@ CAP_PROFILES = {
     "OUTLOOK": {"account_type": "OUTLOOK", "tiers": OUTLOOK_CAP_TIERS,
                 "pause": OUTLOOK_CAP_PAUSE, "min_sends": OUTLOOK_CAP_MIN_SENDS,
                 "park_min_sends": OUTLOOK_CAP_PARK_MIN_SENDS},
+    "MAILDOSO": {"account_type": "SMTP", "tiers": MAILDOSO_CAP_TIERS,
+                 "pause": MAILDOSO_CAP_PAUSE, "min_sends": MAILDOSO_CAP_MIN_SENDS,
+                 "park_min_sends": MAILDOSO_CAP_PARK_MIN_SENDS,
+                 "host_contains": MAILDOSO_HOST_CONTAINS},
 }
 
 
@@ -18932,10 +18959,18 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
     acct = prof["account_type"]
 
     boxes = [b for b in (sb_get_all(
-        "mailboxes?select=smartlead_id,email,domain,account_type,message_per_day,workspace"
+        "mailboxes?select=smartlead_id,email,domain,account_type,message_per_day,workspace,smtp_host"
         f"&account_type=eq.{acct}") or []) if b.get("domain")]
+    # Some account_type classes are broader than one provider (SMTP covers
+    # Maildoso AND Boomerang etc.), so a profile may narrow to boxes whose
+    # smtp_host names it — nothing else in the class is scored or touched.
+    host_needle = prof.get("host_contains")
+    if host_needle:
+        boxes = [b for b in boxes
+                 if host_needle in str(b.get("smtp_host") or "").lower()]
     if not boxes:
-        return {"ok": False, "error": f"no {acct} mailboxes in the mirror"}
+        return {"ok": False, "error": f"no {acct} mailboxes in the mirror"
+                                      + (f" matching host {host_needle!r}" if host_needle else "")}
 
     # Latest stats row per box. mailbox_stats_daily is one row per box per sweep
     # day, so take the newest stat_date present and read sent_30d/replies_30d
@@ -19011,6 +19046,19 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
             skipped.append({**row, "reason": f"under {park_floor}-send park floor "
                                              "— fair-chance hold, not parked"})
             continue
+        # Rollout gate (owner ruling 2026-08-23, "preview before apply"):
+        # Outlook and Maildoso parking are NEW behavior — until CAP_PARK_V2=1
+        # is set in the environment, their park verdicts show up in preview
+        # (and in apply-mode skipped rows) but are never written live. Google's
+        # parking predates this and is not gated. Flip the env var on Render
+        # once the owner has approved the previewed park lists.
+        if (cap == 0 and provider in ("OUTLOOK", "MAILDOSO")
+                and not os.environ.get("CAP_PARK_V2")):
+            if mode == "apply":
+                skipped.append({**row, "reason": "park verdict gated — "
+                                                 "CAP_PARK_V2 not set (preview-only rollout)"})
+                continue
+            row["gated"] = True  # preview shows the would-park verdict, flagged
         row["new_cap"] = cap
         row["pause"] = cap == 0
         plan.append(row)
@@ -19078,10 +19126,17 @@ def google_reply_caps(mode: str = "preview") -> dict:
 
 
 def outlook_reply_caps(mode: str = "preview") -> dict:
-    """Outlook/Azure boxes: 4/2/1 a day, never parked. Replaces the standalone
-    audit service's engine, which ignored its own provider filter and crushed
-    132 Google boxes on 2026-07-26."""
+    """Outlook/Azure boxes: 4/2/1 a day, park below 0.7% (owner ruling
+    2026-08-23; the earlier never-park posture is retired). Replaces the
+    standalone audit service's engine, which ignored its own provider filter
+    and crushed 132 Google boxes on 2026-07-26."""
     return provider_reply_caps("OUTLOOK", mode)
+
+
+def maildoso_reply_caps(mode: str = "preview") -> dict:
+    """Maildoso SMTP boxes: 20/15 a day, park below 0.5% (owner ruling
+    2026-08-23). Send caps only — warm-up stays owned by Instantly."""
+    return provider_reply_caps("MAILDOSO", mode)
 
 
 # ============================================================================
@@ -20349,6 +20404,7 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
                      # either, the route is dead. Both cap engines were missing from
                      # both from 07-28 until 07-29.
                      "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
+                     "/api/cron/maildoso-reply-caps",
                      "/api/notify/positive-card",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
@@ -22468,6 +22524,7 @@ class Handler(SimpleHTTPRequestHandler):
                    # being listed and never once served a request; the 07-28 cap
                    # moves all came from the laptop-side scripts. Added 07-29.
                    "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
+                   "/api/cron/maildoso-reply-caps",
                    "/api/notify/positive-card"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
@@ -22599,6 +22656,37 @@ class Handler(SimpleHTTPRequestHandler):
                         log_activity("/api/cron/google-reply-caps", payload={"error": str(e)[:200]},
                                      actor="cron", action="reply-caps", entity="deliverability")
                 threading.Thread(target=_google_caps_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/cron/maildoso-reply-caps":
+                # The Maildoso half of cap tiering (owner ruling 2026-08-23):
+                # SMTP boxes whose smtp_host names Maildoso, on their own tiers
+                # (20/15, park below 0.5%). Send caps only — warm-up stays on
+                # Instantly. Parking is gated by CAP_PARK_V2 like Outlook's.
+                # ?mode=preview returns the plan without writing.
+                from urllib.parse import parse_qs, urlparse
+                q = parse_qs(urlparse(self.path).query)
+                if (q.get("mode") or ["apply"])[0] == "preview":
+                    try:
+                        return self._json(maildoso_reply_caps("preview"), 200)
+                    except Exception as e:  # noqa: BLE001
+                        return self._json({"ok": False, "error": str(e)[:300]}, 500)
+
+                def _maildoso_caps_bg():
+                    try:
+                        r = maildoso_reply_caps("apply")
+                        log_activity("/api/cron/maildoso-reply-caps",
+                                     payload={"changed": r.get("changed", 0),
+                                              "failed": r.get("failed"),
+                                              "parked": r.get("parked"),
+                                              "domains": r.get("domains"),
+                                              "skipped": len(r.get("skipped") or []),
+                                              "tierCount": r.get("tierCount")},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                        _deliv_bundle_start(force=True)  # badges reflect the new caps now
+                    except Exception as e:  # noqa: BLE001 — a failed run must be visible
+                        log_activity("/api/cron/maildoso-reply-caps", payload={"error": str(e)[:200]},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                threading.Thread(target=_maildoso_caps_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/notify/positive-card":
                 # Categoriser → client-card hook bypass (query params only —
