@@ -2160,19 +2160,25 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     if sender_first and len(sender_first) > 1:
         html_body = re.sub(r"\bspeaking with " + re.escape(sender_first) + r"\b",
                            "speaking with me", html_body, flags=re.IGNORECASE)
-    # Never invent a phone number (shared SDR rule, live audit 2026-08-22): if
-    # the draft states a number that is NOT in the agent's instructions, the
-    # model fabricated it (seen live: "+44 7700 900999" from a brain with no
-    # number). Replace the claim with a deferral rather than send a fake number.
+    # Never SEND an invented phone number (owner ruling 2026-08-22: "replace the
+    # placeholder numbers with [PHONE NUMBER], seeing as we can't beat the rule").
+    # The model keeps fabricating a number (seen live: "+44 7700 900999" from a
+    # brain with none), so when the draft states a number that is NOT in the
+    # agent's instructions, swap the digits for a visible [PHONE NUMBER] token
+    # the client fills in - the sentence stays ("My number is [PHONE NUMBER]").
     try:
         _instr_digits = re.sub(r"\D", "", _agent_instructions(agent) or "")
         def _fix_num(m):
-            digs = re.sub(r"\D", "", m.group(1))
+            num = m.group(1)
+            digs = re.sub(r"\D", "", num)
             if len(digs) >= 7 and digs not in _instr_digits:
-                return "I'll share my direct number on the call"
+                return m.group(0).replace(num, "[PHONE NUMBER]")
             return m.group(0)
-        html_body = re.sub(r"(?i)\b(?:my|our|the) (?:phone |direct )?number is\s*([+()\d][()\d\s\-]{6,}\d)",
-                           _fix_num, html_body)
+        html_body = re.sub(
+            r"(?i)\b(?:(?:my|our|the) (?:phone |direct |mobile |cell )?(?:number|line|mobile|cell) is"
+            r"|(?:reach|call|ring|contact) (?:me|us) (?:on|at)"
+            r"|you can (?:reach|call|contact) (?:me|us) (?:on|at))\s*([+()\d][()\d\s\-]{6,}\d)",
+            _fix_num, html_body)
     except Exception:  # noqa: BLE001 - a repair helper must never break drafting
         pass
     html_body = enforce_signoff(html_body, sender_first)
