@@ -13263,8 +13263,16 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
             # report 2026-07-14). The LEAD's first name rides in the payload
             # (owner verdict, round 1 2026-08-17): a draft must greet the
             # lead by name — the live setter never says "Hi there".
+            # Route call_ask so TRAINING drafts run the same machinery as the
+            # live inbox (owner report 2026-08-22): without this, every training
+            # case drafted with call_ask absent, so the two-times default always
+            # fired and the self-serve (phone/booking), lead-proposed-time, and
+            # "avoid" routing - plus the strip_two_times_ask backstop - were all
+            # dead in the wizard. That is why a phone-number ask kept getting the
+            # two-times push in training.
+            _train_ca = call_ask_for(cls, body, "", first_touch=True)
             d = draft_reply({"first_name": lead_first_name, "subject": subject, "body": body,
-                             "first_outbound": first_outbound}, agent, cls, slots, slot_status,
+                             "first_outbound": first_outbound, "call_ask": _train_ca}, agent, cls, slots, slot_status,
                             sender_first=_sender_first_for(agent), regen_feedback=mem_digest)
             draft_html = d.get("html")
             if draft_html:
@@ -14647,8 +14655,9 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 # 2026-07-14). Lead name from the case (owner verdict, round
                 # 1 2026-08-17: never "Hi there").
                 lead_first = _case_lead_first_name(case)
+                _train_ca = call_ask_for(cls, body, "", first_touch=True)
                 d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
-                                 "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
+                                 "first_outbound": first_outbound, "call_ask": _train_ca}, agent_snapshot, cls, slots, slot_status,
                                 sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
                 draft_html = d.get("html")
                 if draft_html:
@@ -14774,8 +14783,9 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 # Lead name from the case (owner verdict, round 1
                 # 2026-08-17: never "Hi there").
                 lead_first = _case_lead_first_name(case)
+                _train_ca = call_ask_for(cls, body, "", first_touch=True)
                 d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
-                                 "first_outbound": first_outbound}, agent_snapshot, cls, slots, slot_status,
+                                 "first_outbound": first_outbound, "call_ask": _train_ca}, agent_snapshot, cls, slots, slot_status,
                                 sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
                 draft_html = d.get("html")
                 if draft_html:
