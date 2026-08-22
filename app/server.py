@@ -18846,6 +18846,17 @@ GOOGLE_CAP_PAUSE = 0          # below the lowest tier: park the domain into warm
 # a domain fresh off rest on that noise is exactly how rest clocks reset
 # forever. Under the floor the domain is reported and left alone.
 GOOGLE_CAP_MIN_SENDS = 300
+# Park floor (owner ruling 2026-08-22). A domain must have SENT at least this
+# many before it can be auto-parked into warm-up (cap -> 0). Tiering DOWN
+# (30->20->10) still fires off the ordinary min_sends floor above — only the
+# park verdict carries the higher bar, so a fresh domain that has sent 60-100
+# with no reply yet gets a fair chance to earn its keep instead of resting on
+# a thin, verdict-less sample. Judged at DOMAIN level, on the same trailing-30d
+# `sent` the tiering reads (30d sends are a conservative lower bound on all-time
+# sends, so >=500 in 30d guarantees >=500 all-time; the reverse floor errs
+# toward NOT parking, which is the intent). Below it the domain is reported and
+# left exactly as it is.
+GOOGLE_CAP_PARK_MIN_SENDS = 500
 
 
                               # ── Outlook/Azure ──────────────────────────────
@@ -18858,6 +18869,11 @@ OUTLOOK_CAP_PAUSE = None      # below the lowest tier: LEAVE ALONE (never park).
 # Outlook's floor has to be far lower than Google's: a 4/day box tops out at
 # ~120 sends a month, so a 300-send floor would skip most domains outright.
 OUTLOOK_CAP_MIN_SENDS = 100
+# Outlook's engine never parks (pause=None), so this floor is dormant here; it
+# exists so the profile shape matches Google's and so the day Outlook parking
+# is turned on (in the standalone audit service) it carries the same 500-send
+# fair-chance bar. Judged at DOMAIN level like Google's.
+OUTLOOK_CAP_PARK_MIN_SENDS = 500
 
 # Workspaces excluded from AUTOMATIC cap tiering (owner ruling 2026-07-28).
 # Asteri runs its own caps — 73 of its boxes sit at 15/day, a setting nothing in
@@ -18871,9 +18887,11 @@ CAP_EXCLUDED_WORKSPACES = {"asteri"}
 # posture, separate crons — but ONE engine, so the two can never drift apart.
 CAP_PROFILES = {
     "GOOGLE": {"account_type": "GMAIL", "tiers": GOOGLE_CAP_TIERS,
-               "pause": GOOGLE_CAP_PAUSE, "min_sends": GOOGLE_CAP_MIN_SENDS},
+               "pause": GOOGLE_CAP_PAUSE, "min_sends": GOOGLE_CAP_MIN_SENDS,
+               "park_min_sends": GOOGLE_CAP_PARK_MIN_SENDS},
     "OUTLOOK": {"account_type": "OUTLOOK", "tiers": OUTLOOK_CAP_TIERS,
-                "pause": OUTLOOK_CAP_PAUSE, "min_sends": OUTLOOK_CAP_MIN_SENDS},
+                "pause": OUTLOOK_CAP_PAUSE, "min_sends": OUTLOOK_CAP_MIN_SENDS,
+                "park_min_sends": OUTLOOK_CAP_PARK_MIN_SENDS},
 }
 
 
@@ -18981,6 +18999,17 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
             # No verdict at this rate under this profile (Outlook below 0.7%):
             # report it and leave the domain exactly as it is.
             skipped.append({**row, "reason": "below lowest tier — left untouched"})
+            continue
+        # Park fair-chance floor (owner ruling 2026-08-22): a domain must have
+        # SENT >= park_min_sends before it can be auto-parked. Under it, a park
+        # verdict is withheld and the domain is left exactly as it is — a fresh
+        # domain sitting at 0 replies on <500 sends is a thin sample, not a
+        # verdict. Only the PARK is gated; ordinary tier-downs already fired off
+        # min_sends above.
+        park_floor = prof.get("park_min_sends")
+        if cap == prof.get("pause") and park_floor and e["sent"] < park_floor:
+            skipped.append({**row, "reason": f"under {park_floor}-send park floor "
+                                             "— fair-chance hold, not parked"})
             continue
         row["new_cap"] = cap
         row["pause"] = cap == 0
