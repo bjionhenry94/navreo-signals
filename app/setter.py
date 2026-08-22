@@ -7848,8 +7848,30 @@ def route_agents_duplicate(payload):
             "created_at": now,
             "updated_at": now,
         })
+        # NEW-CLIENT clone (owner rule 2026-08-21, verified via cross-client
+        # bleed): a plain duplicate carries the SOURCE agent's learned,
+        # client-specific state - memory, voice_examples, instruction_edits,
+        # feedback_log, pricing_notes, extra_instructions and training_outreach
+        # - and the drafter injects all of it (latest-owner-rules, voice, the
+        # memory digest, and the scenario outreach). So a clone made for a
+        # DIFFERENT client parrots the source client's business even after you
+        # rewrite `instructions`. With fresh=true, strip that state so the clone
+        # is a clean tenant carrying only structure the caller will overwrite
+        # next (its own instructions, campaigns/training_outreach, booking).
+        # Same-client clones (fresh falsey) keep everything - that is the whole
+        # point of duplicating a proven brain for a new campaign set.
+        if payload.get("fresh"):
+            clone.update({
+                "memory": [],
+                "voice_examples": [],
+                "instruction_edits": [],
+                "feedback_log": [],
+                "pricing_notes": "",
+                "extra_instructions": "",
+                "training_outreach": [],
+            })
         saved = _save_agent(clone)
-        return 200, {"doc": saved}
+        return 200, {"doc": saved, "fresh": bool(payload.get("fresh"))}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
