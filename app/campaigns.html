@@ -2748,18 +2748,35 @@
     STATE.insights = { insights: [], track_record: [], meetings_by_campaign: {},
                        generated_at: null, stats_updated_at: null };
 
-    /* Insights in parallel, NON-blocking: decorate on arrival. */
+    /* Insights in parallel, NON-blocking: decorate on arrival. Fired ONCE —
+       the scorecard warm-up retry loop re-enters boot() every 10s, and each
+       insights call is expensive server-side (60s+ when cold). */
+    if (!STATE.insightsFired) { STATE.insightsFired = true;
     getJSON("/api/cockpit/insights").then(function (ins) {
       if (!ins || ins.degraded) { STATE.insightsDown = true; return; }
       STATE.insights = ins;
       if (STATE.scorecard) { join(); renderList(); } /* re-render with decorations */
-    }).catch(function () { STATE.insightsDown = true; });
+    }).catch(function () { STATE.insightsDown = true; }); }
 
-    /* Scorecard drives first paint. */
+    /* Scorecard drives first paint. A degraded/empty payload means the server
+       answered instantly WITHOUT a warm cache and is rebuilding it in the
+       background (server-side rule 2026-08-22: the endpoint never computes on
+       the request) — so poll until the real payload lands instead of parking
+       on the error banner. Bounded: ~5 min of 10s retries, then the banner. */
     getJSON("/api/campaign-scorecard").then(function (sc) {
       STATE.scorecard = sc;
       var scCount = Object.keys(((STATE.scorecard || {}).campaigns) || {}).length;
-      if (!scCount) throw new Error("campaign inventory unavailable");
+      if (!scCount) {
+        STATE.scRetries = (STATE.scRetries || 0) + 1;
+        if (STATE.scRetries <= 30) {
+          document.getElementById("list-loading").textContent =
+            "Warming the campaign cache… (auto-retrying)";
+          setTimeout(boot, 10000);
+          return;
+        }
+        throw new Error("campaign inventory unavailable");
+      }
+      STATE.scRetries = 0;
       join();
       renderList();
       document.getElementById("list-loading").hidden = true;

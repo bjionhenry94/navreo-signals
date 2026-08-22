@@ -21828,6 +21828,23 @@ class Handler(SimpleHTTPRequestHandler):
             # numbers) + HeyReach LinkedIn progress. SWR ~2min over a cheap
             # Supabase read; the slow /analytics fetches happen in the bg thread.
             _scorecard_seed_from_snapshot()
+            # NEVER compute inline (prod incident 2026-08-22): when the seed
+            # has nothing (no snapshot, or >24h old) the old fall-through ran
+            # the full compute ON the request — and with the scorecard/replies
+            # selects timing out that meant every page load hung ~2-3 MINUTES
+            # and still answered empty (degraded results are never cached, so
+            # the next request paid it all again). Cold-and-empty now kicks
+            # exactly one background build and answers degraded immediately;
+            # the page retries and paints the moment a real payload lands.
+            with _CAMPAIGN_SCORECARD_ALL_SWR.lock:
+                _sc_have = _CAMPAIGN_SCORECARD_ALL_SWR.payload is not None
+                if not _sc_have and not _CAMPAIGN_SCORECARD_ALL_SWR.refreshing:
+                    _CAMPAIGN_SCORECARD_ALL_SWR.refreshing = True
+                    threading.Thread(target=_CAMPAIGN_SCORECARD_ALL_SWR._refresh_bg,
+                                     daemon=True).start()
+            if not _sc_have:
+                return self._json({"campaigns": {}, "heyreach": {}, "asof": None,
+                                   "degraded": True})
             return self._json(_inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get()))
         if path == "/api/workspaces":
             # Settings page: connected Smartlead workspaces (keys masked to
