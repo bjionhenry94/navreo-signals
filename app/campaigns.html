@@ -657,6 +657,13 @@
   .book-strip {
     margin-top: 30px;
   }
+  .rows-more-sentinel {
+    display: block; width: 100%; margin: 10px 0 4px;
+    padding: 12px; border: 1px dashed var(--border, #d7dbe3); border-radius: 12px;
+    background: transparent; color: var(--fg-subtle); cursor: pointer;
+    font-size: 0.78rem; text-align: center;
+  }
+  .rows-more-sentinel:hover { color: var(--fg, inherit); }
   .section-label {
     font-size: 0.68rem;
     font-weight: 600;
@@ -3143,10 +3150,26 @@
   }
   /* Build #campaign-rows honouring the current tier filter, live-status filter,
      search, and completion sort. Rows are plain <a> — no per-row JS — so a full
-     innerHTML rebuild on every control change is safe. */
-  function renderRows() {
+     innerHTML rebuild on every control change is safe.
+
+     Progressive render: STATE.campaigns holds every campaign, but the DOM only
+     mounts a page at a time. With the Client filter cleared the list is ~580 rows
+     at ~40 nodes each — mounting them all was 20k+ nodes and a janky sort/scroll.
+     We mount RENDER_CAP_DEFAULT rows, then a sentinel near the bottom extends the
+     cap by RENDER_CAP_STEP. Any control change calls renderRows() with no arg,
+     resetting to page one; only the sentinel calls renderRows(true) to keep it. */
+  var RENDER_CAP_DEFAULT = 60, RENDER_CAP_STEP = 60;
+  var _rowsMoreObserver = null;
+  /* Auto-extend only after a real user scroll. Without this the observer fires
+     during boot layout-thrash (rows not yet sized, sentinel reads on-screen) and
+     cascades through several batches before the list settles, defeating the cap.
+     The sentinel is also a real button, so a no-scroll user can still load more. */
+  var _userScrolled = false;
+  window.addEventListener("scroll", function () { _userScrolled = true; }, { passive: true });
+  function renderRows(keepCap) {
     var container = document.getElementById("campaign-rows");
     if (!container) return;
+    if (!keepCap) STATE.renderCap = RENDER_CAP_DEFAULT;
     var v = STATE.view;
     var q = (v.q || "").toLowerCase().trim();
     var cs = STATE.campaigns || [];
@@ -3178,8 +3201,13 @@
         return preset.asc ? (va - vb) : (vb - va);   // asc for "fewest emails per meeting"
       });
     }
+    /* cap how many rows we actually mount; the sentinel below extends it */
+    var cap = STATE.renderCap || RENDER_CAP_DEFAULT;
+    var drawn = 0;
     if (flat) {
-      visible.forEach(function (c) { h.push(rowHTML(c)); });
+      for (var fi = 0; fi < visible.length && drawn < cap; fi++) {
+        h.push(rowHTML(visible[fi])); drawn++;
+      }
     } else {
       /* The fourth group is not optional. This list used to be three groups
          because only crunched campaigns could reach it; now the inventory drives
@@ -3187,14 +3215,40 @@
          every campaign Lilly has not written up, which is the whole bug. */
       var tiers = [["decision", "Needs a decision"], ["watch", "Watch"], ["fine", "Fine"],
                    ["unreviewed", "Not yet reviewed"]];
-      tiers.forEach(function (t) {
+      for (var ti = 0; ti < tiers.length && drawn < cap; ti++) {
+        var t = tiers[ti];
         var group = visible.filter(function (c) { return c.tier === t[0]; });
-        if (!group.length) return;
+        if (!group.length) continue;
+        /* label carries the FULL group size (honest), even when the cap only
+           mounts some of its rows this page */
         h.push('<div class="section-label rows-tier-label" data-tier-label="' + t[0] + '">' + t[1] + ' <span class="tnum">(' + group.length + ")</span></div>");
-        group.forEach(function (c) { h.push(rowHTML(c)); });
-      });
+        for (var gi = 0; gi < group.length && drawn < cap; gi++) {
+          h.push(rowHTML(group[gi])); drawn++;
+        }
+      }
+    }
+    /* more to mount? drop a sentinel that extends the cap — on scroll (auto) or
+       click (explicit fallback for no-scroll / no-IntersectionObserver) */
+    if (visible.length > drawn) {
+      h.push('<button type="button" id="rows-more-sentinel" class="rows-more-sentinel">' +
+        "Showing " + fmtInt(drawn) + " of " + fmtInt(visible.length) + " &middot; scroll or click for more</button>");
     }
     container.innerHTML = h.join("");
+    var _sentinel = document.getElementById("rows-more-sentinel");
+    if (_rowsMoreObserver) { _rowsMoreObserver.disconnect(); _rowsMoreObserver = null; }
+    if (_sentinel) {
+      var _extend = function () {
+        STATE.renderCap = (STATE.renderCap || RENDER_CAP_DEFAULT) + RENDER_CAP_STEP;
+        renderRows(true);
+      };
+      _sentinel.addEventListener("click", _extend);
+      if (typeof IntersectionObserver === "function") {
+        _rowsMoreObserver = new IntersectionObserver(function (entries) {
+          if (entries[0] && entries[0].isIntersecting && _userScrolled) _extend();
+        }, { rootMargin: "600px 0px" });
+        _rowsMoreObserver.observe(_sentinel);
+      }
+    }
     syncReviewBadgeWrap(container);
     var STATUS_LABEL = { active: "Active", paused: "Paused", completed: "Completed", archived: "Archived", drafted: "Draft" };
     var empty = document.getElementById("rows-empty-state");
