@@ -10207,9 +10207,9 @@ def route_search_smartlead_get(params):
     Returns hits newest-reply-first, each carrying queue_id/queue_status when
     the conversation ALSO lives in the setter (any pill), so the client can
     route those opens through the normal full-control path and badge the rest
-    "Not in setter". 120s cache per query; up to 3 pages of 20 per workspace
-    (Smartlead caps limit at 20), stopping early, with a first-token retry
-    when a multi-token query is empty — never an unbounded sweep (512MB box)."""
+    "Not in setter". 120s cache per query; one 20-row page per workspace
+    (Smartlead's hard limit), with a first-token retry when a multi-token
+    query is empty — never an unbounded sweep (512MB box)."""
     try:
         q = _qp(params, "q", "").strip()
         if len(q) < 2:
@@ -10228,31 +10228,22 @@ def route_search_smartlead_get(params):
         # hung workspace can't pin the request thread on the 512MB box.
         ws_keys = _sl_search_keys()
 
-        # Smartlead's master-inbox `limit` is hard-capped at 20 server-side
-        # (verified 2026-08-16: limit>20 is rejected). To shrink the truncation
-        # window on a busy workspace (a broad query fills page 1 with
-        # hasMore=true), page through up to SL_SEARCH_MAX_PAGES of 20, stopping
-        # early on a short/empty page. 3×20 = 60 rows max per workspace — still
-        # bounded (memory + latency safe: ≤3 sequential calls inside the
-        # per-workspace thread, all under the 25s deadline).
-        SL_SEARCH_PAGE = 20
-        SL_SEARCH_MAX_PAGES = 3
-
+        # ONE page of 20 per workspace. Smartlead caps the master-inbox `limit`
+        # at 20 server-side (verified 2026-08-16: limit>20 is rejected), and
+        # paginating for more was measured worse than useless — 3 pages tripled
+        # latency and pushed a slow workspace past the 25s deadline, so a real
+        # query like "goodles" came back EMPTY (errors=1). A single page keeps
+        # the search ~4-8s and reliable. The remaining truncation window (a
+        # very common substring like a bare "a" or a hugely popular surname can
+        # exceed 20 hits in one busy workspace) is an accepted Smartlead
+        # limitation — realistic name/email/company searches sit well under 20.
         def _sl_rows(key, term):
-            out = []
-            for pg in range(SL_SEARCH_MAX_PAGES):
-                resp = _sl_post("/master-inbox/inbox-replies", {
-                    "limit": SL_SEARCH_PAGE, "offset": pg * SL_SEARCH_PAGE,
-                    "sortBy": "REPLY_TIME_DESC",
-                    "filters": {"emailStatus": "Replied", "search": term},
-                }, api_key=key)
-                data = resp.get("data") if isinstance(resp, dict) else None
-                if not isinstance(data, list) or not data:
-                    break
-                out.extend(data)
-                if len(data) < SL_SEARCH_PAGE:
-                    break
-            return out
+            resp = _sl_post("/master-inbox/inbox-replies", {
+                "limit": 20, "offset": 0, "sortBy": "REPLY_TIME_DESC",
+                "filters": {"emailStatus": "Replied", "search": term},
+            }, api_key=key)
+            data = resp.get("data") if isinstance(resp, dict) else None
+            return data if isinstance(data, list) else []
 
         pages = {}
         def _one(ws, key):
