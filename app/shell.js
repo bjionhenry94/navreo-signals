@@ -361,9 +361,47 @@ function setupChartTooltip(wrap) {
     return { queued: "jq-n", running: "jq-b", done: "jq-g", failed: "jq-r", cancelled: "jq-c", interrupted: "jq-r" }[status] || "jq-n";
   }
 
+  /* Split Rail: one plain-English sentence per job — verbs + one big number,
+     never raw counts keys. Falls back to the job label for unknown kinds. */
+  function jobSentence(job) {
+    const c = (job.counts && typeof job.counts === "object") ? job.counts : {};
+    const k = String(job.kind || "").toLowerCase();
+    const st = job.status;
+    const live = st === "queued" || st === "running";
+    const num = (n) => `<span class="sr-num">${jEsc(n)}</span>`;
+    const doms = c.domains != null
+      ? ` <span class="sr-soft">across ${jEsc(c.domains)} domain${c.domains === 1 ? "" : "s"}</span>` : "";
+    if (k === "warmup_pause") {
+      if (st === "interrupted" || st === "failed") return `<b>Rest stopped early</b>${doms}`;
+      const n = c.held_boxes ?? c.paused;
+      if (n != null) return `<b>${live ? "Resting" : "Rested"} ${num(n)} inboxes</b>${doms}`;
+      return `<b>${live ? "Resting inboxes" : "Rested inboxes"}</b>${doms}`;
+    }
+    if (k === "warmup_resume") {
+      if (st === "interrupted" || st === "failed") return `<b>Wake-up stopped early</b>${doms}`;
+      const n = c.resumed;
+      if (n != null) return `<b>${live ? "Waking up" : "Woke up"} ${num(n)} inboxes</b>${doms}`;
+      return `<b>${live ? "Waking up inboxes" : "Woke up inboxes"}</b>${doms}`;
+    }
+    if (k.includes("verify")) {
+      if (st === "interrupted" || st === "failed") return `<b>Email check stopped early</b>`;
+      if (live) return `<b>Checking emails</b>`;
+      const n = c.checked ?? c.total;
+      return n != null ? `<b>Checked ${num(n)} emails</b>` : `<b>Checked emails</b>`;
+    }
+    if (k.includes("remove")) {
+      if (st === "interrupted" || st === "failed") return `<b>Clean-up stopped early</b>`;
+      if (live) return `<b>Removing bad leads</b>`;
+      const n = c.deleted ?? c.removed;
+      return n != null ? `<b>Removed ${num(n)} bad leads</b>` : `<b>Removed bad leads</b>`;
+    }
+    if (c.detail) return `<b>${jEsc(c.detail)}</b>`;
+    return `<b>${jEsc(job.label || job.kind || "Task")}</b>`;
+  }
+
   function countsLine(job) {
     const c = job.counts;
-    if (job.status === "interrupted") return jEsc(job.error || "Server restarted mid-run — re-run to resume (already-checked emails are cached).");
+    if (job.status === "interrupted") return jEsc(job.error || "The server restarted mid-run — press Resume to pick it back up.");
     if (job.error && job.status === "failed") return jEsc(job.error);
     if (job.status === "cancelled") {
       const kind = String(job.kind || "").toLowerCase();
@@ -395,8 +433,8 @@ function setupChartTooltip(wrap) {
       if (c.failed) line += ` · ${jEsc(c.failed)} failed`;
       return line;
     }
-    const parts = Object.keys(c).slice(0, 6).map((k) => `${jEsc(k)}: ${jEsc(c[k])}`);
-    return parts.join(" · ");
+    // Split Rail: no raw counts dump — the sentence carries the story.
+    return "";
   }
 
   function injectStyle() {
@@ -511,12 +549,67 @@ function setupChartTooltip(wrap) {
 }
 .nj-resume-btn:hover { background: var(--orange-700, #C63B00); border-color: var(--orange-700, #C63B00); }
 .nj-resume-btn:disabled { opacity: 0.6; cursor: default; }
+/* ── Split Rail ── */
+.sr-zone {
+  display: flex; align-items: center; gap: 8px; margin: 18px 2px 6px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-3, #6B6055);
+}
+.sr-zone:first-child { margin-top: 4px; }
+.sr-zone .sr-zn { margin-left: auto; font-family: var(--font-mono, monospace); letter-spacing: 0; }
+.sr-row {
+  display: flex; align-items: center; gap: 11px; padding: 11px 2px;
+  border-bottom: 1px solid var(--line, #ECECEA);
+}
+.sr-row:last-child { border-bottom: none; }
+.sr-mark {
+  width: 30px; height: 30px; border-radius: 9px; flex: none;
+  display: grid; place-items: center; border: 1px solid;
+}
+.sr-mark svg { display: block; }
+.sr-mark.sr-done { background: var(--green-bg, #E2F1E9); border-color: #C4E2D3; color: var(--green, #2E7D5B); }
+.sr-mark.sr-stop { background: var(--red-bg, #F7DCD5); border-color: #EFC7BB; color: var(--red, #C2371F); }
+.sr-mark.sr-live { background: var(--amber-bg, #F8EAC4); border-color: #EBD79E; color: #8F6600; }
+.sr-mark.sr-idle { background: var(--bg-sunken, #F7F7F6); border-color: var(--line-2, #DDDDDA); color: var(--ink-3, #6B6055); }
+.sr-spin { animation: sr-spin 2.4s linear infinite; transform-origin: center; }
+@keyframes sr-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sr-spin { animation: none; } }
+.sr-txt { flex: 1; min-width: 0; font-size: 13px; line-height: 1.35; color: var(--ink, #14110E); }
+.sr-txt b { font-weight: 600; }
+.sr-num { font-family: var(--font-mono, monospace); font-variant-numeric: tabular-nums; font-weight: 500; }
+.sr-soft { color: var(--ink-3, #6B6055); }
+.sr-when { color: var(--ink-3, #6B6055); font-size: 11px; margin-top: 1px; }
+.sr-detail { color: var(--red, #C2371F); font-size: 11px; margin-top: 1px; }
+.sr-side { display: flex; align-items: center; gap: 4px; flex: none; }
+.sr-idlebox {
+  display: flex; align-items: center; gap: 11px; padding: 12px;
+  border: 1px dashed var(--line-2, #DDDDDA); border-radius: var(--radius, 12px);
+  color: var(--ink-3, #6B6055); font-size: 12.5px; background: var(--bg-sunken, #F7F7F6);
+}
+.sr-more {
+  width: 100%; margin-top: 10px; border: 1px solid var(--line, #ECECEA);
+  background: var(--card, #fff); color: var(--ink-3, #6B6055);
+  font: 600 11.5px var(--font-sans, sans-serif); padding: 7px; border-radius: 999px; cursor: pointer;
+}
+.sr-more:hover { color: var(--ink, #14110E); border-color: var(--line-2, #DDDDDA); }
+.sr-foot { text-align: center; color: var(--ink-3, #6B6055); font-size: 11.5px; margin-top: 18px; padding-bottom: 6px; }
     `;
     document.head.appendChild(style);
   }
 
   function buildDom() {
     elRoot = document.createElement("div");
+
+    // Split Rail state marks — geometry, not emoji.
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    defs.setAttribute("width", "0"); defs.setAttribute("height", "0");
+    defs.style.position = "absolute";
+    defs.innerHTML = `
+      <symbol id="sr-i-check" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-loop" viewBox="0 0 16 16"><path d="M8 2a6 6 0 1 1-5.6 3.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M2 2v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-stop" viewBox="0 0 16 16"><path d="M8 3v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="12.4" r="1.3" fill="currentColor"/></symbol>
+      <symbol id="sr-i-moon" viewBox="0 0 16 16"><path d="M12.6 9.7A5.4 5.4 0 0 1 6.3 3.4a5.4 5.4 0 1 0 6.3 6.3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>`;
+    elRoot.appendChild(defs);
 
     elTab = document.createElement("button");
     elTab.id = "nav-jobs-tab";
@@ -634,82 +727,100 @@ function setupChartTooltip(wrap) {
     setTimeout(() => elTab && elTab.classList.remove("nj-flash"), 1300);
   }
 
-  function renderCard(job, queuePos, campaignBusy) {
+  function renderRow(job, queuePos, campaignBusy) {
     const status = job.status || "queued";
-    const label = jEsc(job.label || job.kind || "Job");
-    const pill = `<span class="nj-pill ${statusClass(status)}"><span class="nj-dot"></span>${statusLabel(status)}</span>`;
-    const cancellable = status === "queued" || status === "running";
-    const cancelBtn = cancellable
-      ? `<button type="button" class="nj-cancel-btn" data-jid="${jEsc(job.id)}">Cancel</button>` : "";
-    // Resume: an interrupted verification can be continued on demand instead of
-    // waiting for the next server restart's auto-resume. Hidden when that
-    // campaign is already being verified again (no duplicate runs).
-    const resumable = status === "interrupted" && (job.kind === "verify" || job.kind === "remove_bad") && !job.dry_run && !campaignBusy;
-    const resumeBtn = resumable
-      ? `<button type="button" class="nj-resume-btn" data-jid="${jEsc(job.id)}">Resume</button>` : "";
-    let progress = "";
-    if (status === "running" && job.progress && typeof job.progress === "object") {
-      const done = job.progress.done, total = job.progress.total;
-      if (done != null && total != null) {
-        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-        progress = `<div class="nj-card-progress"><span>${jEsc(done)} of ${jEsc(total)} · ${pct}%</span>${cancelBtn}</div>`;
-      }
+    const live = status === "queued" || status === "running";
+    const stopped = status === "failed" || status === "interrupted";
+    const markCls = live ? "sr-live" : stopped ? "sr-stop" : "sr-done";
+    const icon = live ? "sr-i-loop" : stopped ? "sr-i-stop" : "sr-i-check";
+    const spin = status === "running" ? " sr-spin" : "";
+    const mark = `<div class="sr-mark ${markCls}"><svg width="14" height="14" class="ic${spin}"><use href="#${icon}"/></svg></div>`;
+
+    // Secondary line: relative time, plus progress / queue position while live.
+    const bits = [];
+    if (status === "running" && job.progress && typeof job.progress === "object"
+        && job.progress.done != null && job.progress.total > 0) {
+      const pct = Math.round((job.progress.done / job.progress.total) * 100);
+      bits.push(`${jEsc(job.progress.done)} of ${jEsc(job.progress.total)} · ${pct}%`);
     }
     if (status === "queued") {
-      const waitTxt = queuePos == null ? "Waiting…"
-        : queuePos <= 0 ? "Next up — starts when the current task finishes"
-        : queuePos === 1 ? "Waiting · 1 task ahead"
-        : `Waiting · ${queuePos} tasks ahead`;
-      progress = `<div class="nj-card-progress"><span class="nj-queue-wait">${waitTxt}</span>${cancelBtn}</div>`;
+      bits.push(queuePos == null ? "Waiting…"
+        : queuePos <= 0 ? "Next up"
+        : queuePos === 1 ? "Waiting · 1 ahead"
+        : `Waiting · ${queuePos} ahead`);
     }
-    if (!progress && cancellable) {
-      progress = `<div class="nj-card-progress"><span></span>${cancelBtn}</div>`;
-    }
-    const startedIso = job.started_at || job.finished_at;
-    const timeStr = jRelTime(startedIso);
-    const timeLine = timeStr ? `<div class="nj-card-time">${timeStr}</div>` : "";
-    let countsHtml = "";
-    if (status === "done" || status === "failed" || status === "cancelled" || status === "interrupted") {
+    const timeStr = jRelTime(job.started_at || job.finished_at);
+    if (timeStr) bits.push(timeStr);
+    if (status === "cancelled") bits.push(countsLine(job) || "stopped by you");
+    const when = bits.length ? `<div class="sr-when">${bits.join(" · ")}</div>` : "";
+    // Failures keep their reason, in red, under the sentence.
+    let detail = "";
+    if (status === "failed" || status === "interrupted") {
       const line = countsLine(job);
-      if (line) countsHtml = `<div class="nj-card-counts">${line}</div>`;
+      if (line) detail = `<div class="sr-detail">${line}</div>`;
     }
-    const cardCls = (status === "failed" || status === "interrupted") ? "nj-card jf-failed" : "nj-card";
-    // Dismiss: remove a FINISHED task from the panel. Not shown while live.
-    const finished = status === "done" || status === "failed" || status === "cancelled" || status === "interrupted";
-    const dismissBtn = finished
-      ? `<button type="button" class="nj-dismiss-btn" data-jid="${jEsc(job.id)}" title="Remove this task from the list" aria-label="Dismiss">&times;</button>` : "";
-    const resumeRow = (resumeBtn) ? `<div class="nj-card-actions">${resumeBtn}</div>` : "";
-    return `<div class="${cardCls}">
-      <div class="nj-card-top"><span class="nj-card-label">${label}</span>${pill}${dismissBtn}</div>
-      ${progress}${timeLine}${countsHtml}${resumeRow}
+
+    // Actions ride the right edge (same classes → same click handlers).
+    const side = [];
+    if (live) side.push(`<button type="button" class="nj-cancel-btn" data-jid="${jEsc(job.id)}">Cancel</button>`);
+    const resumable = status === "interrupted" && (job.kind === "verify" || job.kind === "remove_bad") && !job.dry_run && !campaignBusy;
+    if (resumable) side.push(`<button type="button" class="nj-resume-btn" data-jid="${jEsc(job.id)}">Resume</button>`);
+    const finished = !live;
+    if (finished) side.push(`<button type="button" class="nj-dismiss-btn" data-jid="${jEsc(job.id)}" title="Remove this task from the list" aria-label="Dismiss">&times;</button>`);
+
+    return `<div class="sr-row">
+      ${mark}
+      <div class="sr-txt">${jobSentence(job)}${when}${detail}</div>
+      <div class="sr-side">${side.join("")}</div>
     </div>`;
   }
 
+  const SR_SHOW = 5;
+  let srExpanded = false;
+
   function render() {
     if (!jobs.length) {
-      elList.innerHTML = `<div class="nj-empty">No tasks in progress yet.</div>`;
+      elList.innerHTML = `<div class="nj-empty">No tasks yet.</div>`;
     } else {
-      // Queue position: a queued job waits behind every running job plus every
-      // queued job enqueued before it (lower queue_seq). Lets each card show
-      // "next up" / "2nd in line" so a stack of added tasks reads clearly.
       const running = jobs.filter((j) => j.status === "running").length;
       const queuedSeqs = jobs.filter((j) => j.status === "queued")
         .map((j) => j.queue_seq).filter((s) => s != null).sort((a, b) => a - b);
       const posFor = (job) => {
         if (job.status !== "queued") return null;
-        const ahead = running + (job.queue_seq != null
-          ? queuedSeqs.filter((s) => s < job.queue_seq).length
-          : 0);
-        return ahead;
+        return running + (job.queue_seq != null
+          ? queuedSeqs.filter((s) => s < job.queue_seq).length : 0);
       };
-      // Campaigns with a live job — used to hide Resume on an interrupted card
-      // whose campaign is already being verified again (avoids duplicate runs).
       const busyCampaigns = new Set(jobs
         .filter((j) => (j.status === "queued" || j.status === "running") && j.campaign_id != null)
         .map((j) => String(j.campaign_id)));
-      elList.innerHTML = jobs.map((j) =>
-        renderCard(j, posFor(j), j.campaign_id != null && busyCampaigns.has(String(j.campaign_id)))
-      ).join("");
+      const row = (j) => renderRow(j, posFor(j), j.campaign_id != null && busyCampaigns.has(String(j.campaign_id)));
+
+      // Split Rail zones: Needs you → Happening now → Just finished.
+      const needs = jobs.filter((j) => j.status === "failed" || j.status === "interrupted");
+      const now = jobs.filter((j) => j.status === "queued" || j.status === "running");
+      const fin = jobs.filter((j) => j.status === "done" || j.status === "cancelled");
+      const two = (n) => String(n).padStart(2, "0");
+      let html = "";
+      if (needs.length) html += `<div class="sr-zone">Needs you <span class="sr-zn">${two(needs.length)}</span></div>${needs.map(row).join("")}`;
+      html += `<div class="sr-zone">Happening now <span class="sr-zn">${two(now.length)}</span></div>`;
+      html += now.length ? now.map(row).join("")
+        : `<div class="sr-idlebox"><div class="sr-mark sr-idle"><svg width="14" height="14"><use href="#sr-i-moon"/></svg></div>Quiet right now.</div>`;
+      if (fin.length) {
+        html += `<div class="sr-zone">Just finished <span class="sr-zn">${two(fin.length)}</span></div>`;
+        const shown = srExpanded ? fin : fin.slice(0, SR_SHOW);
+        html += shown.map(row).join("");
+        if (fin.length > SR_SHOW) {
+          html += `<button type="button" class="sr-more">${srExpanded ? "Show less" : `Show earlier (${fin.length - SR_SHOW} more)`}</button>`;
+        }
+        const boxes = fin.reduce((a, j) => {
+          const c = (j.counts && typeof j.counts === "object") ? j.counts : {};
+          return a + (Number(c.held_boxes ?? c.resumed) || 0);
+        }, 0);
+        if (boxes > 0) html += `<div class="sr-foot">The engine handled <span class="sr-num">${boxes.toLocaleString()}</span> inboxes for you.</div>`;
+      }
+      elList.innerHTML = html;
+      const moreBtn = elList.querySelector(".sr-more");
+      if (moreBtn) moreBtn.addEventListener("click", () => { srExpanded = !srExpanded; render(); });
     }
     const activeCount = jobs.filter((j) => j.status === "queued" || j.status === "running").length;
     elBadge.textContent = String(activeCount);
