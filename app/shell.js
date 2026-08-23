@@ -369,8 +369,18 @@ function setupChartTooltip(wrap) {
     const st = job.status;
     const live = st === "queued" || st === "running";
     const num = (n) => `<span class="sr-num">${jEsc(n)}</span>`;
-    const doms = c.domains != null
-      ? ` <span class="sr-soft">across ${jEsc(c.domains)} domain${c.domains === 1 ? "" : "s"}</span>` : "";
+    // Name the domains, not just their count (owner report 2026-08-23: a
+    // "Warm up domain" click seemed to never reach the Tasks menu — the row
+    // was there, but "Rested 52 inboxes across 1 domain" carries nothing the
+    // clicker can recognise as THEIR domain). counts.domains_list is stamped
+    // at job creation, so queued/running rows name the domain too.
+    const dlist = Array.isArray(c.domains_list) ? c.domains_list.filter(Boolean) : [];
+    const dnames = dlist.length
+      ? (dlist.length <= 2 ? dlist.join(", ") : `${dlist[0]} +${dlist.length - 1} more`) : "";
+    const doms = dnames
+      ? ` <span class="sr-soft">— ${jEsc(dnames)}</span>`
+      : (c.domains != null
+        ? ` <span class="sr-soft">across ${jEsc(c.domains)} domain${c.domains === 1 ? "" : "s"}</span>` : "");
     if (k === "warmup_pause") {
       if (st === "interrupted" || st === "failed") return `<b>Rest stopped early</b>${doms}`;
       const n = c.held_boxes ?? c.paused;
