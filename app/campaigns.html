@@ -3512,24 +3512,15 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
 
   function rowHTML(c) {
     var st = c.stats;
-    /* ring = leads through the sequence when the sync carries it (Smartlead's
-       own split), sent ÷ (leads × 2) only as the legacy fallback — one source
-       shared with liveBucket so ring, chip and filter can never disagree */
-    /* completion-source precedence mirrors liveBucket exactly: live answer,
-       then the synced per-lead split, then the legacy heuristic — so ring,
-       chip and filter draw one truth on every path */
-    var lsr = STATE.liveStatus && STATE.liveStatus[c.id];
-    var ringPct, ringTitle;
-    if (lsr && lsr.completion != null) {
-      ringPct = Math.min(100, Math.round(lsr.completion));
-      ringTitle = "live: leads finished the sequence";
-    } else if (st.completedLeads != null && st.leads > 0) {
-      ringPct = Math.min(100, Math.round(st.completedLeads / st.leads * 100));
-      ringTitle = "leads finished the sequence";
-    } else if (st.leads && st.sent != null) {
-      ringPct = Math.min(100, Math.round(st.sent / (st.leads * 2) * 100));
-      ringTitle = "sent &divide; (leads &times; 2)";
-    } else { ringPct = null; ringTitle = ""; }
+    /* ring = PROGRESS through the list (contacted / total), the SAME single
+       function the detail-page dial uses (headerDialPct) so the list ring and
+       the campaign dial can never show different numbers (fidelity fix, 23 Aug
+       2026). This is deliberately NOT completion: the "Completed" status filter
+       keys off liveBucket, which still tests finished/total — so a 100%-
+       contacted but mid-sequence campaign correctly stays under Active. */
+    var ringPct = headerDialPct(c);
+    if (ringPct != null) ringPct = Math.round(ringPct);
+    var ringTitle = ringPct != null ? "of the list contacted so far" : "";
     var replyPct = pct(st.replied, st.sent, 2);
     var bouncePct = pct(st.bounced, st.sent, 1);
     /* Insight-kind badges ("copy", "list audit", …) used to render in the
@@ -3862,16 +3853,26 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
      and liveBucket: live platform answer first, then Smartlead's own synced
      per-lead split, then the crunch snapshot, then the sent÷(leads×2)
      heuristic as last resort. Null only when NO source can answer. */
+  /* PROGRESS, not completion (fidelity fix, 23 Aug 2026 — Bjion).
+     The old dial showed completed/total ("finished the whole sequence").
+     On a young multi-step campaign that reads ~0% for weeks even while
+     thousands are mid-sequence — 3832738/3832719 both showed a bare "0%"
+     while actively sending. That contradicts the audience bar right below it.
+     The dial now shows how far through the list we've REACHED = started/total,
+     where started = everyone no longer notStarted (= completed+inprogress+
+     paused+blocked+stopped). ONE Smartlead source (campaign_lead_stats via
+     live-status) — this deliberately drops the 4 fallback completion
+     calculators (ls.completion, st.completedLeads, st.completion, the
+     sent/(leads·2) heuristic) so there's a single number to maintain.
+     "Completed" still lives, in-context, in the audience bar. */
   function headerDialPct(c) {
     var st = c.stats;
-    var ls = STATE.liveStatus && STATE.liveStatus[c.id];
     var clamp = function (v) { return Math.max(0, Math.min(100, v)); };
-    if (ls && ls.completion != null) return clamp(ls.completion);
-    if (ls && ls.lead_stats && ls.lead_stats.total)
-      return clamp(100 * (ls.lead_stats.completed || 0) / ls.lead_stats.total);
-    if (st.completedLeads != null && st.leads > 0) return clamp(100 * st.completedLeads / st.leads);
-    if (st.completion != null) return clamp(st.completion);
-    if (st.leads && st.sent != null) return clamp(100 * st.sent / (st.leads * 2));
+    var ls = STATE.liveStatus && STATE.liveStatus[c.id] && STATE.liveStatus[c.id].lead_stats;
+    if (ls && ls.total) return clamp(100 * (ls.total - (ls.notStarted || 0)) / ls.total);
+    /* pre-live fallback (replaced in place by paintDial once live lands): a
+       rough contacted estimate from the sync stats, never the completion ring */
+    if (st.leads && st.sent != null) return clamp(100 * Math.min(st.sent, st.leads) / st.leads);
     return null;
   }
   function dialInnerHTML(compPct) {
@@ -3890,7 +3891,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     var compPct = headerDialPct(c);
     if (compPct == null) return; /* never blank a dial that's already showing */
     el.hidden = false;
-    el.setAttribute("aria-label", compPct.toFixed(0) + "% of the list has finished the sequence");
+    el.setAttribute("aria-label", compPct.toFixed(0) + "% of the list contacted so far");
     el.innerHTML = dialInnerHTML(compPct);
   }
 
@@ -3916,7 +3917,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
        once the live check lands. */
     var compPct = headerDialPct(c);
     var dial = '<div class="progress-dial" id="hdr-dial" role="img"' +
-      (compPct == null ? " hidden" : ' aria-label="' + compPct.toFixed(0) + '% of the list has finished the sequence"') +
+      (compPct == null ? " hidden" : ' aria-label="' + compPct.toFixed(0) + '% of the list contacted so far"') +
       '>' + (compPct == null ? "" : dialInnerHTML(compPct)) + "</div>";
     var slStatus = c.slStatus ? String(c.slStatus) : "";
     if (slStatus) slStatus = slStatus.charAt(0).toUpperCase() + slStatus.slice(1).toLowerCase();
