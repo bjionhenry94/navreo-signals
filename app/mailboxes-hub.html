@@ -444,7 +444,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   var MGR_TABS = [
     { key: "lowrep", label: "Below reply floor" },
     { key: "warmupoff", label: "Not warming" },
-    { key: "inwarmup", label: "In warm-up" },
+    { key: "inwarmup", label: "Resting" },
     { key: "reconnect", label: "Needs reconnect" },
     { key: "highb", label: "High bounce-rate" },
     { key: "tags", label: "Performance by tag" }
@@ -561,10 +561,10 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     // same domain never appears in two tabs at once.
     var hb = highbList() || []; var hbSet = {}; hb.forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
     rows = rows.filter(function (m) { return !hbSet[m.domain]; });
-    if (!rows.length) return '<div class="mgr-empty">None right now — nothing is in warm-up.</div>';
+    if (!rows.length) return '<div class="mgr-empty">None right now — nothing is resting.</div>';
     var gr = groupByDomain(rows);
-    var body = gr.order.map(function (dom) {
-      var rs = gr.g[dom], md = rs.some(function (r) { return r.maildoso; });
+    var doms = gr.order.map(function (dom) {
+      var rs = gr.g[dom];
       // Due-back source of truth = the rest LEDGER (bundle.restDue: domain →
       // first-seen-warming + 7d), same as the old deliverability manager — it
       // is what gives each domain its own countdown. Row restedAt is a
@@ -576,6 +576,12 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
         dueTs = due.length ? Math.min.apply(null, due) : (Date.now() + 7 * 864e5);
       }
+      return { dom: dom, rs: rs, dueTs: dueTs };
+    });
+    // Always sorted by due date, soonest first — ready-now domains sit at the top.
+    doms.sort(function (a, b) { return a.dueTs - b.dueTs; });
+    var body = doms.map(function (e) {
+      var dom = e.dom, rs = e.rs, dueTs = e.dueTs, md = rs.some(function (r) { return r.maildoso; });
       return '<tr><td class="mono">' + esc(dom) + ' <span class="t-mut">· ' + rs.length + ' mbx</span>' + (md ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + rs.length + '</td>' +
         '<td>' + dueChip(dueTs) + '</td>' +
