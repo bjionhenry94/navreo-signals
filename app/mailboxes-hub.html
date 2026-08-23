@@ -876,6 +876,22 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       .catch(function () { if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); } });
   }
 
+  // /api/warmup-capacity → { perWorkspace:{ws:{capacityPerDay,boxes,byProvider}} }
+  // Estimated sends/day currently IN WARM-UP (being "repaired"), per workspace,
+  // from the Smartlead mirror by provider default (Outlook 2, Gmail 20, SMTP 15).
+  // Feeds warmCapFor → the heat map's "In warm-up" column. Same transient-retry
+  // pattern as loadCap so a slow mirror read never leaves the column blank.
+  var warmCapTries = 0;
+  function loadWarmCap() {
+    return fetch("/api/warmup-capacity", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.perWorkspace) { warmCapTries = 0; S.warmcap = j; renderHeat(); }
+        else if (warmCapTries < 8) { warmCapTries++; setTimeout(loadWarmCap, 3000); }
+      })
+      .catch(function () { if (warmCapTries < 8) { warmCapTries++; setTimeout(loadWarmCap, 3000); } });
+  }
+
   // paint immediately with placeholders/representative, then fill as data lands
   renderChips(); renderAll();
   loadCw().then(function () { renderChips(); renderAll(); });
@@ -884,6 +900,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   loadBundle();
   loadMcm();
   loadCap();
+  loadWarmCap();
 })();
 </script>
 </body>
