@@ -152,9 +152,9 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   function comma(x) { return (Number(x) || 0).toLocaleString("en-US"); }
   function pct(part, whole) { whole = Number(whole) || 0; if (!whole) return null; return (100 * (Number(part) || 0) / whole); }
   function fx(v, d) { return v == null ? "—" : (Number(v).toFixed(d == null ? 1 : d) + "%"); }
-  function replyTone(v) { return v == null ? "mut" : v >= 3 ? "g1" : v >= 1.5 ? "g2" : v >= 0.8 ? "a1" : "r1"; }
+  function replyTone(v) { return v == null ? "mut" : v >= 1.1 ? "g1" : v >= 0.8 ? "a1" : "r1"; }
   function bounceTone(v) { return v == null ? "mut" : v < 2 ? "g1" : v < 3 ? "a1" : "r1"; }
-  function capTone(v) { return v == null ? "mut" : v > 100 ? "r1" : v >= 70 ? "g1" : v >= 25 ? "g2" : "a1"; }
+  function capTone(v) { return v == null ? "mut" : v > 100 ? "r1" : v >= 90 ? "g1" : v >= 70 ? "a1" : "r1"; }
   function warmTone(v) { return v == null ? "mut" : v <= 15 ? "g1" : v <= 30 ? "g2" : v <= 50 ? "a1" : "r1"; }
   function tclass(tone) { return tone === "g1" ? "t-g" : tone === "g2" ? "t-g" : tone === "a1" ? "t-a" : tone === "r1" ? "t-r" : "t-mut"; }
 
@@ -380,6 +380,16 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   }
   function renderHeat() {
     var rows = clientRows();
+    // Lazy-load, don't pre-paint the sample. Until /api/client-windows resolves,
+    // show a skeleton; if it resolved with no live rows, say so honestly. Never
+    // render REP_CLIENTS' fabricated numbers — a sample fleet coloured as if real
+    // reads as genuine fleet health. (Was: pre-state painted REP_CLIENTS.)
+    if (USING_REP.heat) {
+      el("hub-heat").innerHTML = S.cwDone
+        ? '<div class="skel" style="padding:16px 4px">No live per-client rows yet for this window.</div>'
+        : '<div class="skel">Loading fleet…</div>';
+      return;
+    }
     var body = rows.map(function (r) {
       var meta = (r.dom != null ? r.dom + " dom" : "") + (r.inbox != null ? " · " + r.inbox + " inbox" : "");
       var tds = '<td class="n">' + esc(r.name) + (meta ? '<small>' + meta.replace(/^ · /, "") + '</small>' : '') + '</td>';
@@ -720,10 +730,11 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     return fetch("/api/client-windows", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (cw) {
+        S.cwDone = true;
         if (!cw) return;
         S.cw = cw; S.labels = cw.ws_labels || {}; S.vol = (cw.windows && cw.windows["30"]) || {};
       })
-      .catch(function () {});
+      .catch(function () { S.cwDone = true; });
   }
   function loadTags() {
     return fetch("/api/tag-performance", { credentials: "same-origin" })
