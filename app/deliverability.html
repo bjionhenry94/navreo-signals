@@ -223,7 +223,7 @@
 .ah .splitlbl b{font-weight:600;color:var(--ink)}
 
 .ah .rank{display:flex;flex-direction:column}
-.ah .rrow{display:grid;grid-template-columns:20px minmax(180px,1fr) 62px 62px 70px 70px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.ah .rrow{display:grid;grid-template-columns:20px minmax(180px,1fr) 62px 62px 68px 70px 70px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
 .ah .rcost{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 .ah .rcost.mute{color:var(--ink-3)}
 .ah .rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
@@ -267,7 +267,7 @@
 .ah .moved-note a:hover{text-decoration:underline}
 
 @media (max-width:1280px){
-  .ah .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 58px 54px}
+  .ah .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 56px 58px 54px}
   .ah .brow{grid-template-columns:104px 1fr 42px}
   .ah .ocol{grid-template-columns:1fr 74px 74px;gap:8px}
   .ah .hero-flow{grid-template-columns:240px 1fr}
@@ -784,7 +784,6 @@ function clientOfName(name, ws) {
   if (n.indexOf("arnic") >= 0) return "Arnic";
   if (n.indexOf("qwintiq") >= 0) return "Qwintiq";
   if (n.indexOf("thunderbird") >= 0) return "ThunderBird";   // its own client
-  if (n.indexOf("acme") >= 0) return "Acme";                 // demo client (toggle-gated server-side)
   if (n.indexOf("navreo") >= 0) return "Navreo";             // name-gated like every client
   // No keyword → belongs to NO client. Must never fall back to Navreo (that
   // silently inflated Navreo's numbers by every unmatched campaign).
@@ -2116,15 +2115,8 @@ function renderRank() {
   var minSent = Math.max(100, state.range * 15);
   setStamp("rank-stamp", win && win.length ? (CW && CW.asof) : (SCORE && SCORE.asof), 6);
   if (win && win.length) {
-    var winPM = false;   // set from the rows this VIEW shows (demo rows carry
-                         // pos/mtg before a fresh sweep does — they must not
-                         // un-caveat the All view's lifetime fallback numbers)
+    var winPM = false;   // set from the rows this VIEW shows
     var rows = win.filter(function (r) {
-      // Demo rows never rank in the whole-book leaderboard: the __all totals
-      // exclude them, so letting them place under "All" was a lie. There is
-      // no client-side demo registry — "Acme" is the literal demo label
-      // (clientOfName's demo mapping). Under the Acme chip they still show.
-      if (state.client === "All" && r.client === "Acme") return false;
       return r.sent >= minSent && (state.client === "All" || r.client === state.client);
     }).map(function (r) {
       var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
@@ -2135,23 +2127,32 @@ function renderRank() {
                mtg: r.mtg != null ? r.mtg : ((sc && sc.meetings) || 0),
                active: !!(sc && String(sc.status || "").toUpperCase() === "ACTIVE") };
     });
-    // rank meetings first, then positives, then reply rate (Bjion 2026-07-29)
+    // rank by cost-to-buy now (Bjion 2026-08-23): cheapest emails-per-meeting
+    // first, then cheapest emails-per-positive. Campaigns with no meeting (or no
+    // positive) sort to the bottom of their key via +Infinity.
+    rows.forEach(function (c) {
+      c.cost = winPM
+        ? { perPos: c.pos > 0 ? Math.round(c.sent / c.pos) : null,
+            perMtg: c.mtg > 0 ? Math.round(c.sent / c.mtg) : null }
+        : campCost(c.id);
+    });
     rows.sort(function (a, b) {
-      return (b.mtg - a.mtg) || (b.pos - a.pos) || ((b.replied / b.sent) - (a.replied / a.sent));
+      var am = a.cost.perMtg == null ? Infinity : a.cost.perMtg,
+          bm = b.cost.perMtg == null ? Infinity : b.cost.perMtg,
+          ap = a.cost.perPos == null ? Infinity : a.cost.perPos,
+          bp = b.cost.perPos == null ? Infinity : b.cost.perPos;
+      return (am - bm) || (ap - bp) || ((b.replied / b.sent) - (a.replied / a.sent));
     });
     var top = rows.slice(0, 8);
     $("rank-scope").textContent = winPM ? "· " + rangeLabel()
                                         : "· " + rangeLabel() + " · positives & meetings all-time";
-    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Emails sent</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
     top.forEach(function (c, i) {
       var scLT = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
       var noYes = scLT && (scLT.sent || 0) >= 2000 && !(scLT.positives || 0);
       // costs follow the same window as the counts: window sent ÷ window
       // pos/mtg. Lifetime campCost only when the blob predates windowed fields.
-      var cost = winPM
-        ? { perPos: c.pos > 0 ? Math.round(c.sent / c.pos) : null,
-            perMtg: c.mtg > 0 ? Math.round(c.sent / c.mtg) : null }
-        : campCost(c.id);
+      var cost = c.cost;
       s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
         '<div><div class="rname"><a class="nm" href="campaigns.html#/c/' + encodeURIComponent(c.id) + '" title="' + escq(c.name) + '">' + escq(c.name) + "</a>" +
         (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
@@ -2159,6 +2160,7 @@ function renderRank() {
         (!c.active ? '<span class="apill mute">finished</span>' : "") +
         '</div><div class="rsub">' + escq(c.client) + " · " + rangeLabel() + "</div></div>" +
         '<span class="rint">' + fmtN(c.pos) + '</span><span class="rmtg">' + fmtN(c.mtg) + "</span>" +
+        '<span class="rmtg">' + fmtN(c.sent) + "</span>" +
         '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
         '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
     });
@@ -2181,15 +2183,20 @@ function renderRank() {
   // lifetime fallback (sweep still building)
   var rowsLT = scoreRows().filter(function (c) { return (c.sent || 0) >= 500 && c.status === "ACTIVE"; });
   if (!rowsLT.length) rowsLT = scoreRows().filter(function (c) { return (c.sent || 0) >= 500; });
-  // rank meetings first, then positives, then reply rate (Bjion 2026-07-29)
+  // rank by cost-to-buy now (Bjion 2026-08-23): cheapest emails-per-meeting
+  // first, then cheapest emails-per-positive; no-meeting/no-positive sink via +∞.
   rowsLT.sort(function (a, b) {
-    return ((b.meetings || 0) - (a.meetings || 0)) || ((b.positives || 0) - (a.positives || 0)) ||
-           ((b.replied / b.sent) - (a.replied / a.sent));
+    var ca = campCost(a.id), cb = campCost(b.id);
+    var am = ca.perMtg == null ? Infinity : ca.perMtg,
+        bm = cb.perMtg == null ? Infinity : cb.perMtg,
+        ap = ca.perPos == null ? Infinity : ca.perPos,
+        bp = cb.perPos == null ? Infinity : cb.perPos;
+    return (am - bm) || (ap - bp) || ((b.replied / b.sent) - (a.replied / a.sent));
   });
   var topLT = rowsLT.slice(0, 8);
   $("rank-scope").textContent = "· all time — the " + rangeLabel() + " view is warming up";
   if (SCORE && !SCORE.asof) { var _rs = $("rank-stamp"); _rs.textContent = "freshness unknown"; _rs.classList.add("stale"); }
-  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Emails sent</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
   topLT.forEach(function (c, i) {
     var cost = campCost(c.id);
     sLT += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
@@ -2198,6 +2205,7 @@ function renderRank() {
       (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
       '</div><div class="rsub">' + escq(clientDisplay(campClient(c.id, c))) + " · all time</div></div>" +
       '<span class="rint">' + fmtN(c.positives || 0) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span>" +
+      '<span class="rmtg">' + fmtN(c.sent || 0) + "</span>" +
       '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
       '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
   });
