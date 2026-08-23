@@ -178,11 +178,14 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   var USING_REP = { heat: false, tags: false, fix: false };
 
   /* ---------- per-client rows from /api/client-windows ---------- */
+  // The analytics/client-windows layer injects a demo client "Acme" (hardcoded
+  // _DEMO_ACME_WINDOW_30D) — never a real client; keep it out of chips + heat.
+  function isDemoClient(name) { return /^acme$/i.test(String(name || "").trim()); }
   function clientRows() {
     var cw = S.cw, win = String(S.win);
     if (!cw || !cw.windows || !cw.windows[win]) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
     var w = cw.windows[win], labels = cw.labels || cw.ws_labels || {};
-    var names = Object.keys(w).filter(function (k) { return k !== "__all" && k !== "__navreo_ws" && k.indexOf("__") !== 0; });
+    var names = Object.keys(w).filter(function (k) { return k !== "__all" && k !== "__navreo_ws" && k.indexOf("__") !== 0 && !isDemoClient(k); });
     if (!names.length) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
     USING_REP.heat = false;
     // fleet-wide warm-up % and capacity come from the audit blob (per-client
@@ -416,10 +419,29 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var b = S.bundle && S.bundle.views && S.bundle.views[key];
     return (b && Array.isArray(b.rows)) ? b.rows : null;
   }
+  /* ---- shared data helpers (match the OLD deliverability manager) ---- */
+  var FLOOR_STD = 0.7, FLOOR_MD = 0.5, BOUNCE_HOT = 3; // same thresholds as the old tab
+  function dhRows() { // domain-health rows for the active window
+    var dh = S.bundle && S.bundle.dh; if (!dh) return null;
+    var w = dh[String(S.win)] || dh["30"] || dh["7"]; return (w && w.rows) || null;
+  }
+  function floorList() { var r = dhRows(); if (r == null) return null; var ms = (S.bundle && S.bundle.minSent) || 500;
+    return r.filter(function (d) { return d.reply_rate != null && (d.sent || 0) >= ms && d.reply_rate < (d.maildoso ? FLOOR_MD : FLOOR_STD); })
+      .sort(function (a, b) { return a.reply_rate - b.reply_rate; }); }
+  function highbList() { var r = dhRows(); if (r == null) return null;
+    return r.filter(function (d) { return d.bounce_rate != null && d.bounce_rate >= BOUNCE_HOT; })
+      .sort(function (a, b) { return b.bounce_rate - a.bounce_rate; }); }
+  function groupByDomain(rows) { var g = {}, order = []; rows.forEach(function (r) { var d = r.domain || "—"; if (!g[d]) { g[d] = []; order.push(d); } g[d].push(r); }); return { g: g, order: order }; }
+  function restingSet() { var s = {}; ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; }); return s; }
+  function dueChip(ts) { if (!ts) return '<span class="t-mut">—</span>'; var left = ts - Date.now();
+    if (left <= 0) return '<span class="pill g">ready now</span>';
+    var dl = Math.ceil(left / 864e5); return '<span class="pill ' + (dl <= 2 ? "a" : "n") + '">due in ' + dl + 'd</span>'; }
+  function restedMs(m) { var v = m.restedAt; if (v == null) return null; if (typeof v === "number") return v < 1e12 ? v * 1000 : v; var p = Date.parse(v); return isNaN(p) ? null : p; }
+
   function mgrCount(key) {
     if (key === "tags") return null;
-    if (key === "lowrep") return S.deliv ? (Number(S.deliv.lowrep) || 0) : null;
-    if (key === "highb") return S.deliv ? arrLen(S.deliv.highbCamps || S.deliv.campaignsFlagged) : null;
+    if (key === "lowrep") { var f = floorList(); return f ? f.length : null; }
+    if (key === "highb") { var h = highbList(); return h ? h.length : null; }
     var rows = bundleView(key);
     return rows ? rows.length : null;
   }
@@ -437,134 +459,113 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       (foot ? '<div style="padding:11px 16px;font-size:11.5px;color:var(--ink-3)">' + foot + '</div>' : '');
   }
   function pill(cls, txt) { return '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(txt) + '</span>'; }
+  function actBtn(act, domain, id, label, primary) {
+    var attrs = 'data-act="' + act + '"' + (domain != null ? ' data-domain="' + esc(domain) + '"' : '') + (id != null ? ' data-id="' + esc(id) + '"' : '');
+    var style = primary ? '' : ' style="background:var(--card);color:var(--ink);border:1px solid var(--line-2)"';
+    return '<button class="fbtn"' + attrs + style + '>' + esc(label) + '</button>';
+  }
   function tagChips(tags) {
     if (!Array.isArray(tags) || !tags.length) return '<span class="t-mut">—</span>';
     return tags.slice(0, 2).map(function (t) { return '<span class="pill n" style="margin-right:3px">' + esc(t) + '</span>'; }).join("") + (tags.length > 2 ? '<span class="t-mut"> +' + (tags.length - 2) + '</span>' : "");
   }
-  function mgrMailboxView(key, statusPill, extraNote) {
-    var rows = bundleView(key);
-    if (rows == null) return null;
-    if (!rows.length) return '<div class="mgr-empty">None right now — all clear.</div>';
-    var body = rows.slice(0, MGR_CAP).map(function (m) {
-      return '<tr><td>' + esc(m.email || "—") + '</td>' +
-        '<td class="mono">' + esc(m.domain || "") + '</td>' +
-        '<td>' + tagChips(m.tags) + '</td>' +
-        '<td class="num">' + (m.cap != null ? m.cap : "—") + '</td>' +
-        '<td>' + esc(m.provider || "—") + '</td>' +
-        '<td>' + statusPill(m) + '</td></tr>';
-    }).join("");
-    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + ". " : "") + (extraNote || "");
-    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Tags</th><th class="num">Cap/day</th><th>Provider</th><th>Status</th>', body, null, foot);
-  }
-  function mgrWarmupOff() {
-    return mgrMailboxView("warmupoff", function (m) { return pill("a", m.maildoso ? "Warm-up off (Maildoso)" : "Warm-up off"); },
-      "Warm-up is OFF — these boxes aren’t warming or sending. Turn warm-up on to put the capacity to work.");
-  }
-  function mgrInWarmup() {
-    var rows = bundleView("inwarmup");
-    if (rows == null) return null;
-    if (!rows.length) return '<div class="mgr-empty">None right now — nothing is in warm-up.</div>';
-    // one Restore button per DOMAIN (the action rests/restores a whole domain)
-    var seen = {}, body = rows.slice(0, MGR_CAP).map(function (m) {
-      var canRestore = m.domain && !seen[m.domain]; if (m.domain) seen[m.domain] = 1;
-      return '<tr><td>' + esc(m.email || "—") + '</td>' +
-        '<td class="mono">' + esc(m.domain || "") + '</td>' +
-        '<td>' + tagChips(m.tags) + '</td>' +
-        '<td class="num">' + (m.cap != null ? m.cap : "—") + '</td>' +
-        '<td>' + pill("n", m.warmup_status || "Warming") + '</td>' +
-        '<td style="text-align:right">' + (canRestore ? '<button class="fbtn" data-act="restore" data-domain="' + esc(m.domain) + '" style="background:var(--card);color:var(--ink);border:1px solid var(--line-2)">Restore to sending</button>' : '') + '</td></tr>';
-    }).join("");
-    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + ". " : "") +
-      "Inside the warm-up window — building reputation before full volume. Restore returns a whole domain to sending.";
-    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Tags</th><th class="num">Cap/day</th><th>Status</th><th style="text-align:right">Action</th>', body, null, foot);
-  }
-  function mgrReconnect() {
-    var rows = bundleView("reconnect");
-    if (rows == null) return null;
-    if (!rows.length) return '<div class="mgr-empty">None right now — every mailbox is connected.</div>';
-    var body = rows.slice(0, MGR_CAP).map(function (m) {
-      return '<tr><td>' + esc(m.email || "—") + '</td>' +
-        '<td class="mono">' + esc(m.domain || "") + '</td>' +
-        '<td>' + tagChips(m.tags) + '</td>' +
-        '<td class="t-r" style="max-width:340px">' + esc(shortReason(m.reason)) + '</td>' +
-        '<td>' + pill("r", "Disconnected") + '</td></tr>';
-    }).join("");
-    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Tags</th><th>Why it failed</th><th>Status</th>', body, null,
-      "These stopped authenticating — reconnect them to bring the capacity back.");
-  }
-  function shortReason(r) {
-    if (!r) return "Needs reconnect";
-    r = String(r).replace(/^RTPS[^:]*:-?\s*/, "");
-    return r.length > 90 ? r.slice(0, 88) + "…" : r;
-  }
-  // Below-floor DOMAINS from the bundle domain-health rows, unioned across the
-  // 7/14/30 windows (a slow bleed only crosses the floor on the wider window),
-  // scored with the same floors the auto-park uses: 0.7% standard, 0.5% Maildoso.
-  function belowFloorRows() {
-    var dh = (S.bundle && S.bundle.dh) || null;
-    if (!dh) return null;
-    var minSent = (S.bundle && S.bundle.minSent) || 500;
-    var inWarm = {};
-    ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) inWarm[m.domain] = true; });
-    var best = {};
-    ["7", "14", "30"].forEach(function (w) {
-      var rows = (dh[w] && dh[w].rows) || [];
-      rows.forEach(function (r) {
-        var dom = r.domain, rate = r.reply_rate, sent = r.sent || 0;
-        if (!dom || rate == null || sent < minSent) return;
-        var floor = r.maildoso ? 0.5 : 0.7;
-        if (rate >= floor) return;
-        if (!best[dom] || sent > best[dom].sent) best[dom] = { domain: dom, reply: rate, sent: sent, maildoso: !!r.maildoso, window: w };
-      });
-    });
-    return Object.keys(best).map(function (d) { var r = best[d]; r.inWarm = !!inWarm[d]; return r; })
-      .sort(function (a, b) { return a.reply - b.reply; });
-  }
-  function mgrLowRep() {
-    var rows = belowFloorRows();
-    if (rows == null) return null; // bundle not in yet
-    if (!rows.length) return '<div class="mgr-empty">No domains are below the reply floor right now — everything is replying above the line.</div>';
-    var body = rows.map(function (r) {
-      var floor = r.maildoso ? "0.5%" : "0.7%";
-      var status = r.inWarm ? pill("n", "In warm-up") : pill("a", "Sending");
-      var action = r.inWarm
-        ? '<button class="fbtn" data-act="restore" data-domain="' + esc(r.domain) + '" style="background:var(--card);color:var(--ink);border:1px solid var(--line-2)">Restore to sending</button>'
-        : '<button class="fbtn" data-act="warmup" data-domain="' + esc(r.domain) + '">Send to warm-up</button>';
-      return '<tr><td class="mono">' + esc(r.domain) + (r.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
-        '<td class="num t-r">' + r.reply + '%</td>' +
-        '<td class="num">' + comma(r.sent) + '</td>' +
-        '<td>' + status + '</td>' +
+  function shortReason(r) { if (!r) return "conn fail"; r = String(r).replace(/^RTPS[^:]*:-?\s*/, ""); return r.length > 90 ? r.slice(0, 88) + "…" : r; }
+
+  // ---- Below reply floor (old flow "floor"): Domain·Sent·Leads·Reply·Positive·Bounce·Action
+  function mgrFloor() {
+    var rows = floorList(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ No domains below the ' + FLOOR_STD + '% reply floor in the last ' + S.win + ' days.</div>';
+    var resting = restingSet();
+    var body = rows.map(function (d) {
+      var action = resting[d.domain]
+        ? pill("a", "sends paused") + " " + actBtn("reactivate", d.domain, null, "Reactivate", false)
+        : actBtn("warmup", d.domain, null, "Warm up domain", true);
+      return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+        '<td class="num">' + comma(d.sent) + '</td>' +
+        '<td class="num">' + comma(d.lead || 0) + '</td>' +
+        '<td class="num t-r">' + (d.reply_rate).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
+        '<td class="num">' + (d.positive_rate || 0).toFixed(2) + '%</td>' +
+        '<td class="num' + (d.bounce_rate >= 3 ? ' t-r' : '') + '">' + (d.bounce_rate || 0).toFixed(2) + '%</td>' +
         '<td style="text-align:right">' + action + '</td></tr>';
     }).join("");
-    return tableWrap('<th>Domain</th><th class="num">Reply %</th><th class="num">Sent</th><th>Status</th><th style="text-align:right">Action</th>', body, null,
-      rows.length + " domain(s) below the floor (0.7% standard · 0.5% Maildoso, on ≥" + comma((S.bundle && S.bundle.minSent) || 500) + " sends). Getting too few replies for the volume — rest them so they stop dragging reputation. Your auto-park already warms the worst first; this is the manual override.");
+    return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Leads</th><th class="num">Reply rate</th><th class="num">Positive</th><th class="num">Bounce</th><th style="text-align:right">Action</th>', body, null,
+      rows.length + ' domain(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + S.win + ' days. One button rests every mailbox on the domain.');
   }
-  function mgrHighb(A) {
-    var rows = (A && (A.highbCamps || A.campaignsFlagged)) || [];
-    if (!rows.length) return '<div class="mgr-empty">No campaigns over the bounce limit right now.</div>';
-    return tableWrap('<th>Campaign</th><th class="num">Sent</th><th class="num">Bounce</th><th class="num">Reply</th><th>Status</th>',
-      rows.map(function (c) {
-        return '<tr><td style="max-width:360px">' + esc(c.name || ("Campaign " + c.id)) + '</td>' +
-          '<td class="num">' + comma(c.sent) + '</td>' +
-          '<td class="num t-r">' + (c.bounce_pct != null ? c.bounce_pct + "%" : "—") + '</td>' +
-          '<td class="num">' + (c.reply_pct != null ? c.reply_pct + "%" : "—") + '</td>' +
-          '<td>' + pill("r", "High bounce") + '</td></tr>';
-      }).join(""), null, "Campaigns bouncing over the safe limit — pause or clean the list before they burn the sending domains.");
+  // ---- High bounce-rate (old flow "highbounce"): Domain·Sent·Bounces·Bounce rate·Reply rate·Action
+  function mgrHighb() {
+    var rows = highbList(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ No domains over ' + BOUNCE_HOT + '% bounce in the last ' + S.win + ' days.</div>';
+    var body = rows.map(function (d) {
+      var bn = (typeof d.bounced === "number") ? d.bounced : Math.round((d.bounce_rate || 0) * (d.sent || 0) / 100);
+      return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+        '<td class="num">' + comma(d.sent) + '</td>' +
+        '<td class="num" style="font-weight:700">' + comma(bn) + '</td>' +
+        '<td class="num t-r">' + (d.bounce_rate).toFixed(2) + '%</td>' +
+        '<td class="num">' + (d.reply_rate || 0).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
+        '<td style="text-align:right">' + actBtn("bounce-pause", d.domain, null, "Pause", true) + '</td></tr>';
+    }).join("");
+    return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Bounces</th><th class="num">Bounce rate</th><th class="num">Reply rate</th><th style="text-align:right">Action</th>', body, null,
+      rows.length + ' domain(s) over ' + BOUNCE_HOT + '% bounce · last ' + S.win + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
+  }
+  // ---- In warm-up (old flow "inwarmup", domain-grouped): Domain·Mailboxes·Due back·Status·Action(Restore)
+  function mgrInWarmup() {
+    var rows = bundleView("inwarmup"); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">None right now — nothing is in warm-up.</div>';
+    var gr = groupByDomain(rows);
+    var body = gr.order.map(function (dom) {
+      var rs = gr.g[dom], md = rs.some(function (r) { return r.maildoso; });
+      var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
+      var dueTs = due.length ? Math.min.apply(null, due) : null;
+      return '<tr><td class="mono">' + esc(dom) + ' <span class="t-mut">· ' + rs.length + ' mbx</span>' + (md ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+        '<td class="num">' + rs.length + '</td>' +
+        '<td>' + dueChip(dueTs) + '</td>' +
+        '<td>' + pill("n", "warming — sends held") + '</td>' +
+        '<td style="text-align:right">' + actBtn("reactivate", dom, null, "Restore", dueTs != null && dueTs <= Date.now()) + '</td></tr>';
+    }).join("");
+    return tableWrap('<th>Domain / mailbox</th><th class="num">Mailboxes</th><th>Due back</th><th>Status</th><th style="text-align:right">Action</th>', body, null,
+      gr.order.length + ' domain(s) · ' + rows.length + ' mailbox(es) warming. None are sending while they warm (normal). Restore returns a whole domain to sending.');
+  }
+  // ---- Not warming (old flow "notwarming"): Domain / mailbox·Batch·Warmup·Action(Re-enable)
+  function mgrWarmupOff() {
+    var rows = bundleView("warmupoff"); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">None right now — every mailbox is warming as expected.</div>';
+    var shown = rows.slice(0, MGR_CAP);
+    var body = shown.map(function (m) {
+      var batch = (Array.isArray(m.tags) && m.tags.length) ? esc(m.tags[0]) : '<span class="t-mut">—</span>';
+      return '<tr><td><div>' + esc(m.email || "—") + (m.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</div><div class="mono t-mut" style="font-size:11px">' + esc(m.domain || "") + '</div></td>' +
+        '<td>' + batch + '</td>' +
+        '<td>' + pill("a", m.warmup_status || "OFF") + '</td>' +
+        '<td style="text-align:right">' + actBtn("reenable", null, mgrRowKey(m), "Re-enable", false) + '</td></tr>';
+    }).join("");
+    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + " mailboxes. " : "") +
+      "Warm-up is OFF on these mailboxes. Re-enable turns warm-up back on for that box. Maildoso boxes warm on Instantly.";
+    return tableWrap('<th>Domain / mailbox</th><th>Batch</th><th>Warmup</th><th style="text-align:right">Action</th>', body, null, foot);
+  }
+  function mgrRowKey(m) { return String(m.id != null ? m.id : m.email); } // same key the old tab uses
+  // ---- Needs reconnect (old flow "reconnect", flat rows): Mailbox·Failure reason·Action(Reconnect)
+  function mgrReconnect() {
+    var rows = bundleView("reconnect"); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ Nothing needs attention — every mailbox is connected.</div>';
+    var body = rows.slice(0, MGR_CAP).map(function (m) {
+      return '<tr><td><div>' + esc(m.email || "—") + (m.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + (m.workspace ? ' <span class="pill n">' + esc(m.workspace) + '</span>' : '') + '</div><div class="mono t-mut" style="font-size:11px">' + esc(m.domain || "") + '</div></td>' +
+        '<td><span class="pill r">' + esc(m.reason_category || "conn fail") + '</span> <span class="t-mut" style="font-size:12px" title="' + esc(m.reason || "") + '">' + esc(shortReason(m.reason)) + '</span></td>' +
+        '<td style="text-align:right">' + actBtn("reconnect", null, mgrRowKey(m), "Reconnect", false) + '</td></tr>';
+    }).join("");
+    return tableWrap('<th>Mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>', body, null,
+      rows.length + " mailbox(es) stopped authenticating — silently sending nothing until reconnected.");
   }
   function renderMgrBody() {
-    var host = el("hub-mgr-body"), A = S.deliv, html;
+    var host = el("hub-mgr-body"), html;
     if (mgrActive === "tags") { host.innerHTML = mgrTags(); return; }
-    if (mgrActive === "highb") { host.innerHTML = mgrHighb(A); return; }
-    var builder = mgrActive === "lowrep" ? mgrLowRep : mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrReconnect;
+    var builder = mgrActive === "lowrep" ? mgrFloor : mgrActive === "highb" ? mgrHighb : mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrReconnect;
     try { html = builder(); } catch (e) { html = null; }
-    if (html == null) { host.innerHTML = '<div class="skel" style="padding:18px">' + (S.bundleLoading ? "Loading mailboxes…" : "Sample view — live rows load from the audit bundle.") + '</div>'; return; }
+    if (html == null) { host.innerHTML = '<div class="skel" style="padding:18px">' + (S.bundleLoading ? "Loading manager data…" : "Loading…") + '</div>'; return; }
     host.innerHTML = html;
   }
 
   /* ---------- filter chips ---------- */
   function renderChips() {
     var seen = {}, names = [], labels = S.labels || {}, vol = S.vol || {};
-    function add(c) { if (c && !/^(all|__)/i.test(c) && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
+    function add(c) { if (c && !/^(all|__)/i.test(c) && !isDemoClient(c) && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
     Object.keys(labels).forEach(add);
     Object.keys(vol).forEach(add);
     add(S.client);
@@ -617,23 +618,39 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     t.style.opacity = "1";
     clearTimeout(toast._t); toast._t = setTimeout(function () { t.style.transition = "opacity .4s"; t.style.opacity = "0"; }, 3200);
   }
+  // Action map — the SAME endpoints the old deliverability tab fires.
+  // domain-scoped: warmup-job pause/resume + bounce-pause/resume.
+  // id-scoped: reconnect + reenable (per mailbox). All are live-fleet writes.
+  var ACTIONS = {
+    warmup:        { verb: "Warm up domain", scope: "domain", run: function (d) { return warmupJob("pause", d); }, note: "Every mailbox on the domain stops sending and starts warming. Reversible with Reactivate." },
+    reactivate:    { verb: "Restore to sending", scope: "domain", run: function (d) { return warmupJob("resume", d); }, note: "Its mailboxes return to sending at their saved caps." },
+    "bounce-pause":  { verb: "Pause (high bounce)", scope: "domain", run: function (d) { return delivPost("bounce-pause?domain=" + encodeURIComponent(d)); }, note: "Sets every mailbox on the domain to 0/day. Saved caps restore on Resume." },
+    "bounce-resume": { verb: "Resume sending", scope: "domain", run: function (d) { return delivPost("bounce-resume?domain=" + encodeURIComponent(d)); }, note: "Restores the caps saved when the domain was paused." },
+    reconnect:     { verb: "Reconnect mailbox", scope: "id", run: function (id) { return delivPost("reconnect?id=" + encodeURIComponent(id)); }, note: "Re-authenticates this mailbox so it can send again." },
+    reenable:      { verb: "Re-enable warm-up", scope: "id", run: function (id) { return delivPost("reenable?id=" + encodeURIComponent(id)); }, note: "Turns warm-up back on for this mailbox." }
+  };
+  function warmupJob(op, domain) {
+    return fetch("/api/warmup-job", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: op, domains: [domain] }) })
+      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); });
+  }
+  function delivPost(path) { // liveAction path → POST /api/deliverability/<path>
+    return fetch("/api/deliverability/" + path, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" } })
+      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); });
+  }
   el("hub-mgr-body").addEventListener("click", function (e) {
     var b = e.target.closest("[data-act]"); if (!b) return;
-    var act = b.getAttribute("data-act"), domain = b.getAttribute("data-domain");
-    if ((act !== "warmup" && act !== "restore") || !domain) return;
-    var op = act === "warmup" ? "pause" : "resume";
-    var verb = act === "warmup" ? "Send to warm-up" : "Restore to sending";
-    if (!window.confirm(verb + " — " + domain + "?\n\n" + (op === "pause"
-      ? "All its mailboxes stop sending and start warming. Reversible with Restore."
-      : "Its mailboxes return to sending at their saved caps."))) return;
+    var act = b.getAttribute("data-act"), spec = ACTIONS[act];
+    if (!spec) return;
+    var target = spec.scope === "domain" ? b.getAttribute("data-domain") : b.getAttribute("data-id");
+    if (!target) return;
+    var label = spec.scope === "domain" ? target : (b.closest("tr") ? b.closest("tr").querySelector("td div").textContent.trim() : target);
+    if (!window.confirm(spec.verb + " — " + label + "?\n\n" + spec.note)) return;
     b.disabled = true; var old = b.textContent; b.textContent = "Working…";
-    fetch("/api/warmup-job", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ op: op, domains: [domain] }) })
-      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); })
+    spec.run(target)
       .then(function (j) {
-        if (j && j.ok === false) { toast((j.message || "Action failed") + "", "err"); b.disabled = false; b.textContent = old; return; }
-        toast(verb + " done — " + domain, "ok");
-        bundleTries = 0; loadBundle(); // refresh views so the row moves
+        if (j && j.ok === false) { toast(spec.verb + " failed — " + (j.message || "see logs"), "err"); b.disabled = false; b.textContent = old; return; }
+        toast(spec.verb + " done — " + label, "ok");
+        bundleTries = 0; loadBundle(); renderMgrTabs();
       })
       .catch(function (err) { toast("Failed — " + err, "err"); b.disabled = false; b.textContent = old; });
   });
