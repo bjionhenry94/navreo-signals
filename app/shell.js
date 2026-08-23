@@ -383,6 +383,18 @@ function setupChartTooltip(wrap) {
       if (n != null) return `<b>${live ? "Waking up" : "Woke up"} ${num(n)} inboxes</b>${doms}`;
       return `<b>${live ? "Waking up inboxes" : "Woke up inboxes"}</b>${doms}`;
     }
+    if (k === "bounce_pause") {
+      if (st === "interrupted" || st === "failed") return `<b>Bounce pause stopped early</b>`;
+      const n = c.paused;
+      if (n != null) return `<b>${live ? "Pausing" : "Paused"} ${num(n)} inboxes</b> <span class="sr-soft">(high bounce)</span>`;
+      return `<b>${live ? "Pausing inboxes" : "Paused inboxes"}</b> <span class="sr-soft">(high bounce)</span>`;
+    }
+    if (k === "bounce_resume") {
+      if (st === "interrupted" || st === "failed") return `<b>Resume stopped early</b>`;
+      const n = c.resumed;
+      if (n != null) return `<b>${live ? "Resuming" : "Resumed"} ${num(n)} inboxes</b>`;
+      return `<b>${live ? "Resuming inboxes" : "Resumed inboxes"}</b>`;
+    }
     if (k.includes("verify")) {
       if (st === "interrupted" || st === "failed") return `<b>Email check stopped early</b>`;
       if (live) return `<b>Checking emails</b>`;
@@ -924,8 +936,9 @@ function setupChartTooltip(wrap) {
    reproduces the EXACT number the Analytics tab shows (user ruling
    2026-08-23: "match Analytics"). The pipeline is not a plain Σsent÷Σcap —
    it mirrors renderTrend(): align cap onto the sent-day axis, slice the
-   window, DROP WEEKENDS (Analytics' default), gap-fill low-send and zero-cap
-   days (_fill), then capUsed = Σ sentBars ÷ Σ capBars over days where cap>0.
+   window, optionally drop weekends (Analytics' DEFAULT keeps them —
+   state.hideWeekends=false), gap-fill low-send and zero-cap days (_fill),
+   then capUsed = Σ sentBars ÷ Σ capBars over days where cap>0.
    Keep this the single definition so the two surfaces can never drift.
    See capacity-parity-align.
    =================================================================== */

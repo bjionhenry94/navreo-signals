@@ -152,9 +152,9 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   function comma(x) { return (Number(x) || 0).toLocaleString("en-US"); }
   function pct(part, whole) { whole = Number(whole) || 0; if (!whole) return null; return (100 * (Number(part) || 0) / whole); }
   function fx(v, d) { return v == null ? "—" : (Number(v).toFixed(d == null ? 1 : d) + "%"); }
-  function replyTone(v) { return v == null ? "mut" : v >= 1.1 ? "g1" : v >= 0.8 ? "a1" : "r1"; }
+  function replyTone(v) { return v == null ? "mut" : v >= 3 ? "g1" : v >= 1.5 ? "g2" : v >= 0.8 ? "a1" : "r1"; }
   function bounceTone(v) { return v == null ? "mut" : v < 2 ? "g1" : v < 3 ? "a1" : "r1"; }
-  function capTone(v) { return v == null ? "mut" : v > 100 ? "r1" : v >= 90 ? "g1" : v >= 70 ? "a1" : "r1"; }
+  function capTone(v) { return v == null ? "mut" : v > 100 ? "r1" : v >= 70 ? "g1" : v >= 25 ? "g2" : "a1"; }
   function warmTone(v) { return v == null ? "mut" : v <= 15 ? "g1" : v <= 30 ? "g2" : v <= 50 ? "a1" : "r1"; }
   function tclass(tone) { return tone === "g1" ? "t-g" : tone === "g2" ? "t-g" : tone === "a1" ? "t-a" : tone === "r1" ? "t-r" : "t-mut"; }
 
@@ -193,24 +193,28 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       var e = w[name] || {};
       var reply = pct(e.replied, e.sent), bounce = pct(e.bounced, e.sent);
       var pw = perClientWarmPct(name, labels);          // % of the client's mailboxes actively warming (inwarmup only)
+      var wcap = warmCapFor(name, labels);              // estimated sends/day IN WARM-UP (being repaired), by provider
       var capDay = capFor(name, labels);                 // current per-day cap — ONLY for the "N/day cap" label text
       // Capacity-used % via the ONE shared helper (NavreoCapacity in shell.js),
-      // a faithful port of the Analytics chart pipeline (align → window → drop
-      // weekends → gap-fill → Σsent÷Σcap). Reproduces the EXACT number the
-      // Analytics tab shows, per the 2026-08-23 "match Analytics" ruling.
-      // See capacity-parity-align.
+      // a faithful port of the Analytics chart pipeline (align → window →
+      // gap-fill → Σsent÷Σcap). Reproduces the EXACT number the Analytics tab
+      // shows, per the 2026-08-23 "match Analytics" ruling. hideWeekends:false
+      // mirrors the Analytics DEFAULT (state.hideWeekends=false — weekends kept);
+      // verified byte-exact e.g. Asteri 21,677/41,884 = 52%. See capacity-parity-align.
       var lc = String(name).toLowerCase();
       var wsKey = (lc === "asteri" || lc === "krg" || lc === "grout") ? lc : null;
       var sSer = (S.cw && S.cw.series && S.cw.series[name]) || null;
       var capUsed = (window.NavreoCapacity && sSer && sSer.sent && S.cw.days && S.cap)
         ? NavreoCapacity.usedPct({
             sent: sSer.sent, sentDays: S.cw.days, cap: S.cap,
-            name: name, wsKey: wsKey, days: winN, hideWeekends: true })
+            name: name, wsKey: wsKey, days: winN, hideWeekends: false })
         : null;
       return {
         name: prettyClient(name, labels), dom: null, inbox: pw ? pw.total : null,
         reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
-        warm: pw ? pw.warmPct : null, warmKnown: !!pw, cap: capUsed, capDay: capDay, bl: null
+        warm: pw ? pw.warmPct : null, warmKnown: !!pw,
+        warmCap: wcap ? wcap.capacityPerDay : null, warmBoxes: wcap ? wcap.boxes : null, warmCapKnown: !!wcap,
+        cap: capUsed, capDay: capDay, bl: null
       };
     });
     rows.sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
@@ -380,23 +384,20 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   }
   function renderHeat() {
     var rows = clientRows();
-    // Lazy-load, don't pre-paint the sample. Until /api/client-windows resolves,
-    // show a skeleton; if it resolved with no live rows, say so honestly. Never
-    // render REP_CLIENTS' fabricated numbers — a sample fleet coloured as if real
-    // reads as genuine fleet health. (Was: pre-state painted REP_CLIENTS.)
-    if (USING_REP.heat) {
-      el("hub-heat").innerHTML = S.cwDone
-        ? '<div class="skel" style="padding:16px 4px">No live per-client rows yet for this window.</div>'
-        : '<div class="skel">Loading fleet…</div>';
-      return;
-    }
     var body = rows.map(function (r) {
       var meta = (r.dom != null ? r.dom + " dom" : "") + (r.inbox != null ? " · " + r.inbox + " inbox" : "");
       var tds = '<td class="n">' + esc(r.name) + (meta ? '<small>' + meta.replace(/^ · /, "") + '</small>' : '') + '</td>';
       tds += heatCell(replyTone(r.reply), r.reply == null ? "—" : fx(r.reply), r.reply == null ? "" : (r.reply >= 3 ? "strong" : r.reply >= 1.5 ? "ok" : "soft"));
       tds += heatCell(bounceTone(r.bounce), r.bounce == null ? "—" : fx(r.bounce), r.bounce == null ? "" : (r.bounce < 2 ? "low" : r.bounce < 3 ? "watch" : "high"));
-      var warmSub = r.warm == null ? (r.warmKnown === false ? "own-ws" : "") : (r.warm <= 15 ? "mostly live" : "ramping");
-      tds += heatCell(warmTone(r.warm), r.warm == null ? "—" : r.warm + "%", warmSub);
+      // In warm-up = estimated sends/day currently being "repaired": Σ per
+      // warming box of its provider default (Outlook 2, Gmail 20, SMTP 15),
+      // from /api/warmup-capacity. Shared-fleet clients (not their own
+      // workspace) can't be split out of Navreo's pool → "—/shared".
+      var warmVal = r.warmCap == null ? "—" : n(r.warmCap) + "/day";
+      var warmSub = r.warmCap == null ? (r.warmCapKnown === false ? "shared" : "")
+        : (r.warmBoxes + " box" + (r.warmBoxes === 1 ? "" : "es") + " warming");
+      var warmTn = r.warmCap == null ? "mut" : (r.warmCap > 0 ? "g2" : "mut");
+      tds += heatCell(warmTn, warmVal, warmSub);
       tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%", r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day cap" : "used"));
       var blTone = r.bl == null ? "mut" : r.bl === 0 ? "g1" : "r1";
       tds += heatCell(blTone, r.bl == null ? "—" : (r.bl === 0 ? "Clean" : r.bl + " flagged"), r.bl == null ? "" : (r.bl === 0 ? "0 flagged" : "paused"));
@@ -404,7 +405,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     }).join("");
     var note = USING_REP.heat
       ? 'Showing sample fleet — live per-client rows load from client-windows.'
-      : 'Reply &amp; bounce are per client. In-warm-up = % of the client’s mailboxes actively warming (own-workspace clients not in the shared-fleet map show “—”). Capacity used = daily sends ÷ real daily send capacity (/api/fleet-capacity, the same source as Analytics).';
+      : 'Reply &amp; bounce are per client. In-warm-up = estimated sends/day currently being repaired — each warming mailbox counted at its provider default (Outlook 2, Gmail 20, SMTP 15), from the Smartlead mirror (/api/warmup-capacity). Shared-fleet clients show “—” (their boxes sit in Navreo’s pool). Capacity used = daily sends ÷ real daily send capacity (/api/fleet-capacity, the same source as Analytics).';
     el("hub-heat").innerHTML =
       '<div class="heatwrap"><table class="heat"><tr><th class="n">Client</th><th>Reply rate</th><th>Bounce</th><th>In warm-up</th><th>Capacity used</th><th>Blacklist</th></tr>' + body + '</table></div>' +
       '<div class="heat-legend">' +
@@ -689,11 +690,11 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   // domain-scoped: warmup-job pause/resume + bounce-pause/resume.
   // id-scoped: reconnect + reenable (per mailbox). All are live-fleet writes.
   var ACTIONS = {
-    warmup:        { verb: "Warm up domain", scope: "domain", run: function (d) { return warmupJob("pause", d); }, note: "Every mailbox on the domain stops sending and starts warming. Reversible with Reactivate." },
-    reactivate:    { verb: "Restore to sending", scope: "domain", run: function (d) { return warmupJob("resume", d); }, note: "Its mailboxes return to sending at their saved caps." },
-    "bounce-pause":  { verb: "Pause (high bounce)", scope: "domain", run: function (d) { return delivPost("bounce-pause?domain=" + encodeURIComponent(d)); }, note: "Sets every mailbox on the domain to 0/day. Saved caps restore on Resume." },
-    "bounce-resume": { verb: "Resume sending", scope: "domain", run: function (d) { return delivPost("bounce-resume?domain=" + encodeURIComponent(d)); }, note: "Restores the caps saved when the domain was paused." },
-    reconnect:     { verb: "Reconnect mailbox", scope: "id", run: function (id) { return delivPost("reconnect?id=" + encodeURIComponent(id)); }, note: "Re-authenticates this mailbox so it can send again." },
+    warmup:        { verb: "Warm up domain", scope: "domain", job: true, run: function (d) { return warmupJob("pause", d); }, note: "Every mailbox on the domain stops sending and starts warming. Reversible with Reactivate." },
+    reactivate:    { verb: "Restore to sending", scope: "domain", job: true, run: function (d) { return warmupJob("resume", d); }, note: "Its mailboxes return to sending at their saved caps." },
+    "bounce-pause":  { verb: "Pause (high bounce)", scope: "domain", job: true, run: function (d) { return delivPost("bounce-pause?domain=" + encodeURIComponent(d)); }, note: "Sets every mailbox on the domain to 0/day. Saved caps restore on Resume." },
+    "bounce-resume": { verb: "Resume sending", scope: "domain", job: true, run: function (d) { return delivPost("bounce-resume?domain=" + encodeURIComponent(d)); }, note: "Restores the caps saved when the domain was paused." },
+    reconnect:     { verb: "Reconnect mailbox", scope: "id", job: true, run: function (id) { return delivPost("reconnect?id=" + encodeURIComponent(id)); }, note: "Re-authenticates this mailbox so it can send again." },
     reenable:      { verb: "Re-enable warm-up", scope: "id", run: function (id) { return delivPost("reenable?id=" + encodeURIComponent(id)); }, note: "Turns warm-up back on for this mailbox." }
   };
   function warmupJob(op, domain) {
@@ -716,7 +717,14 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     spec.run(target)
       .then(function (j) {
         if (j && j.ok === false) { toast(spec.verb + " failed — " + (j.message || "see logs"), "err"); b.disabled = false; b.textContent = old; return; }
-        toast(spec.verb + " done — " + label, "ok");
+        if (spec.job) {
+          // Background job — hand it to the shared Tasks panel (which polls
+          // /api/jobs and reconciles the real outcome) and point the user there.
+          if (window.NavreoJobs && window.NavreoJobs.ping) window.NavreoJobs.ping();
+          toast(spec.verb + " — " + label + " queued · track it in the Tasks panel", "ok");
+        } else {
+          toast(spec.verb + " done — " + label, "ok");
+        }
         bundleTries = 0; loadBundle(); renderMgrTabs();
       })
       .catch(function (err) { toast("Failed — " + err, "err"); b.disabled = false; b.textContent = old; });
@@ -736,11 +744,10 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     return fetch("/api/client-windows", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (cw) {
-        S.cwDone = true;
         if (!cw) return;
         S.cw = cw; S.labels = cw.ws_labels || {}; S.vol = (cw.windows && cw.windows["30"]) || {};
       })
-      .catch(function () { S.cwDone = true; });
+      .catch(function () {});
   }
   function loadTags() {
     return fetch("/api/tag-performance", { credentials: "same-origin" })
