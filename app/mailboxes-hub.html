@@ -516,7 +516,53 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     return r.filter(function (d) { return d.bounce_rate != null && d.bounce_rate >= BOUNCE_HOT; })
       .sort(function (a, b) { return b.bounce_rate - a.bounce_rate; }); }
   function groupByDomain(rows) { var g = {}, order = []; rows.forEach(function (r) { var d = r.domain || "—"; if (!g[d]) { g[d] = []; order.push(d); } g[d].push(r); }); return { g: g, order: order }; }
-  function restingSet() { var s = {}; ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; }); return s; }
+  // Every domain that is genuinely resting — the union of the Smartlead
+  // "inwarmup" + "rested" views AND the rest LEDGER (bundle.restDue). The
+  // ledger is the source of truth for a paused domain: Smartlead often never
+  // classifies a warm-up-job-paused domain as "inwarmup", so reading that view
+  // alone leaked resting domains onto "Below reply floor" and hid them from the
+  // Resting tab. Backend deletes a ledger row on restore, so restDue stays true.
+  function restingSet() {
+    var s = {};
+    ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
+    ((bundleView("rested")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
+    var rd = S.bundle && S.bundle.restDue;
+    if (rd) Object.keys(rd).forEach(function (d) { if (d) s[d] = true; });
+    return s;
+  }
+  // Canonical resting domain list — shared by the Resting tab and its badge so
+  // both count the same thing. Returns [{dom, rs, dueTs}] sorted soonest-due
+  // first, or null while the views are still loading. Merges inwarmup+rested
+  // mailbox rows (deduped), drops high-bounce-paused domains (they live in the
+  // High bounce-rate tab only), and synthesizes a domain-only entry for any
+  // ledger domain with no held-box rows in either view.
+  function restingDomainEntries() {
+    var iw = bundleView("inwarmup"), rv = bundleView("rested");
+    if (iw == null && rv == null) return null;
+    var seen = {}, rows = [];
+    (iw || []).concat(rv || []).forEach(function (m) {
+      var k = String(m.email || m.id || (m.domain + "#" + rows.length)).toLowerCase();
+      if (seen[k]) return; seen[k] = 1; rows.push(m);
+    });
+    var hb = highbList() || []; var hbSet = {}; hb.forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
+    rows = rows.filter(function (m) { return !hbSet[m.domain]; });
+    var gr = groupByDomain(rows);
+    var order = gr.order.slice(), inList = {};
+    order.forEach(function (d) { inList[d] = true; });
+    var rd = (S.bundle && S.bundle.restDue) || {};
+    Object.keys(rd).forEach(function (d) { if (d && !inList[d] && !hbSet[d]) { order.push(d); gr.g[d] = gr.g[d] || []; } });
+    var entries = order.map(function (dom) {
+      var rs = gr.g[dom] || [];
+      var dueTs = rd[dom] || null;
+      if (dueTs == null) {
+        var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
+        dueTs = due.length ? Math.min.apply(null, due) : (Date.now() + 7 * 864e5);
+      }
+      return { dom: dom, rs: rs, dueTs: dueTs };
+    });
+    entries.sort(function (a, b) { return a.dueTs - b.dueTs; });
+    return entries;
+  }
   function dueChip(ts) { if (!ts) return '<span class="t-mut">—</span>'; var left = ts - Date.now();
     if (left <= 0) return '<span class="pill g">ready now</span>';
     var dl = Math.ceil(left / 864e5); return '<span class="pill ' + (dl <= 2 ? "a" : "n") + '">due in ' + dl + 'd</span>'; }
@@ -526,15 +572,12 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     if (key === "tags") return null;
     if (key === "lowrep") { var f = floorList(); return f ? f.length : null; }
     if (key === "highb") { var h = highbList(); return h ? h.length : null; }
+    // Resting is a domain-grouped view (many mailboxes per domain, plus
+    // ledger-only domains), so its badge counts DISTINCT resting domains via
+    // the same canonical list the table renders — never just inwarmup rows.
+    if (key === "inwarmup") { var e = restingDomainEntries(); return e ? e.length : null; }
     var rows = bundleView(key);
     if (!rows) return null;
-    // In warm-up is a domain-grouped view (many mailboxes per domain), so its
-    // badge counts DISTINCT domains, not mailbox rows — matches what the table shows.
-    if (key === "inwarmup") {
-      // Mirror mgrInWarmup: excludes High bounce-rate paused domains so badge = table.
-      var _hbc = highbList() || [], _hbcSet = {}; _hbc.forEach(function (d) { if (d.domain) _hbcSet[d.domain] = true; });
-      return groupByDomain(rows.filter(function (m) { return !_hbcSet[m.domain]; })).order.length;
-    }
     return rows.length;
   }
   function renderMgrTabs() {
@@ -599,42 +642,21 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   }
   // ---- In warm-up (old flow "inwarmup", domain-grouped): Domain·Mailboxes·Due back·Status·Action(Restore)
   function mgrInWarmup() {
-    var rows = bundleView("inwarmup"); if (rows == null) return null;
-    // A domain paused from the High bounce-rate tab has every mailbox zeroed,
-    // so it lands in this cap-0 view too — but it is STOPPED for bouncing, not
-    // warming. Show it only in the High bounce-rate tab, never here, so the
-    // same domain never appears in two tabs at once.
-    var hb = highbList() || []; var hbSet = {}; hb.forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
-    rows = rows.filter(function (m) { return !hbSet[m.domain]; });
-    if (!rows.length) return '<div class="mgr-empty">None right now — nothing is resting.</div>';
-    var gr = groupByDomain(rows);
-    var doms = gr.order.map(function (dom) {
-      var rs = gr.g[dom];
-      // Due-back source of truth = the rest LEDGER (bundle.restDue: domain →
-      // first-seen-warming + 7d), same as the old deliverability manager — it
-      // is what gives each domain its own countdown. Row restedAt is a
-      // fallback (mock mode carries it); last resort is a fresh 7-day window
-      // so the column never shows "—" (client-mirror rows the ledger hasn't
-      // stamped yet — accurate to one sweep).
-      var dueTs = (S.bundle && S.bundle.restDue && S.bundle.restDue[dom]) || null;
-      if (dueTs == null) {
-        var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
-        dueTs = due.length ? Math.min.apply(null, due) : (Date.now() + 7 * 864e5);
-      }
-      return { dom: dom, rs: rs, dueTs: dueTs };
-    });
-    // Always sorted by due date, soonest first — ready-now domains sit at the top.
-    doms.sort(function (a, b) { return a.dueTs - b.dueTs; });
+    var doms = restingDomainEntries(); if (doms == null) return null;
+    if (!doms.length) return '<div class="mgr-empty">None right now — nothing is resting.</div>';
+    var mbxTotal = 0;
     var body = doms.map(function (e) {
       var dom = e.dom, rs = e.rs, dueTs = e.dueTs, md = rs.some(function (r) { return r.maildoso; });
-      return '<tr><td class="mono">' + esc(dom) + ' <span class="t-mut">· ' + rs.length + ' mbx</span>' + (md ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
-        '<td class="num">' + rs.length + '</td>' +
+      mbxTotal += rs.length;
+      var mbx = rs.length ? (' <span class="t-mut">· ' + rs.length + ' mbx</span>') : '';
+      return '<tr><td class="mono">' + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+        '<td class="num">' + (rs.length || '—') + '</td>' +
         '<td>' + dueChip(dueTs) + '</td>' +
         '<td>' + pill("n", "warming — sends held") + '</td>' +
         '<td style="text-align:right">' + actBtn("reactivate", dom, null, "Restore", dueTs != null && dueTs <= Date.now()) + '</td></tr>';
     }).join("");
     return tableWrap('<th>Domain / mailbox</th><th class="num">Mailboxes</th><th>Due back</th><th>Status</th><th style="text-align:right">Action</th>', body, null,
-      gr.order.length + ' domain(s) · ' + rows.length + ' mailbox(es) warming. None are sending while they warm (normal). Restore returns a whole domain to sending.');
+      doms.length + ' domain(s) resting' + (mbxTotal ? ' · ' + mbxTotal + ' mailbox(es)' : '') + '. None are sending while they warm (normal). Restore returns a whole domain to sending.');
   }
   // ---- Not warming (old flow "notwarming"): Domain / mailbox·Batch·Warmup·Action(Re-enable)
   function mgrWarmupOff() {
