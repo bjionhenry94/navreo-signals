@@ -1507,20 +1507,28 @@ async function submitInterviewAnswers(iv, onDone) {
   if (!n) { showError("Answer at least one question - or hit skip."); return; }
   const body = { agent_id: selectedAgentId, action: "answers", answers };
   if (SHARE_MODE) body.share = SHARE_TOKEN;
-  const btn = document.getElementById("ivSubmitBtn");
-  const restore = btn ? busyBtn(btn, "Teaching your AI…") : null;
-  pendingFeedbackSync++;
-  const res = await fetchJson("/api/setter/training/interview", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  });
-  pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
-  if (restore) restore();
-  if (!res.ok) { showError("Couldn't save your answers: " + res.error); return; }
-  clearError();
+  // OPTIMISTIC ADVANCE (owner report 2026-08-22: submit froze on "Teaching
+  // your AI..." when the save collided with the share-time pre-build). The
+  // answers are already captured, and the scenarios are pre-built, so take the
+  // user straight to them and save + teach in the BACKGROUND - the UI must
+  // never block on a slow POST. The merge only affects FUTURE drafts, so
+  // running it async costs nothing here.
   iv.answers = answers;
-  bumpLastFeedbackAt((res.data && res.data.at) || "");
-  LEARNED_CHIP = { kind: "interview", text: "we'll use these answers in every reply from now on", pending: false };
+  LEARNED_CHIP = { kind: "interview", text: "we'll use these answers in every reply from now on", pending: true };
+  clearError();
   if (onDone) onDone();
+  pendingFeedbackSync++;
+  fetchJson("/api/setter/training/interview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }).then((res) => {
+    pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
+    if (res && res.ok) {
+      bumpLastFeedbackAt((res.data && res.data.at) || "");
+      if (LEARNED_CHIP && LEARNED_CHIP.kind === "interview") LEARNED_CHIP.pending = false;
+    } else {
+      showError("Couldn't save those answers - " + ((res && res.error) || "please retry") + " (your scenarios are unaffected).");
+    }
+  }).catch(() => { pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1); });
 }
 
 /* Round-done variant: fetch once per round, then MOUNT from cache on every
