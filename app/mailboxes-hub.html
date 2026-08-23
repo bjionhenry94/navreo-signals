@@ -188,15 +188,18 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var names = Object.keys(w).filter(function (k) { return k !== "__all" && k !== "__navreo_ws" && k.indexOf("__") !== 0 && !isDemoClient(k); });
     if (!names.length) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
     USING_REP.heat = false;
-    var fleetWarm = fleetWarmPct(), fleetLive = fleetLivePct();
+    var winN = Number(win) || 30;
     var rows = names.map(function (name) {
       var e = w[name] || {};
       var reply = pct(e.replied, e.sent), bounce = pct(e.bounced, e.sent);
-      var pc = perClientMbx(name, labels);  // real per-client warm/live from the mailbox→client map ∩ bundle views
+      var pw = perClientWarmPct(name, labels);          // % of the client's mailboxes actively warming (inwarmup only)
+      var capDay = capFor(name, labels);                 // real daily send capacity from /api/fleet-capacity (analytics' source)
+      var sentDay = (e.sent || 0) / winN;
+      var capUsed = (capDay != null && capDay > 0) ? Math.round(100 * sentDay / capDay) : null;
       return {
-        name: prettyClient(name, labels), dom: null, inbox: pc ? pc.total : null,
+        name: prettyClient(name, labels), dom: null, inbox: pw ? pw.total : null,
         reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
-        warm: pc ? pc.warmPct : fleetWarm, cap: pc ? pc.livePct : fleetLive, bl: null, perClient: !!pc
+        warm: pw ? pw.warmPct : null, warmKnown: !!pw, cap: capUsed, capDay: capDay, bl: null
       };
     });
     rows.sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
@@ -206,41 +209,37 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     for (var lbl in labels) { if (labels[lbl] === key) return lbl; }
     return key.charAt(0).toUpperCase() + key.slice(1);
   }
-  function fleetWarmPct() {
-    var A = S.deliv; if (!A || !A.inboxes) return null;
-    var resting = (Array.isArray(A.warmupResting) ? A.warmupResting.length : (A.warmupResting || 0));
-    var due = (Array.isArray(A.warmupDue) ? A.warmupDue.length : (A.warmupDue || 0));
-    return Math.round(100 * (resting + due) / Math.max(1, A.inboxes));
+  // Real per-day send capacity for a client — the SAME /api/fleet-capacity the
+  // analytics page uses: client_caps for shared-fleet clients, capacity[ws]
+  // latest for own-workspace clients (Asteri/KRG/Grout). null until it lands.
+  function capFor(name, labels) {
+    var cap = S.cap; if (!cap) return null;
+    var cc = cap.client_caps || {};
+    if (cc[name] != null) return cc[name];
+    for (var k in cc) { if (k.toLowerCase() === String(name).toLowerCase()) return cc[k]; }
+    var ws = labels[name] || String(name).toLowerCase();
+    var series = cap.capacity && cap.capacity[ws];
+    if (Array.isArray(series)) { for (var i = series.length - 1; i >= 0; i--) if (series[i] != null) return series[i]; }
+    return null;
   }
-  function fleetLivePct() { // % of the fleet actively sending (not warming/off/failed)
-    var A = S.deliv; if (!A || !A.inboxes) return null;
-    var warm = (Array.isArray(A.warmupResting) ? A.warmupResting.length : (A.warmupResting || 0)) + (Array.isArray(A.warmupDue) ? A.warmupDue.length : (A.warmupDue || 0));
-    var off = A.warmupConfig ? arrLen(A.warmupConfig.notWarming) : 0;
-    var recon = Number(A.blocked) || 0;
-    return Math.max(0, Math.round(100 * (A.inboxes - warm - off - recon) / A.inboxes));
-  }
-  // Emails warming / needing reconnect, from the same bundle views the manager lists.
-  function warmEmailSet() {
+  // Emails ACTIVELY WARMING — the inwarmup view ONLY (warm-up-OFF boxes are not
+  // warming; counting them here was the bug that made every client read ~34%).
+  function inWarmEmailSet() {
     if (!S.bundle) return null; var s = {};
-    ["inwarmup", "warmupoff"].forEach(function (v) { ((bundleView(v)) || []).forEach(function (r) { if (r.email) s[String(r.email).toLowerCase()] = 1; }); });
+    ((bundleView("inwarmup")) || []).forEach(function (r) { if (r.email) s[String(r.email).toLowerCase()] = 1; });
     return s;
   }
-  function reconnEmailSet() {
-    if (!S.bundle) return null; var s = {};
-    ((bundleView("reconnect")) || []).forEach(function (r) { if (r.email) s[String(r.email).toLowerCase()] = 1; }); return s;
-  }
-  // Per-client mailbox split: mailbox→client map ∩ warming/reconnect sets.
-  // null when the map hasn't attributed this client → caller falls to fleet %.
-  function perClientMbx(rawName, labels) {
+  // % of a client's mailboxes currently warming, via mailbox→client map ∩ inwarmup.
+  // null when the map hasn't attributed this client (own-workspace clients) → "—".
+  function perClientWarmPct(rawName, labels) {
     var mcm = S.mcm; if (!mcm || mcm.status !== "ready" || !mcm.clients) return null;
-    var warm = warmEmailSet(); if (!warm) return null;
-    var recon = reconnEmailSet() || {};
+    var iw = inWarmEmailSet(); if (!iw) return null;
     var key = prettyClient(rawName, labels).toLowerCase();
     var emails = mcm.clients[key] || mcm.clients[String(rawName).toLowerCase()];
     if (!emails || !emails.length) return null;
-    var total = emails.length, wc = 0, rc = 0;
-    emails.forEach(function (e) { e = String(e).toLowerCase(); if (warm[e]) wc++; else if (recon[e]) rc++; });
-    return { total: total, warmPct: Math.round(100 * wc / total), livePct: Math.round(100 * (total - wc - rc) / total) };
+    var total = emails.length, wc = 0;
+    emails.forEach(function (e) { if (iw[String(e).toLowerCase()]) wc++; });
+    return { total: total, warmPct: Math.round(100 * wc / total) };
   }
 
   /* ---------- fleet KPI figures ---------- */
@@ -375,18 +374,18 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       var tds = '<td class="n">' + esc(r.name) + (meta ? '<small>' + meta.replace(/^ · /, "") + '</small>' : '') + '</td>';
       tds += heatCell(replyTone(r.reply), r.reply == null ? "—" : fx(r.reply), r.reply == null ? "" : (r.reply >= 3 ? "strong" : r.reply >= 1.5 ? "ok" : "soft"));
       tds += heatCell(bounceTone(r.bounce), r.bounce == null ? "—" : fx(r.bounce), r.bounce == null ? "" : (r.bounce < 2 ? "low" : r.bounce < 3 ? "watch" : "high"));
-      var warmSub = r.warm == null ? "" : ((r.perClient ? "" : "fleet · ") + (r.warm <= 15 ? "mostly live" : "ramping"));
+      var warmSub = r.warm == null ? (r.warmKnown === false ? "own-ws" : "") : (r.warm <= 15 ? "mostly live" : "ramping");
       tds += heatCell(warmTone(r.warm), r.warm == null ? "—" : r.warm + "%", warmSub);
-      tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%", r.cap == null ? "" : ((r.perClient ? "" : "fleet · ") + "live"));
+      tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%", r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day cap" : "used"));
       var blTone = r.bl == null ? "mut" : r.bl === 0 ? "g1" : "r1";
       tds += heatCell(blTone, r.bl == null ? "—" : (r.bl === 0 ? "Clean" : r.bl + " flagged"), r.bl == null ? "" : (r.bl === 0 ? "0 flagged" : "paused"));
       return "<tr>" + tds + "</tr>";
     }).join("");
     var note = USING_REP.heat
       ? 'Showing sample fleet — live per-client rows load from client-windows.'
-      : 'Reply &amp; bounce are per client. In-warm-up &amp; live mailboxes are per client from the mailbox→client map; a client not yet attributed shows the fleet figure (marked “fleet”).';
+      : 'Reply &amp; bounce are per client. In-warm-up = % of the client’s mailboxes actively warming (own-workspace clients not in the shared-fleet map show “—”). Capacity used = daily sends ÷ real daily send capacity (/api/fleet-capacity, the same source as Analytics).';
     el("hub-heat").innerHTML =
-      '<div class="heatwrap"><table class="heat"><tr><th class="n">Client</th><th>Reply rate</th><th>Bounce</th><th>In warm-up</th><th>Mailboxes live</th><th>Blacklist</th></tr>' + body + '</table></div>' +
+      '<div class="heatwrap"><table class="heat"><tr><th class="n">Client</th><th>Reply rate</th><th>Bounce</th><th>In warm-up</th><th>Capacity used</th><th>Blacklist</th></tr>' + body + '</table></div>' +
       '<div class="heat-legend">' +
         '<span class="sw"><span class="box" style="background:var(--green)"></span>Great</span>' +
         '<span class="sw"><span class="box" style="background:#4E9A76"></span>Good</span>' +
@@ -727,6 +726,15 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       })
       .catch(function () {});
   }
+  // /api/fleet-capacity → { client_caps:{Name:cap/day}, capacity:{ws:[series]}, days }.
+  // The SAME source the Analytics page uses for real daily send capacity — feeds
+  // the heat map's Capacity-used column (sent/day ÷ capacity/day).
+  function loadCap() {
+    return fetch("/api/fleet-capacity?days=30", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && (j.client_caps || j.capacity)) { S.cap = j; renderHeat(); } })
+      .catch(function () {});
+  }
 
   // paint immediately with placeholders/representative, then fill as data lands
   renderChips(); renderAll();
@@ -735,6 +743,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   loadTags().then(function () { renderMgrTabs(); });
   loadBundle();
   loadMcm();
+  loadCap();
 })();
 </script>
 </body>
