@@ -15879,6 +15879,39 @@ def _deliv_client_ws_provider(host):
     return "SMTP"
 
 
+def _deliv_client_ws_warming_doms():
+    """Domains of client-workspace mailboxes currently In warm-up, for the
+    rest LEDGER union (owner ruling 2026-08-23: client domains get the SAME
+    first-seen + 7d due-back clock as Navreo's — the merge runs after the
+    ledger path, so without this they rendered with no real countdown).
+    Same classification as _deliv_merge_client_ws's inwarmup branch and the
+    same 48h staleness guard — raises on a stale/empty mirror so the caller
+    can withhold ledger deletes that sweep (a flaky mirror pull must never
+    reset client rest clocks)."""
+    from datetime import datetime, timedelta, timezone
+    ws_ids = [w.get("id") for w in ws_enabled()
+              if w.get("id") and w.get("id") != "navreo"]
+    if not ws_ids:
+        return set()
+    boxes = sb_get_all(
+        "mailboxes?select=domain,message_per_day,warmup_enabled,smtp_ok,imap_ok,"
+        "campaign_count,last_synced_at&workspace=in.(%s)" % ",".join(ws_ids)) or []
+    newest = max((str(r.get("last_synced_at") or "") for r in boxes), default="")
+    if not boxes or newest < (datetime.now(timezone.utc) - timedelta(hours=48)).isoformat():
+        raise RuntimeError("client mirror stale or empty (newest=%s)" % (newest or "none"))
+    doms = set()
+    for r in boxes:
+        if r.get("smtp_ok") is False or r.get("imap_ok") is False:
+            continue
+        if not r.get("warmup_enabled"):
+            continue
+        if not r.get("message_per_day") or not (r.get("campaign_count") or 0):
+            d = (r.get("domain") or "").lower()
+            if d:
+                doms.add(d)
+    return doms
+
+
 def _deliv_merge_client_ws(out):
     """Client-workspace federation (inbox-manager-all-workspaces, 2026-07-28):
     the audit backend only sees Navreo's Smartlead, so client workspaces could
@@ -16545,6 +16578,18 @@ def _deliv_bundle_run_bg_inner():
             warming_rows = ((out["views"].get("inwarmup") or {}).get("rows")) or []
             union_doms = rested_doms | {(r.get("domain") or "").lower()
                                         for r in warming_rows if r.get("domain")}
+            # Client-workspace warming domains join the SAME ledger so their
+            # due-back clocks are real first-seen countdowns, not a client-side
+            # placeholder (the client merge runs after this block, so their
+            # rows can't be read from out["views"] here). A failed/stale
+            # mirror pull withholds deletes below instead of raising — client
+            # clocks must survive one flaky sweep, exactly like the trunc guard.
+            client_ws_ok = True
+            try:
+                union_doms |= _deliv_client_ws_warming_doms()
+            except Exception as ce:  # noqa: BLE001
+                client_ws_ok = False
+                out["errors"]["clientWsLedger"] = str(ce)[:200]
             # A FAILED pull of EITHER view must never look like "those domains
             # left warm-up" — that path mass-deleted the ledger and reset every
             # domain's rest clock on one flaky backend refresh. Same guard for
@@ -16576,7 +16621,8 @@ def _deliv_bundle_run_bg_inner():
                                if n > 0 and d not in union_doms}
             out["restDue"] = _deliv_resting_ledger_sync(
                 union_doms,
-                allow_delete=("rested" in out["views"]) and ("inwarmup" in out["views"]) and not trunc)
+                allow_delete=("rested" in out["views"]) and ("inwarmup" in out["views"])
+                             and not trunc and client_ws_ok)
             out["maildosoDomains"] = sorted(mdoms)
             gdoms = _safe_domains(sorted(ghosts))
             if gdoms and not _deliv_mock_on():
