@@ -10219,8 +10219,7 @@ def route_search_smartlead_get(params):
     the conversation ALSO lives in the setter (any pill), so the client can
     route those opens through the normal full-control path and badge the rest
     "Not in setter". 120s cache per query; one 20-row page per workspace
-    (Smartlead's hard limit), with a first-token retry when a multi-token
-    query is empty — never an unbounded sweep (512MB box)."""
+    (Smartlead's hard limit) — one round, never an unbounded sweep (512MB box)."""
     try:
         q = _qp(params, "q", "").strip()
         if len(q) < 2:
@@ -10231,7 +10230,6 @@ def route_search_smartlead_get(params):
         if hit and now - hit[0] < _SL_SEARCH_TTL:
             return 200, dict(hit[1], cached=True)
         results, errors, seen = [], 0, set()
-        tokens = q.split()
         # One short-lived thread per workspace (live measure 2026-08-15: the
         # serial loop cost 19.5s cold across the enabled workspaces — each
         # master-inbox search is ~5s on Smartlead's side). Bounded at the
@@ -10275,16 +10273,16 @@ def route_search_smartlead_get(params):
             return out
 
         pages = _fanout(q)
-        # First-token retry (accuracy fix 2026-08-16), GLOBAL-empty only: Smartlead
-        # ANDs every query token against the stored lead record, so a "first last"
-        # search returns NOTHING when the lead's last_name field is empty (live:
-        # "jim downey" → 0, though he exists). Only when the FULL query found
-        # nobody anywhere do we spend a second round on the first token alone —
-        # so a query that already matched someone never pays the extra latency,
-        # and the doubled cost falls only on searches that would otherwise be a
-        # (misleading) empty result. Bounded to exactly two rounds.
-        if len(tokens) > 1 and not any(v for v in pages.values() if isinstance(v, list) and v):
-            pages = _fanout(tokens[0])
+        # NOTE — a first-token retry (re-search the first name-token when a
+        # "first last" query is empty because the lead's last_name field is
+        # blank) was built and LIVE-TESTED here 2026-08-16, then removed: it
+        # returns the 20 most-RECENT matches for the bare first name, which
+        # (a) buries the intended person under dozens of unrelated same-first-
+        # name hits and (b) still misses the target when their reply is old
+        # enough to fall outside that recent-20 (the exact case it was meant to
+        # rescue — an April reply never surfaced). Net-negative, so the honest
+        # answer for an empty-last_name miss is: search by surname or email,
+        # both of which resolve fast and precisely. Left as one clean round.
         for ws, _key in ws_keys:
             try:
                 data = pages.get(ws)
