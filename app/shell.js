@@ -618,7 +618,7 @@ function setupChartTooltip(wrap) {
     defs.style.position = "absolute";
     defs.innerHTML = `
       <symbol id="sr-i-check" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
-      <symbol id="sr-i-loop" viewBox="0 0 16 16"><path d="M8 2a6 6 0 1 1-5.6 3.8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><path d="M2 2v4h4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-loop" viewBox="0 0 16 16"><polyline points="13.5 2.5 13.5 6.5 9.5 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12.4 10a5.5 5.5 0 1 1-1.3-5.7l2.4 2.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="sr-i-stop" viewBox="0 0 16 16"><path d="M8 3v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="12.4" r="1.3" fill="currentColor"/></symbol>
       <symbol id="sr-i-moon" viewBox="0 0 16 16"><path d="M12.6 9.7A5.4 5.4 0 0 1 6.3 3.4a5.4 5.4 0 1 0 6.3 6.3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>`;
     elRoot.appendChild(defs);
