@@ -480,7 +480,10 @@ function glanceHTML(r){
     +'<div class="gv-quad">'
     +'<div class="gv-q"><span class="gv-n tnum">'+fmt(sent)+'</span><span class="gv-l">Sent</span></div>'
     +'<div class="gv-q"><span class="gv-n tnum">'+(replyPct!=null? replyPct+"%" : fmt(rep))+'</span>'+(replyPct!=null?'<span class="gv-c tnum">'+fmt(rep)+'</span>':"")+'<span class="gv-l">Replied</span></div>'
-    +'<div class="gv-q"><span class="gv-n tnum '+gClass+'">'+fmt(pos)+'</span>'+(gPosPct!=null?'<span class="gv-c tnum">'+gPosPct+'%</span>':"")+'<span class="gv-l">Positives</span></div>'
+    /* the % here is positives/REPLIED (reply quality), NOT positives/sent like
+       the Replied tile's % — label it "of replies" so the two %s next to each
+       other aren't misread as the same base (fidelity fix, 23 Aug 2026). */
+    +'<div class="gv-q"><span class="gv-n tnum '+gClass+'">'+fmt(pos)+'</span>'+(gPosPct!=null?'<span class="gv-c tnum" title="of the people who replied">'+gPosPct+'% of replies</span>':"")+'<span class="gv-l">Positives</span></div>'
     +'<div class="gv-q"><span class="gv-n tnum'+(mtg>0?" gv-good":"")+'">'+fmt(mtg)+'</span><span class="gv-l">Meetings</span></div>'
     +'</div>'
     +'<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>'
@@ -619,7 +622,7 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
           +'">Send 100% of Email '+esc(String(sk))+' to it</button>';
       return '<tr>'
         +'<td data-label="Version">'+esc(label)+stateCell
-          +(isBest?' <span class="vp-best">best</span>':'')+scaleBtn+'</td>'
+          +(isBest?' <span class="vp-best" title="opener booking the most meetings per email sent (live)">best opener</span>':'')+scaleBtn+'</td>'
         /* a deleted variant's counters were PURGED by Smartlead, not zero */
         +(v.stats_purged
           ? '<td class="tnum" data-label="Sent"><span class="ring-caption" title="Smartlead purges a variant\'s counters when it is deleted — it did send before deletion">&mdash;</span></td>'
@@ -1869,7 +1872,7 @@ function render(r){
     <nav class="campaign-tabs" role="tablist" aria-label="Campaign sections">
       <button class="campaign-tab is-active" data-tab="overview" onclick="showTab('overview')">Overview</button>
       <button class="campaign-tab" data-tab="messaging" onclick="showTab('messaging')">Messaging</button>
-      <button class="campaign-tab" data-tab="leads" onclick="showTab('leads')">Leads <span class="tab-count tnum" id="leads-tabcount">(${fmt(sent)})</span></button></nav>
+      <button class="campaign-tab" data-tab="leads" onclick="showTab('leads')">Leads <span class="tab-count tnum" id="leads-tabcount"></span></button></nav>
     <div class="campaign-page-body">
     <section class="tab-panel" data-tab="overview">
       ${glanceHTML(r)}

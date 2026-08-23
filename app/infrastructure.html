@@ -162,16 +162,25 @@
 
   function mbHTML(d) {
     var built = ["warming", "ready", "mailboxes_building"].indexOf(d.status) >= 0 && d.status !== "mailboxes_building";
-    return esc(d.inboxes || 3) + ' inboxes' + (built ? ' <span class="tick">✓</span>' : '');
+    /* Fidelity fix (23 Aug 2026): don't invent "3 inboxes" for a domain whose
+       live count hasn't landed — a defaulted guess rendered as a real count.
+       Show the true number when known, "inboxes pending" when not. */
+    if (d.inboxes == null) return 'inboxes pending';
+    return esc(d.inboxes) + ' inboxes' + (built ? ' <span class="tick">✓</span>' : '');
   }
 
   function headlineFor(b) {
     var ds = b.domains || [];
-    var n = ds.length, boxes = ds.reduce(function (a, d) { return a + (d.inboxes || 3); }, 0);
+    /* Sum only KNOWN inbox counts; if any domain's count is still unknown the
+       headline total is approximate ("~N"), never a figure padded with
+       assumed 3-per-domain defaults presented as verified. */
+    var n = ds.length, anyUnknown = ds.some(function (d) { return d.inboxes == null; });
+    var boxes = ds.reduce(function (a, d) { return a + (d.inboxes || 0); }, 0);
+    var boxesLabel = (anyUnknown ? '~' : '') + boxes;
     var building = ds.filter(function (d) { return d.status === "mailboxes_building"; }).length;
     var readyCt = ds.filter(function (d) { return d.status === "ready"; }).length;
     if (b.stage === "ready" || readyCt === n)
-      return { h: 'All ' + n + ' domains are ready — <span class="date">' + boxes + ' inboxes</span>, good to go.',
+      return { h: 'All ' + n + ' domains are ready — <span class="date">' + boxesLabel + ' inboxes</span>, good to go.',
                s: "Sending as " + b.sender + " · visitors land on " + b.redirect + " · in your " + b.workspace + " workspace" };
     if (b.stage === "warming")
       return { h: 'Your inboxes are warming' + (b.ready_date ? ' — ready <span class="date">' + esc(b.ready_date) + '</span>' : '') + '.',

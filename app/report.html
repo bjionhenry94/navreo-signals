@@ -574,8 +574,13 @@ function renderRank() {
       var c = sc[String(r.id)];
       return { id: r.id, name: r.name || (c && c.name) || ("Campaign " + r.id),
                sent: r.sent || 0, replied: r.replied || 0,
-               pos: r.pos != null ? r.pos : ((c && c.positives) || 0),
-               mtg: r.mtg != null ? r.mtg : ((c && c.meetings) || 0),
+               /* window-scoped positives/meetings ONLY — never fall back to the
+                  scorecard's LIFETIME c.positives/c.meetings under a "last N days"
+                  label (that mixed a window `sent` with lifetime results and
+                  understated per-positive/per-meeting). Unknown-for-window stays
+                  null → renders "–", not a borrowed lifetime count. */
+               pos: r.pos != null ? r.pos : null,
+               mtg: r.mtg != null ? r.mtg : null,
                active: !!(c && String(c.status || "").toUpperCase() === "ACTIVE") };
     });
   } else {
