@@ -4264,6 +4264,35 @@ def _existing_row(workspace: str, campaign_id, email: str, message_id: str):
         return None
 
 
+def _row_same_instant(workspace: str, campaign_id, email: str, rtime, own_id):
+    """The sibling row (any status) already representing this reply INSTANT,
+    or None. Message-id identity alone cannot dedupe a re-reply: the webhook,
+    the absorb path and the re-reply sweep each stamp a DIFFERENT identity for
+    the same physical reply (webhook event time vs master-inbox row time vs
+    the real RFC Message-ID — proven live 2026-08-23 on tareq@zeda.ai, whose
+    one re-reply produced queue rows keyed 18:05:45 AND 18:05:56). The reply
+    instant is the identity every path shares, give or take clock drift, so
+    dedupe uses the same ±30s slack _absorb_newer_reply applies."""
+    if not _SB or not rtime:
+        return None
+    t = _parse_iso(str(rtime))
+    if not t:
+        return None
+    lo = (t - _dt.timedelta(seconds=30)).isoformat()
+    hi = (t + _dt.timedelta(seconds=30)).isoformat()
+    try:
+        own = f"&id=neq.{own_id}" if own_id is not None else ""
+        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{workspace}"
+                          f"&smartlead_campaign_id=eq.{campaign_id}"
+                          f"&lead_email=eq.{quote(str(email), safe='')}"
+                          f"&replied_at=gte.{quote(lo, safe='')}"
+                          f"&replied_at=lte.{quote(hi, safe='')}"
+                          f"{own}&select=*&order=id&limit=1")
+        return rows[0] if isinstance(rows, list) and rows else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
 def _preserve_followup_entries(old_thread, new_thread):
     """Follow-up markers must survive every thread overwrite (panel critical
     2026-08-01): the hydrator rebuilds `thread` from Smartlead, which knows
@@ -5248,6 +5277,23 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
                     except Exception:  # noqa: BLE001 - a leftover husk is not worth a crash
                         pass
                 return other
+        else:
+            # Hydration resolved NO distinct real id (deep re-replies often
+            # miss message ids in history), so the real-key stand-down above
+            # can't run and the claim key alone can't dedupe: sweep-fed
+            # intakes were duplicating replies the webhook or absorb path
+            # already owned under a different identity (accuracy audit
+            # 2026-08-23 - tareq/aboubakar duplicate needs_review rows, hand-
+            # dismissed daily). Reply-instant identity is the fallback.
+            dup = _row_same_instant(workspace, campaign_id, email,
+                                    row.get("replied_at"), row.get("id"))
+            if dup is not None:
+                if row.get("id") is not None:
+                    try:
+                        _SB("DELETE", f"{QUEUE_TABLE}?id=eq.{row['id']}")
+                    except Exception:  # noqa: BLE001 - a leftover husk is not worth a crash
+                        pass
+                return dup
 
     # Canonical identity resolution (see _sender_first_for): the thread-
     # derived name (or, for a test-injected reply, whatever the caller passed
@@ -6023,11 +6069,16 @@ def run_client_reply_reconcile(force: bool = False, days: int = RECONCILE_WINDOW
 # re-replies dedupe exactly like first replies do.
 # FIRST run SEEDS: every current mid is marked seen WITHOUT posting —
 # otherwise ~1.5k historic threads would flood Slack in one tick.
-POSITIVE_CATEGORY_IDS = [1, 2, 5, 78386, 83039, 83731, 86207, 125938]
+# 113398 = "[Manual] Sending meeting request follow-up" - a positive-workflow
+# relabel; without it a positive thread relabelled mid-conversation silently
+# left the sweep set (accuracy audit 2026-08-23).
+POSITIVE_CATEGORY_IDS = [1, 2, 5, 78386, 83039, 83731, 86207, 113398, 125938]
 RESWEEP_INTERVAL_MIN = 15      # effective cadence, self-throttled off the 3-min tick
 RESWEEP_THROTTLE_MIN = 13      # >13 min since last sweep => due (aligns to 3-min grid)
 RESWEEP_POST_CAP = 25          # tripwire: never fire more than this many alerts per sweep
 RESWEEP_PAGE_CEILING = 200     # 4k threads; hitting it reports FAILED, never silent
+RESWEEP_ACTIVE_DAYS = 7        # authoritative history top-up: threads active this recently
+RESWEEP_ACTIVE_CAP = 40        # ...capped message-history reads per sweep (rate budget)
 _RESWEEP_STATE_ID = 2          # reply_sync_state row (id=1 is run_reply_sync's watermark)
 
 
@@ -6152,6 +6203,57 @@ def run_positive_resweep(force: bool = False) -> dict:
             if not lead_id or not rtime or not cid or not email:
                 continue
             mids_by_row[f"{lead_id}-{rtime}"] = r
+
+        # Authoritative top-up (accuracy audit 2026-08-23): the master-inbox
+        # row's last_reply_time can lag the real thread by hours - proven on
+        # aboubakar@egtmea.com, whose 10:32 re-reply the sweep only saw at
+        # 12:35 - so re-replies on threads the team is actively working rode
+        # in 1-5h late. Per-campaign message-history has no such lag. For the
+        # newest RESWEEP_ACTIVE_CAP setter threads touched inside
+        # RESWEEP_ACTIVE_DAYS, read the history and merge each thread's
+        # LATEST reply time as a candidate mid (same shape, same downstream
+        # dedup - an instant already seen or archived costs nothing).
+        summary["active_threads"] = 0
+        try:
+            since_active = (now - _dt.timedelta(days=RESWEEP_ACTIVE_DAYS)).isoformat()
+            qa = quote(since_active, safe="")
+            qrows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{WORKSPACE}"
+                               f"&is_test=eq.false&smartlead_lead_id=not.is.null"
+                               f"&or=(sent_at.gte.{qa},replied_at.gte.{qa})"
+                               f"&select=smartlead_campaign_id,lead_email,smartlead_lead_id"
+                               f"&order=updated_at.desc&limit=200") or []
+            seen_threads = set()
+            for qr in qrows:
+                if not isinstance(qr, dict):
+                    continue
+                cid_a = qr.get("smartlead_campaign_id")
+                lid_a = qr.get("smartlead_lead_id")
+                em_a = (qr.get("lead_email") or "").strip()
+                if not cid_a or not lid_a or not em_a or (cid_a, lid_a) in seen_threads:
+                    continue
+                if summary["active_threads"] >= RESWEEP_ACTIVE_CAP:
+                    break
+                seen_threads.add((cid_a, lid_a))
+                summary["active_threads"] += 1
+                try:
+                    hist_resp = _sl_get(f"/campaigns/{cid_a}/leads/{lid_a}/message-history")
+                    hist = hist_resp.get("history") if isinstance(hist_resp, dict) else hist_resp
+                    latest = ""
+                    for h in hist or []:
+                        if isinstance(h, dict) and h.get("type") == "REPLY" and h.get("time"):
+                            if str(h["time"]) > latest:
+                                latest = str(h["time"])
+                    if latest:
+                        mid_a = f"{lid_a}-{latest}"
+                        if mid_a not in mids_by_row:
+                            mids_by_row[mid_a] = {"email_lead_id": lid_a,
+                                                  "last_reply_time": latest,
+                                                  "email_campaign_id": cid_a,
+                                                  "lead_email": em_a}
+                except Exception:  # noqa: BLE001 - one thread's history must not sink the sweep
+                    summary["errors"] += 1
+        except Exception:  # noqa: BLE001 - the top-up is additive; the sweep proper still runs
+            summary["errors"] += 1
 
         seen = _resweep_seen_set(list(mids_by_row))
         unseen = {m: r for m, r in mids_by_row.items() if m not in seen}
