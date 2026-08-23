@@ -10245,29 +10245,35 @@ def route_search_smartlead_get(params):
             data = resp.get("data") if isinstance(resp, dict) else None
             return data if isinstance(data, list) else []
 
-        pages = {}
-        def _one(ws, key):
-            try:
-                rows = _sl_rows(key, q)
-                # First-token retry (accuracy fix 2026-08-16): Smartlead ANDs
-                # every query token against the stored lead record, so a
-                # "first last" search returns NOTHING when the lead's
-                # last_name field is empty (live: "jim downey" → 0, though he
-                # exists). When a multi-token search comes back empty, retry
-                # the FIRST token alone — the caller dedupes, so a lead who
-                # matched the full query can't double up.
-                if (not rows) and len(tokens) > 1:
-                    rows = _sl_rows(key, tokens[0])
-                pages[ws] = rows
-            except Exception:  # noqa: BLE001 - one workspace failing must not kill the search
-                pages[ws] = None
-        threads = [threading.Thread(target=_one, args=(ws, key), daemon=True,
+        def _fanout(term):
+            # All workspaces in parallel for one search term; None marks a
+            # workspace that errored/timed out (distinct from a clean empty []).
+            out = {}
+            def _one(ws, key):
+                try:
+                    out[ws] = _sl_rows(key, term)
+                except Exception:  # noqa: BLE001 - one workspace failing must not kill the search
+                    out[ws] = None
+            ths = [threading.Thread(target=_one, args=(ws, key), daemon=True,
                                     name=f"sl-search-{ws}") for ws, key in ws_keys]
-        for t in threads:
-            t.start()
-        deadline = _time.time() + 25
-        for t in threads:
-            t.join(timeout=max(0.1, deadline - _time.time()))
+            for t in ths:
+                t.start()
+            dl = _time.time() + 20
+            for t in ths:
+                t.join(timeout=max(0.1, dl - _time.time()))
+            return out
+
+        pages = _fanout(q)
+        # First-token retry (accuracy fix 2026-08-16), GLOBAL-empty only: Smartlead
+        # ANDs every query token against the stored lead record, so a "first last"
+        # search returns NOTHING when the lead's last_name field is empty (live:
+        # "jim downey" → 0, though he exists). Only when the FULL query found
+        # nobody anywhere do we spend a second round on the first token alone —
+        # so a query that already matched someone never pays the extra latency,
+        # and the doubled cost falls only on searches that would otherwise be a
+        # (misleading) empty result. Bounded to exactly two rounds.
+        if len(tokens) > 1 and not any(v for v in pages.values() if isinstance(v, list) and v):
+            pages = _fanout(tokens[0])
         for ws, _key in ws_keys:
             try:
                 data = pages.get(ws)
