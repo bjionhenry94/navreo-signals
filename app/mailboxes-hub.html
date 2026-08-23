@@ -454,7 +454,16 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   function mgrTags() {
     var rows = null, D = S.tags;
     if (D && D.tagStats && D.tagStats[String(S.win)]) rows = D.tagStats[String(S.win)].filter(function (r) { return r.mailboxes > 0; });
-    if (!rows || !rows.length) { USING_REP.tags = true; rows = REP_TAGS; } else { USING_REP.tags = false; }
+    /* Fidelity fix (23 Aug 2026): never paint REP_TAGS' fabricated reply/bounce/
+       per-positive numbers as if real — the heat table warns when it falls back
+       but this table did not, so empty tag stats read as genuine performance.
+       Show an honest empty state instead of made-up rates. */
+    if (!rows || !rows.length) {
+      USING_REP.tags = true;
+      return '<div class="tbl-empty" style="padding:18px;color:var(--fg-subtle);font-size:.9rem">' +
+        'No per-tag performance yet for this window — tag your mailboxes and this fills from live sends.</div>';
+    }
+    USING_REP.tags = false;
     var body = rows.map(function (r) {
       var rt = r.reply_rate, bt = r.bounce_rate, pp = r.per_positive, ut = r.utilisation;
       function span(tone, txt) { return '<span class="' + tclass(tone) + '">' + txt + '</span>'; }
