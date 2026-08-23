@@ -22637,10 +22637,31 @@ class Handler(SimpleHTTPRequestHandler):
                                               "skipped": len(r.get("skipped") or []),
                                               "tierCount": r.get("tierCount")},
                                      actor="cron", action="reply-caps", entity="deliverability")
-                        _deliv_bundle_start(force=True)  # badges reflect the new caps now
                     except Exception as e:  # noqa: BLE001 — a failed run must be visible
                         log_activity("/api/cron/outlook-reply-caps", payload={"error": str(e)[:200]},
                                      actor="cron", action="reply-caps", entity="deliverability")
+                    # Maildoso rides the SAME daily trigger (owner ruling 2026-08-23):
+                    # the owner can't create a separate pg_cron, so rather than leave
+                    # the Maildoso engine unscheduled it runs right after Outlook here,
+                    # off the one pg_cron that already fires this endpoint. Its own
+                    # /api/cron/maildoso-reply-caps stays for manual/preview use. A
+                    # failure in one must not skip the other — separate try blocks.
+                    try:
+                        rm = maildoso_reply_caps("apply")
+                        log_activity("/api/cron/maildoso-reply-caps",
+                                     payload={"changed": rm.get("changed", 0),
+                                              "failed": rm.get("failed"),
+                                              "parked": rm.get("parked"),
+                                              "domains": rm.get("domains"),
+                                              "skipped": len(rm.get("skipped") or []),
+                                              "tierCount": rm.get("tierCount"),
+                                              "via": "outlook-cron-piggyback"},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                    except Exception as e:  # noqa: BLE001 — visible, and never blocks Outlook's result
+                        log_activity("/api/cron/maildoso-reply-caps", payload={"error": str(e)[:200],
+                                     "via": "outlook-cron-piggyback"},
+                                     actor="cron", action="reply-caps", entity="deliverability")
+                    _deliv_bundle_start(force=True)  # badges reflect the new caps now
                 threading.Thread(target=_outlook_caps_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/google-reply-caps":
