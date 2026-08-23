@@ -6192,7 +6192,7 @@ async function doSendFollowup(btn) {
   // anchor-stable renderDetail keeps the reader's place).
   let grafted = null;
   if (row) {
-    grafted = { type: "SENT", time: new Date().toISOString(), body };
+    grafted = { type: "SENT", time: new Date().toISOString(), body, _optimistic: true };
     row.thread = (row.thread || []).concat([grafted]);
     row.sent_body = body;
     if (String(selectedRowId) === String(id)) renderDetail(row);
@@ -6222,17 +6222,38 @@ async function doSendFollowup(btn) {
     return;
   }
   clearError();
-  // Processing a tray person ends with the NEXT person, not a bounce back
-  // (owner ask 2026-08-01): if this thread was in the follow-up tray,
-  // resolve it there and open the next one.
+  // Stay on the conversation you just sent from (owner ask 2026-08-22: "make
+  // it easier to see you've sent an email") — the send must be unmistakable.
+  // This SUPERSEDES the earlier auto-advance-to-next-tray-person behaviour
+  // (owner ask 2026-08-01): bouncing to the next person hid the just-sent
+  // message a single frame after it was grafted in. Resolve this row in the
+  // follow-up tray, but keep it open, re-render, and scroll the sent message
+  // into view so the send is plainly visible on the thread.
   if (unresolvedRows.some((r) => String(r.id) === String(id))) {
-    const nextFu = trayNextAfter(id);
     _trayMutatedAt = Date.now();
     unresolvedRows = unresolvedRows.filter((r) => String(r.id) !== String(id));
     renderUnresolvedTray();
-    if (nextFu) openUnresolvedRow(nextFu.id);
+  }
+  if (row && String(selectedRowId) === String(id)) {
+    renderDetail(row);
+    scrollSentIntoView(id);
   }
   loadQueue();   // its tail reconciles the tray — no separate GET needed
+}
+
+/* After a follow-up sends, bring the just-grafted SENT message into view so
+   the send is unmistakable (owner ask 2026-08-22). The optimistic message
+   carries time=now, so it renders LAST in the sorted conversation; scroll the
+   convo's last message card into view. Deferred a frame so the fresh DOM from
+   renderDetail exists to scroll to. */
+function scrollSentIntoView(id) {
+  requestAnimationFrame(() => {
+    const convo = document.getElementById(`convo-${id}`);
+    if (!convo) return;
+    const msgs = convo.querySelectorAll(".thread-msg");
+    const last = msgs[msgs.length - 1];
+    if (last) last.scrollIntoView({ behavior: "smooth", block: "center" });
+  });
 }
 
 /* Mirrors the server's _draft_text: compare what a human would READ, so
@@ -7479,6 +7500,30 @@ const THREAD_FETCHED_AT = new Map();   // row id -> last /thread GET ms
 function threadKey(t) {
   return (t || []).map((m) => `${m.type}:${m.message_id || m.stats_id || String(m.body || "").slice(0, 40)}`).join("|");
 }
+/* Carry a just-sent, optimistically-grafted follow-up across a server thread
+   refresh that doesn't yet contain it (Smartlead ingestion lag), then let it
+   fall away with no duplicate once the server catches up.
+
+   Correlation is by SENT COUNT, not body text: matching on the cleaned body
+   was unreliable both ways — an earlier identical follow-up would drop the
+   placeholder prematurely, and any server-side reformat (merge-variable /
+   signature resolution) would keep it sitting beside the real one. Instead we
+   count the REAL (non-optimistic) SENTs we already knew about vs the real
+   SENTs the fresh thread now reports; the difference is how many of our
+   placeholders the server has absorbed, so we drop exactly that many (oldest
+   first) and keep the rest visible. Robust to identical text and to any body
+   reformat; a stray unrelated outbound in the same few-second window can only
+   retire a placeholder one refresh early, and the next refresh self-heals. */
+function mergeOptimisticSents(fresh, old) {
+  const pending = (old || []).filter((m) => m && m._optimistic);
+  if (!pending.length) return fresh;
+  const realSentCount = (arr) => (arr || []).filter(
+    (m) => m && String(m.type).toUpperCase() === "SENT" && !m._optimistic
+  ).length;
+  const landed = Math.max(0, realSentCount(fresh) - realSentCount(old));
+  const keep = pending.slice(landed);   // retire the oldest `landed` placeholders
+  return keep.length ? fresh.concat(keep) : fresh;
+}
 async function refreshThreadFor(row, isRepoll) {
   if (!row || row.is_test) return;
   // Per-row throttle (panel fix 2026-08-01): renderDetail calls this on
@@ -7571,10 +7616,14 @@ async function refreshThreadFor(row, isRepoll) {
     }
   }
   if (fresh.length && threadKey(fresh) !== threadKey(row.thread)) {
-    row.thread = fresh;
+    // Keep an optimistically-grafted follow-up visible through the lag window
+    // before Smartlead reflects it: a plain `row.thread = fresh` here wiped the
+    // just-sent message on the very next background refresh, re-hiding it.
+    const merged = mergeOptimisticSents(fresh, row.thread);
+    row.thread = merged;
     [QUEUE_ROWS, ALL_ROWS].forEach((list) => {
       const r = (list || []).find((x) => String(x.id) === String(row.id));
-      if (r) r.thread = fresh;
+      if (r) r.thread = merged;
     });
     if (String(selectedRowId) === String(row.id) && !isTypingIn(row.id)) {
       // Typing guard (panel fix 2026-08-01): this was the ONE repaint path
@@ -7585,7 +7634,7 @@ async function refreshThreadFor(row, isRepoll) {
       // Never repaint from a detached stale object: prefer the object the
       // pane is actually showing (it carries the newest draft), grafting the
       // fresh thread onto it.
-      if (live && String(live.id) === String(row.id) && live !== row) live.thread = fresh;
+      if (live && String(live.id) === String(row.id) && live !== row) live.thread = merged;
       renderDetail(live && String(live.id) === String(row.id) ? live : row);
     }
   }

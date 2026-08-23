@@ -452,8 +452,10 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var dh = S.bundle && S.bundle.dh; if (!dh) return null;
     var w = dh[String(S.win)] || dh["30"] || dh["7"]; return (w && w.rows) || null;
   }
-  function floorList() { var r = dhRows(); if (r == null) return null; var ms = (S.bundle && S.bundle.minSent) || 500;
-    return r.filter(function (d) { return d.reply_rate != null && (d.sent || 0) >= ms && d.reply_rate < (d.maildoso ? FLOOR_MD : FLOOR_STD); })
+  function floorList() { var r = dhRows(); if (r == null) return null; var ms = (S.bundle && S.bundle.minSent) || 500; var resting = restingSet();
+    // Paused/resting domains belong to the In warm-up tab, not here — a domain that is
+    // already resting has no live sends to be "below the floor", so exclude it outright.
+    return r.filter(function (d) { return !resting[d.domain] && d.reply_rate != null && (d.sent || 0) >= ms && d.reply_rate < (d.maildoso ? FLOOR_MD : FLOOR_STD); })
       .sort(function (a, b) { return a.reply_rate - b.reply_rate; }); }
   function highbList() { var r = dhRows(); if (r == null) return null;
     return r.filter(function (d) { return d.bounce_rate != null && d.bounce_rate >= BOUNCE_HOT; })
@@ -488,8 +490,8 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   function pill(cls, txt) { return '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(txt) + '</span>'; }
   function actBtn(act, domain, id, label, primary) {
     var attrs = 'data-act="' + act + '"' + (domain != null ? ' data-domain="' + esc(domain) + '"' : '') + (id != null ? ' data-id="' + esc(id) + '"' : '');
-    var style = primary ? '' : ' style="background:var(--card);color:var(--ink);border:1px solid var(--line-2)"';
-    return '<button class="fbtn"' + attrs + style + '>' + esc(label) + '</button>';
+    // Design-system button (navreo.css): .btn.sm base, .primary for the orange emphasis variant.
+    return '<button class="btn sm' + (primary ? ' primary' : '') + '" ' + attrs + '>' + esc(label) + '</button>';
   }
   function tagChips(tags) {
     if (!Array.isArray(tags) || !tags.length) return '<span class="t-mut">—</span>';
@@ -501,11 +503,10 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   function mgrFloor() {
     var rows = floorList(); if (rows == null) return null;
     if (!rows.length) return '<div class="mgr-empty">✓ No domains below the ' + FLOOR_STD + '% reply floor in the last ' + S.win + ' days.</div>';
-    var resting = restingSet();
     var body = rows.map(function (d) {
-      var action = resting[d.domain]
-        ? pill("a", "sends paused") + " " + actBtn("reactivate", d.domain, null, "Reactivate", false)
-        : actBtn("warmup", d.domain, null, "Warm up domain", true);
+      // Every domain here has live sends below the floor (paused ones are filtered out
+      // in floorList and live in the In warm-up tab), so the only action is Warm up.
+      var action = actBtn("warmup", d.domain, null, "Warm up domain", true);
       return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + comma(d.sent) + '</td>' +
         '<td class="num">' + comma(d.lead || 0) + '</td>' +
@@ -536,6 +537,12 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   // ---- In warm-up (old flow "inwarmup", domain-grouped): Domain·Mailboxes·Due back·Status·Action(Restore)
   function mgrInWarmup() {
     var rows = bundleView("inwarmup"); if (rows == null) return null;
+    // A domain paused from the High bounce-rate tab has every mailbox zeroed,
+    // so it lands in this cap-0 view too — but it is STOPPED for bouncing, not
+    // warming. Show it only in the High bounce-rate tab, never here, so the
+    // same domain never appears in two tabs at once.
+    var hb = highbList() || []; var hbSet = {}; hb.forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
+    rows = rows.filter(function (m) { return !hbSet[m.domain]; });
     if (!rows.length) return '<div class="mgr-empty">None right now — nothing is in warm-up.</div>';
     var gr = groupByDomain(rows);
     var body = gr.order.map(function (dom) {
