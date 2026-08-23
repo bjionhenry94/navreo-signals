@@ -6214,6 +6214,7 @@ def run_positive_resweep(force: bool = False) -> dict:
         # LATEST reply time as a candidate mid (same shape, same downstream
         # dedup - an instant already seen or archived costs nothing).
         summary["active_threads"] = 0
+        summary["active_errors"] = 0
         try:
             since_active = (now - _dt.timedelta(days=RESWEEP_ACTIVE_DAYS)).isoformat()
             qa = quote(since_active, safe="")
@@ -6223,6 +6224,7 @@ def run_positive_resweep(force: bool = False) -> dict:
                                f"&select=smartlead_campaign_id,lead_email,smartlead_lead_id"
                                f"&order=updated_at.desc&limit=200") or []
             seen_threads = set()
+            consec_fail = 0
             for qr in qrows:
                 if not isinstance(qr, dict):
                     continue
@@ -6243,6 +6245,7 @@ def run_positive_resweep(force: bool = False) -> dict:
                         if isinstance(h, dict) and h.get("type") == "REPLY" and h.get("time"):
                             if str(h["time"]) > latest:
                                 latest = str(h["time"])
+                    consec_fail = 0
                     if latest:
                         mid_a = f"{lid_a}-{latest}"
                         if mid_a not in mids_by_row:
@@ -6251,9 +6254,17 @@ def run_positive_resweep(force: bool = False) -> dict:
                                                   "email_campaign_id": cid_a,
                                                   "lead_email": em_a}
                 except Exception:  # noqa: BLE001 - one thread's history must not sink the sweep
-                    summary["errors"] += 1
+                    # Counted apart from the sweep's own errors so the log stays
+                    # readable. 3 consecutive failures = we're being rate-limited
+                    # (first live tick: 37/40 429s while parallel tooling shared
+                    # the account budget) - the rest would fail too; stop and let
+                    # the next sweep retry with a fresh budget.
+                    summary["active_errors"] += 1
+                    consec_fail += 1
+                    if consec_fail >= 3:
+                        break
         except Exception:  # noqa: BLE001 - the top-up is additive; the sweep proper still runs
-            summary["errors"] += 1
+            summary["active_errors"] += 1
 
         seen = _resweep_seen_set(list(mids_by_row))
         unseen = {m: r for m, r in mids_by_row.items() if m not in seen}
