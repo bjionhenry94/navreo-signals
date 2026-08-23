@@ -915,3 +915,56 @@ function setupChartTooltip(wrap) {
 
   window.NavreoJobs = { ping };
 })();
+
+/* ===================================================================
+   NavreoCapacity — the ONE "Capacity used" formula, shared by the
+   Analytics tab (deliverability.html) and the Fleet heat map
+   (mailboxes-hub.html). Both read /api/fleet-capacity; keeping the
+   math here (not inline per page) is what makes the two surfaces agree.
+   Formula = Σ per-day sent ÷ Σ per-day capacity across the window,
+   using the full ramping per-day capacity series — identical to the
+   Analytics tab's capacityDailyFull() × sum. See capacity-parity-align.
+   =================================================================== */
+(function () {
+  function ci(map, name) {                 // case-insensitive object lookup
+    if (!map || name == null) return undefined;
+    if (map[name] != null) return map[name];
+    var lc = String(name).toLowerCase();
+    for (var k in map) if (k.toLowerCase() === lc) return map[k];
+    return undefined;
+  }
+  // Per-day capacity series for a client, mirroring Analytics' capacityDailyFull():
+  //  • own-workspace clients (asteri/krg/grout) → cap.capacity[wsKey] exact per-day
+  //  • shared clients → real cap.client_caps_daily[name], else the navreo per-day
+  //    series scaled to the client's current cap (cap.client_caps[name]).
+  function series(cap, name, wsKey) {
+    if (!cap || !cap.capacity) return null;
+    var own = wsKey && cap.capacity[wsKey];
+    if (Array.isArray(own)) return own;
+    var real = ci(cap.client_caps_daily, name);
+    if (Array.isArray(real) && real.some(function (v) { return v != null; })) return real;
+    var nav = cap.capacity.navreo, cur = ci(cap.client_caps, name);
+    if (Array.isArray(nav) && cur != null) {
+      var navCur = null;
+      for (var i = nav.length - 1; i >= 0; i--) if (nav[i] != null) { navCur = nav[i]; break; }
+      if (navCur) { var r = cur / navCur; return nav.map(function (v) { return v == null ? null : Math.round(v * r); }); }
+    }
+    return null;
+  }
+  // Sum the last `days` non-null entries of the series (the window total capacity).
+  function windowCapSum(cap, name, wsKey, days) {
+    var s = series(cap, name, wsKey);
+    if (!s) return null;
+    var win = s.slice(Math.max(0, s.length - days)), sum = 0, seen = false;
+    win.forEach(function (v) { if (v != null) { sum += v; seen = true; } });
+    return seen ? sum : null;
+  }
+  // THE number: round(100 · windowSent ÷ windowCapacity). null when unknown.
+  // opts = { name, wsKey, days, windowSent }
+  function usedPct(cap, opts) {
+    var capSum = windowCapSum(cap, opts.name, opts.wsKey, opts.days);
+    if (capSum == null || capSum <= 0 || opts.windowSent == null) return null;
+    return Math.round(100 * opts.windowSent / capSum);
+  }
+  window.NavreoCapacity = { usedPct: usedPct, windowCapSum: windowCapSum };
+})();

@@ -193,9 +193,16 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       var e = w[name] || {};
       var reply = pct(e.replied, e.sent), bounce = pct(e.bounced, e.sent);
       var pw = perClientWarmPct(name, labels);          // % of the client's mailboxes actively warming (inwarmup only)
-      var capDay = capFor(name, labels);                 // real daily send capacity from /api/fleet-capacity (analytics' source)
-      var sentDay = (e.sent || 0) / winN;
-      var capUsed = (capDay != null && capDay > 0) ? Math.round(100 * sentDay / capDay) : null;
+      var capDay = capFor(name, labels);                 // current per-day cap — ONLY for the "N/day cap" label text
+      // Capacity-used % via the ONE shared formula (NavreoCapacity in shell.js) —
+      // Σ window sent ÷ Σ window per-day capacity — IDENTICAL to the Analytics tab.
+      // The old inline (avg-daily-sent ÷ latest-day-cap) read low mid-ramp; this
+      // matches Analytics exactly. See capacity-parity-align.
+      var lc = String(name).toLowerCase();
+      var wsKey = (lc === "asteri" || lc === "krg" || lc === "grout") ? lc : null;
+      var capUsed = (window.NavreoCapacity)
+        ? NavreoCapacity.usedPct(S.cap, { name: name, wsKey: wsKey, days: winN, windowSent: e.sent })
+        : ((capDay != null && capDay > 0) ? Math.round(100 * (e.sent || 0) / winN / capDay) : null);
       return {
         name: prettyClient(name, labels), dom: null, inbox: pw ? pw.total : null,
         reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
