@@ -371,10 +371,51 @@ def test_f3_archived_fresh_reply_not_reposted():
           s.get("marked_archived") == 1 and s.get("errors") == 0, str(s))
 
 
+def test_f3_rate_limit_bailout():
+    """c146b74: 3 consecutive history-read failures end the top-up for the
+    tick (Smartlead 429 storm — 37/40 failed on the first live tick), the
+    failures land in active_errors (not the sweep's own errors), and the
+    sweep itself stays ok."""
+    stale = _iso(NOW - dt.timedelta(days=2))
+    inbox_row = {"email_lead_id": "600", "last_reply_time": stale,
+                 "email_campaign_id": 50, "lead_email": "ok@x.com",
+                 "lead_category_id": 2}
+    actives = [{"id": 10 + i, "workspace": "navreo", "smartlead_campaign_id": 50 + i,
+                "lead_email": f"l{i}@x.com", "smartlead_lead_id": str(700 + i),
+                "status": "sent", "sent_at": _iso(NOW - dt.timedelta(hours=2)),
+                "replied_at": stale, "is_test": False,
+                "message_id": f"<m{i}@y>", "source_message_id": f"{700+i}-{stale}"}
+               for i in range(6)]
+
+    class RateLimitedHistory:
+        def __init__(self):
+            self.calls = 0
+        def __call__(self, path, params=None, campaign_id=None):
+            self.calls += 1
+            raise RuntimeError("HTTP Error 429: Too Many Requests")
+
+    hist = RateLimitedHistory()
+    sb = FakeSB(queue_rows=actives,
+                last_sweep=(NOW - dt.timedelta(minutes=20)).isoformat(),
+                seen={f"600-{stale}"})
+    hook = HookRecorder()
+    _wire_resweep(sb, FakeInbox([inbox_row]), hist, hook)
+    s = setter.run_positive_resweep(force=True)
+    check("F3-hardening: top-up stops after 3 consecutive failures",
+          hist.calls == 3, f"calls={hist.calls}")
+    check("F3-hardening: failures counted in active_errors, not errors",
+          s.get("active_errors") == 3 and s.get("errors") == 0, str(s))
+    check("F3-hardening: sweep itself still ok (fail-soft)",
+          s.get("ok") is True, str(s))
+    check("F3-hardening: no hook posts from the failed top-up",
+          len(hook.posts) == 0, str(hook.posts))
+
+
 if __name__ == "__main__":
     test_f2_manual_followup_id_in_sweep_set()
     test_f1_same_instant_dedup_stands_down()
     test_f1_distinct_instant_still_processes()
     test_f3_history_topup_posts_lagged_re_reply()
     test_f3_archived_fresh_reply_not_reposted()
+    test_f3_rate_limit_bailout()
     sys.exit(1 if report() else 0)
