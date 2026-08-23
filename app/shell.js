@@ -944,16 +944,20 @@ function setupChartTooltip(wrap) {
   function capSeries(cap, name, wsKey) {
     if (!cap || !cap.capacity) return null;
     var own = wsKey && cap.capacity[wsKey];
-    if (Array.isArray(own)) return own;
-    var real = ci(cap.client_caps_daily, name);
-    if (Array.isArray(real) && real.some(function (v) { return v != null; })) return real;
-    var nav = cap.capacity.navreo, cur = ci(cap.client_caps, name);
+    if (Array.isArray(own)) return own;                    // own-workspace: exact per-day
+    // shared client: real per-day series (client_caps_daily), with any NULL day
+    // filled by the navreo series scaled to the client's current cap — this
+    // merge is capacityDailyFull()'s exact behaviour (real.map(v ?? est[i])).
+    var realRaw = ci(cap.client_caps_daily, name);
+    var real = (Array.isArray(realRaw) && realRaw.some(function (v) { return v != null; })) ? realRaw : null;
+    var nav = cap.capacity.navreo, cur = ci(cap.client_caps, name), est = null;
     if (Array.isArray(nav) && cur != null) {
       var navCur = null;
       for (var i = nav.length - 1; i >= 0; i--) if (nav[i] != null) { navCur = nav[i]; break; }
-      if (navCur) { var r = cur / navCur; return nav.map(function (v) { return v == null ? null : Math.round(v * r); }); }
+      if (navCur) { var r = cur / navCur; est = nav.map(function (v) { return v == null ? null : Math.round(v * r); }); }
     }
-    return null;
+    if (!real) return est;
+    return real.map(function (v, i) { return v != null ? v : (est ? est[i] : null); });
   }
   // Re-key a (values,srcDays) series onto a target date axis — Analytics' alignCap.
   function alignTo(vals, srcDays, axis) {
