@@ -461,8 +461,22 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       "Warm-up is OFF — these boxes aren’t warming or sending. Turn warm-up on to put the capacity to work.");
   }
   function mgrInWarmup() {
-    return mgrMailboxView("inwarmup", function (m) { return pill("n", m.warmup_status || "Warming"); },
-      "Currently inside the warm-up window — building reputation before they carry full send volume.");
+    var rows = bundleView("inwarmup");
+    if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">None right now — nothing is in warm-up.</div>';
+    // one Restore button per DOMAIN (the action rests/restores a whole domain)
+    var seen = {}, body = rows.slice(0, MGR_CAP).map(function (m) {
+      var canRestore = m.domain && !seen[m.domain]; if (m.domain) seen[m.domain] = 1;
+      return '<tr><td>' + esc(m.email || "—") + '</td>' +
+        '<td class="mono">' + esc(m.domain || "") + '</td>' +
+        '<td>' + tagChips(m.tags) + '</td>' +
+        '<td class="num">' + (m.cap != null ? m.cap : "—") + '</td>' +
+        '<td>' + pill("n", m.warmup_status || "Warming") + '</td>' +
+        '<td style="text-align:right">' + (canRestore ? '<button class="fbtn" data-act="restore" data-domain="' + esc(m.domain) + '" style="background:var(--card);color:var(--ink);border:1px solid var(--line-2)">Restore to sending</button>' : '') + '</td></tr>';
+    }).join("");
+    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + ". " : "") +
+      "Inside the warm-up window — building reputation before full volume. Restore returns a whole domain to sending.";
+    return tableWrap('<th>Mailbox</th><th>Domain</th><th>Tags</th><th class="num">Cap/day</th><th>Status</th><th style="text-align:right">Action</th>', body, null, foot);
   }
   function mgrReconnect() {
     var rows = bundleView("reconnect");
@@ -483,11 +497,47 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     r = String(r).replace(/^RTPS[^:]*:-?\s*/, "");
     return r.length > 90 ? r.slice(0, 88) + "…" : r;
   }
-  function mgrLowRep(A) {
-    var c = A ? (Number(A.lowrep) || 0) : 0;
-    if (!c) return '<div class="mgr-empty">No mailboxes are below the reply floor right now.</div>';
-    return '<div class="mgr-empty"><b style="color:var(--ink);font-size:22px;font-family:var(--font-display)">' + comma(c) + '</b> mailbox' + (c > 1 ? "es are" : " is") +
-      ' below the reply floor — getting too few replies for the volume they send.<br><span style="font-size:12px">Park or slow these so they stop dragging domain reputation. Per-mailbox list wires in with the next bundle field.</span></div>';
+  // Below-floor DOMAINS from the bundle domain-health rows, unioned across the
+  // 7/14/30 windows (a slow bleed only crosses the floor on the wider window),
+  // scored with the same floors the auto-park uses: 0.7% standard, 0.5% Maildoso.
+  function belowFloorRows() {
+    var dh = (S.bundle && S.bundle.dh) || null;
+    if (!dh) return null;
+    var minSent = (S.bundle && S.bundle.minSent) || 500;
+    var inWarm = {};
+    ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) inWarm[m.domain] = true; });
+    var best = {};
+    ["7", "14", "30"].forEach(function (w) {
+      var rows = (dh[w] && dh[w].rows) || [];
+      rows.forEach(function (r) {
+        var dom = r.domain, rate = r.reply_rate, sent = r.sent || 0;
+        if (!dom || rate == null || sent < minSent) return;
+        var floor = r.maildoso ? 0.5 : 0.7;
+        if (rate >= floor) return;
+        if (!best[dom] || sent > best[dom].sent) best[dom] = { domain: dom, reply: rate, sent: sent, maildoso: !!r.maildoso, window: w };
+      });
+    });
+    return Object.keys(best).map(function (d) { var r = best[d]; r.inWarm = !!inWarm[d]; return r; })
+      .sort(function (a, b) { return a.reply - b.reply; });
+  }
+  function mgrLowRep() {
+    var rows = belowFloorRows();
+    if (rows == null) return null; // bundle not in yet
+    if (!rows.length) return '<div class="mgr-empty">No domains are below the reply floor right now — everything is replying above the line.</div>';
+    var body = rows.map(function (r) {
+      var floor = r.maildoso ? "0.5%" : "0.7%";
+      var status = r.inWarm ? pill("n", "In warm-up") : pill("a", "Sending");
+      var action = r.inWarm
+        ? '<button class="fbtn" data-act="restore" data-domain="' + esc(r.domain) + '" style="background:var(--card);color:var(--ink);border:1px solid var(--line-2)">Restore to sending</button>'
+        : '<button class="fbtn" data-act="warmup" data-domain="' + esc(r.domain) + '">Send to warm-up</button>';
+      return '<tr><td class="mono">' + esc(r.domain) + (r.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+        '<td class="num t-r">' + r.reply + '%</td>' +
+        '<td class="num">' + comma(r.sent) + '</td>' +
+        '<td>' + status + '</td>' +
+        '<td style="text-align:right">' + action + '</td></tr>';
+    }).join("");
+    return tableWrap('<th>Domain</th><th class="num">Reply %</th><th class="num">Sent</th><th>Status</th><th style="text-align:right">Action</th>', body, null,
+      rows.length + " domain(s) below the floor (0.7% standard · 0.5% Maildoso, on ≥" + comma((S.bundle && S.bundle.minSent) || 500) + " sends). Getting too few replies for the volume — rest them so they stop dragging reputation. Your auto-park already warms the worst first; this is the manual override.");
   }
   function mgrHighb(A) {
     var rows = (A && (A.highbCamps || A.campaignsFlagged)) || [];
@@ -505,8 +555,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var host = el("hub-mgr-body"), A = S.deliv, html;
     if (mgrActive === "tags") { host.innerHTML = mgrTags(); return; }
     if (mgrActive === "highb") { host.innerHTML = mgrHighb(A); return; }
-    if (mgrActive === "lowrep") { host.innerHTML = mgrLowRep(A); return; }
-    var builder = mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrReconnect;
+    var builder = mgrActive === "lowrep" ? mgrLowRep : mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrReconnect;
     try { html = builder(); } catch (e) { html = null; }
     if (html == null) { host.innerHTML = '<div class="skel" style="padding:18px">' + (S.bundleLoading ? "Loading mailboxes…" : "Sample view — live rows load from the audit bundle.") + '</div>'; return; }
     host.innerHTML = html;
@@ -555,6 +604,38 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var b = e.target.closest(".tab"); if (!b) return;
     mgrActive = b.getAttribute("data-tab");
     renderMgrTabs();
+  });
+
+  /* ---------- row actions: send-to-warm-up / restore ---------------------
+     Same endpoint the old tab (and the auto-park engine) use:
+     POST /api/warmup-job { op:"pause"|"resume", domains:[domain] }.
+     pause = rest the domain (send to warm-up); resume = restore to sending. */
+  function toast(msg, kind) {
+    var t = el("hub-toast"); if (!t) { t = document.createElement("div"); t.id = "hub-toast"; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.style.cssText = "position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:9999;padding:11px 18px;border-radius:10px;font:600 13px var(--font-sans);color:#fff;box-shadow:var(--shadow);background:" + (kind === "err" ? "var(--red)" : kind === "ok" ? "var(--green)" : "var(--ink)");
+    t.style.opacity = "1";
+    clearTimeout(toast._t); toast._t = setTimeout(function () { t.style.transition = "opacity .4s"; t.style.opacity = "0"; }, 3200);
+  }
+  el("hub-mgr-body").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-act]"); if (!b) return;
+    var act = b.getAttribute("data-act"), domain = b.getAttribute("data-domain");
+    if ((act !== "warmup" && act !== "restore") || !domain) return;
+    var op = act === "warmup" ? "pause" : "resume";
+    var verb = act === "warmup" ? "Send to warm-up" : "Restore to sending";
+    if (!window.confirm(verb + " — " + domain + "?\n\n" + (op === "pause"
+      ? "All its mailboxes stop sending and start warming. Reversible with Restore."
+      : "Its mailboxes return to sending at their saved caps."))) return;
+    b.disabled = true; var old = b.textContent; b.textContent = "Working…";
+    fetch("/api/warmup-job", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ op: op, domains: [domain] }) })
+      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); })
+      .then(function (j) {
+        if (j && j.ok === false) { toast((j.message || "Action failed") + "", "err"); b.disabled = false; b.textContent = old; return; }
+        toast(verb + " done — " + domain, "ok");
+        bundleTries = 0; loadBundle(); // refresh views so the row moves
+      })
+      .catch(function (err) { toast("Failed — " + err, "err"); b.disabled = false; b.textContent = old; });
   });
 
   /* ---------- data loads ---------- */
