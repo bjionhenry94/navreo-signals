@@ -4024,6 +4024,12 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
       if (flow === "reconnect") return b.views.reconnect ? v("reconnect") : null;
       if (flow === "inwarmup") {
         if (!b.views.inwarmup && !b.views.rested) return null;
+        // A domain paused from the High bounce-rate tab has every box zeroed,
+        // which otherwise reads identically to a warming box (cap 0). Those are
+        // NOT warming — they're stopped for bouncing — so they must never
+        // surface here, or the same domain shows in two tabs at once.
+        const bounceHeld = bouncePausedSet();
+        const notBouncePaused = (r) => !bounceHeld.has(String(r.domain || "").toLowerCase());
         const seen = new Set(), out = [];
         v("inwarmup").concat(v("rested")).forEach((r) => {
           const k = mgrRowKey(r);
@@ -4055,16 +4061,16 @@ details.dlv-fold.dlv-flash{animation:dlvFlash 1.5s ease-out}
                           _censusOnly: true });
             }
           });
-          return kept;
+          return kept.filter(notBouncePaused);
         }
-        return out;
+        return out.filter(notBouncePaused);
       }
       return [];
     }
     const A = S.A;
     if (flow === "notwarming") return A.inboxRows.filter((r) => r.kind === "warmupoff" && !r.maildoso);
     if (flow === "reconnect") return A.inboxRows.filter((r) => r.kind === "reconnect");
-    if (flow === "inwarmup") return A.inboxRows.filter((r) => r.kind === "ok" && (r.cap === 0 || r.rested));
+    if (flow === "inwarmup") { const bh = bouncePausedSet(); return A.inboxRows.filter((r) => r.kind === "ok" && (r.cap === 0 || r.rested) && !bh.has(String(r.domain || "").toLowerCase())); }
     return [];
   }
 

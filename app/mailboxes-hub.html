@@ -403,9 +403,6 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       tds += heatCell(blTone, r.bl == null ? "—" : (r.bl === 0 ? "Clean" : r.bl + " flagged"), r.bl == null ? "" : (r.bl === 0 ? "0 flagged" : "paused"));
       return "<tr>" + tds + "</tr>";
     }).join("");
-    var note = USING_REP.heat
-      ? 'Showing sample fleet — live per-client rows load from client-windows.'
-      : 'Reply &amp; bounce are per client. In-warm-up = estimated sends/day currently being repaired — each warming mailbox counted at its provider default (Outlook 2, Gmail 20, SMTP 15), from the Smartlead mirror (/api/warmup-capacity). Shared-fleet clients show “—” (their boxes sit in Navreo’s pool). Capacity used = daily sends ÷ real daily send capacity (/api/fleet-capacity, the same source as Analytics).';
     el("hub-heat").innerHTML =
       '<div class="heatwrap"><table class="heat"><tr><th class="n">Client</th><th>Reply rate</th><th>Bounce</th><th>In warm-up</th><th>Capacity used</th><th>Blacklist</th></tr>' + body + '</table></div>' +
       '<div class="heat-legend">' +
@@ -413,7 +410,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         '<span class="sw"><span class="box" style="background:#4E9A76"></span>Good</span>' +
         '<span class="sw"><span class="box" style="background:var(--amber)"></span>Watch</span>' +
         '<span class="sw"><span class="box" style="background:var(--red)"></span>Fix now</span>' +
-        '<span style="margin-left:auto">' + note + '</span></div>';
+        '</div>';
   }
 
   function mgrTags() {
