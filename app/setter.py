@@ -10207,8 +10207,9 @@ def route_search_smartlead_get(params):
     Returns hits newest-reply-first, each carrying queue_id/queue_status when
     the conversation ALSO lives in the setter (any pill), so the client can
     route those opens through the normal full-control path and badge the rest
-    "Not in setter". 120s cache per query; one 20-row page per workspace per
-    miss — never an unbounded sweep (512MB box)."""
+    "Not in setter". 120s cache per query; one 100-row page per workspace per
+    miss, with a first-token retry when a multi-token query is empty — never
+    an unbounded sweep (512MB box)."""
     try:
         q = _qp(params, "q", "").strip()
         if len(q) < 2:
@@ -10219,19 +10220,40 @@ def route_search_smartlead_get(params):
         if hit and now - hit[0] < _SL_SEARCH_TTL:
             return 200, dict(hit[1], cached=True)
         results, errors, seen = [], 0, set()
+        tokens = q.split()
         # One short-lived thread per workspace (live measure 2026-08-15: the
         # serial loop cost 19.5s cold across the enabled workspaces — each
         # master-inbox search is ~5s on Smartlead's side). Bounded at the
         # workspace count (single digits), joined with a hard deadline so a
         # hung workspace can't pin the request thread on the 512MB box.
         ws_keys = _sl_search_keys()
+
+        def _sl_page(key, term):
+            # One 100-row page (accuracy fix 2026-08-16: was 20, and a broad
+            # query like a bare surname returned exactly 20 with hasMore=true —
+            # a busy workspace silently truncated. 100 shrinks that window and
+            # is still ONE page, ~single-digit MB, memory-safe on the 512MB
+            # box; full pagination stays rejected for latency + memory).
+            return _sl_post("/master-inbox/inbox-replies", {
+                "limit": 100, "offset": 0, "sortBy": "REPLY_TIME_DESC",
+                "filters": {"emailStatus": "Replied", "search": term},
+            }, api_key=key)
+
         pages = {}
         def _one(ws, key):
             try:
-                pages[ws] = _sl_post("/master-inbox/inbox-replies", {
-                    "limit": 20, "offset": 0, "sortBy": "REPLY_TIME_DESC",
-                    "filters": {"emailStatus": "Replied", "search": q},
-                }, api_key=key)
+                resp = _sl_page(key, q)
+                data = resp.get("data") if isinstance(resp, dict) else None
+                # First-token retry (accuracy fix 2026-08-16): Smartlead ANDs
+                # every query token against the stored lead record, so a
+                # "first last" search returns NOTHING when the lead's
+                # last_name field is empty (live: "jim downey" → 0, though he
+                # exists). When a multi-token search comes back empty, retry
+                # the FIRST token alone — the caller dedupes, so a lead who
+                # matched the full query can't double up. Same page bound.
+                if (not data) and len(tokens) > 1:
+                    resp = _sl_page(key, tokens[0])
+                pages[ws] = resp
             except Exception:  # noqa: BLE001 - one workspace failing must not kill the search
                 pages[ws] = None
         threads = [threading.Thread(target=_one, args=(ws, key), daemon=True,
@@ -10274,8 +10296,14 @@ def route_search_smartlead_get(params):
                     })
             except Exception:  # noqa: BLE001 - one workspace failing must not kill the search
                 errors += 1
-        results.sort(key=lambda r: str(r.get("last_reply_time") or ""), reverse=True)
-        results = results[:40]
+        # Deterministic order (Sol ruling 2026-08-16): newest reply first, then
+        # the convo identity key as a stable tiebreaker so equal-timestamp rows
+        # never reorder between calls (they'd otherwise shuffle and read as
+        # "the list keeps changing").
+        results.sort(key=lambda r: (str(r.get("last_reply_time") or ""),
+                                    f"{r['workspace']}|{r['smartlead_campaign_id']}|{r['lead_email']}"),
+                     reverse=True)
+        results = results[:60]
         # Cross-ref the setter queue in ONE indexed select: newest row per
         # (campaign, email) wins, bare-email fallback mirrors /queue/locate.
         if results and _SB:

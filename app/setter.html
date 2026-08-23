@@ -131,10 +131,11 @@
 .il-search input:focus { outline: none; box-shadow: var(--focus); }
 .il-search-notes { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-top: 6px; }
 /* "From Smartlead" search-escalation section (global-search ship 2026-08-15) */
-.sl-section { border-top: 2px solid var(--line); }
-.sl-section-head { padding: 8px 14px 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-2); }
-.sl-section-head span { font-weight: 400; text-transform: none; letter-spacing: 0; }
+/* Unified search (2026-08-16): the old "From Smartlead" section is gone — hits
+   render as ordinary rows. sl-pill marks a conversation not in the setter
+   queue; sl-foot is the one-line "still searching" / error footer under the list. */
 .sl-pill { background: hsl(28 80% 90%); color: hsl(28 70% 28%); }
+.sl-foot { padding: 8px 14px; font-size: 12px; color: var(--ink-2); display: flex; align-items: center; gap: 6px; }
 .il-client-filter { margin-top: 8px; width: 100%; }
 /* Uncategorised handling (ship 2026-07-20) */
 .uncat-pill { background: rgba(217,164,32,.14); color: #9a7515; border: 1px solid rgba(217,164,32,.45); }
@@ -2936,7 +2937,7 @@ function inboxRowsBeforeCategory() {
    inboxPage back into range whenever the underlying set shrinks (a dismiss,
    a filter switch, a narrower search). */
 function pagedInboxRows() {
-  const rows = visibleInboxRows();
+  const rows = unifiedInboxRows();
   const totalPages = Math.max(1, Math.ceil(rows.length / INBOX_PAGE_SIZE));
   if (inboxPage > totalPages) inboxPage = totalPages;
   if (inboxPage < 1) inboxPage = 1;
@@ -3055,34 +3056,81 @@ function slHitName(h) {
   const n = [h.lead_first_name, h.lead_last_name].filter(Boolean).join(" ").trim();
   return n || h.lead_name || emailLocalPart(h.lead_email) || h.lead_email || "Unknown lead";
 }
-function smartleadSectionHtml() {
+/* Unified search (2026-08-16, Sol-orchestrated): there is no longer a separate
+   "From Smartlead" section. A Smartlead-only hit is turned into a synthetic
+   inbox row so the ONE list, ONE renderer (inboxItemHtml) and ONE pager show it
+   IDENTICALLY to a queue-backed row — the reviewer sees all results together and
+   never has to care whether a conversation lives in the setter or only in
+   Smartlead. queue_id decides open mode (full-control vs read-only), never the
+   source that surfaced it. */
+function slHitToRow(h) {
+  return {
+    id: null, __sl: true, __slkey: slHitKey(h),
+    workspace: h.workspace,
+    smartlead_campaign_id: h.smartlead_campaign_id,
+    campaign_name: h.campaign_name,
+    lead_email: h.lead_email,
+    lead_first_name: h.lead_first_name, lead_last_name: h.lead_last_name,
+    lead_name: h.lead_name,
+    reply_body: h.subject || "",
+    replied_at: h.last_reply_time,
+    status: h.queue_status || null,   // null => neutral "Not in setter" badge
+    queue_id: h.queue_id || null,
+    agent_id: "sl", is_test: false, category: "sl",
+  };
+}
+/* Workspace-aware conversation identity, used to dedupe the SAME conversation
+   across the local corpus and the Smartlead results (accuracy fix #10). Email
+   is in the key, so two different prospects who merely share a name never
+   merge. Matches the server's dedupe key shape. */
+function unifiedConvoKey(row) {
+  const em = String((row && row.lead_email) || "").trim().toLowerCase();
+  if (!em) return null;
+  const ws = (row.workspace || "navreo");
+  const cid = row.smartlead_campaign_id;
+  return cid != null ? `${ws}|${cid}|${em}` : `${ws}|${em}`;
+}
+/* The paged list's source: local matches PLUS every Smartlead hit for the
+   current query that isn't already a local row, merged into one recency-sorted
+   array. When a hit and a local row are the same conversation the LOCAL row
+   wins (it carries the stable queue id + full-control open) and the hit is
+   dropped — that's the merge, and it's what kills the old double-render. */
+function unifiedInboxRows() {
+  const local = visibleInboxRows();
+  const q = inboxSearchQuery.trim();
+  if (!q || q.length < 3 || SL_SEARCH.q !== q || !(SL_SEARCH.results || []).length) return local;
+  const localKeys = new Set(local.map(unifiedConvoKey).filter(Boolean));
+  const extra = [];
+  for (const h of SL_SEARCH.results) {
+    const row = slHitToRow(h);
+    const k = unifiedConvoKey(row);
+    if (k && localKeys.has(k)) continue;   // same conversation already local → merged
+    extra.push(row);
+  }
+  if (!extra.length) return local;
+  // One deterministic order for the whole list: newest reply first, convo key
+  // as a stable tiebreaker (mirrors the server sort) so equal-time rows never
+  // reshuffle between renders. concat() copies — the memoized `local` array is
+  // never mutated.
+  const merged = local.concat(extra);
+  merged.sort((a, b) => {
+    const ta = String(a.replied_at || a.created_at || "");
+    const tb = String(b.replied_at || b.created_at || "");
+    if (ta !== tb) return ta < tb ? 1 : -1;
+    const ka = unifiedConvoKey(a) || "", kb = unifiedConvoKey(b) || "";
+    return ka < kb ? 1 : (ka > kb ? -1 : 0);
+  });
+  return merged;
+}
+/* A one-line, unobtrusive footer under the unified list — NOT a second result
+   section. It only ever says "still searching Smartlead" or surfaces an error;
+   actual Smartlead results render as ordinary rows in the list above. */
+function smartleadStatusFootHtml() {
   const q = inboxSearchQuery.trim();
   if (!q || q.length < 3 || SL_SEARCH.q !== q) return "";
-  // The section carries what the list ABOVE can't show — a hit whose queue
-  // row is already in the visible local matches would be a duplicate.
-  const visIds = new Set(visibleInboxRows().map((r) => String(r.id)));
-  const hits = (SL_SEARCH.results || []).filter((h) => !(h.queue_id && visIds.has(String(h.queue_id))));
-  let body;
-  if (SL_SEARCH.loading) body = `<div class="empty"><span class="btnspin"></span> Searching all of Smartlead…</div>`;
-  else if (SL_SEARCH.error) body = `<div class="empty">${esc(SL_SEARCH.error)}</div>`;
-  else if (!hits.length) body = `<div class="empty">No further matches in Smartlead.</div>`;
-  else body = hits.map(slHitHtml).join("");
-  return `<div class="sl-section">
-    <div class="sl-section-head">From Smartlead <span>· whole account</span></div>
-    ${body}
-  </div>`;
-}
-function slHitHtml(h) {
-  const badge = h.queue_id
-    ? `<span class="pill ${statusPillClass(h.queue_status)}">${statusLabel(h.queue_status)}</span>`
-    : `<span class="pill sl-pill">Not in setter</span>`;
-  const camp = h.campaign_name || (h.smartlead_campaign_id ? `Campaign ${h.smartlead_campaign_id}` : "");
-  const selected = SL_OPEN === slHitKey(h) ? "selected" : "";
-  return `<div class="inbox-item sl-item ${selected}" data-slkey="${esc(slHitKey(h))}">
-    <div class="ii-line1">${esc(slHitName(h))}</div>
-    <div class="ii-snippet">${esc(truncate(h.subject || h.lead_email, 70))}</div>
-    <div class="ii-line3">${badge}${camp ? `<span class="pill n">${esc(truncate(camp, 34))}</span>` : ""}</div>
-  </div>`;
+  if (SL_SEARCH.loading) return `<div class="sl-foot"><span class="btnspin"></span> Searching all of Smartlead…</div>`;
+  if (SL_SEARCH.error) return `<div class="sl-foot">${esc(SL_SEARCH.error)}</div>`;
+  return "";
 }
 async function openSmartleadHit(key) {
   const h = (SL_SEARCH.results || []).find((x) => slHitKey(x) === key);
@@ -3167,15 +3215,19 @@ function renderInboxList() {
     testNoteEl.style.display = onlyTest ? "block" : "none";
     testNoteEl.textContent = onlyTest ? "These are simulated test replies. Real replies will appear here." : "";
   }
+  const slFoot = smartleadStatusFootHtml();
   const html = (!paged.rows.length
     // While a fetch is in flight an empty list means "still loading", not
     // "nothing here" - never show the misleading empty state during a load
-    // (loader ruling 2026-07-16).
+    // (loader ruling 2026-07-16). A Smartlead search still in flight is the
+    // same case: don't claim "nothing here" while more results may land.
     ? (_queueLoading
         ? `<div class="empty"><span class="btnspin"></span> Loading replies…</div>`
-        : `<div class="empty">No replies here. New ones will show up after the next check.</div>`)
+        : (slFoot
+            ? ""   // the footer's "Searching all of Smartlead…" carries the state
+            : `<div class="empty">No replies here. New ones will show up after the next check.</div>`))
     : paged.rows.map(inboxItemHtml).join(""))
-    + smartleadSectionHtml();
+    + slFoot;
   // Identical-HTML skip (perf pass R2): only touch the DOM when the markup
   // actually differs. An identical string rebuilds a byte-for-byte identical
   // list, so skipping the innerHTML assignment is invisible but saves the parse/
@@ -3419,22 +3471,36 @@ document.addEventListener("click", (e) => {
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeCallMenus(null); });
 
 function inboxItemHtml(row) {
+  // A synthetic Smartlead-only row (unified search 2026-08-16) renders through
+  // this SAME function so it looks identical to a queue row; it carries no
+  // stable id, so it's keyed by data-slkey and its selection tracks SL_OPEN.
+  const isSl = !!row.__sl;
   const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
   const snippet = esc(cleanBody(row.reply_body).replace(/\s+/g, " "));
-  const selected = String(row.id) === String(selectedRowId) ? "selected" : "";
+  const selected = isSl
+    ? (SL_OPEN === row.__slkey ? "selected" : "")
+    : (String(row.id) === String(selectedRowId) ? "selected" : "");
   // Status pill shows under "All" AND while a search is active - search spans
   // every filter, so without the pill a mixed result list would be unreadable.
-  const statusChip = (currentStatus === "" || inboxSearchQuery.trim())
-    ? `<span class="pill ${statusPillClass(row.status)}">${statusLabel(row.status)}</span>` : "";
+  // A Smartlead-only hit with no queue row shows a neutral "Not in setter" pill
+  // in the SAME slot, so every row wears one status badge of the same shape.
+  let statusChip = "";
+  if (isSl && !row.status) {
+    statusChip = `<span class="pill sl-pill">Not in setter</span>`;
+  } else if (currentStatus === "" || inboxSearchQuery.trim()) {
+    statusChip = `<span class="pill ${statusPillClass(row.status)}">${statusLabel(row.status)}</span>`;
+  }
   // Owner ruling 2026-07-14: intaken rows may carry agent_id = null (a positive
   // from a campaign with no assigned agent). Same subtle neutral pill as the
   // status chip above - no colour shouting, just a flag that no brain is set.
-  const noAgentChip = row.agent_id ? "" : `<span class="pill n">No agent</span>`;
-  const uncatChip = (isUncategorised(row) && !["sent", "auto_sent"].includes(row.status))
+  // (Suppressed on Smartlead-only rows — "no agent" is a queue concept.)
+  const noAgentChip = (isSl || row.agent_id) ? "" : `<span class="pill n">No agent</span>`;
+  const uncatChip = (!isSl && isUncategorised(row) && !["sent", "auto_sent"].includes(row.status))
     ? `<span class="pill uncat-pill">UNCATEGORISED</span>` : "";
+  const handle = isSl ? `data-slkey="${esc(row.__slkey)}"` : `data-id="${esc(row.id)}"`;
   // Reason/verdict text and the right-side "X ago" time were removed (owner ask):
   // the row now carries a per-client colour pill on the right instead.
-  return `<div class="inbox-item ${selected}" data-id="${esc(row.id)}">
+  return `<div class="inbox-item ${selected}" ${handle}>
     <div class="ii-line1">${esc(leadName(row))} ${testChip}</div>
     <div class="ii-snippet">${snippet || "No reply text."}</div>
     <div class="ii-line3">
