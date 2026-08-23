@@ -917,13 +917,17 @@ function setupChartTooltip(wrap) {
 })();
 
 /* ===================================================================
-   NavreoCapacity — the ONE "Capacity used" formula, shared by the
+   NavreoCapacity — the ONE "Capacity used" number, shared by the
    Analytics tab (deliverability.html) and the Fleet heat map
-   (mailboxes-hub.html). Both read /api/fleet-capacity; keeping the
-   math here (not inline per page) is what makes the two surfaces agree.
-   Formula = Σ per-day sent ÷ Σ per-day capacity across the window,
-   using the full ramping per-day capacity series — identical to the
-   Analytics tab's capacityDailyFull() × sum. See capacity-parity-align.
+   (mailboxes-hub.html). Both read /api/fleet-capacity + /api/client-windows.
+   This is a FAITHFUL port of the Analytics chart pipeline so the heat map
+   reproduces the EXACT number the Analytics tab shows (user ruling
+   2026-08-23: "match Analytics"). The pipeline is not a plain Σsent÷Σcap —
+   it mirrors renderTrend(): align cap onto the sent-day axis, slice the
+   window, DROP WEEKENDS (Analytics' default), gap-fill low-send and zero-cap
+   days (_fill), then capUsed = Σ sentBars ÷ Σ capBars over days where cap>0.
+   Keep this the single definition so the two surfaces can never drift.
+   See capacity-parity-align.
    =================================================================== */
 (function () {
   function ci(map, name) {                 // case-insensitive object lookup
@@ -933,11 +937,11 @@ function setupChartTooltip(wrap) {
     for (var k in map) if (k.toLowerCase() === lc) return map[k];
     return undefined;
   }
-  // Per-day capacity series for a client, mirroring Analytics' capacityDailyFull():
+  // Per-day capacity series (on cap.days axis), mirroring capacityDailyFull():
   //  • own-workspace clients (asteri/krg/grout) → cap.capacity[wsKey] exact per-day
   //  • shared clients → real cap.client_caps_daily[name], else the navreo per-day
   //    series scaled to the client's current cap (cap.client_caps[name]).
-  function series(cap, name, wsKey) {
+  function capSeries(cap, name, wsKey) {
     if (!cap || !cap.capacity) return null;
     var own = wsKey && cap.capacity[wsKey];
     if (Array.isArray(own)) return own;
@@ -951,20 +955,63 @@ function setupChartTooltip(wrap) {
     }
     return null;
   }
-  // Sum the last `days` non-null entries of the series (the window total capacity).
-  function windowCapSum(cap, name, wsKey, days) {
-    var s = series(cap, name, wsKey);
-    if (!s) return null;
-    var win = s.slice(Math.max(0, s.length - days)), sum = 0, seen = false;
-    win.forEach(function (v) { if (v != null) { sum += v; seen = true; } });
-    return seen ? sum : null;
+  // Re-key a (values,srcDays) series onto a target date axis — Analytics' alignCap.
+  function alignTo(vals, srcDays, axis) {
+    if (!vals || !srcDays || !axis) return null;
+    var m = {}; for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = vals[i];
+    return axis.map(function (d) { return m[d] == null ? null : m[d]; });
   }
-  // THE number: round(100 · windowSent ÷ windowCapacity). null when unknown.
-  // opts = { name, wsKey, days, windowSent }
-  function usedPct(cap, opts) {
-    var capSum = windowCapSum(cap, opts.name, opts.wsKey, opts.days);
-    if (capSum == null || capSum <= 0 || opts.windowSent == null) return null;
-    return Math.round(100 * opts.windowSent / capSum);
+  function median(a) {
+    var v = a.filter(function (x) { return x != null; }).slice().sort(function (x, y) { return x - y; });
+    if (!v.length) return 0; var m = v.length >> 1;
+    return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
   }
-  window.NavreoCapacity = { usedPct: usedPct, windowCapSum: windowCapSum };
+  // Analytics' _fill: interpolate over "trivial" gap days so the bars stay
+  // continuous. Returns filled values (same length). triv(v,i) marks a gap.
+  function fill(arr, triv) {
+    var out = arr.slice(), i, j;
+    if (!arr.some(function (v, k) { return !triv(v, k); })) return out;
+    for (i = 0; i < arr.length; i++) {
+      if (!triv(arr[i], i)) continue;
+      var lo = null, hi = null;
+      for (j = i - 1; j >= 0; j--) if (!triv(arr[j], j)) { lo = j; break; }
+      for (j = i + 1; j < arr.length; j++) if (!triv(arr[j], j)) { hi = j; break; }
+      out[i] = (lo != null && hi != null) ? arr[lo] + (arr[hi] - arr[lo]) * (i - lo) / (hi - lo)
+             : lo != null ? arr[lo] : (hi != null ? arr[hi] : arr[i]);
+    }
+    return out;
+  }
+  function isWeekend(d) { var g = new Date(d + "T12:00:00Z").getUTCDay(); return g === 0 || g === 6; }
+
+  // THE number the Analytics tab shows, reproduced. Returns 0..100 or null.
+  // opts = {
+  //   sent:[per-day], sentDays:[dates],   // from /api/client-windows series[client]
+  //   cap:{payload}, name, wsKey,          // from /api/fleet-capacity
+  //   days,                                // window length (7/14/30)
+  //   hideWeekends                         // default true — Analytics' default view
+  // }
+  function usedPct(opts) {
+    if (!opts || !opts.sent || !opts.sentDays || !opts.cap) return null;
+    var axis = opts.sentDays;
+    var cs = capSeries(opts.cap, opts.name, opts.wsKey);
+    var capOnAxis = alignTo(cs, opts.cap.days, axis);
+    if (!capOnAxis) return null;
+    var range = opts.days || axis.length;
+    var start = Math.max(0, axis.length - range);
+    var wDays = axis.slice(start), wSent = opts.sent.slice(start), wCap = capOnAxis.slice(start);
+    var hideWk = opts.hideWeekends !== false;              // default: weekends hidden
+    var keep = [];
+    wDays.forEach(function (d, i) { if (!(hideWk && isWeekend(d))) keep.push(i); });
+    var sentBars = keep.map(function (i) { return wSent[i]; });
+    var capBars = keep.map(function (i) { return wCap[i]; });
+    var med = median(sentBars);
+    sentBars = fill(sentBars, function (v) { return v == null || v < Math.max(5, 0.15 * med); })
+      .map(function (v) { return Math.round(v || 0); });
+    capBars = fill(capBars, function (v) { return v == null || v === 0; });
+    var capTot = 0, sTot = 0;
+    capBars.forEach(function (v, i) { if (v) { capTot += v; sTot += (sentBars[i] || 0); } });
+    if (capTot <= 0) return null;
+    return Math.round(100 * sTot / capTot);
+  }
+  window.NavreoCapacity = { usedPct: usedPct, capSeries: capSeries };
 })();
