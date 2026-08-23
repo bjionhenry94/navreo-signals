@@ -265,14 +265,38 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     if (labels[client]) return labels[client];
     return client.toLowerCase();
   }
-  function issuesCount(A) {
-    var bl = arrLen(A.blacklistRows || A.blacklist);
-    var nw = A.warmupConfig ? arrLen(A.warmupConfig.notWarming) : 0;
-    var inact = arrLen(A.inactive);
-    var sig = A.signature ? arrLen(A.signature.missing) : 0;
-    var hb = arrLen(A.campaignsFlagged || A.highbCamps);
-    return bl + nw + inact + sig + hb;
+  // Count-truth: the headline counts the reconciled ACTION LIST (the same
+  // Fix-today rows the founder sees), NOT a raw sum of every flagged row —
+  // so "Inbox issues" can't read 1,300 when there are a handful of real jobs.
+  // Each row still carries its own magnitude ("294 domains blacklisted").
+  function buildFixItems(A) {
+    if (!A) return [];
+    var items = [];
+    var bl = A.blacklistRows || (Array.isArray(A.blacklist) ? A.blacklist : []);
+    if (bl.length) {
+      var doms = bl.map(function (b) { return b.domain; }).filter(Boolean);
+      items.push({ lvl: "r", ic: "🚫", h: bl.length + " domain" + (bl.length > 1 ? "s" : "") + " blacklisted",
+        p: (doms.slice(0, 3).join(", ") || "Flagged on a public blacklist") + (doms.length > 3 ? " +" + (doms.length - 3) + " more" : "") + " — mail from them is bouncing.", btn: "Pause & replace" });
+    }
+    var hb = A.campaignsFlagged || (Array.isArray(A.highbCamps) ? A.highbCamps : []);
+    if (hb.length) {
+      var c0 = hb[0];
+      items.push({ lvl: "r", ic: "📈", h: hb.length + " campaign" + (hb.length > 1 ? "s" : "") + " bouncing too high",
+        p: esc(c0.name || ("campaign " + c0.id)) + (c0.bounce_pct != null ? " at " + c0.bounce_pct + "% bounce" : "") + " — heading toward spam if it keeps sending.", btn: "Review" });
+    }
+    var recon = bundleView("reconnect"); var rn = recon ? recon.length : 0;
+    if (rn) items.push({ lvl: "r", ic: "🔌", h: rn + " mailbox" + (rn > 1 ? "es" : "") + " need reconnecting",
+      p: "Failed to authenticate — silently sending nothing until reconnected.", btn: "Reconnect" });
+    var nw = A.warmupConfig && Array.isArray(A.warmupConfig.notWarming) ? A.warmupConfig.notWarming : [];
+    if (nw.length) items.push({ lvl: "a", ic: "😴", h: nw.length + " mailbox" + (nw.length > 1 ? "es" : "") + " have warm-up OFF",
+      p: "Sitting dormant — not sending, not warming, just losing time.", btn: "Turn warm-up on" });
+    var sig = A.signature && Array.isArray(A.signature.missing) ? A.signature.missing : [];
+    if (sig.length) items.push({ lvl: "a", ic: "✍️", h: sig.length + " mailbox" + (sig.length > 1 ? "es" : "") + " missing a signature",
+      p: "A blank signature reads as spammy and hurts deliverability.", btn: "Fix" });
+    return items;
   }
+  function issuesCount(A) { return buildFixItems(A).length; }
+  function urgentCount(A) { return buildFixItems(A).filter(function (it) { return it.lvl === "r"; }).length; }
   function arrLen(x) { return Array.isArray(x) ? x.length : (Number(x) || 0); }
 
   /* ---------- renderers ---------- */
@@ -292,9 +316,6 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     sub = esc(date) + " audit · " + parts.join(" · ");
     el("hub-verdict").innerHTML =
       '<div class="hub-vdot ' + dot + '"></div><div><h2>' + esc(head) + '</h2><p>' + sub + '</p></div>';
-  }
-  function urgentCount(A) {
-    return arrLen(A.blacklistRows || A.blacklist) + arrLen(A.campaignsFlagged || A.highbCamps);
   }
 
   function kpiCard(lab, val, delta, dcls, valCls) {
@@ -319,34 +340,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var A = S.deliv;
     if (!A) { USING_REP.fix = true; el("hub-fix").innerHTML = repFix(); return; }
     USING_REP.fix = false;
-    var items = [];
-    var bl = A.blacklistRows || (Array.isArray(A.blacklist) ? A.blacklist : []);
-    if (bl.length) {
-      var doms = bl.map(function (b) { return b.domain; }).filter(Boolean);
-      items.push({ lvl: "r", ic: "🚫", h: bl.length + " domain" + (bl.length > 1 ? "s" : "") + " blacklisted",
-        p: (doms.slice(0, 3).join(", ") || "Flagged on a public blacklist") + (doms.length > 3 ? " +" + (doms.length - 3) + " more" : "") + " — mail from them is bouncing.", btn: "Pause & replace" });
-    }
-    var hb = A.campaignsFlagged || (Array.isArray(A.highbCamps) ? A.highbCamps : []);
-    if (hb.length) {
-      var c0 = hb[0];
-      items.push({ lvl: "r", ic: "📈", h: hb.length + " campaign" + (hb.length > 1 ? "s" : "") + " bouncing too high",
-        p: esc(c0.name || ("campaign " + c0.id)) + (c0.bounce_pct != null ? " at " + c0.bounce_pct + "% bounce" : "") + " — heading toward spam if it keeps sending.", btn: "Review" });
-    }
-    var nw = A.warmupConfig && Array.isArray(A.warmupConfig.notWarming) ? A.warmupConfig.notWarming : [];
-    if (nw.length) {
-      items.push({ lvl: "a", ic: "😴", h: nw.length + " mailbox" + (nw.length > 1 ? "es" : "") + " have warm-up OFF",
-        p: "Sitting dormant — not sending, not warming, just losing time.", btn: "Turn warm-up on" });
-    }
-    var inact = Array.isArray(A.inactive) ? A.inactive : [];
-    if (inact.length) {
-      items.push({ lvl: "a", ic: "🔌", h: inact.length + " inbox" + (inact.length > 1 ? "es" : "") + " went quiet",
-        p: "Haven’t sent recently — reconnect to put the capacity back to work.", btn: "Reconnect" });
-    }
-    var sig = A.signature && Array.isArray(A.signature.missing) ? A.signature.missing : [];
-    if (sig.length) {
-      items.push({ lvl: "a", ic: "✍️", h: sig.length + " mailbox" + (sig.length > 1 ? "es" : "") + " missing a signature",
-        p: "A blank signature reads as spammy and hurts deliverability.", btn: "Fix" });
-    }
+    var items = buildFixItems(A);
     if (!items.length) {
       el("hub-fix").innerHTML = '<div class="allclear" style="margin:0;border-radius:0">✓ All clear — nothing needs action today.</div>';
       el("hub-fix-hint").textContent = "nothing urgent";
@@ -713,7 +707,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       .then(function (j) {
         if (j && j.bundle) S.bundle = j.bundle;
         S.bundleLoading = !!(j && j.running);
-        renderMgrTabs(); renderHeat(); // bundle feeds per-client warm/live too
+        renderAll(); // bundle feeds per-client warm/live + the reconnect count in Fix-today/verdict
         if (j && j.running && bundleTries < 8) { bundleTries++; setTimeout(loadBundle, 4000); }
       })
       .catch(function () { S.bundleLoading = false; });
