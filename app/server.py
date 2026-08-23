@@ -16471,6 +16471,75 @@ def _bounce_action(action: str, domain: str):
     return ok, skipped, failed, "; ".join(msgs[:5])
 
 
+def _bounce_job_worker(job: dict, action: str, domain: str):
+    """Runs a high-bounce pause/resume inside the job queue so the click shows
+    up in the Tasks panel (parity with warm-up), survives a refresh, and a
+    failure carries a real error instead of a silent inline wait — the domain's
+    mailboxes get zeroed/restored one at a time under the Smartlead rate budget,
+    which can run many seconds for a wide domain."""
+    _job_started(job)
+    try:
+        ok, skipped, failed, msg = _bounce_action(action, domain)
+        counts = {**(job.get("counts") or {}),
+                  ("paused" if action == "bounce-pause" else "resumed"): ok,
+                  "skipped": skipped, "failed": failed}
+        if failed and msg:
+            counts["detail"] = msg[:200]
+        with JOBS_LOCK:
+            job["counts"] = counts
+        # A failure on every box (nothing paused/resumed) is a real failure;
+        # a partial one still surfaces its per-box detail but counts as done.
+        if failed and not ok:
+            _job_finished(job, "failed", msg[:300] or "bounce action failed")
+        else:
+            _job_finished(job, "done")
+    except Exception as e:  # noqa: BLE001 — never let a worker die silently
+        _job_finished(job, "failed", str(e)[:300])
+
+
+def api_bounce_job(action: str, domain: str):
+    """Queue a high-bounce pause/resume as a Tasks-panel job. Returns
+    {job_id}, 202 — the client pings NavreoJobs and the panel tracks it."""
+    dom = (domain or "").strip().lower()
+    if action not in ("bounce-pause", "bounce-resume"):
+        return {"error": "bad_action"}, 400
+    if not dom:
+        return {"error": "missing_domain", "message": "missing domain"}, 400
+    verb = "High-bounce pause" if action == "bounce-pause" else "Resume sending"
+    job = _new_job("bounce_" + ("pause" if action == "bounce-pause" else "resume"),
+                   f"{verb}: {dom}", None)
+    with JOBS_LOCK:
+        job["counts"] = {"domains_list": [dom], "action": action}
+    _job_persist(job)
+    _enqueue_job(_bounce_job_worker, job, (job, action, dom))
+    return {"job_id": job["id"]}, 202
+
+
+def _deliv_apply_instantly_warmupoff(out, iwarming):
+    """Instantly is the warm-up TRUTH for the Maildoso fleet (owner request
+    2026-08-23): Smartlead only ever sees those boxes as 'warmup off /
+    external', so the audit backend dumps the whole fleet into the Not-warming
+    (warmupoff) view. Drop every warmupoff row whose mailbox Instantly reports
+    as actively warming (warmup_status==1), matched on lowercased email. Both
+    the tab count (mgrCount) and the table read this same rows array, so this
+    one filter corrects both. Caller runs it ONLY when the Instantly pull
+    SUCCEEDED — an outage passes an empty `iwarming`, leaving the
+    Smartlead-derived rows untouched (over-report, never a false 'all
+    warming'). Must run BEFORE _deliv_merge_client_ws so client-workspace
+    warmupoff rows (non-Maildoso, no Instantly presence) are never filtered.
+    Returns the number of rows removed."""
+    wo = (out.get("views") or {}).get("warmupoff")
+    if not (isinstance(wo, dict) and isinstance(wo.get("rows"), list) and iwarming):
+        return 0
+    before = len(wo["rows"])
+    wo["rows"] = [r for r in wo["rows"]
+                  if str((r or {}).get("email") or "").lower() not in iwarming]
+    removed = before - len(wo["rows"])
+    if isinstance(out.get("instantly"), dict):
+        out["instantly"]["warmupoffRemoved"] = removed
+    return removed
+
+
 def _deliv_bundle_run_bg_inner():
     """Pull the manager's five actionable views + three domain-health windows
     from the backend, sequentially (its Smartlead budget is shared with the
@@ -16639,7 +16708,7 @@ def _deliv_bundle_run_bg_inner():
     # Not-warming tab can surface real gaps instead of hiding the fleet.
     if not _deliv_mock_on():
         try:
-            idoms, inw = {}, []
+            idoms, inw, iwarming = {}, [], set()
             for a in _instantly_accounts():
                 email = str(a.get("email") or "").lower()
                 dom = email.rpartition("@")[2]
@@ -16651,6 +16720,7 @@ def _deliv_bundle_run_bg_inner():
                 g["score_sum"] += sc
                 if a.get("warmup_status") == 1:
                     g["warming"] += 1
+                    iwarming.add(email)
                 else:
                     g["off"] += 1
                     inw.append({"email": email, "domain": dom, "score": sc,
@@ -16663,6 +16733,7 @@ def _deliv_bundle_run_bg_inner():
                             for d, g in idoms.items()},
                 "notWarming": inw,
             }
+            _deliv_apply_instantly_warmupoff(out, iwarming)
         except Exception as e:  # noqa: BLE001 — key missing / API down: keep last good data
             out["errors"]["instantly"] = str(e)[:200]
     # A partial refresh must not clobber keys the last complete bundle had:
@@ -17177,6 +17248,78 @@ def snapshot_all_capacity(workspaces: list | None = None) -> dict:
     return {"ok": True, "date": today,
             "workspaces": {ws: v["cap"] for ws, v in ws_updates.items()},
             "clients": len(client_updates or {})}
+
+
+# ── warm-up capacity (sends/day currently being "repaired") ───────────────
+# Per-workspace estimated daily sending capacity that is IN WARM-UP — i.e.
+# boxes warming but not yet productive (the "being repaired" fleet). Source of
+# truth is the Supabase `mailboxes` mirror (the nightly Smartlead sync), so
+# it reconciles 1:1 with Smartlead account counts. Provider comes from the
+# mirror's `account_type` (OUTLOOK/GMAIL/SMTP — Smartlead's own field), NOT
+# smtp_host (null on 92% of boxes). Capacity is an ESTIMATE from fixed
+# provider defaults (Outlook 2, Gmail 20, SMTP 15 sends/day/box) — deliberately
+# NOT message_per_day, which is the configured cap, not the warm-up potential.
+_WARMUP_CAP_DEFAULTS = {"OUTLOOK": 2, "GMAIL": 20, "SMTP": 15}
+_WARMUP_CAP_CACHE: dict = {}
+_WARMUP_CAP_TTL_S = 600
+
+
+def _warmup_is_in_warmup(r: dict) -> bool:
+    # Same membership rule the deliverability "In warm-up" view uses: warm-up
+    # ON, but not yet producing (no daily cap OR attached to no campaign).
+    return bool(r.get("warmup_enabled")) and (
+        not (r.get("message_per_day") or 0) or not (r.get("campaign_count") or 0))
+
+
+def warmup_capacity_get() -> tuple[dict, int]:
+    """{ok, perWorkspace:{ws:{capacityPerDay,boxes,byProvider}}, total, boxes,
+    generated_at}. 10-min cached. Serves stale on a transient DB hiccup."""
+    from datetime import datetime, timezone
+    ent = _WARMUP_CAP_CACHE.get("data")
+    if ent and (time.time() - ent["ts"]) < _WARMUP_CAP_TTL_S:
+        return ent["data"], 200
+    try:
+        rows = sb_get_all("mailboxes?select=account_type,warmup_enabled,"
+                          "message_per_day,campaign_count,workspace") or []
+    except Exception as e:  # noqa: BLE001
+        if ent:
+            return ent["data"], 200
+        return {"error": "warmup_capacity_unavailable", "message": str(e)[:200]}, 502
+    # An empty read is a transient hiccup (the mirror always has thousands of
+    # boxes), NOT a real "zero warming" fleet — never cache it or the whole
+    # column blanks for 10 min. Serve stale if we have it, else a soft error.
+    if not rows:
+        if ent:
+            return ent["data"], 200
+        return {"error": "warmup_capacity_unavailable",
+                "message": "mailbox mirror read returned no rows"}, 502
+    # Seed EVERY workspace present in the mirror at zero, so an own-workspace
+    # with nothing currently warming reads "0/day" (real) instead of being
+    # dropped and rendering as "— / shared" — which is reserved for shared-fleet
+    # clients whose boxes live in Navreo's pool and genuinely can't be split out.
+    per: dict = {}
+    for r in rows:
+        ws0 = str(r.get("workspace") or "unknown")
+        per.setdefault(ws0, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
+    total = boxes_total = 0
+    for r in rows:
+        if not _warmup_is_in_warmup(r):
+            continue
+        ws = str(r.get("workspace") or "unknown")
+        at = str(r.get("account_type") or "SMTP").upper()
+        # Unknown providers fall back to SMTP's default rather than being dropped;
+        # every warming box contributes some estimated capacity.
+        add = _WARMUP_CAP_DEFAULTS.get(at, _WARMUP_CAP_DEFAULTS["SMTP"])
+        e = per.setdefault(ws, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
+        e["capacityPerDay"] += add
+        e["boxes"] += 1
+        e["byProvider"][at] = e["byProvider"].get(at, 0) + 1
+        total += add
+        boxes_total += 1
+    out = {"ok": True, "perWorkspace": per, "total": total, "boxes": boxes_total,
+           "generated_at": datetime.now(timezone.utc).isoformat()}
+    _WARMUP_CAP_CACHE["data"] = {"data": out, "ts": time.time()}
+    return out, 200
 
 
 def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
@@ -22182,6 +22325,9 @@ class Handler(SimpleHTTPRequestHandler):
                 days = 30
             body, status = fleet_capacity_get(days)
             return self._json(body, status)
+        if path == "/api/warmup-capacity":
+            body, status = warmup_capacity_get()
+            return self._json(body, status)
         if path == "/api/capacity-invariant":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -23183,16 +23329,16 @@ class Handler(SimpleHTTPRequestHandler):
             if act in ("bounce-pause", "bounce-resume") and not _deliv_mock_on():
                 from urllib.parse import parse_qs, urlparse
                 dom = (parse_qs(urlparse(self.path).query).get("domain") or [""])[0]
-                ok, skipped, failed, msg = _bounce_action(act, dom)
-                log_activity(path, {"domain": dom, "ok": ok, "skipped": skipped,
-                                    "failed": failed, "message": msg[:200]},
+                # Queue as a Tasks-panel job (parity with warm-up): the per-box
+                # cap writes run under the Smartlead rate budget, so a wide domain
+                # can take many seconds — the panel tracks it and reports the
+                # outcome instead of the click hanging on a synchronous wait.
+                body, status = api_bounce_job(act, dom)
+                log_activity(path, {"domain": dom, "queued": bool(body.get("job_id")),
+                                    "message": body.get("message") or body.get("error") or ""},
                              actor=self._authed_email() or "app",
                              action=act, entity="deliverability")
-                out = {("paused" if act == "bounce-pause" else "resumed"): ok,
-                       "skipped": skipped, "failed": failed}
-                if failed and msg:
-                    out["error"] = msg[:200]
-                return self._json(out)
+                return self._json(body, status)
             if act in ("reconnect", "reenable", "capacity-pause", "capacity-resume"):
                 from urllib.parse import parse_qs, urlparse
                 q = parse_qs(urlparse(self.path).query)

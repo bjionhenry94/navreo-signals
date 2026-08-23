@@ -224,6 +224,23 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     for (var lbl in labels) { if (labels[lbl] === key) return lbl; }
     return key.charAt(0).toUpperCase() + key.slice(1);
   }
+  // Estimated sends/day currently being repaired in warm-up for this client
+  // (Σ per warming box of its provider default: Outlook 2, Gmail 20, SMTP 15),
+  // from /api/warmup-capacity → S.warmcap.perWorkspace. Returns null until that
+  // feed is wired (or for shared-fleet clients not separable from Navreo's pool)
+  // → the "In warm-up" cell shows "—". NOTE: origin/main shipped the CALLERS of
+  // this function (clientRows + renderHeat use wcap/r.warmCap) without the
+  // definition, which threw ReferenceError and stranded the heat map on
+  // REP_CLIENTS sample rows for everyone; this defines it (null-safe) so live
+  // rows render again, and it lights up automatically when the loader lands.
+  function warmCapFor(name, labels) {
+    var wc = S.warmcap; if (!wc || !wc.perWorkspace) return null;
+    var pw = wc.perWorkspace;
+    var ws = labels[name] || String(name).toLowerCase();
+    var e = pw[ws] || pw[String(name).toLowerCase()];
+    if (!e) { for (var k in pw) { if (k.toLowerCase() === String(ws).toLowerCase()) { e = pw[k]; break; } } }
+    return e || null;
+  }
   // Real per-day send capacity for a client — the SAME /api/fleet-capacity the
   // analytics page uses: client_caps for shared-fleet clients, capacity[ws]
   // latest for own-workspace clients (Asteri/KRG/Grout). null until it lands.
