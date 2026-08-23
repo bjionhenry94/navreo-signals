@@ -472,7 +472,15 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     if (key === "lowrep") { var f = floorList(); return f ? f.length : null; }
     if (key === "highb") { var h = highbList(); return h ? h.length : null; }
     var rows = bundleView(key);
-    return rows ? rows.length : null;
+    if (!rows) return null;
+    // In warm-up is a domain-grouped view (many mailboxes per domain), so its
+    // badge counts DISTINCT domains, not mailbox rows — matches what the table shows.
+    if (key === "inwarmup") {
+      // Mirror mgrInWarmup: excludes High bounce-rate paused domains so badge = table.
+      var _hbc = highbList() || [], _hbcSet = {}; _hbc.forEach(function (d) { if (d.domain) _hbcSet[d.domain] = true; });
+      return groupByDomain(rows.filter(function (m) { return !_hbcSet[m.domain]; })).order.length;
+    }
+    return rows.length;
   }
   function renderMgrTabs() {
     el("hub-mgr-tabs").innerHTML = MGR_TABS.map(function (t) {
@@ -548,7 +556,10 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var body = gr.order.map(function (dom) {
       var rs = gr.g[dom], md = rs.some(function (r) { return r.maildoso; });
       var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
-      var dueTs = due.length ? Math.min.apply(null, due) : null;
+      // Every warming domain must show a real due-back date. When no rest-ledger
+      // timestamp exists (client-mirror rows carry restedAt:null), fall back to a
+      // full 7-day warm-up window from now so the column never shows "—".
+      var dueTs = due.length ? Math.min.apply(null, due) : (Date.now() + 7 * 864e5);
       return '<tr><td class="mono">' + esc(dom) + ' <span class="t-mut">· ' + rs.length + ' mbx</span>' + (md ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + rs.length + '</td>' +
         '<td>' + dueChip(dueTs) + '</td>' +
