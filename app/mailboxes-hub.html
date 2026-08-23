@@ -737,14 +737,24 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       .then(function (j) { if (j && j.blob) S.deliv = j.blob; })
       .catch(function () {});
   }
+  // client-windows feeds the client chips AND every live heat-map row. The boot
+  // fires 6 loaders at once, so this one can transiently 429/502 in the burst —
+  // and a single miss used to strand the page on REP_CLIENTS sample rows forever
+  // (no retry). Retry with backoff like loadBundle/loadMcm, re-rendering on each
+  // attempt so live rows replace the sample the moment the data lands.
+  var cwTries = 0;
   function loadCw() {
+    var retry = function () {
+      if (cwTries < 8) { cwTries++; setTimeout(function () { loadCw().then(function () { renderChips(); renderAll(); }); }, 3000); }
+    };
     return fetch("/api/client-windows", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (cw) {
-        if (!cw) return;
+        if (!cw || !cw.windows) { retry(); return; }   // transient failure or gated body — try again
+        cwTries = 0;
         S.cw = cw; S.labels = cw.ws_labels || {}; S.vol = (cw.windows && cw.windows["30"]) || {};
       })
-      .catch(function () {});
+      .catch(function () { retry(); });
   }
   function loadTags() {
     return fetch("/api/tag-performance", { credentials: "same-origin" })
@@ -785,11 +795,15 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   // /api/fleet-capacity → { client_caps:{Name:cap/day}, capacity:{ws:[series]}, days }.
   // The SAME source the Analytics page uses for real daily send capacity — feeds
   // the heat map's Capacity-used column (sent/day ÷ capacity/day).
+  var capTries = 0;
   function loadCap() {
     return fetch("/api/fleet-capacity?days=30", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { if (j && (j.client_caps || j.capacity)) { S.cap = j; renderHeat(); } })
-      .catch(function () {});
+      .then(function (j) {
+        if (j && (j.client_caps || j.capacity)) { capTries = 0; S.cap = j; renderHeat(); }
+        else if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); }   // transient miss — retry, don't leave the column blank
+      })
+      .catch(function () { if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); } });
   }
 
   // paint immediately with placeholders/representative, then fill as data lands
