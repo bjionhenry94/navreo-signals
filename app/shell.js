@@ -389,7 +389,14 @@ function setupChartTooltip(wrap) {
     }
     if (k === "warmup_resume") {
       if (st === "interrupted" || st === "failed") return `<b>Wake-up stopped early</b>${doms}`;
-      const n = c.resumed;
+      // The real count woken = what the audit service resumed PLUS what the
+      // direct Smartlead true-up re-capped (the audit inventory runs behind the
+      // fleet, so it routinely resumes 0 while the true-up does the actual work —
+      // job 692c39c565 woke 6 boxes but showed "Woke up 0", owner report
+      // 2026-08-24). The two sets are disjoint (the true-up only touches boxes
+      // still at cap 0), so they add.
+      const capped = Number(c.smartlead_capped) || 0;
+      const n = (c.resumed != null || capped) ? (Number(c.resumed) || 0) + capped : null;
       if (n != null) return `<b>${live ? "Waking up" : "Woke up"} ${num(n)} inboxes</b>${doms}`;
       return `<b>${live ? "Waking up inboxes" : "Woke up inboxes"}</b>${doms}`;
     }
@@ -785,8 +792,16 @@ function setupChartTooltip(wrap) {
     // Actions ride the right edge (same classes → same click handlers).
     const side = [];
     if (live) side.push(`<button type="button" class="nj-cancel-btn" data-jid="${jEsc(job.id)}">Cancel</button>`);
-    const resumable = status === "interrupted" && (job.kind === "verify" || job.kind === "remove_bad") && !job.dry_run && !campaignBusy;
-    if (resumable) side.push(`<button type="button" class="nj-resume-btn" data-jid="${jEsc(job.id)}">Resume</button>`);
+    const c0 = (job.counts && typeof job.counts === "object") ? job.counts : {};
+    const verifyResumable = status === "interrupted"
+      && (job.kind === "verify" || job.kind === "remove_bad") && !job.dry_run && !campaignBusy;
+    // Warm-up rest/reactivate can be re-fired straight from here — the backend
+    // rebuilds the request from the durable domain list. Only offer it when that
+    // list survived (older rows with empty counts can't be reconstructed).
+    const warmupResumable = (status === "interrupted" || status === "failed")
+      && (job.kind === "warmup_pause" || job.kind === "warmup_resume")
+      && Array.isArray(c0.domains_list) && c0.domains_list.length > 0;
+    if (verifyResumable || warmupResumable) side.push(`<button type="button" class="nj-resume-btn" data-jid="${jEsc(job.id)}">Resume</button>`);
     const finished = !live;
     if (finished) side.push(`<button type="button" class="nj-dismiss-btn" data-jid="${jEsc(job.id)}" title="Remove this task from the list" aria-label="Dismiss">&times;</button>`);
 
@@ -836,7 +851,10 @@ function setupChartTooltip(wrap) {
         }
         const boxes = fin.reduce((a, j) => {
           const c = (j.counts && typeof j.counts === "object") ? j.counts : {};
-          return a + (Number(c.held_boxes ?? c.resumed) || 0);
+          // Same true-up truth as jobSentence: a resume's real tally is
+          // resumed + smartlead_capped (held_boxes covers the pause side).
+          const woke = (Number(c.resumed) || 0) + (Number(c.smartlead_capped) || 0);
+          return a + (Number(c.held_boxes) || woke || 0);
         }, 0);
         if (boxes > 0) html += `<div class="sr-foot">The engine handled <span class="sr-num">${boxes.toLocaleString()}</span> inboxes for you.</div>`;
       }

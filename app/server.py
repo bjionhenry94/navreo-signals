@@ -6491,12 +6491,40 @@ def resume_job(jid: str):
     job = _job_get(jid)
     if not job:
         return {"error": "not_found"}, 404
-    if job.get("kind") not in ("verify", "remove_bad") or job.get("dry_run"):
-        return {"error": "not_resumable",
-                "message": "Only an interrupted verification or removal can be resumed."}, 409
     if job.get("status") not in ("interrupted", "failed"):
         return {"error": "not_interrupted",
                 "message": "This task isn't interrupted — nothing to resume."}, 409
+    kind = str(job.get("kind") or "")
+    # Warm-up pause/resume resume by re-submitting the SAME op against the
+    # durable domain list — the same reconstruction _maybe_auto_resume uses
+    # after a restart, now reachable from the sidebar Resume button too (owner
+    # report 2026-08-24: interrupted warm-up rows told the user to "click the
+    # button again" but no button existed, and auto-resume never fired for
+    # rows created on another owner/instance — they stranded forever).
+    if kind.startswith("warmup_"):
+        c = job.get("counts") if isinstance(job.get("counts"), dict) else {}
+        doms = c.get("domains_list") or []
+        op = c.get("op") or kind[len("warmup_"):]
+        if not doms or op not in ("pause", "resume"):
+            return {"error": "not_resumable",
+                    "message": "This warm-up task didn't record its domains, so it "
+                               "can't be retried automatically — re-run the rest / "
+                               "reactivate from the Mailboxes page."}, 409
+        body, st = api_warmup_job({"op": op, "domains": doms})
+        if st in (200, 202) and isinstance(body, dict) and body.get("job_id"):
+            try:
+                log_activity("/api/jobs/resume",
+                             payload={"op": op, "domains": doms[:20], "old_job_id": jid,
+                                      "new_job_id": body["job_id"]},
+                             actor="deliverability", action="warmup_resume_manual",
+                             entity="domain")
+            except Exception:  # noqa: BLE001
+                pass
+            return {"job_id": body["job_id"]}, 202
+        return (body if isinstance(body, dict) else {"error": "resume_failed"}), (st or 500)
+    if kind not in ("verify", "remove_bad") or job.get("dry_run"):
+        return {"error": "not_resumable",
+                "message": "Only an interrupted verification or removal can be resumed."}, 409
     campaign_id = job.get("campaign_id")
     sl_key = ws_key_for_campaign(campaign_id) or os.environ.get("SMARTLEAD_API_KEY") or ""
     # _JOB_CREATE_LOCK spans the has-active check AND job creation: two rapid
