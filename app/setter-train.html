@@ -858,6 +858,9 @@ async function pollGeneratingOnce() {
   // interview merge, or a pool sweep) must not hold the cards hostage -
   // only an actual generate still building blocks the open.
   if (gen.status === "running") pollIdleTicks = 0; // a sighting of running resets the idle grace
+  // A queued batch (waiting on another pass's lock) is coming, not absent -
+  // keep waiting exactly as if it were running (2026-08-24 stall).
+  if (gen.generate_queued) { pollIdleTicks = 0; return; }
   if (gen.status === "running" && gen.kind !== "retrain") return; // still building - keep polling
   if (gen.status === "running" && CASES.length >= pollBaselineCount
       && !(((res.data && res.data.cases) || []).length > pollBaselineCount)) return;
@@ -987,7 +990,7 @@ async function startReview() {
   }
   clearError();
   const genStatus = res.data && res.data.status;
-  if (genStatus === "started" || genStatus === "already_running") {
+  if (genStatus === "started" || genStatus === "already_running" || genStatus === "queued") {
     reviewPollRestores = restores;
     startReviewPoll(); // reviewInFlight stays true until endReviewPoll() (success, failure, or timeout)
     return;
@@ -1981,11 +1984,14 @@ async function generateMore() {
     view = "done"; renderDone();
     return;
   }
-  if (genStatus === "started" || genStatus === "already_running") {
-    // The server kicked the batch off in the background (or one was
-    // already running) - poll GET /api/setter/training until it lands
-    // rather than waiting on this request, which can outrun Render's
-    // edge-proxy timeout on a full batch.
+  if (genStatus === "started" || genStatus === "already_running" || genStatus === "queued") {
+    // The server kicked the batch off in the background, one was already
+    // running, or it queued ours behind a pass that holds the lock (e.g.
+    // the head-start batch - live stall 2026-08-24: "queued" used to fall
+    // through to the defensive fallback and the page went dead). Either
+    // way the cases arrive on the doc - poll GET /api/setter/training
+    // until they land rather than waiting on this request, which can
+    // outrun Render's edge-proxy timeout on a full batch.
     pollRestores = restores;
     startGeneratingPoll(baselineCount);
     return;
