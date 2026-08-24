@@ -380,6 +380,12 @@ let POOL_COMPLETE = false;      // server said the bounded scenario pool is exha
    own clock is never consulted. */
 let BRAIN_COVERS_AT = "";
 let INTERVIEWS = [];
+// Questions the trainer answered THIS SITTING, kept outside INTERVIEWS on
+// purpose: server snapshots replace INTERVIEWS wholesale, and until the
+// background answer-save lands the server copy still shows those questions
+// unanswered - which is exactly the window where a staged-questions fetch
+// could re-ask them (2026-08-24). Never cleared, never clobbered.
+const ANSWERED_IV_LOCAL = { ids: new Set(), texts: new Set() };
 let LEARNED_CHIP = null;      // {kind, text, pending, source} - newest teach echo
 let chipPollHandle = null;
 let transitionPollHandle = null;
@@ -1539,6 +1545,12 @@ async function submitInterviewAnswers(iv, onDone) {
     if (qid && val) { answers[qid] = val; n++; }
   });
   if (!n) { showError("Answer at least one question - or hit skip."); return; }
+  sentQuestions.forEach((q) => {
+    if (answers[q.id]) {
+      ANSWERED_IV_LOCAL.ids.add(String(q.id));
+      ANSWERED_IV_LOCAL.texts.add(String(q.q || "").trim().toLowerCase());
+    }
+  });
   const body = { agent_id: selectedAgentId, action: "answers", answers, questions: sentQuestions };
   if (SHARE_MODE) body.share = SHARE_TOKEN;
   // OPTIMISTIC ADVANCE (owner report 2026-08-22: submit froze on "Teaching
@@ -1579,6 +1591,13 @@ let IV_TYPED = {};            // qid -> half-typed answer, survives re-renders
 function mountInterviewForm() {
   const host = document.getElementById("interviewHost");
   if (!host || view !== "done") return;
+  if (IV_CURRENT && (IV_CURRENT.questions || []).length) {
+    // Final gate against re-asking answered questions, whatever path set
+    // IV_CURRENT (see ANSWERED_IV_LOCAL above).
+    IV_CURRENT.questions = IV_CURRENT.questions.filter((q) =>
+      !ANSWERED_IV_LOCAL.ids.has(String(q.id)) &&
+      !ANSWERED_IV_LOCAL.texts.has(String(q.q || "").trim().toLowerCase()));
+  }
   if (!IV_CURRENT || !(IV_CURRENT.questions || []).length) return;
   if (Object.keys(IV_CURRENT.answers || {}).length) return; // already answered
   if (ivDismissedForRound === currentRoundNum()) return;
@@ -1620,7 +1639,7 @@ async function maybeRenderInterview(roundNum) {
         // still-unanswered set re-served by the server's idempotent path.
         // Never re-ask anything already answered this sitting - match by
         // qid and by question text.
-        const seen = new Set();
+        const seen = new Set([...ANSWERED_IV_LOCAL.ids, ...ANSWERED_IV_LOCAL.texts]);
         INTERVIEWS.forEach((prev) => ((prev && prev.questions) || []).forEach((q) => {
           if (((prev.answers || {})[q.id] || "").length) {
             seen.add(String(q.id));
