@@ -17296,62 +17296,61 @@ def snapshot_all_capacity(workspaces: list | None = None) -> dict:
 
 
 # ── warm-up capacity (sends/day currently being "repaired") ───────────────
-# Per-workspace estimated daily sending capacity that is IN WARM-UP — i.e.
-# boxes warming but not yet productive (the "being repaired" fleet). Source of
-# truth is the Supabase `mailboxes` mirror (the nightly Smartlead sync), so
-# it reconciles 1:1 with Smartlead account counts. Provider comes from the
-# mirror's `account_type` (OUTLOOK/GMAIL/SMTP — Smartlead's own field), NOT
-# smtp_host (null on 92% of boxes). Capacity is an ESTIMATE from fixed
-# provider defaults (Outlook 2, Gmail 20, SMTP 15 sends/day/box) — deliberately
-# NOT message_per_day, which is the configured cap, not the warm-up potential.
-_WARMUP_CAP_DEFAULTS = {"OUTLOOK": 2, "GMAIL": 20, "SMTP": 15}
+# Estimated daily sending capacity currently IN WARM-UP, per client. Membership
+# = the mailboxes currently RESTING per the deliverability bundle's inwarmup
+# view (the rest-ledger truth the Resting tab shows) — owner-verified
+# 2026-08-24: "resting" IS the definition of in-warm-up. The previous mirror
+# heuristic (warmup_enabled AND (cap 0 OR no campaigns)) overcounted navreo
+# 3.8x by sweeping in thousands of warmup-enabled-but-healthy pool boxes.
+# Provider comes from the mirror's `account_type` (Smartlead's own field,
+# joined by email; audit matched 0-miss), with the bundle's maildoso flag on
+# top. Capacity is an ESTIMATE from fixed provider defaults (Outlook 2,
+# Gmail 20, Maildoso 15, SMTP 15 sends/day/box) — deliberately NOT
+# message_per_day, which is the configured cap, not the warm-up potential.
+_WARMUP_CAP_DEFAULTS = {"OUTLOOK": 2, "GMAIL": 20, "MAILDOSO": 15, "SMTP": 15}
 _WARMUP_CAP_CACHE: dict = {}
 _WARMUP_CAP_TTL_S = 600
 
 
-def _warmup_is_in_warmup(r: dict) -> bool:
-    # Same membership rule the deliverability "In warm-up" view uses: warm-up
-    # ON, but not yet producing (no daily cap OR attached to no campaign).
-    return bool(r.get("warmup_enabled")) and (
-        not (r.get("message_per_day") or 0) or not (r.get("campaign_count") or 0))
-
-
 def warmup_capacity_get() -> tuple[dict, int]:
     """{ok, perClient:{Client:{capacityPerDay,boxes,byProvider}}, perWorkspace,
-    total, boxes, mapReady, generated_at}. 10-min cached. Serves stale on a
-    transient DB hiccup.
+    total, boxes, mapReady, basis:"resting", generated_at}. 10-min cached;
+    serves stale on a transient source hiccup.
 
     perClient is the surface the UI renders: every client — Navreo INCLUDED —
-    gets its own warm-up capacity, no shared bucket. Navreo is treated as an
-    individual client (only boxes running Navreo's own campaigns / unattributed),
-    NOT as the fleet its clients ride on. Attribution:
-      • own-workspace clients (krg/asteri/grout) → their workspace, keyed by
-        display name from campaign_scorecard;
+    gets its own warm-up capacity, no shared bucket. Attribution:
+      • own-workspace clients → their workspace, keyed by display name from
+        campaign_scorecard;
       • navreo-workspace boxes → the client whose ACTIVE campaigns they run
-        (via the mailbox→client map, the same truth the client filter uses),
-        else "Navreo" itself.
-    perWorkspace is kept for backward compatibility. When the map is still
-    warming (mapReady false) navreo-workspace boxes all read under Navreo until
-    the sweep lands — the numbers only ever get more attributed, never wrong."""
+        (mailbox→client map, same truth as the client filter), else "Navreo".
+    While the map is warming (mapReady false) navreo-ws boxes read under
+    Navreo and split out when the sweep (or its persisted snapshot) lands."""
     from datetime import datetime, timezone
     ent = _WARMUP_CAP_CACHE.get("data")
     if ent and (time.time() - ent["ts"]) < _WARMUP_CAP_TTL_S:
         return ent["data"], 200
+    # Resting truth: the deliverability bundle's inwarmup view (restored from
+    # Supabase on a cold instance — one row read, no Smartlead traffic).
+    _deliv_bundle_restore()
+    with _DELIV_BUNDLE_LOCK:
+        bundle = _DELIV_BUNDLE.get("data")
+    resting = ((((bundle or {}).get("views") or {}).get("inwarmup") or {}).get("rows")) or []
+    if not resting:
+        # No bundle yet (or an empty view, which a real fleet never has) — a
+        # cold/degraded instance, not a real zero. Never cache it.
+        if ent:
+            return ent["data"], 200
+        return {"error": "warmup_capacity_unavailable",
+                "message": "resting ledger (deliverability bundle) not available yet"}, 502
+    # Provider truth: mirror account_type by email (Smartlead's own field).
     try:
-        rows = sb_get_all("mailboxes?select=email,account_type,warmup_enabled,"
-                          "message_per_day,campaign_count,workspace") or []
+        mrows = sb_get_all("mailboxes?select=email,account_type,workspace") or []
     except Exception as e:  # noqa: BLE001
         if ent:
             return ent["data"], 200
         return {"error": "warmup_capacity_unavailable", "message": str(e)[:200]}, 502
-    # An empty read is a transient hiccup (the mirror always has thousands of
-    # boxes), NOT a real "zero warming" fleet — never cache it or the whole
-    # column blanks for 10 min. Serve stale if we have it, else a soft error.
-    if not rows:
-        if ent:
-            return ent["data"], 200
-        return {"error": "warmup_capacity_unavailable",
-                "message": "mailbox mirror read returned no rows"}, 502
+    acct = {str(r.get("email") or "").lower(): str(r.get("account_type") or "").upper()
+            for r in mrows if r.get("email")}
     # Attribution maps: email→client (shared-fleet boxes under navreo, from the
     # campaign-membership map) and workspace-slug→display name (own-workspace
     # clients). Both are best-effort — a failure just leaves boxes under Navreo
@@ -17374,66 +17373,59 @@ def warmup_capacity_get() -> tuple[dict, int]:
     except Exception:  # noqa: BLE001
         pass
 
-    def _bucket(r):
-        ws = str(r.get("workspace") or "unknown")
-        if ws == "navreo":
-            return email_client.get(str(r.get("email") or "").lower(), "Navreo")
-        return ws_display.get(ws, ws)   # display name if known, else slug
+    def _provider(r, email):
+        if r.get("maildoso"):
+            return "MAILDOSO"
+        a = acct.get(email, "")
+        if "OUTLOOK" in a or "MICROSOFT" in a:
+            return "OUTLOOK"
+        if "GMAIL" in a or "GOOGLE" in a:
+            return "GMAIL"
+        if a:
+            return "SMTP"
+        # mirror miss → the bundle row's own provider string
+        p = str(r.get("provider") or "").lower()
+        if "maildoso" in p:
+            return "MAILDOSO"
+        if "outlook" in p or "office" in p or "azure" in p:
+            return "OUTLOOK"
+        if "gmail" in p or "google" in p:
+            return "GMAIL"
+        return "SMTP"
 
-    # Seed EVERY own-workspace client at zero so one with nothing warming reads
-    # "0%" (real) rather than dropping out; Navreo is always present too.
+    # Seed every known client at zero so one with nothing resting reads "0/day"
+    # (real) rather than dropping out; Navreo is always present too.
     def _seed():
-        return {"capacityPerDay": 0, "boxes": 0, "byProvider": {},
-                "activeCapacityPerDay": 0, "activeBoxes": 0, "warmPct": None}
+        return {"capacityPerDay": 0, "boxes": 0, "byProvider": {}}
     per_client: dict = {"Navreo": _seed()}
     per_ws: dict = {}
-    # Every mapped shared-fleet client too, so one with campaigns but nothing
-    # warming right now reads "0%" instead of dropping back to "— shared".
     for cl in set(email_client.values()):
         per_client.setdefault(cl, _seed())
-    for r in rows:
+    for r in mrows:
         ws0 = str(r.get("workspace") or "unknown")
         per_ws.setdefault(ws0, _seed())
         if ws0 != "navreo":
             per_client.setdefault(ws_display.get(ws0, ws0), _seed())
     total = boxes_total = 0
-    for r in rows:
-        ws = str(r.get("workspace") or "unknown")
-        tgts = (per_ws.setdefault(ws, _seed()),
-                per_client.setdefault(_bucket(r), _seed()))
-        if _warmup_is_in_warmup(r):
-            at = str(r.get("account_type") or "SMTP").upper()
-            # Unknown providers fall back to SMTP's default rather than being
-            # dropped; every warming box contributes some estimated capacity.
-            add = _WARMUP_CAP_DEFAULTS.get(at, _WARMUP_CAP_DEFAULTS["SMTP"])
-            for tgt in tgts:
-                tgt["capacityPerDay"] += add
-                tgt["boxes"] += 1
-                tgt["byProvider"][at] = tgt["byProvider"].get(at, 0) + 1
-            total += add
-            boxes_total += 1
-        else:
-            # Actively-sending capacity = the configured daily cap of boxes that
-            # are NOT warming and can send (message_per_day > 0). A cap-0 /
-            # disconnected box is neither warming nor sending, so it counts to
-            # neither and never inflates the denominator.
-            act = int(r.get("message_per_day") or 0)
-            if act > 0:
-                for tgt in tgts:
-                    tgt["activeCapacityPerDay"] += act
-                    tgt["activeBoxes"] += 1
-    # warmPct = warm-up capacity ÷ TOTAL sending capacity (active + warm-up) —
-    # the share of a client's capacity currently being repaired. null when a
-    # client has no capacity at all (avoid 0/0).
-    for buckets in (per_client, per_ws):
-        for e in buckets.values():
-            denom = e["capacityPerDay"] + e["activeCapacityPerDay"]
-            e["warmPct"] = round(100 * e["capacityPerDay"] / denom) if denom else None
+    for r in resting:
+        ws = str(r.get("workspace") or "navreo")
+        email = str(r.get("email") or "").lower()
+        cl = (email_client.get(email, "Navreo") if ws == "navreo"
+              else ws_display.get(ws, ws))
+        prov = _provider(r, email)
+        add = _WARMUP_CAP_DEFAULTS[prov]
+        for tgt in (per_ws.setdefault(ws, _seed()), per_client.setdefault(cl, _seed())):
+            tgt["capacityPerDay"] += add
+            tgt["boxes"] += 1
+            tgt["byProvider"][prov] = tgt["byProvider"].get(prov, 0) + 1
+        total += add
+        boxes_total += 1
     out = {"ok": True, "perClient": per_client, "perWorkspace": per_ws,
-           "mapReady": map_ready, "total": total, "boxes": boxes_total,
+           "mapReady": map_ready, "basis": "resting",
+           "total": total, "boxes": boxes_total,
            "generated_at": datetime.now(timezone.utc).isoformat()}
     # Don't cache a not-yet-attributed result for the full 10 min — a shorter
-    # hold lets the split appear soon after the sweep warms.
+    # hold lets the split appear soon after the sweep (or its snapshot) lands.
     _WARMUP_CAP_CACHE["data"] = {"data": out,
                                  "ts": time.time() - (_WARMUP_CAP_TTL_S - 60 if not map_ready else 0)}
     return out, 200
