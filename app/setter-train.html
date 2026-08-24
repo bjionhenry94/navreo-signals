@@ -1614,7 +1614,23 @@ async function maybeRenderInterview(roundNum) {
     const unansweredSet = iv && (iv.questions || []).length && !Object.keys(iv.answers || {}).length;
     if (!unansweredSet) {
       iv = await fetchInterviewQuestions();
-      if (iv) INTERVIEWS.push(iv);
+      if (iv) {
+        // Race guard (2026-08-24): intake/staged answers save in the
+        // BACKGROUND, so this fetch can outrun the save and get the same,
+        // still-unanswered set re-served by the server's idempotent path.
+        // Never re-ask anything already answered this sitting - match by
+        // qid and by question text.
+        const seen = new Set();
+        INTERVIEWS.forEach((prev) => ((prev && prev.questions) || []).forEach((q) => {
+          if (((prev.answers || {})[q.id] || "").length) {
+            seen.add(String(q.id));
+            seen.add(String(q.q || "").trim().toLowerCase());
+          }
+        }));
+        iv.questions = (iv.questions || []).filter((q) =>
+          !seen.has(String(q.id)) && !seen.has(String(q.q || "").trim().toLowerCase()));
+        if ((iv.questions || []).length) INTERVIEWS.push(iv);
+      }
     }
     if (iv && (iv.questions || []).length) { iv.answers = iv.answers || {}; IV_CURRENT = iv; }
   }
