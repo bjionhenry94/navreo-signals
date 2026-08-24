@@ -17344,13 +17344,27 @@ def warmup_capacity_get() -> tuple[dict, int]:
                 "message": "resting ledger (deliverability bundle) not available yet"}, 502
     # Provider truth: mirror account_type by email (Smartlead's own field).
     try:
-        mrows = sb_get_all("mailboxes?select=email,account_type,workspace") or []
+        mrows = sb_get_all("mailboxes?select=email,account_type,workspace,"
+                           "warmup_enabled,message_per_day") or []
     except Exception as e:  # noqa: BLE001
         if ent:
             return ent["data"], 200
         return {"error": "warmup_capacity_unavailable", "message": str(e)[:200]}, 502
     acct = {str(r.get("email") or "").lower(): str(r.get("account_type") or "").upper()
             for r in mrows if r.get("email")}
+    # Client-workspace resting truth (owner audit #2, 2026-08-24): the bundle's
+    # client-ws inwarmup rows are built on the mirror's campaign_count, which is
+    # 0 on EVERY client-ws box (stale sync field) — so all 1,660 KRG boxes read
+    # "resting" while KRG visibly sent 2.3k/day. A box that is configured to
+    # send (message_per_day > 0) is NEVER resting; client-ws resting = warm-up
+    # ON and cap 0. (Navreo-ws rows come from the real rest ledger — trusted.)
+    mirror_box = {str(r.get("email") or "").lower(): r for r in mrows if r.get("email")}
+
+    def _clientws_resting(email):
+        r = mirror_box.get(email)
+        if r is None:
+            return True   # unknown to the mirror — keep the bundle's verdict
+        return bool(r.get("warmup_enabled")) and not (r.get("message_per_day") or 0)
     # Attribution maps: email→client (shared-fleet boxes under navreo, from the
     # campaign-membership map) and workspace-slug→display name (own-workspace
     # clients). Both are best-effort — a failure just leaves boxes under Navreo
@@ -17436,6 +17450,10 @@ def warmup_capacity_get() -> tuple[dict, int]:
     for r in resting:
         ws = str(r.get("workspace") or "navreo")
         email = str(r.get("email") or "").lower()
+        # A client-ws box configured to send is a SENDER the stale-campaign_count
+        # bundle rule swept in — not resting; skip it (see _clientws_resting).
+        if ws != "navreo" and not _clientws_resting(email):
+            continue
         cl = (email_client.get(email) or _tag_client(r) or "Navreo") if ws == "navreo" \
             else ws_display.get(ws, ws)
         prov = _provider(r, email)
