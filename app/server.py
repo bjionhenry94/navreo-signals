@@ -15950,7 +15950,10 @@ def _deliv_client_ws_warming_doms():
             continue
         if not r.get("warmup_enabled"):
             continue
-        if not r.get("message_per_day") or not (r.get("campaign_count") or 0):
+        # Resting = warm-up ON and cap 0. NEVER campaign_count: it is stale-zero
+        # on every client-ws mirror row (owner audit 2026-08-24), and using it
+        # put rest clocks on domains that were actively sending 2.3k/day.
+        if not r.get("message_per_day"):
             d = (r.get("domain") or "").lower()
             if d:
                 doms.add(d)
@@ -16016,14 +16019,13 @@ def _deliv_merge_client_ws(out):
             row.update(kind="warmupoff",
                        reason=str(r.get("blocked_reason") or "")[:160])
             view_rows["warmupoff"].append(row)
-        elif not cap or not (r.get("campaign_count") or 0):
-            # In warm-up = warming but not yet sending: either capped at 0, or
-            # attached to no campaign at all (a pre-launch workspace like grout
-            # warms 120 boxes at cap 20 with campaign_count 0 — healthy-looking
-            # but genuinely still warming, so it belongs in this tab, not
-            # dropped as "healthy/no view" the way a launched sender is). This
-            # is what gives a newly-integrated workspace the same In-warm-up
-            # visibility Navreo's own warming inventory gets.
+        elif not cap:
+            # In warm-up = warming and NOT configured to send (cap 0). The old
+            # rule also swept in campaign_count==0 — meant for pre-launch Grout —
+            # but campaign_count is stale-zero on EVERY client-ws mirror row, so
+            # it classified all 1,660 KRG boxes (visibly sending 2.3k/day) as
+            # resting (owner audit 2026-08-24: "remove all phantoms"). Grout has
+            # since launched; a box with a live cap is a sender, full stop.
             row["kind"] = "ok"
             view_rows["inwarmup"].append(row)
     for v, rows in view_rows.items():
