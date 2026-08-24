@@ -4995,6 +4995,15 @@ function convoMsgHtml(who, when, body, emphasize, inbound) {
     <div class="tm-body">${html || "<i>No content.</i>"}</div>
   </div>`;
 }
+/* Subsequence marker — a centred system note on the thread recording that the
+   lead was added to a follow-up subsequence (owner ask 2026-08-24). It never
+   shows the subsequence's own copy, only that it happened. */
+function subseqNoteHtml(when) {
+  return `<div class="thread-note" style="text-align:center;margin:10px 0;">
+    <span class="small" style="display:inline-block;padding:4px 12px;border-radius:999px;background:var(--bg-sunken);border:1px solid var(--line);color:var(--ink-3);">
+      &#10227; Added to a follow-up subsequence${when ? ` &middot; ${pulledAgo(when)}` : ""}</span>
+  </div>`;
+}
 function convoHtml(row) {
   const thread = Array.isArray(row.thread) ? row.thread : [];
   // Compare CLEANED text, not raw HTML: every inbound reply body shares the
@@ -5027,7 +5036,22 @@ function convoHtml(row) {
   // answer), so "current reply pinned last" would tell the story out of
   // order. Sort everything by time; the current reply keeps its emphasis
   // wherever it falls.
-  const items = older.map((m) => ({ time: m.time, html: convoMsgHtml(m.type === "SENT" ? "You" : "Them", m.time, m.body, false, m.type !== "SENT") }));
+  const items = older.map((m) => {
+    // Subsequence marker (owner ask 2026-08-24): a note on the thread saying
+    // the lead was added to a follow-up subsequence. It carries no email body —
+    // it just records that it happened, rendered as a centred system pill, not
+    // a message bubble.
+    if (m && m.type === "NOTE" && m.kind === "subsequence") {
+      return { time: m.time, html: subseqNoteHtml(m.time) };
+    }
+    const who = m.type === "SENT" ? "You" : "Them";
+    // Front-only test graft: mark it plainly so a test send is never mistaken
+    // for a real one. No email was sent for this message.
+    const body = m && m._test
+      ? `<div class="small" style="margin-bottom:6px;font-weight:600;color:#b45309">TEST — added to thread, not actually sent</div>${m.body || ""}`
+      : m.body;
+    return { time: m.time, html: convoMsgHtml(who, m.time, body, false, m.type !== "SENT") };
+  });
   items.push({ time: row.replied_at, html: convoMsgHtml("Their reply", row.replied_at, row.reply_body, true, true) });
   items.sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
   // Fade hint only when there's earlier content to scroll up to - test rows
@@ -6175,6 +6199,18 @@ async function doSend(btn) {
    path Approve uses, but the row's status never changes - only the thread
    grows. Optimistic: the message lands in the conversation instantly; a
    failure removes it again and says why. */
+/* Front-only test mode (owner ask 2026-08-24): open the page with
+   ?fesend=test to make "Send follow-up" graft the message straight onto the
+   local thread WITHOUT ever hitting the server — no email is sent. It exists
+   to prove the send is unmistakable in the UI: the just-typed message appears
+   in the conversation and scrolls into view exactly as a real send would,
+   with a visible "TEST — not actually sent" marker so it can't be mistaken
+   for a live send. Off by default; a normal URL sends for real as before. */
+const FE_SEND_TEST = (() => {
+  try { return new URLSearchParams(location.search).get("fesend") === "test"; }
+  catch (_) { return false; }
+})();
+
 async function doSendFollowup(btn) {
   if (btn.disabled) return;
   const id = btn.getAttribute("data-id");
@@ -6193,12 +6229,19 @@ async function doSendFollowup(btn) {
   let grafted = null;
   if (row) {
     grafted = { type: "SENT", time: new Date().toISOString(), body, _optimistic: true };
+    if (FE_SEND_TEST) grafted._test = true;
     row.thread = (row.thread || []).concat([grafted]);
     row.sent_body = body;
     if (String(selectedRowId) === String(id)) renderDetail(row);
-    protoNote("Follow-up sent");
+    protoNote(FE_SEND_TEST ? "Follow-up added to thread (test — not sent)" : "Follow-up sent");
   }
-  const res = await runSendJob(payload, null, { rowTruth: false });
+  // Front-only test: the message is now on the thread and rendered; stop here
+  // WITHOUT calling the server, so no email is ever sent. Fall through to the
+  // same success path (clear the box, resolve the tray, scroll into view) so
+  // the test looks and feels exactly like a real send.
+  const res = FE_SEND_TEST
+    ? { ok: true, data: { ok: true, test: true } }
+    : await runSendJob(payload, null, { rowTruth: false });
   btn.disabled = false;
   const failed = !res.ok || (res.data && res.data.ok === false);
   if (failed) {
@@ -6238,7 +6281,10 @@ async function doSendFollowup(btn) {
     renderDetail(row);
     scrollSentIntoView(id);
   }
-  loadQueue();   // its tail reconciles the tray — no separate GET needed
+  // Front-only test: skip the queue reload — it reconciles against server
+  // truth, which has no record of this test message and would wipe the graft
+  // straight off the thread. The whole point is that it stays visible.
+  if (!FE_SEND_TEST) loadQueue();   // its tail reconciles the tray — no separate GET needed
 }
 
 /* After a follow-up sends, bring the just-grafted SENT message into view so
@@ -6250,7 +6296,7 @@ function scrollSentIntoView(id) {
   requestAnimationFrame(() => {
     const convo = document.getElementById(`convo-${id}`);
     if (!convo) return;
-    const msgs = convo.querySelectorAll(".thread-msg");
+    const msgs = convo.querySelectorAll(".thread-msg, .thread-note");
     const last = msgs[msgs.length - 1];
     if (last) last.scrollIntoView({ behavior: "smooth", block: "center" });
   });
@@ -6715,6 +6761,16 @@ async function doSubsequence(chk) {
   chk.disabled = true;
   const id = chk.getAttribute("data-id");
   const checked = chk.checked;
+  const row = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
+              ALL_ROWS.find((r) => String(r.id) === String(id));
+  // Front-only test: don't touch Smartlead — just record it on the thread.
+  if (FE_SEND_TEST) {
+    chk.disabled = false;
+    chk.checked = checked;
+    if (checked) graftSubseqNote(row, id);
+    protoNote(checked ? "Added to subsequence (test — not pushed)" : "Saved");
+    return;
+  }
   const res = await fetchJson("/api/setter/queue/action", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: Number(id), action: "subsequence", checked }),
   });
@@ -6725,7 +6781,27 @@ async function doSubsequence(chk) {
   if (!res.ok) { showError("Couldn't update the subsequence flag: " + res.error); chk.checked = !checked; return; }
   chk.checked = !!(res.data && res.data.added_to_subsequence);
   clearError();
+  // Record it on the thread (owner ask 2026-08-24): a system note saying the
+  // lead was added, so the action is visible on the conversation. Only when
+  // the push actually took — mirror the checkbox's server-confirmed state.
+  if (chk.checked) graftSubseqNote(row, id);
   protoNote(checked ? "Pushed to Smartlead subsequence" : "Saved");
+}
+
+/* Graft the "added to subsequence" note onto the local thread and repaint the
+   open conversation, so the action shows up exactly like a sent message does.
+   Guards against a double-note if the checkbox is toggled twice. */
+function graftSubseqNote(row, id) {
+  if (!row) return;
+  const already = (row.thread || []).some((m) => m && m.type === "NOTE" && m.kind === "subsequence" && m._optimistic);
+  if (already) return;
+  row.thread = (row.thread || []).concat([
+    { type: "NOTE", kind: "subsequence", time: new Date().toISOString(), _optimistic: true },
+  ]);
+  if (String(selectedRowId) === String(id)) {
+    renderDetail(row);
+    scrollSentIntoView(id);
+  }
 }
 
 /* ── Reply check (owner report 2026-07-25; header button removed 2026-07-26)
