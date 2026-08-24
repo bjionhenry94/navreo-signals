@@ -1526,13 +1526,20 @@ async function submitInterviewAnswers(iv, onDone) {
   // can be reassigned to a newer round while this form stays mounted, which
   // made every getElementById miss and falsely report an empty form (owner
   // report 2026-08-21: a full form bounced with "answer at least one question").
+  // Also capture each question's on-screen text: if the server's training doc
+  // was rotated under this page (a reset/re-create mid-session), the answers
+  // route can rebuild the interview from these instead of 404ing the client's
+  // typed answers away (hardening, 2026-08-24).
+  const sentQuestions = [];
   document.querySelectorAll("#ivForm .iv-q input[data-qid]").forEach((inp) => {
     const qid = inp.getAttribute("data-qid");
     const val = (inp.value || "").trim();
+    const lab = inp.closest(".iv-q") ? inp.closest(".iv-q").querySelector("label") : null;
+    if (qid) sentQuestions.push({ id: qid, q: lab ? (lab.textContent || "").trim() : "" });
     if (qid && val) { answers[qid] = val; n++; }
   });
   if (!n) { showError("Answer at least one question - or hit skip."); return; }
-  const body = { agent_id: selectedAgentId, action: "answers", answers };
+  const body = { agent_id: selectedAgentId, action: "answers", answers, questions: sentQuestions };
   if (SHARE_MODE) body.share = SHARE_TOKEN;
   // OPTIMISTIC ADVANCE (owner report 2026-08-22: submit froze on "Teaching
   // your AI..." when the save collided with the share-time pre-build). The
