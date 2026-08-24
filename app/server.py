@@ -17271,22 +17271,27 @@ def snapshot_navreo_capacity() -> dict:
     today = _dtmod.date.today().isoformat()
     _cap_blob_upsert(today, {"navreo": nav}, bd.get("clients") or {}, src="navreo-caps")
     _CLIENT_CAP.update(data=bd, ts=time.time())
-    # The mailbox→client map (mcm) that drives the Mailboxes tab's client filter is
-    # only persisted from INSIDE api_mailbox_client_map(), which needs a completed
-    # restore sweep. The 512MB web instance OOMs before that sweep finishes, so the
-    # snapshot was never written and the web served an EMPTY map — the client filter
-    # showed "attributing…" for every client forever. force_fresh above just ran the
-    # sweep synchronously in THIS cron process, so calling the map now persists a
-    # non-zero snapshot to the shared blob for the web to read. Best-effort.
-    mcm_clients = None
+    mcm_clients = _persist_mcm_after_sweep()
+    return {"ok": True, "date": today, "navreo_workspace_cap": nav["cap"],
+            "clients": len(bd.get("clients") or {}), "mcm_clients": mcm_clients}
+
+
+def _persist_mcm_after_sweep():
+    """Persist the mailbox→client map (mcm) that drives the Mailboxes tab's client
+    filter. That map is only written from INSIDE api_mailbox_client_map(), which needs
+    a completed restore sweep; the 512MB web instance OOMs before the sweep finishes,
+    so the snapshot was never written and the web served an EMPTY map — the client
+    filter showed "attributing…" for every client forever. Both snapshot_* callers run
+    the sweep synchronously in a cron process just before calling this, so the map is
+    ready here and gets persisted to the shared blob for the web to read. Best-effort:
+    a failure must never break the capacity cron. Returns the client count, or None."""
     try:
         mp = api_mailbox_client_map()
         if mp.get("status") == "ready":
-            mcm_clients = len(mp.get("clients") or {})
-    except Exception as e:  # noqa: BLE001 — never fail the cap cron over the map
-        print(f"[snapshot_navreo_capacity] mcm persist skipped: {e}", file=sys.stderr)
-    return {"ok": True, "date": today, "navreo_workspace_cap": nav["cap"],
-            "clients": len(bd.get("clients") or {}), "mcm_clients": mcm_clients}
+            return len(mp.get("clients") or {})
+    except Exception as e:  # noqa: BLE001
+        print(f"[mcm persist] skipped: {e}", file=sys.stderr)
+    return None
 
 
 def snapshot_all_capacity(workspaces: list | None = None) -> dict:
@@ -17306,9 +17311,13 @@ def snapshot_all_capacity(workspaces: list | None = None) -> dict:
     today = _dtmod.date.today().isoformat()
     _cap_blob_upsert(today, ws_updates, client_updates, src="sync")
     _CLIENT_CAP.update(data=bd, ts=time.time())
+    # This is the reliable SERVER-SIDE path (federated mailbox-sync cron), so persist
+    # the mcm snapshot here too — the navreo cap crons that also persist it are
+    # laptop-side scripts that don't always run. See _persist_mcm_after_sweep.
+    mcm_clients = _persist_mcm_after_sweep() if "navreo" in workspaces else None
     return {"ok": True, "date": today,
             "workspaces": {ws: v["cap"] for ws, v in ws_updates.items()},
-            "clients": len(client_updates or {})}
+            "clients": len(client_updates or {}), "mcm_clients": mcm_clients}
 
 
 # ── warm-up capacity (sends/day currently being "repaired") ───────────────
