@@ -212,11 +212,15 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
         warm: pw ? pw.warmPct : null, warmKnown: !!pw,
         warmCap: wcap ? wcap.capacityPerDay : null, warmBoxes: wcap ? wcap.boxes : null, warmCapKnown: !!wcap,
-        // % of the client's TOTAL sending capacity (active + warm-up) currently
-        // in warm-up (being repaired) — server-computed from the one mirror
-        // source: warmupCap ÷ (warmupCap + activeCap). null → cell falls back to
-        // raw sends/day.
-        warmPct: wcap && wcap.warmPct != null ? wcap.warmPct : null,
+        // % of the client's TOTAL sending capacity currently in warm-up =
+        // warmup ÷ (warmup + available), where "available" is the SAME capDay
+        // the Capacity-used column shows — the two columns stay mathematically
+        // consistent by construction (a client at 100% here would have 0/day
+        // available there). The backend's mirror-derived warmPct is NOT used:
+        // the mirror's campaign_count/message_per_day are unreliable for some
+        // workspaces (KRG read active=0 while visibly sending 2.2k/day).
+        warmPct: (wcap && capDay != null && (wcap.capacityPerDay + capDay) > 0)
+          ? Math.round(100 * wcap.capacityPerDay / (wcap.capacityPerDay + capDay)) : null,
         cap: capUsed, capDay: capDay, bl: null
       };
     });
@@ -361,20 +365,24 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var all = S.cw && S.cw.windows && S.cw.windows[win] && S.cw.windows[win]["__all"];
     var reply = (all && all.sent) ? pct(all.replied, all.sent) : null;
     var bounce = (all && all.sent) ? pct(all.bounced, all.sent) : null;
-    var sumWarmCap = 0, sumCapDay = 0, sumSent = 0, capKnown = false, warmKnown = false, bl = 0, blKnown = false;
+    // Warm-up % = Σ(warm capacity) / Σ(total capacity) over clients where BOTH
+    // are known — numerator and denominator PAIRED, so the fleet % can never
+    // exceed the per-client range (an unpaired sum produced >100% nonsense).
+    // Capacity used % = the send-weighted mean of each client's own used-% (its
+    // exact per-client figure comes from the gap-filled capacity pipeline, which
+    // can't be re-derived from a single cap/day number here).
+    var sumWarm = 0, capForWarm = 0, wCapNum = 0, wCapDen = 0, bl = 0, blKnown = false;
     rows.forEach(function (r) {
-      if (r.capDay != null) { sumCapDay += r.capDay; capKnown = true; }
-      if (r.warmCap != null) { sumWarmCap += r.warmCap; warmKnown = true; }
-      if (r.sent != null) { sumSent += r.sent; }
+      if (r.warmCap != null && r.capDay != null) { sumWarm += r.warmCap; capForWarm += r.capDay; }
+      if (r.cap != null && r.sent) { wCapNum += r.cap * r.sent; wCapDen += r.sent; }
       if (r.bl != null) { bl += r.bl; blKnown = true; }
     });
-    var winN = Number(win) || 30;
     return {
       isAll: true, name: "All clients", dom: null, inbox: null,
       reply: reply, bounce: bounce,
-      warmPct: (capKnown && sumCapDay > 0 && warmKnown) ? Math.round(100 * sumWarmCap / sumCapDay) : null,
-      warmCap: warmKnown ? sumWarmCap : null, warmCapKnown: true,
-      cap: (capKnown && sumCapDay > 0) ? Math.round(100 * sumSent / (sumCapDay * winN)) : null,
+      warmPct: capForWarm > 0 ? Math.round(100 * sumWarm / capForWarm) : null,
+      warmCap: capForWarm > 0 ? sumWarm : null, warmCapKnown: true,
+      cap: wCapDen > 0 ? Math.round(wCapNum / wCapDen) : null,
       capDay: null, bl: blKnown ? bl : null, nClients: rows.length
     };
   }
@@ -427,9 +435,10 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       }
       var warmTn = r.warmCap == null ? "mut" : (r.warmCap > 0 ? "g2" : "mut");
       tds += heatCell(warmTn, warmVal, warmSub);
-      // Capacity used: keep the % (top); bottom describes what it's a % OF.
+      // Capacity used: keep the % (top); bottom = the available amount itself
+      // ("22.1k/day of available sending capacity") — the amount stays visible.
       tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%",
-        r.cap == null ? "" : "of available sending capacity");
+        r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day of available sending capacity" : "used"));
       var blTone = r.bl == null ? "mut" : r.bl === 0 ? "g1" : "r1";
       tds += heatCell(blTone, r.bl == null ? "—" : (r.bl === 0 ? "Clean" : r.bl + " flagged"), r.bl == null ? "" : (r.bl === 0 ? "0 flagged" : "paused"));
       return '<tr' + (r.isAll ? ' class="heat-all"' : '') + '>' + tds + "</tr>";
@@ -931,12 +940,18 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // from the Smartlead mirror by provider default (Outlook 2, Gmail 20, SMTP 15).
   // Feeds warmCapFor → the heat map's "In warm-up" column. Same transient-retry
   // pattern as loadCap so a slow mirror read never leaves the column blank.
-  var warmCapTries = 0;
+  var warmCapTries = 0, warmMapTries = 0;
   function loadWarmCap() {
     return fetch("/api/warmup-capacity", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
-        if (j && j.perWorkspace) { warmCapTries = 0; S.warmcap = j; renderHeat(); }
+        if (j && j.perWorkspace) {
+          warmCapTries = 0; S.warmcap = j; renderHeat();
+          // Attribution map still warming (fresh deploy / cold sweep): the
+          // shared-fleet clients read "not mapped" until it lands, so keep
+          // re-polling — up to ~7 min — and re-render when the split appears.
+          if (!j.mapReady && warmMapTries < 20) { warmMapTries++; setTimeout(loadWarmCap, 20000); }
+        }
         else if (warmCapTries < 8) { warmCapTries++; setTimeout(loadWarmCap, 3000); }
       })
       .catch(function () { if (warmCapTries < 8) { warmCapTries++; setTimeout(loadWarmCap, 3000); } });
