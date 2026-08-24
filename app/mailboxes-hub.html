@@ -467,11 +467,12 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // ("22.1k/day of available sending capacity") — the amount stays visible.
       tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%",
         r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day of available sending capacity" : "used"));
-      // ~Average total sending capacity over the selected range (black box) —
-      // the absolute figure the warm-up % is a share of. Top = per day, bottom
-      // = the estimated monthly total (×30 — weekends are kept, matching the
-      // capacity convention everywhere else on this page).
-      var moCap = r.totalCap == null ? null : r.totalCap * 30;
+      // ~Total sending capacity (black box) — the sum of the two numbers this
+      // row already shows (warm-up + available). Top = per day, bottom = the
+      // estimated monthly total at ×20 SENDING DAYS: Navreo never sends on
+      // weekends (owner law 2026-08-24 — a month is ~20 weekdays, always),
+      // so ×30 overstated every monthly figure by 50%.
+      var moCap = r.totalCap == null ? null : r.totalCap * 20;
       var moTxt = moCap == null ? "" :
         (moCap >= 1e6 ? "~" + (Math.round(moCap / 1e5) / 10) + "M/month" : "~" + n(moCap) + "/month");
       tds += heatCell("blk", r.totalCap == null ? "—" : "~" + n(r.totalCap) + "/day", moTxt);
