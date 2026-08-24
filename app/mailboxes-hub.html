@@ -95,6 +95,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
 .skel{color:var(--ink-3);font-size:13px;padding:16px 4px}
 @keyframes hpulse{0%,100%{opacity:1}50%{opacity:.4}}
 .hcell.sk{background:#DED9D1;animation:hpulse 1.15s ease-in-out infinite}
+.hub-refresh{border:1px solid var(--line-2);background:transparent;border-radius:999px;width:28px;height:28px;display:inline-grid;place-items:center;font-size:14px;color:var(--ink-2);cursor:pointer;margin-left:6px}
+.hub-refresh.busy{animation:hspin 1s linear infinite;pointer-events:none}
+@keyframes hspin{to{transform:rotate(360deg)}}
 .heat-sk-n{height:18px;width:110px;border-radius:6px;background:#DED9D1;animation:hpulse 1.15s ease-in-out infinite}
 </style>
 </head>
@@ -116,8 +119,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         <div class="sec-ctrl">
           <span class="ctrl-lab">Range</span>
           <div class="hub-seg" id="hub-range" role="radiogroup" aria-label="Heat map date range">
-            <button data-win="7" type="button" role="radio" aria-checked="false">7d</button><button data-win="14" type="button" role="radio" aria-checked="false">14d</button><button data-win="30" type="button" role="radio" aria-checked="true" class="on">30d</button>
+            <button data-win="7" type="button" role="radio" aria-checked="true" class="on">7d</button><button data-win="14" type="button" role="radio" aria-checked="false">14d</button><button data-win="30" type="button" role="radio" aria-checked="false">30d</button>
           </div>
+          <button id="hub-refresh" type="button" class="hub-refresh" title="Recalculate now" aria-label="Recalculate the heat map now">&#10227;</button>
           <span class="ctrl-scope">↑ changes this heat map only</span>
         </div>
       </div>
@@ -157,7 +161,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // deliberately NOT range-scoped — it always shows the full MGR_WIN window so
   // the two filters stay cleanly separated (range->heat map, client->manager).
   var MGR_WIN = 30;
-  var S = { client: "All", win: 30, deliv: null, cw: null, tags: null, labels: {}, vol: {} };
+  var S = { client: "All", win: 7, deliv: null, cw: null, tags: null, labels: {}, vol: {} };
   try { var v = localStorage.getItem(LS); if (v) S.client = v; } catch (e) {}
 
   /* ---------- helpers ---------- */
@@ -168,7 +172,8 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   function fx(v, d) { return v == null ? "—" : (Number(v).toFixed(d == null ? 1 : d) + "%"); }
   function replyTone(v) { return v == null ? "mut" : v >= 1.1 ? "g1" : v >= 0.8 ? "a1" : "r1"; }
   function bounceTone(v) { return v == null ? "mut" : v < 2 ? "g1" : v < 3 ? "a1" : "r1"; }
-  function capTone(v) { return v == null ? "mut" : v > 100 ? "r1" : v >= 90 ? "g1" : v >= 70 ? "a1" : "r1"; }
+  // Actively-sending tone (owner 2026-08-24): <80 red, 80-90 amber, 90+ green.
+  function capTone(v) { return v == null ? "mut" : v >= 90 ? "g1" : v >= 80 ? "a1" : "r1"; }
   function warmTone(v) { return v == null ? "mut" : v <= 15 ? "g1" : v <= 30 ? "g2" : v <= 50 ? "a1" : "r1"; }
   function tclass(tone) { return tone === "g1" ? "t-g" : tone === "g2" ? "t-g" : tone === "a1" ? "t-a" : tone === "r1" ? "t-r" : "t-mut"; }
 
@@ -468,16 +473,18 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // In warm-up, ONE consistent format (owner ruling): top = the volume in
       // warm-up ("2.9k/day"), bottom = its share of total sending capacity
       // ("12% of total sending capacity"; "in warm-up" while the % is unknown).
-      var warmVal, warmSub;
+      var warmVal = null, warmSub = null;
       if (r.warmCap != null) {
         warmVal = n(r.warmCap) + "/day";
         warmSub = r.warmPct != null ? r.warmPct + "% of total sending capacity" : "in warm-up";
-      } else {
-        warmVal = "—";
-        warmSub = r.warmCapKnown === false ? "not mapped" : "";
       }
-      var warmTn = r.warmCap == null ? "mut" : (r.warmCap > 0 ? "g2" : "mut");
-      tds += heatCell(warmTn, warmVal, warmSub);
+      // Warm-up tone (owner 2026-08-24): <=20% green, 20-30% amber, 30%+ red
+      // (share of total sending capacity tied up in repair).
+      var warmTn = r.warmPct == null ? "g2"
+        : (r.warmPct <= 20 ? "g1" : r.warmPct < 30 ? "a1" : "r1");
+      // Until the warm-up feed lands for this row, show the lazy-load pulsing
+      // skeleton (owner 2026-08-24) rather than a dash that reads like a value.
+      tds += (r.warmCap == null) ? '<td><div class="hcell sk"></div></td>' : heatCell(warmTn, warmVal, warmSub);
       // Actively sending: the % (top); bottom = the available amount itself
       // ("22.1k/day of available sending capacity") — the amount stays visible.
       tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%",
@@ -920,6 +927,17 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-checked", on ? "true" : "false");
     });
     renderHeatScope(); renderHeat(); flashSection("sec-heat");
+  });
+  el("hub-refresh").addEventListener("click", function () {   // hard refresh → recompute warm-up + capacity now
+    var b = el("hub-refresh"); b.classList.add("busy");
+    S.warmcap = null; renderHeat();            // warm cells drop to the pulsing skeleton while recomputing
+    var wc = fetch("/api/warmup-capacity?refresh=1", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.perWorkspace) S.warmcap = j; })
+      .catch(function () {});
+    Promise.all([wc, loadCap()]).then(function () {
+      b.classList.remove("busy"); renderHeat(); flashSection("sec-heat");
+    }, function () { b.classList.remove("busy"); renderHeat(); });
   });
   el("hub-mgr-tabs").addEventListener("click", function (e) {
     var b = e.target.closest(".tab"); if (!b) return;

@@ -17364,14 +17364,36 @@ def warmup_capacity_get() -> tuple[dict, int]:
                 email_client[str(em).lower()] = cl
     except Exception:  # noqa: BLE001
         pass
+    nav_clients = {}   # lowercase match token → display name (navreo-ws roster)
     try:
         for r in (sb_get_all("campaign_scorecard?select=client,workspace") or []):
             ws_ = (r.get("workspace") or "").strip()
             cl_ = (r.get("client") or "").strip()
-            if ws_ and ws_ != "navreo" and cl_ and not cl_.startswith("__"):
+            if not cl_ or cl_.startswith("__"):
+                continue
+            if ws_ and ws_ != "navreo":
                 ws_display.setdefault(ws_, cl_)
+            else:
+                nav_clients.setdefault(cl_.lower(), cl_)
+                first = cl_.split()[0]
+                if len(first) >= 4:   # "Altius Reach" also matches plain "altius"
+                    nav_clients.setdefault(first.lower(), cl_)
     except Exception:  # noqa: BLE001
         pass
+
+    def _tag_client(r):
+        """Fallback attribution for a navreo-ws resting box the campaign-
+        membership map doesn't know (map cold after a deploy, or box parked
+        with its campaigns since removed): a Smartlead tag literally naming a
+        known client ("Amplifyy - Hypertide", "Arnic - Temporary") is strong
+        evidence. The map stays primary — this only fills its gaps, so every
+        resting box still lands on a client instead of "not mapped"."""
+        for t in (r.get("tags") or []):
+            tl = str(t).lower()
+            for token, disp in nav_clients.items():
+                if token in tl:
+                    return disp
+        return None
 
     def _provider(r, email):
         if r.get("maildoso"):
@@ -17401,6 +17423,10 @@ def warmup_capacity_get() -> tuple[dict, int]:
     per_ws: dict = {}
     for cl in set(email_client.values()):
         per_client.setdefault(cl, _seed())
+    # The whole navreo-ws client roster too: a client with NOTHING resting
+    # right now must read "0/day" (real), never fall back to "— not mapped".
+    for cl in set(nav_clients.values()):
+        per_client.setdefault(cl, _seed())
     for r in mrows:
         ws0 = str(r.get("workspace") or "unknown")
         per_ws.setdefault(ws0, _seed())
@@ -17410,8 +17436,8 @@ def warmup_capacity_get() -> tuple[dict, int]:
     for r in resting:
         ws = str(r.get("workspace") or "navreo")
         email = str(r.get("email") or "").lower()
-        cl = (email_client.get(email, "Navreo") if ws == "navreo"
-              else ws_display.get(ws, ws))
+        cl = (email_client.get(email) or _tag_client(r) or "Navreo") if ws == "navreo" \
+            else ws_display.get(ws, ws)
         prov = _provider(r, email)
         add = _WARMUP_CAP_DEFAULTS[prov]
         for tgt in (per_ws.setdefault(ws, _seed()), per_client.setdefault(cl, _seed())):
@@ -22460,6 +22486,10 @@ class Handler(SimpleHTTPRequestHandler):
             body, status = fleet_capacity_get(days)
             return self._json(body, status)
         if path == "/api/warmup-capacity":
+            # ?refresh=1 (the heat map's manual ⟳): drop the 10-min cache so the
+            # resting/provider/attribution read recomputes right now.
+            if "refresh=1" in urllib.parse.urlparse(self.path).query:
+                _WARMUP_CAP_CACHE.clear()
             body, status = warmup_capacity_get()
             return self._json(body, status)
         if path == "/api/capacity-invariant":
