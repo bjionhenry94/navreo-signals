@@ -17271,8 +17271,22 @@ def snapshot_navreo_capacity() -> dict:
     today = _dtmod.date.today().isoformat()
     _cap_blob_upsert(today, {"navreo": nav}, bd.get("clients") or {}, src="navreo-caps")
     _CLIENT_CAP.update(data=bd, ts=time.time())
+    # The mailbox→client map (mcm) that drives the Mailboxes tab's client filter is
+    # only persisted from INSIDE api_mailbox_client_map(), which needs a completed
+    # restore sweep. The 512MB web instance OOMs before that sweep finishes, so the
+    # snapshot was never written and the web served an EMPTY map — the client filter
+    # showed "attributing…" for every client forever. force_fresh above just ran the
+    # sweep synchronously in THIS cron process, so calling the map now persists a
+    # non-zero snapshot to the shared blob for the web to read. Best-effort.
+    mcm_clients = None
+    try:
+        mp = api_mailbox_client_map()
+        if mp.get("status") == "ready":
+            mcm_clients = len(mp.get("clients") or {})
+    except Exception as e:  # noqa: BLE001 — never fail the cap cron over the map
+        print(f"[snapshot_navreo_capacity] mcm persist skipped: {e}", file=sys.stderr)
     return {"ok": True, "date": today, "navreo_workspace_cap": nav["cap"],
-            "clients": len(bd.get("clients") or {})}
+            "clients": len(bd.get("clients") or {}), "mcm_clients": mcm_clients}
 
 
 def snapshot_all_capacity(workspaces: list | None = None) -> dict:
