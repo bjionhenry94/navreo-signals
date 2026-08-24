@@ -590,21 +590,6 @@
           <div id="offer-rows"><div class="subline">Reading the offer off each campaign's copy…</div></div>
           <div class="subline" id="offer-sub">&nbsp;</div>
           <div class="take" id="offer-take-row" style="display:none"><span class="arr">→</span><span id="offer-take">&nbsp;</span></div>
-
-          <!-- variant-action-wire P4 (Bjion's pick, 2 Aug 2026): every clear-
-               loser version the optimiser has flagged across ALL campaigns,
-               switch-off-able in one confirmed batch. Each write runs through
-               the shared id-intact save helper server-side; a version that is
-               the last live one on its step is refused by the server and
-               reported here, never silently skipped. -->
-          <div class="vaw4" id="vaw4">
-            <div class="vaw4-kick">Losing versions you can switch off now</div>
-            <div id="vaw4-rows"><div class="subline">Checking the optimiser's calls…</div></div>
-            <div class="vaw4-foot">
-              <button class="btn sm" id="vaw4-go" disabled type="button">Switch off selected</button>
-              <span class="subline" id="vaw4-note">Their share moves to each campaign's best-performing version. History is kept.</span>
-            </div>
-          </div>
         </div>
 
       </div>
@@ -617,22 +602,12 @@
         <h2 class="lane-q">Who actually replies?</h2>
         <span class="lane-tag num">Pipeline · Interested · <span id="tag-int">–</span></span>
       </div>
-      <div class="cards c23">
+      <div class="cards c-land">
         <div class="acard">
           <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title</span></div>
           <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
           <div class="subline" id="who-size" style="margin-top:8px">&nbsp;</div>
           <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
-        </div>
-        <div class="acard">
-          <div class="card-kick">How fast we answer</div>
-          <div class="bignum num" id="wait-big">–</div>
-          <div class="subline" id="wait-sub">&nbsp;</div>
-          <div class="wspeed" id="wait-chart" style="display:none">
-            <div class="wspeed-head">Booked-call rate by how fast we answered</div>
-            <div class="wspeed-bars num" id="wait-bars"></div>
-          </div>
-          <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
         </div>
         <div class="acard">
           <div class="card-kick">How effective are our follow-ups <span id="subseq-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· automated subsequences</span></div>
@@ -649,7 +624,7 @@
         <h2 class="lane-q">How many meetings did it book?</h2>
         <span class="lane-tag num">Pipeline · Meetings · <span id="tag-meet">–</span></span>
       </div>
-      <div class="cards">
+      <div class="cards c32">
         <div class="acard meet">
           <div class="mleft">
             <div class="card-kick" id="meet-kick">Meetings booked this month</div><span class="stamp" id="meet-stamp"></span>
@@ -662,6 +637,16 @@
             <div class="mcol"><span class="mv" id="meet-mv2">–</span><div class="mb now" id="meet-mb2" style="height:8px"></div><span class="ml" id="meet-ml2">this month</span></div>
           </div>
           <div class="take side"><span class="arr">→</span><span id="meet-take">&nbsp;</span></div>
+        </div>
+        <div class="acard">
+          <div class="card-kick">How fast we answer</div>
+          <div class="bignum num" id="wait-big">–</div>
+          <div class="subline" id="wait-sub">&nbsp;</div>
+          <div class="wspeed" id="wait-chart" style="display:none">
+            <div class="wspeed-head">Booked-call rate by how fast we answered</div>
+            <div class="wspeed-bars num" id="wait-bars"></div>
+          </div>
+          <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
         </div>
       </div>
     </section>
@@ -3104,291 +3089,6 @@ renderChips();
 renderHead();
 updateLens();
 boot();
-})();
-</script>
-<script>
-/* ══ variant-action-wire P4: bulk switch-off of flagged losing versions ══ */
-(function () {
-  var css = [
-    ".vaw4{margin-top:14px;padding-top:12px;border-top:1px dashed var(--line,#ddd8cf)}",
-    ".vaw4-kick{font-size:.68rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3,#8a8477);margin-bottom:8px}",
-    ".vaw4-row{display:grid;grid-template-columns:20px 1fr auto;gap:9px;align-items:center;padding:6px 0;border-bottom:1px solid var(--line,#eee9df);font-size:.8rem}",
-    ".vaw4-row:last-child{border-bottom:0}",
-    ".vaw4-row input{width:15px;height:15px;cursor:pointer}",
-    ".vaw4-row .c{font-weight:600}",
-    ".vaw4-row .m{font-size:.72rem;color:var(--ink-3,#8a8477)}",
-    ".vaw4-row .s{font-variant-numeric:tabular-nums;font-size:.74rem;color:var(--ink-3,#8a8477);text-align:right;white-space:nowrap}",
-    ".vaw4-row.is-done{opacity:.65}",
-    ".vaw4-row .ok{color:#2f9e44;font-weight:700}",
-    ".vaw4-row .bad{color:#c9352b;font-size:.72rem}",
-    /* P3 traffic-light row */
-    ".vaw4-tl{display:grid;grid-template-columns:16px minmax(0,1fr) 108px;gap:10px;align-items:center;padding:10px 8px;border-bottom:1px solid var(--line,#eee9df);cursor:pointer;border-radius:8px}",
-    ".vaw4-tl:last-child{border-bottom:0}",
-    ".vaw4-tl.sel{background:#FFF1EA}",
-    ".vaw4-tl.is-done{opacity:.55;pointer-events:none}",
-    ".vaw4-tl>input{width:15px;height:15px;accent-color:#FF4D00;cursor:pointer}",
-    ".vaw4-tl>div{min-width:0}",
-    ".vaw4-top{display:flex;align-items:center;gap:7px;min-width:0}",
-    ".vaw4-dot{width:8px;height:8px;border-radius:50%;background:#C2371F;flex:0 0 auto}",
-    ".vaw4-name{display:flex;align-items:center;gap:5px;min-width:0;color:var(--ink,#211d16);text-decoration:none;font-weight:600;font-size:.82rem}",
-    ".vaw4-name .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-    ".vaw4-name .ext{flex:0 0 auto;font-size:.7rem;color:var(--ink-3,#8a8477)}",
-    ".vaw4-name:hover .nm{text-decoration:underline}",
-    ".vaw4-name:hover .ext{color:#FF4D00}",
-    ".vaw4-sub{font-size:.7rem;color:var(--ink-3,#8a8477);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
-    ".vaw4-mini{display:flex;flex-direction:column;gap:5px;min-width:0}",
-    ".vaw4-mb{display:flex;align-items:center;gap:6px;font-size:.68rem;color:var(--ink-3,#8a8477);white-space:nowrap}",
-    ".vaw4-mb.this{color:var(--ink-2,#5c554a)}",
-    ".vaw4-mb .k{width:26px;flex:0 0 auto}",
-    ".vaw4-mb.this .k{font-weight:600}",
-    ".vaw4-tk{flex:1;height:6px;border-radius:4px;background:rgba(20,16,10,.10);overflow:hidden}",
-    ".vaw4-mb.this .vaw4-tk{background:rgba(20,16,10,.14)}",
-    ".vaw4-fl{display:block;height:100%;border-radius:4px}",
-    ".vaw4-fl.win{background:#FF4D00}",
-    ".vaw4-fl.lose{background:#8C8173}",
-    ".vaw4-v{font-variant-numeric:tabular-nums;width:14px;text-align:right;font-weight:700;color:var(--ink-2,#5c554a)}",
-    ".vaw4-right{font-size:.72rem;color:var(--ink-3,#8a8477);text-align:right;white-space:nowrap}",
-    ".vaw4-right .ok{color:#2f9e44;font-weight:700}",
-    ".vaw4-right .bad{color:#c9352b}",
-    ".vaw4-foot{display:flex;gap:10px;align-items:center;margin-top:9px;flex-wrap:wrap}",
-    ".vaw4-ov{position:fixed;inset:0;background:rgba(20,16,10,.45);z-index:900;display:flex;align-items:center;justify-content:center;padding:18px}",
-    ".vaw4-modal{background:#fff;color:var(--ink,#211d16);border:1px solid var(--line,#ddd8cf);border-radius:14px;max-width:520px;width:100%;max-height:84vh;overflow:auto;padding:18px;box-shadow:0 18px 50px rgba(0,0,0,.28)}",
-    ".vaw4-modal h3{margin:0 0 4px;font-size:1rem}",
-    ".vaw4-modal .sub{margin:0 0 12px;font-size:.8rem;color:var(--ink-2,#5c554a)}",
-    ".vaw4-line{display:flex;justify-content:space-between;gap:12px;font-size:.78rem;background:var(--wash,#f4f1ec);border-radius:8px;padding:6px 10px;margin-bottom:6px}",
-    ".vaw4-tok{display:flex;gap:8px;align-items:center;margin:10px 0 4px;flex-wrap:wrap;font-size:.78rem}",
-    ".vaw4-tok input{font:inherit;padding:6px 10px;border:1px solid var(--line,#ddd8cf);border-radius:8px;width:120px}",
-    ".vaw4-err{color:#c9352b;font-size:.76rem;min-height:1em;margin:4px 0 6px}",
-    ".vaw4-btns{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}",
-    ".vaw4-btn{font:inherit;font-size:.78rem;font-weight:600;padding:6px 13px;border-radius:8px;border:1px solid var(--line,#ddd8cf);background:#fff;cursor:pointer}",
-    ".vaw4-btn--danger{background:#c9352b;border-color:#c9352b;color:#fff}",
-    ".vaw4-btn[disabled]{opacity:.5;pointer-events:none}",
-    "@media (prefers-color-scheme:dark){.vaw4-modal,.vaw4-btn{background:#211d16;color:#f1ece2}.vaw4-btn--danger{background:#c9352b;color:#fff}.vaw4-line{background:rgba(255,255,255,.06)}.vaw4-tl.sel{background:rgba(255,77,0,.13)}.vaw4-tk{background:rgba(255,255,255,.11)}.vaw4-mb.this .vaw4-tk{background:rgba(255,255,255,.18)}.vaw4-fl.lose{background:#9a8f80}}"
-  ].join("\n");
-  var st = document.createElement("style"); st.textContent = css; document.head.appendChild(st);
-
-  var $id = function (x) { return document.getElementById(x); };
-  var E = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (ch) {
-    return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]; }); };
-  var TITLE_RE = /^Variant call: Email\s*(\d+)(?:\s+Var\s+(.+?))?\s*$/i;
-  var CAND = [];
-
-  function post(url, body) {
-    return fetch(url, { method: "POST", credentials: "same-origin",
-      headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) })
-      .then(function (r) { return r.json().catch(function () { return { ok: false, message: "bad response (" + r.status + ")" }; }); });
-  }
-
-  // The card follows the page's client filter (state.client) — a loser
-  // belongs to a client, so switching to Amplifyy must only show Amplifyy's
-  // losers. "All" shows the whole book. We re-paint on the same
-  // dlv-client-lens event the rest of the page listens to.
-  // Read the active client from window.DLV_CLIENT_LENS (the page publishes it
-  // there and updates it on every chip switch). NOT `state` — the main script
-  // is a strict-mode IIFE, so its `state` is not reachable from this block.
-  function curClient() {
-    try { return (window.DLV_CLIENT_LENS && window.DLV_CLIENT_LENS.client) || "All"; }
-    catch (e) { return "All"; }
-  }
-  function visible() {
-    var cl = curClient();
-    return cl === "All" ? CAND : CAND.filter(function (c) { return c.client === cl; });
-  }
-  function paint() {
-    var rowsEl = $id("vaw4-rows");
-    var vis = visible();
-    if (!vis.length) {
-      var cl = curClient();
-      rowsEl.innerHTML = '<div class="subline">' +
-        (cl === "All" ? "No clear losers flagged right now — nothing to switch off."
-                      : "No losing versions for " + E(cl) + " right now — nothing to switch off.") +
-        "</div>";
-      $id("vaw4-go").disabled = true;
-      return;
-    }
-    rowsEl.innerHTML = vis.map(function (c, i) {
-      var link = "campaigns.html#/c/" + encodeURIComponent(c.cid) + "/messaging";
-      var sent = Number((c.lose && c.lose.sent) || (c.v && c.v.sent) || 0);
-      var splitTxt = (c.split != null) ? (" · " + c.split + "% split") : "";
-      var sub = "Email " + c.email + " · Ver " + E(c.vlab) + " · " + sent.toLocaleString() + " sent" + splitTxt;
-      // right column: the Best/This comparison, or a done/err/loading state
-      var right;
-      if (c.state === "done") { right = '<div class="vaw4-right"><span class="ok">✓ off</span></div>'; }
-      else if (c.state === "err") { right = '<div class="vaw4-right"><span class="bad">' + E(c.err) + "</span></div>"; }
-      else if (c.metric && c.win) {
-        var wv = c.win.val, lv = c.lose.val, mx = Math.max(wv, lv, 1);
-        right = '<div class="vaw4-mini">' +
-          '<div class="vaw4-mb"><span class="k">Best</span><span class="vaw4-tk"><span class="vaw4-fl win" style="width:' + (wv / mx * 100).toFixed(0) + '%"></span></span><span class="vaw4-v">' + wv + "</span></div>" +
-          '<div class="vaw4-mb this"><span class="k">This</span><span class="vaw4-tk"><span class="vaw4-fl lose" style="width:' + (lv / mx * 100).toFixed(0) + '%"></span></span><span class="vaw4-v">' + lv + "</span></div>" +
-          "</div>";
-      } else {
-        right = '<div class="vaw4-right"><span class="s">' + (c.v ? (c.v.positives || 0) + " interested" : "") + "</span></div>";
-      }
-      return '<div class="vaw4-tl' + (c.checked ? " sel" : "") + (c.state === "done" ? " is-done" : "") + '" data-i="' + i + '">' +
-        '<input type="checkbox" data-i="' + i + '"' +
-        (c.state === "done" ? " disabled" : c.checked ? " checked" : "") + ">" +
-        '<div><div class="vaw4-top"><span class="vaw4-dot"></span>' +
-        '<a class="vaw4-name" href="' + link + '" target="_blank" rel="noopener" title="Open campaign in a new tab">' +
-        '<span class="nm">' + E(c.name) + '</span><span class="ext" aria-label="opens in a new tab">↗</span></a></div>' +
-        '<div class="vaw4-sub">' + E(sub) + "</div></div>" +
-        right + "</div>";
-    }).join("");
-    // the campaign-name link opens a new tab; its click must not toggle the row
-    rowsEl.querySelectorAll(".vaw4-name").forEach(function (a) {
-      a.addEventListener("click", function (e) { e.stopPropagation(); });
-    });
-    rowsEl.querySelectorAll(".vaw4-tl > input[data-i]").forEach(function (cb) {
-      cb.addEventListener("change", function (e) {
-        e.stopPropagation();
-        vis[+cb.getAttribute("data-i")].checked = cb.checked;
-        paint();
-      });
-    });
-    rowsEl.querySelectorAll(".vaw4-tl").forEach(function (row) {
-      row.addEventListener("click", function () {
-        var c = vis[+row.getAttribute("data-i")];
-        if (c.state === "done") return;
-        c.checked = !c.checked;
-        paint();
-      });
-    });
-    sync();
-  }
-  function picked() { return visible().filter(function (c) { return c.checked && c.state !== "done"; }); }
-  function sync() {
-    var n = picked().length;
-    var go = $id("vaw4-go");
-    go.disabled = !n;
-    go.textContent = n ? "Switch off selected (" + n + ")" : "Switch off selected";
-  }
-
-  function enrich4(done) {
-    // Hydrate each loser with its email-step siblings from cockpit so the row
-    // can show Best-vs-This and name the winner — ranked by meetings per email
-    // sent, then positives per email sent (Bjion's order). Best-effort: a
-    // campaign whose stats don't load just renders without the comparison and
-    // is still switch-off-able, so this never blocks the action.
-    var ids = {}; CAND.forEach(function (c) { ids[c.cid] = 1; });
-    var list = Object.keys(ids);
-    if (!list.length) { done(); return; }
-    Promise.all(list.map(function (id) {
-      return fetch("/api/cockpit/messaging?id=" + encodeURIComponent(id), { credentials: "same-origin" })
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .catch(function () { return null; });
-    })).then(function (res) {
-      var byCid = {}; list.forEach(function (id, i) { byCid[id] = res[i]; });
-      CAND.forEach(function (c) {
-        try {
-          var d = byCid[String(c.cid)];
-          if (!d || d.degraded || !Array.isArray(d.versions)) return;
-          var bv = (d.meetings && d.meetings.by_variant) || {};
-          var meetOf = function (v) { return bv[String(v.step) + "|" + String(v.label)] || 0; };
-          var step = d.versions.filter(function (v) { return String(v.step) === String(c.email); });
-          var lose = step.filter(function (v) { return v.label === c.vlab; })[0];
-          var sibs = step.filter(function (v) { return (v.split == null || v.split > 0) && v.label && v.label !== c.vlab; });
-          if (!lose || !sibs.length) return;
-          sibs.sort(function (a, b) {
-            var sa = a.sent || 0, sb = b.sent || 0;
-            var ma = sa ? meetOf(a) / sa : 0, mb = sb ? meetOf(b) / sb : 0;
-            var pa = sa ? (a.positives || 0) / sa : 0, pb = sb ? (b.positives || 0) / sb : 0;
-            return (mb - ma) || (pb - pa);
-          });
-          var win = sibs[0];
-          var hasMeet = step.some(function (v) { return meetOf(v) > 0; });
-          c.metric = hasMeet ? "meet" : "pos";
-          c.split = (lose.split != null) ? lose.split : null;
-          c.lose = { sent: lose.sent || (c.v && c.v.sent) || 0, val: c.metric === "meet" ? meetOf(lose) : (lose.positives || 0) };
-          c.win = { v: win.label, val: c.metric === "meet" ? meetOf(win) : (win.positives || 0) };
-        } catch (e) { /* leave this row without a comparison */ }
-      });
-      done();
-    });
-  }
-
-  function runBatch() {
-    var todo = picked();
-    if (!todo.length) return;
-    var ov = document.createElement("div");
-    ov.className = "vaw4-ov";
-    ov.innerHTML = '<div class="vaw4-modal"><h3>Switch off ' + todo.length + " losing version" +
-      (todo.length === 1 ? "" : "s") + "?</h3>" +
-      '<p class="sub">Each one is saved the ID-intact way — fresh pull, every step &amp; version ID echoed back, history kept. A version that turns out to be the last live one on its step is refused and reported, not forced.</p>' +
-      todo.map(function (c) {
-        return '<div class="vaw4-line"><span>' + E(c.name) + " · Email " + c.email + " · Version " + E(c.vlab) +
-          '</span><span>sending → 0%</span></div>';
-      }).join("") +
-      '<div class="vaw4-tok"><span>Type <b>DISABLE</b> to confirm:</span><input type="text" autocomplete="off" spellcheck="false" aria-label="confirmation word"></div>' +
-      '<div class="vaw4-err"></div>' +
-      '<div class="vaw4-btns"><button class="vaw4-btn" type="button" data-x>Cancel</button>' +
-      '<button class="vaw4-btn vaw4-btn--danger" type="button" data-go disabled>Confirm — switch them off</button></div></div>';
-    document.body.appendChild(ov);
-    var input = ov.querySelector("input"), go = ov.querySelector("[data-go]"), err = ov.querySelector(".vaw4-err");
-    function close() { ov.remove(); }
-    ov.addEventListener("mousedown", function (e) { if (e.target === ov) close(); });
-    ov.querySelector("[data-x]").addEventListener("click", close);
-    input.addEventListener("input", function () { go.disabled = input.value.trim().toUpperCase() !== "DISABLE"; });
-    input.focus();
-    go.addEventListener("click", function () {
-      if (go.disabled) return;
-      go.disabled = true;
-      var i = 0, okN = 0, errN = 0;
-      function step() {
-        if (i >= todo.length) {
-          err.textContent = "";
-          ov.querySelector(".vaw4-modal").innerHTML = "<h3>" + okN + " switched off" +
-            (errN ? " · " + errN + " refused (see the list)" : "") + "</h3>" +
-            '<p class="sub">Every saved write echoed its campaign\'s step and version IDs — ' +
-            "the versions keep their stats and can be switched back on from each campaign's Messaging tab.</p>" +
-            '<div class="vaw4-btns"><button class="vaw4-btn vaw4-btn--danger" type="button" data-x2>Done</button></div>';
-          ov.querySelector("[data-x2]").addEventListener("click", close);
-          paint();
-          return;
-        }
-        var c = todo[i];
-        go.textContent = "Writing " + (i + 1) + " / " + todo.length + "…";
-        post("/api/notifications/" + c.nid + "/execute", { action: "disable_variant", confirm: "DISABLE" })
-          .then(function (resp) {
-            if (resp && resp.ok !== false) { c.state = "done"; okN++; }
-            else { c.state = "err"; c.err = (resp && resp.message) || "refused"; errN++; }
-          })
-          .catch(function () { c.state = "err"; c.err = "network error"; errN++; })
-          .then(function () { i++; step(); });
-      }
-      step();
-    });
-  }
-
-  function boot4() {
-    fetch("/api/notifications?slim=1&finding_type=variant_call", { credentials: "same-origin" })
-      .then(function (r) { return r.ok ? r.json() : []; })
-      .then(function (rows) {
-        CAND = (Array.isArray(rows) ? rows : []).filter(function (n) {
-          return n.finding_type === "variant_call" && /disable/i.test(n.suggested_action || "") &&
-            (n.status || "") !== "actioned" && TITLE_RE.test(n.title || "") &&
-            // under 800 sent it's too little to judge — don't surface it (Bjion 2026-08-02)
-            Number(n.sent || 0) >= 800;
-        }).map(function (n) {
-          var m = TITLE_RE.exec(n.title || "");
-          var email = +m[1], vlab = (m[2] || "").trim();
-          var v = (n.variants || []).filter(function (x) {
-            return String(x.email) === String(email) && String(x.variant) === vlab;
-          })[0];
-          return { nid: n.id, cid: n.campaign_id, name: n.campaign_name || ("Campaign " + n.campaign_id),
-                   client: n.client || "Unknown",
-                   email: email, vlab: vlab, v: v, checked: true, state: "" };
-        }).filter(function (c) { return c.vlab; });
-        enrich4(paint);
-      })
-      .catch(function () {
-        $id("vaw4-rows").innerHTML = '<div class="subline">Couldn\'t load the optimiser\'s calls — reload to retry.</div>';
-      });
-  }
-
-  $id("vaw4-go").addEventListener("click", runBatch);
-  // Follow the page's client filter: re-paint (filter to the picked client)
-  // whenever the client chips change. Data is fetched once; filtering is local.
-  window.addEventListener("dlv-client-lens", function () { if (CAND.length) paint(); });
-  boot4();
 })();
 </script>
 <script>
