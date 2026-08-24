@@ -15721,6 +15721,21 @@ def route_training_interview(payload):
                 doc = _load_training(agent_id)
                 has_cases = bool(doc.get("cases"))
                 interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+                # Rotation hardening (2026-08-24): if the training doc was
+                # reset/re-created under a live page, the interview these
+                # answers belong to is gone - but the client TYPED these
+                # answers, and teaching must never be dropped. The page sends
+                # the on-screen questions alongside the answers; rebuild the
+                # interview from them and store normally.
+                sent_qs = [{"id": str(q.get("id")), "q": str(q.get("q") or "").strip()[:300]}
+                           for q in (payload.get("questions") or [])
+                           if isinstance(q, dict) and str(q.get("id") or "").strip()]
+                have_match = any(
+                    any(str(qid) in {str((q or {}).get("id")) for q in (iv.get("questions") or [])}
+                        for qid in raw)
+                    for iv in interviews)
+                if not have_match and sent_qs:
+                    interviews.append({"questions": sent_qs[:12], "answers": {}, "asked_at": at})
                 if not interviews:
                     return 404, {"error": "No interview questions have been asked yet."}
                 # Match the answers to the interview the qids actually belong
