@@ -40,6 +40,11 @@
 .sec-h .hint{font-size:12px;color:var(--ink-3)}
 .sec-h .sec-ctrl{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
 .sec-h .sec-ctrl .ctrl-lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);font-weight:600}
+/* Client picker drops to its OWN full-width row, left-aligned beneath the
+   "Inbox & domain manager" title (many chips read better on their own line than
+   crammed right). The heat-map Range control stays docked on the title row. */
+.sec-h .mgr-ctrl{width:100%;margin-left:0;justify-content:flex-start}
+.sec-h .mgr-ctrl .hub-chips{justify-content:flex-start}
 /* the control asserts its OWN blast-radius, so scope is legible without interacting */
 .sec-h .sec-ctrl .ctrl-scope{font-size:11px;color:var(--ink-3);font-weight:500;white-space:nowrap}
 /* stronger keyboard focus (active state was colour-only) */
@@ -1042,18 +1047,43 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   }
   // /api/mailbox-client-map → { status:"ready", clients:{ Name:[emails] } }.
   // Attributes shared-fleet mailboxes to the client whose campaigns they run —
-  // lets the heat map show REAL per-client warm-up / live %, not a fleet broadcast.
+  // lets the heat map show REAL per-client warm-up / live %, not a fleet broadcast,
+  // AND drives the manager's client filter.
+  //
+  // The server rebuild can take a while (it rides a 30-min sweep of campaign
+  // membership), which used to mean the client filter "never loaded" on a fresh
+  // page. Two fixes: (1) a stale-while-revalidate localStorage CACHE so the last
+  // known map is applied INSTANTLY on load and the filter works immediately,
+  // refreshing quietly in the background; (2) a much longer poll budget so a
+  // genuinely cold map still lands instead of giving up after ~30s.
+  var MCM_LS = "mbxhub.mcm";
+  var MCM_TTL = 7 * 864e5;   // trust a cached map for a week (membership drifts slowly)
+  function applyMcm(clients, ts, fromCache) {
+    var norm = {}; Object.keys(clients).forEach(function (k) { norm[k.toLowerCase()] = clients[k]; });
+    S.mcm = { status: "ready", clients: norm, ts: ts || Date.now(), cached: !!fromCache };
+    renderHeat(); renderMgrScope(); renderMgrTabs();   // attribution feeds both the heat map AND the manager
+  }
+  function hydrateMcmFromCache() {
+    try {
+      var raw = localStorage.getItem(MCM_LS); if (!raw) return;
+      var c = JSON.parse(raw);
+      if (c && c.clients && c.ts && (Date.now() - c.ts) < MCM_TTL) applyMcm(c.clients, c.ts, true);
+    } catch (e) {}
+  }
   var mcmTries = 0;
   function loadMcm() {
     return fetch("/api/mailbox-client-map", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (m) {
-        if (m && m.status === "ready" && m.clients) {
-          var norm = {}; Object.keys(m.clients).forEach(function (k) { norm[k.toLowerCase()] = m.clients[k]; });
-          S.mcm = { status: "ready", clients: norm }; renderHeat();
-        } else if (mcmTries < 8) { mcmTries++; setTimeout(loadMcm, 4000); } // map builds lazily server-side
+        if (m && m.status === "ready" && m.clients && Object.keys(m.clients).length) {
+          var ts = Date.now();
+          applyMcm(m.clients, ts, false);
+          try { localStorage.setItem(MCM_LS, JSON.stringify({ clients: m.clients, ts: ts })); } catch (e) {}
+        } else if (mcmTries < 45) {  // ~30 fast tries then slower — up to a few minutes for a cold map
+          mcmTries++; setTimeout(loadMcm, mcmTries < 15 ? 4000 : 8000);
+        }
       })
-      .catch(function () {});
+      .catch(function () { if (mcmTries < 45) { mcmTries++; setTimeout(loadMcm, 8000); } });
   }
   // /api/fleet-capacity → { client_caps:{Name:cap/day}, capacity:{ws:[series]}, days }.
   // The SAME source the Analytics page uses for real daily send capacity — feeds
@@ -1092,6 +1122,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   }
 
   // paint immediately with placeholders/representative, then fill as data lands
+  hydrateMcmFromCache();   // apply last-known mailbox→client map instantly (before any fetch)
   renderChips(); renderAll();
   loadCw().then(function () { renderChips(); renderAll(); });
   loadDeliv().then(function () { renderAll(); });
