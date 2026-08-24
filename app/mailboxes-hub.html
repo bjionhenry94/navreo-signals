@@ -237,11 +237,22 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   // REP_CLIENTS sample rows for everyone; this defines it (null-safe) so live
   // rows render again, and it lights up automatically when the loader lands.
   function warmCapFor(name, labels) {
-    var wc = S.warmcap; if (!wc || !wc.perWorkspace) return null;
-    var pw = wc.perWorkspace;
+    var wc = S.warmcap; if (!wc) return null;
+    // Per CLIENT now (owner ask: Navreo is an individual client, and every
+    // client under it gets its OWN warm-up capacity via the mailbox→client map
+    // — no "shared" bucket). Match the row's client name against perClient
+    // case-insensitively; fall back to the old perWorkspace-by-slug lookup so
+    // own-workspace clients still resolve if perClient is ever absent.
+    var pc = wc.perClient;
+    if (pc) {
+      if (pc[name]) return pc[name];
+      var nl = String(name).toLowerCase();
+      for (var k in pc) { if (k.toLowerCase() === nl) return pc[k]; }
+    }
+    var pw = wc.perWorkspace; if (!pw) return null;
     var ws = labels[name] || String(name).toLowerCase();
     var e = pw[ws] || pw[String(name).toLowerCase()];
-    if (!e) { for (var k in pw) { if (k.toLowerCase() === String(ws).toLowerCase()) { e = pw[k]; break; } } }
+    if (!e) { for (var k2 in pw) { if (k2.toLowerCase() === String(ws).toLowerCase()) { e = pw[k2]; break; } } }
     return e || null;
   }
   // Real per-day send capacity for a client — the SAME /api/fleet-capacity the
@@ -432,7 +443,9 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       // from /api/warmup-capacity. Shared-fleet clients (not their own
       // workspace) can't be split out of Navreo's pool → "—/shared".
       var warmVal = r.warmCap == null ? "—" : n(r.warmCap) + "/day";
-      var warmSub = r.warmCap == null ? (r.warmCapKnown === false ? "shared" : "")
+      // Every client is attributed its own warm-up capacity now (no shared
+      // bucket); "—" only remains for a client we genuinely can't map yet.
+      var warmSub = r.warmCap == null ? (r.warmCapKnown === false ? "not mapped" : "")
         : (r.warmBoxes + " box" + (r.warmBoxes === 1 ? "" : "es") + " warming");
       var warmTn = r.warmCap == null ? "mut" : (r.warmCap > 0 ? "g2" : "mut");
       tds += heatCell(warmTn, warmVal, warmSub);

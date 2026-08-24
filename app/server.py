@@ -17272,14 +17272,28 @@ def _warmup_is_in_warmup(r: dict) -> bool:
 
 
 def warmup_capacity_get() -> tuple[dict, int]:
-    """{ok, perWorkspace:{ws:{capacityPerDay,boxes,byProvider}}, total, boxes,
-    generated_at}. 10-min cached. Serves stale on a transient DB hiccup."""
+    """{ok, perClient:{Client:{capacityPerDay,boxes,byProvider}}, perWorkspace,
+    total, boxes, mapReady, generated_at}. 10-min cached. Serves stale on a
+    transient DB hiccup.
+
+    perClient is the surface the UI renders: every client — Navreo INCLUDED —
+    gets its own warm-up capacity, no shared bucket. Navreo is treated as an
+    individual client (only boxes running Navreo's own campaigns / unattributed),
+    NOT as the fleet its clients ride on. Attribution:
+      • own-workspace clients (krg/asteri/grout) → their workspace, keyed by
+        display name from campaign_scorecard;
+      • navreo-workspace boxes → the client whose ACTIVE campaigns they run
+        (via the mailbox→client map, the same truth the client filter uses),
+        else "Navreo" itself.
+    perWorkspace is kept for backward compatibility. When the map is still
+    warming (mapReady false) navreo-workspace boxes all read under Navreo until
+    the sweep lands — the numbers only ever get more attributed, never wrong."""
     from datetime import datetime, timezone
     ent = _WARMUP_CAP_CACHE.get("data")
     if ent and (time.time() - ent["ts"]) < _WARMUP_CAP_TTL_S:
         return ent["data"], 200
     try:
-        rows = sb_get_all("mailboxes?select=account_type,warmup_enabled,"
+        rows = sb_get_all("mailboxes?select=email,account_type,warmup_enabled,"
                           "message_per_day,campaign_count,workspace") or []
     except Exception as e:  # noqa: BLE001
         if ent:
@@ -17293,14 +17307,48 @@ def warmup_capacity_get() -> tuple[dict, int]:
             return ent["data"], 200
         return {"error": "warmup_capacity_unavailable",
                 "message": "mailbox mirror read returned no rows"}, 502
-    # Seed EVERY workspace present in the mirror at zero, so an own-workspace
-    # with nothing currently warming reads "0/day" (real) instead of being
-    # dropped and rendering as "— / shared" — which is reserved for shared-fleet
-    # clients whose boxes live in Navreo's pool and genuinely can't be split out.
-    per: dict = {}
+    # Attribution maps: email→client (shared-fleet boxes under navreo, from the
+    # campaign-membership map) and workspace-slug→display name (own-workspace
+    # clients). Both are best-effort — a failure just leaves boxes under Navreo
+    # / their slug rather than 500-ing the column.
+    email_client, ws_display, map_ready = {}, {}, False
+    try:
+        mp = api_mailbox_client_map()
+        map_ready = (mp.get("status") == "ready")
+        for cl, emails in (mp.get("clients") or {}).items():
+            for em in emails:
+                email_client[str(em).lower()] = cl
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        for r in (sb_get_all("campaign_scorecard?select=client,workspace") or []):
+            ws_ = (r.get("workspace") or "").strip()
+            cl_ = (r.get("client") or "").strip()
+            if ws_ and ws_ != "navreo" and cl_ and not cl_.startswith("__"):
+                ws_display.setdefault(ws_, cl_)
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _bucket(r):
+        ws = str(r.get("workspace") or "unknown")
+        if ws == "navreo":
+            return email_client.get(str(r.get("email") or "").lower(), "Navreo")
+        return ws_display.get(ws, ws)   # display name if known, else slug
+
+    # Seed EVERY own-workspace client at zero so one with nothing warming reads
+    # "0/day" (real) rather than dropping out; Navreo is always present too.
+    per_client: dict = {"Navreo": {"capacityPerDay": 0, "boxes": 0, "byProvider": {}}}
+    per_ws: dict = {}
+    # Every mapped shared-fleet client too, so one with campaigns but nothing
+    # warming right now reads "0/day" instead of dropping back to "— shared".
+    for cl in set(email_client.values()):
+        per_client.setdefault(cl, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
     for r in rows:
         ws0 = str(r.get("workspace") or "unknown")
-        per.setdefault(ws0, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
+        per_ws.setdefault(ws0, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
+        if ws0 != "navreo":
+            per_client.setdefault(ws_display.get(ws0, ws0),
+                                  {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
     total = boxes_total = 0
     for r in rows:
         if not _warmup_is_in_warmup(r):
@@ -17310,15 +17358,20 @@ def warmup_capacity_get() -> tuple[dict, int]:
         # Unknown providers fall back to SMTP's default rather than being dropped;
         # every warming box contributes some estimated capacity.
         add = _WARMUP_CAP_DEFAULTS.get(at, _WARMUP_CAP_DEFAULTS["SMTP"])
-        e = per.setdefault(ws, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
-        e["capacityPerDay"] += add
-        e["boxes"] += 1
-        e["byProvider"][at] = e["byProvider"].get(at, 0) + 1
+        for tgt in (per_ws.setdefault(ws, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}}),
+                    per_client.setdefault(_bucket(r), {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})):
+            tgt["capacityPerDay"] += add
+            tgt["boxes"] += 1
+            tgt["byProvider"][at] = tgt["byProvider"].get(at, 0) + 1
         total += add
         boxes_total += 1
-    out = {"ok": True, "perWorkspace": per, "total": total, "boxes": boxes_total,
+    out = {"ok": True, "perClient": per_client, "perWorkspace": per_ws,
+           "mapReady": map_ready, "total": total, "boxes": boxes_total,
            "generated_at": datetime.now(timezone.utc).isoformat()}
-    _WARMUP_CAP_CACHE["data"] = {"data": out, "ts": time.time()}
+    # Don't cache a not-yet-attributed result for the full 10 min — a shorter
+    # hold lets the split appear soon after the sweep warms.
+    _WARMUP_CAP_CACHE["data"] = {"data": out,
+                                 "ts": time.time() - (_WARMUP_CAP_TTL_S - 60 if not map_ready else 0)}
     return out, 200
 
 
