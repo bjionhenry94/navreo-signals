@@ -90,14 +90,6 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     </div>
 
     <div class="hub">
-      <!-- FIX TODAY — fleet-wide to-do, not affected by either filter -->
-      <div class="sec-h">
-        <h3>Fix today</h3>
-        <span class="scope">Whole fleet</span>
-        <span class="hint" id="hub-fix-hint">top = biggest hit to meetings</span>
-      </div>
-      <div class="card" style="padding:0;overflow:hidden" id="hub-fix"><div class="skel">Building today’s to-do…</div></div>
-
       <!-- FLEET HEAT MAP — the RANGE picker lives here, and only changes this -->
       <div class="sec-h">
         <h3>Fleet heat map</h3>
@@ -323,34 +315,10 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     return items;
   }
   /* ---------- renderers ---------- */
-  function renderFix() {
-    var A = S.deliv;
-    if (!A) { USING_REP.fix = true; el("hub-fix").innerHTML = repFix(); return; }
-    USING_REP.fix = false;
-    var items = buildFixItems(A);
-    if (!items.length) {
-      el("hub-fix").innerHTML = '<div class="allclear" style="margin:0;border-radius:0">✓ All clear — nothing needs action today.</div>';
-      el("hub-fix-hint").textContent = "nothing urgent";
-      return;
-    }
-    el("hub-fix-hint").textContent = items.length + " items · top = biggest hit to meetings";
-    el("hub-fix").innerHTML = items.map(function (it) {
-      return '<div class="fixrow ' + it.lvl + '"><div class="fic ' + it.lvl + '">' + it.ic + '</div>' +
-        '<div><h4>' + esc(it.h) + '</h4><p>' + it.p + '</p></div>' +
-        '<button class="fbtn">' + esc(it.btn) + '</button></div>';
-    }).join("");
-  }
-  function repFix() {
-    var items = [
-      { lvl: "r", ic: "🚫", h: "2 Amplifyy domains blacklisted", p: '<span class="who">Amplifyy</span>amplifyy-mail.com &amp; amplifyyhq.co flagged on Spamhaus — mail is bouncing.', btn: "Pause & replace" },
-      { lvl: "a", ic: "😴", h: "7 mailboxes have warm-up OFF", p: '<span class="who">Altius</span>Sitting dormant — not sending, not warming, just losing time.', btn: "Turn warm-up on" },
-      { lvl: "a", ic: "📈", h: "Grout bounce climbing (1.2% → 3.1%)", p: '<span class="who">Grout</span>Heading toward spam if it keeps rising.', btn: "Slow sending" }
-    ];
-    return items.map(function (it) {
-      return '<div class="fixrow ' + it.lvl + '"><div class="fic ' + it.lvl + '">' + it.ic + '</div>' +
-        '<div><h4>' + it.h + '</h4><p>' + it.p + '</p></div><button class="fbtn">' + it.btn + '</button></div>';
-    }).join("");
-  }
+  // NOTE: The "Fix today" widget was removed — its blacklist / high-bounce /
+  // reconnect items duplicated the Inbox & domain manager tabs below, and the
+  // "missing a signature" item is now its own manager tab. buildFixItems()
+  // is kept only because the "Inbox issues" KPI + verdict headline count it.
 
   function heatCell(tone, big, small) {
     return '<td><div class="hcell h-' + tone + '">' + big + (small ? '<small>' + small + '</small>' : '') + '</div></td>';
@@ -501,6 +469,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     { key: "inwarmup", label: "Resting" },
     { key: "reconnect", label: "Needs reconnect" },
     { key: "highb", label: "High bounce-rate" },
+    { key: "signature", label: "Missing signature" },
     { key: "tags", label: "Performance by tag" }
   ];
   var mgrActive = "warmupoff";
@@ -550,6 +519,10 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   function floorListC() { var r = floorList(); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (d) { return domMatch(d, m); }) : r; }
   function highbListC() { var r = highbList(); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (d) { return domMatch(d, m); }) : r; }
   function restingEntriesC() { var e = restingDomainEntries(); if (e == null) return null; var m = clientMembership(); return m ? e.filter(function (en) { return domMatch({ domain: en.dom }, m) || (en.rs && en.rs.some(function (r) { return mbxMatch(r, m); })); }) : e; }
+  // Missing-signature rows come from the audit blob (S.deliv.signature.missing),
+  // each carrying { email, domain, batch, from_name }. Client-scoped like the
+  // other manager views so the badge + table honour the current client filter.
+  function signatureListC() { var A = S.deliv; var r = (A && A.signature && Array.isArray(A.signature.missing)) ? A.signature.missing : null; if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (x) { return mbxMatch(x, m); }) : r; }
 
   /* ---- shared data helpers (match the OLD deliverability manager) ---- */
   var FLOOR_STD = 0.7, FLOOR_MD = 0.5, BOUNCE_HOT = 3; // same thresholds as the old tab
@@ -628,6 +601,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // ledger-only domains), so its badge counts DISTINCT resting domains via
     // the same canonical list the table renders — never just inwarmup rows.
     if (key === "inwarmup") { var e = restingEntriesC(); return e ? e.length : null; }
+    if (key === "signature") { var sg = signatureListC(); return sg ? sg.length : null; }
     var rows = bundleViewC(key);
     if (!rows) return null;
     return rows.length;
@@ -739,10 +713,40 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     return tableWrap('<th>Mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>', body, null,
       rows.length + " mailbox(es) stopped authenticating — silently sending nothing until reconnected.");
   }
+  // ---- Missing signature: Mailbox·Batch·Sender name·Action(Copy fix prompt)
+  // Applying a signature needs a brand template (the signature manager modal),
+  // so instead of a half-action the row hands the founder a ready-to-paste
+  // Claude Code prompt that fixes it end-to-end.
+  function sigPrompt(rows) {
+    var list = rows.map(function (r) { return "- " + (r.email || "?") + " (" + (r.domain || "?") + (r.batch ? ", batch: " + r.batch : "") + (r.from_name ? ", from-name: " + r.from_name : "") + ")"; }).join("\n");
+    return "Apply the correct Navreo brand email signature to the following mailboxes, which are currently sending with a blank/missing signature. Use the signature manager (POST /api/deliverability/fix-signatures with the right brand template per mailbox), verify each mailbox afterwards, and report which succeeded.\n\nMailboxes missing a signature:\n" + list;
+  }
+  function copyText(txt) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
+    return new Promise(function (res, rej) {
+      try { var ta = document.createElement("textarea"); ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); res(); }
+      catch (e) { rej(e); }
+    });
+  }
+  function mgrSignature() {
+    var rows = signatureListC(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ Every mailbox has a signature — nothing to fix.</div>';
+    var shown = rows.slice(0, MGR_CAP);
+    var body = shown.map(function (m) {
+      return '<tr><td><div>' + esc(m.email || "—") + (m.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</div><div class="mono t-mut" style="font-size:11px">' + esc(m.domain || "") + '</div></td>' +
+        '<td>' + ((Array.isArray(m.tags) && m.tags.length) ? esc(m.tags[0]) : (m.batch ? esc(m.batch) : '<span class="t-mut">—</span>')) + '</td>' +
+        '<td>' + (m.from_name ? esc(m.from_name) : '<span class="t-mut">—</span>') + '</td>' +
+        '<td style="text-align:right">' + actBtn("copy-sig-prompt", null, mgrRowKey(m), "Copy fix prompt", false) + '</td></tr>';
+    }).join("");
+    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + " mailboxes. " : "") +
+      "A blank signature reads as spammy and hurts deliverability. " +
+      '<button class="btn sm primary" data-act="copy-sig-prompt-all">Copy a Claude Code prompt for all ' + comma(rows.length) + '</button> — paste it into Claude Code to apply the right brand signature to every one.';
+    return tableWrap('<th>Mailbox</th><th>Batch</th><th>Sender name</th><th style="text-align:right">Action</th>', body, null, foot);
+  }
   function renderMgrBody() {
     var host = el("hub-mgr-body"), html;
     if (mgrActive === "tags") { host.innerHTML = mgrTags(); return; }
-    var builder = mgrActive === "lowrep" ? mgrFloor : mgrActive === "highb" ? mgrHighb : mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrReconnect;
+    var builder = mgrActive === "lowrep" ? mgrFloor : mgrActive === "highb" ? mgrHighb : mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrActive === "signature" ? mgrSignature : mgrReconnect;
     try { html = builder(); } catch (e) { html = null; }
     if (html == null) { host.innerHTML = '<div class="skel" style="padding:18px">' + (S.bundleLoading ? "Loading manager data…" : "Loading…") + '</div>'; return; }
     host.innerHTML = html;
@@ -779,7 +783,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // events use the section-scoped renderers below instead, so a filter only
   // ever repaints the section it governs.
   function renderAll() {
-    renderFix(); renderHeatScope(); renderHeat(); renderMgrScope(); renderMgrTabs();
+    renderHeatScope(); renderHeat(); renderMgrScope(); renderMgrTabs();
   }
 
   /* ---------- events — each filter repaints ONLY its own section ---------- */
@@ -833,7 +837,16 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   }
   el("hub-mgr-body").addEventListener("click", function (e) {
     var b = e.target.closest("[data-act]"); if (!b) return;
-    var act = b.getAttribute("data-act"), spec = ACTIONS[act];
+    var act = b.getAttribute("data-act");
+    if (act === "copy-sig-prompt" || act === "copy-sig-prompt-all") {
+      var all = signatureListC() || [];
+      var rows = act === "copy-sig-prompt-all" ? all : all.filter(function (m) { return mgrRowKey(m) === b.getAttribute("data-id"); });
+      if (!rows.length) rows = all;
+      var oldl = b.textContent;
+      copyText(sigPrompt(rows)).then(function () { toast("Prompt copied — paste it into Claude Code", "ok"); b.textContent = "Copied ✓"; setTimeout(function () { b.textContent = oldl; }, 1800); }).catch(function () { toast("Couldn't copy — select the text manually", "err"); });
+      return;
+    }
+    var spec = ACTIONS[act];
     if (!spec) return;
     var target = spec.scope === "domain" ? b.getAttribute("data-domain") : b.getAttribute("data-id");
     if (!target) return;
