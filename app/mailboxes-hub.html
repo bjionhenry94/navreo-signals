@@ -743,8 +743,39 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       '<button class="btn sm primary" data-act="copy-sig-prompt-all">Copy a Claude Code prompt for all ' + comma(rows.length) + '</button> — paste it into Claude Code to apply the right brand signature to every one.';
     return tableWrap('<th>Mailbox</th><th>Batch</th><th>Sender name</th><th style="text-align:right">Action</th>', body, null, foot);
   }
+  // Can we attribute mailboxes/domains to the selected client at all? True when
+  // we have a mailbox-client-map entry (shared-fleet) OR any bundle/dh row is
+  // stamped with the client's workspace slug (own-workspace clients). When it's
+  // false, the client-scoped tables would all filter to empty and read as a
+  // misleading "all clear" — so renderMgrBody shows an honest notice instead.
+  function clientResolvable(mem) {
+    if (!mem) return true;
+    if (Object.keys(mem.emails).length || Object.keys(mem.domains).length) return true;
+    var slug = mem.slug, hit = false;
+    var views = (S.bundle && S.bundle.views) || {};
+    Object.keys(views).forEach(function (k) {
+      var rows = views[k] && views[k].rows;
+      if (Array.isArray(rows)) rows.forEach(function (r) { if (r.workspace && String(r.workspace).toLowerCase() === slug) hit = true; });
+    });
+    var dh = (S.bundle && S.bundle.dh) || {};
+    Object.keys(dh).forEach(function (k) {
+      var rows = dh[k] && dh[k].rows;
+      if (Array.isArray(rows)) rows.forEach(function (r) { if (r.workspace && String(r.workspace).toLowerCase() === slug) hit = true; });
+    });
+    return hit;
+  }
   function renderMgrBody() {
     var host = el("hub-mgr-body"), html;
+    // Client selected but not yet attributable — say so plainly rather than
+    // paint empty "all clear" tables (which would read as "this client is fine").
+    var mem = clientMembership();
+    if (mem && !clientResolvable(mem)) {
+      var stillLoading = !S.mcm || S.mcm.status !== "ready" || S.bundleLoading;
+      host.innerHTML = '<div class="mgr-empty">' + (stillLoading
+        ? 'Attributing ' + esc(S.client) + '’s mailboxes…'
+        : 'We can’t map ' + esc(S.client) + '’s individual mailboxes yet, so the per-client detail isn’t available. Switch to <b>All clients</b> to see the whole fleet.') + '</div>';
+      return;
+    }
     if (mgrActive === "tags") { host.innerHTML = mgrTags(); return; }
     var builder = mgrActive === "lowrep" ? mgrFloor : mgrActive === "highb" ? mgrHighb : mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrActive === "signature" ? mgrSignature : mgrReconnect;
     try { html = builder(); } catch (e) { html = null; }
@@ -774,9 +805,10 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   function renderMgrScope() {
     var s = el("hub-mgr-scope"); if (!s) return;
     if (S.client === "All") { s.textContent = "All clients"; return; }
-    var mapped = (S.mcm && S.mcm.clients && S.mcm.clients[String(S.client).toLowerCase()]) ||
-                 (S.cw && (S.cw.ws_labels || S.cw.labels) && (S.cw.ws_labels || S.cw.labels)[S.client]);
-    s.textContent = S.client + (mapped ? "" : " · attributing…");
+    var mem = clientMembership();
+    if (mem && clientResolvable(mem)) { s.textContent = S.client; return; }
+    var loading = !S.mcm || S.mcm.status !== "ready" || S.bundleLoading;
+    s.textContent = S.client + (loading ? " · attributing…" : " · not mapped");
   }
 
   // Whole-page paint (initial load + background data lands). Range/client
