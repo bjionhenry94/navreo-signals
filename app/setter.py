@@ -5899,7 +5899,7 @@ def run_client_reply_sync() -> dict:
                             {"workspace": ws, "client_id": ws,
                              "smartlead_campaign_id": cid, "email": email.lower(),
                              "replied_at": rtime,
-                             "category": (catmap.get(raw_cat) or "") if raw_cat is not None else "",
+                             "category": _canon_client_category(raw_cat, catmap.get(raw_cat) or ""),
                              "smartlead_message_id": mid,
                              "reply_subject": "", "reply_body": text},
                             prefer="resolution=ignore-duplicates")
@@ -6019,7 +6019,7 @@ def run_client_reply_reconcile(force: bool = False, days: int = RECONCILE_WINDOW
                     raw_cat = int(raw_cat)
                 except (TypeError, ValueError):
                     raw_cat = None
-                sl_cat = (catmap.get(raw_cat) or "") if raw_cat is not None else ""
+                sl_cat = _canon_client_category(raw_cat, catmap.get(raw_cat) or "")
                 hit = by_mid.get(mid) or by_em_t.get((email, str(rtime)[:19]))
                 if hit is None:
                     text = _ws_reply_body(api_key, cid, lead_id, rtime)
@@ -6073,6 +6073,34 @@ def run_client_reply_reconcile(force: bool = False, days: int = RECONCILE_WINDOW
 # relabel; without it a positive thread relabelled mid-conversation silently
 # left the sweep set (accuracy audit 2026-08-23).
 POSITIVE_CATEGORY_IDS = [1, 2, 5, 78386, 83039, 83731, 86207, 113398, 125938]
+
+# analytics_hub_v1 counts a reply as "positive/interested" purely by CORE_FOUR
+# NAME match. Client workspaces categorise in their OWN Smartlead account, where
+# the positive category may be renamed (KRG sits at ~1% positive rate vs Asteri's
+# ~19% on the same page — the renamed-category signature). So when a client
+# reply carries a KNOWN-positive Smartlead id we archive it under a canonical
+# CORE_FOUR name, not the workspace's label — otherwise those positives never
+# reach the hub's count. ids 1/2/5 are Smartlead defaults (stable across
+# accounts); every account-custom positive id in POSITIVE_CATEGORY_IDS collapses
+# to "Interested" (the hub bucket is CORE_FOUR membership, so the exact name
+# within CORE_FOUR does not change the interested count). Non-positive ids keep
+# the workspace's own name untouched.
+_POSITIVE_ID_CANON = {1: "Interested", 2: "Meeting Request", 5: "Information Request"}
+
+
+def _canon_client_category(raw_cat_id, ws_name: str) -> str:
+    """Canonical CORE_FOUR name for a client reply on a known-positive Smartlead
+    id, else the workspace's own category name. Keeps positives countable by the
+    hub even when a client renamed the category. Mirrors POSITIVE_CATEGORY_IDS."""
+    try:
+        cid = int(raw_cat_id)
+    except (TypeError, ValueError):
+        return ws_name or ""
+    if cid in POSITIVE_CATEGORY_IDS:
+        return _POSITIVE_ID_CANON.get(cid, "Interested")
+    return ws_name or ""
+
+
 RESWEEP_INTERVAL_MIN = 15      # effective cadence, self-throttled off the 3-min tick
 RESWEEP_THROTTLE_MIN = 13      # >13 min since last sweep => due (aligns to 3-min grid)
 RESWEEP_POST_CAP = 25          # tripwire: never fire more than this many alerts per sweep
