@@ -17381,35 +17381,54 @@ def warmup_capacity_get() -> tuple[dict, int]:
         return ws_display.get(ws, ws)   # display name if known, else slug
 
     # Seed EVERY own-workspace client at zero so one with nothing warming reads
-    # "0/day" (real) rather than dropping out; Navreo is always present too.
-    per_client: dict = {"Navreo": {"capacityPerDay": 0, "boxes": 0, "byProvider": {}}}
+    # "0%" (real) rather than dropping out; Navreo is always present too.
+    def _seed():
+        return {"capacityPerDay": 0, "boxes": 0, "byProvider": {},
+                "activeCapacityPerDay": 0, "activeBoxes": 0, "warmPct": None}
+    per_client: dict = {"Navreo": _seed()}
     per_ws: dict = {}
     # Every mapped shared-fleet client too, so one with campaigns but nothing
-    # warming right now reads "0/day" instead of dropping back to "— shared".
+    # warming right now reads "0%" instead of dropping back to "— shared".
     for cl in set(email_client.values()):
-        per_client.setdefault(cl, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
+        per_client.setdefault(cl, _seed())
     for r in rows:
         ws0 = str(r.get("workspace") or "unknown")
-        per_ws.setdefault(ws0, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
+        per_ws.setdefault(ws0, _seed())
         if ws0 != "navreo":
-            per_client.setdefault(ws_display.get(ws0, ws0),
-                                  {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})
+            per_client.setdefault(ws_display.get(ws0, ws0), _seed())
     total = boxes_total = 0
     for r in rows:
-        if not _warmup_is_in_warmup(r):
-            continue
         ws = str(r.get("workspace") or "unknown")
-        at = str(r.get("account_type") or "SMTP").upper()
-        # Unknown providers fall back to SMTP's default rather than being dropped;
-        # every warming box contributes some estimated capacity.
-        add = _WARMUP_CAP_DEFAULTS.get(at, _WARMUP_CAP_DEFAULTS["SMTP"])
-        for tgt in (per_ws.setdefault(ws, {"capacityPerDay": 0, "boxes": 0, "byProvider": {}}),
-                    per_client.setdefault(_bucket(r), {"capacityPerDay": 0, "boxes": 0, "byProvider": {}})):
-            tgt["capacityPerDay"] += add
-            tgt["boxes"] += 1
-            tgt["byProvider"][at] = tgt["byProvider"].get(at, 0) + 1
-        total += add
-        boxes_total += 1
+        tgts = (per_ws.setdefault(ws, _seed()),
+                per_client.setdefault(_bucket(r), _seed()))
+        if _warmup_is_in_warmup(r):
+            at = str(r.get("account_type") or "SMTP").upper()
+            # Unknown providers fall back to SMTP's default rather than being
+            # dropped; every warming box contributes some estimated capacity.
+            add = _WARMUP_CAP_DEFAULTS.get(at, _WARMUP_CAP_DEFAULTS["SMTP"])
+            for tgt in tgts:
+                tgt["capacityPerDay"] += add
+                tgt["boxes"] += 1
+                tgt["byProvider"][at] = tgt["byProvider"].get(at, 0) + 1
+            total += add
+            boxes_total += 1
+        else:
+            # Actively-sending capacity = the configured daily cap of boxes that
+            # are NOT warming and can send (message_per_day > 0). A cap-0 /
+            # disconnected box is neither warming nor sending, so it counts to
+            # neither and never inflates the denominator.
+            act = int(r.get("message_per_day") or 0)
+            if act > 0:
+                for tgt in tgts:
+                    tgt["activeCapacityPerDay"] += act
+                    tgt["activeBoxes"] += 1
+    # warmPct = warm-up capacity ÷ TOTAL sending capacity (active + warm-up) —
+    # the share of a client's capacity currently being repaired. null when a
+    # client has no capacity at all (avoid 0/0).
+    for buckets in (per_client, per_ws):
+        for e in buckets.values():
+            denom = e["capacityPerDay"] + e["activeCapacityPerDay"]
+            e["warmPct"] = round(100 * e["capacityPerDay"] / denom) if denom else None
     out = {"ok": True, "perClient": per_client, "perWorkspace": per_ws,
            "mapReady": map_ready, "total": total, "boxes": boxes_total,
            "generated_at": datetime.now(timezone.utc).isoformat()}
