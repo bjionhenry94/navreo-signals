@@ -365,9 +365,10 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var all = S.cw && S.cw.windows && S.cw.windows[win] && S.cw.windows[win]["__all"];
     var reply = (all && all.sent) ? pct(all.replied, all.sent) : null;
     var bounce = (all && all.sent) ? pct(all.bounced, all.sent) : null;
-    // Warm-up % = Σ(warm capacity) / Σ(total capacity) over clients where BOTH
-    // are known — numerator and denominator PAIRED, so the fleet % can never
-    // exceed the per-client range (an unpaired sum produced >100% nonsense).
+    // Warm-up % = Σ(warm) / (Σ(warm) + Σ(available)) over clients where BOTH are
+    // known — the SAME total-sending-capacity definition as the per-client cells
+    // (warm ÷ capacity-alone produced 254% nonsense), paired so the fleet %
+    // stays ≤100 by construction.
     // Capacity used % = the send-weighted mean of each client's own used-% (its
     // exact per-client figure comes from the gap-filled capacity pipeline, which
     // can't be re-derived from a single cap/day number here).
@@ -380,7 +381,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     return {
       isAll: true, name: "All clients", dom: null, inbox: null,
       reply: reply, bounce: bounce,
-      warmPct: capForWarm > 0 ? Math.round(100 * sumWarm / capForWarm) : null,
+      warmPct: (sumWarm + capForWarm) > 0 ? Math.round(100 * sumWarm / (sumWarm + capForWarm)) : null,
       warmCap: capForWarm > 0 ? sumWarm : null, warmCapKnown: true,
       cap: wCapDen > 0 ? Math.round(wCapNum / wCapDen) : null,
       capDay: null, bl: blKnown ? bl : null, nClients: rows.length
