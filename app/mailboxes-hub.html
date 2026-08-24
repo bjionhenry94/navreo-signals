@@ -22,29 +22,21 @@
 .mbx-head .sub{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
 .hub{max-width:1240px}
 
-.hub-filters{display:flex;align-items:center;gap:14px;flex-wrap:wrap;margin:16px 0 22px;padding-bottom:16px;border-bottom:1px solid var(--line)}
-.hub-fgroup{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.hub-flabel{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);font-weight:600;margin-right:2px}
-.hub-fdiv{width:1px;height:26px;background:var(--line)}
 .hub-seg{display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden}
 .hub-seg button{border:0;background:transparent;padding:6px 14px;font:500 12.5px var(--font-sans);color:var(--ink-2);cursor:pointer}
 .hub-seg button.on{background:var(--orange);color:#fff}
+.hub-chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 
-.hub-hero{display:grid;grid-template-columns:1.1fr 2fr;gap:14px;align-items:stretch}
-.hub-verdict{display:flex;gap:16px;align-items:center;padding:20px 22px;background:var(--cream-50)}
-.hub-vdot{width:42px;height:42px;border-radius:50%;flex:none;box-shadow:0 0 0 7px var(--green-bg);background:var(--green)}
-.hub-vdot.a{background:var(--amber);box-shadow:0 0 0 7px var(--amber-bg)}
-.hub-vdot.r{background:var(--red);box-shadow:0 0 0 7px var(--red-bg)}
-.hub-verdict h2{margin:0;font-family:var(--font-display);font-weight:400;font-size:21px;letter-spacing:-.02em}
-.hub-verdict p{margin:4px 0 0;color:var(--ink-2);font-size:13px}
-.hub-hero .stats{margin:0;grid-template-columns:repeat(4,1fr)}
-.stat .num-hero{font-size:27px}
-.stat .delta{font-size:11.5px;font-weight:600;margin-top:4px}
-.stat .delta.up{color:var(--green)}.stat .delta.down{color:var(--red)}.stat .delta.mut{color:var(--ink-3)}
-
-.sec-h{display:flex;align-items:baseline;gap:10px;margin:26px 2px 12px}
+/* Section header with a docked, section-scoped control on the right.
+   Each filter physically lives inside the section it governs — this is what
+   makes the split filtering read as unambiguous (range->heat map, client->manager). */
+.sec-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:26px 2px 12px}
 .sec-h h3{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);margin:0}
-.sec-h .hint{font-size:12px;color:var(--ink-3);margin-left:auto}
+.sec-h .scope{font-size:11.5px;font-weight:600;color:var(--ink-2);background:var(--bg-sunken);border-radius:999px;padding:2px 10px}
+.sec-h .hint{font-size:12px;color:var(--ink-3)}
+.sec-h .sec-ctrl{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.sec-h .sec-ctrl .ctrl-lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);font-weight:600}
+@media(max-width:640px){.sec-h .sec-ctrl{width:100%;margin-left:0}.sec-h .mgr-ctrl,.hub-chips{justify-content:flex-start}}
 
 .fixrow{display:flex;gap:13px;align-items:flex-start;padding:15px 17px;border-left:3px solid var(--line)}
 .fixrow + .fixrow{border-top:1px solid var(--line)}
@@ -66,6 +58,11 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
 .hcell{border-radius:10px;height:48px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:14px;line-height:1}
 .hcell small{font-weight:500;font-size:9.5px;opacity:.9;margin-top:2px}
 .h-g1{background:var(--green)}.h-g2{background:#4E9A76}.h-a1{background:var(--amber)}.h-r1{background:var(--red)}.h-mut{background:#C9C4BD}
+/* Aggregate "All clients" total row — visually pinned above the per-client rows. */
+table.heat tr.heat-all td.n{font-weight:700;font-size:15px}
+table.heat tr.heat-all td.n small{color:var(--ink-2);font-weight:600}
+table.heat tr.heat-all .hcell{box-shadow:inset 0 0 0 2px rgba(0,0,0,.14)}
+table.heat tr.heat-all + tr td{padding-top:9px}
 .heat-legend{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap;font-size:11.5px;color:var(--ink-3)}
 .heat-legend .sw{display:inline-flex;align-items:center;gap:5px}
 .heat-legend .box{width:12px;height:12px;border-radius:3px}
@@ -81,7 +78,6 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
 @keyframes hpulse{0%,100%{opacity:1}50%{opacity:.4}}
 .hcell.sk{background:#DED9D1;animation:hpulse 1.15s ease-in-out infinite}
 .heat-sk-n{height:18px;width:110px;border-radius:6px;background:#DED9D1;animation:hpulse 1.15s ease-in-out infinite}
-@media(max-width:820px){.hub-hero{grid-template-columns:1fr}.hub-hero .stats{grid-template-columns:repeat(2,1fr)}}
 </style>
 </head>
 <body>
@@ -94,41 +90,36 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     </div>
 
     <div class="hub">
-      <div class="hub-filters">
-        <div class="hub-fgroup">
-          <span class="hub-flabel">Client</span>
-          <div id="hub-chips" style="display:flex;gap:6px;flex-wrap:wrap"><button class="chip on" data-client="All">All clients</button></div>
-        </div>
-        <div class="hub-fdiv"></div>
-        <div class="hub-fgroup">
-          <span class="hub-flabel">Range</span>
-          <div class="hub-seg" id="hub-range">
-            <button data-win="7">7d</button><button data-win="14">14d</button><button data-win="30" class="on">30d</button>
-          </div>
-        </div>
-        <div class="hub-flabel" id="hub-lens" style="margin-left:auto;text-transform:none;letter-spacing:0;font-weight:500;color:var(--ink-3);display:none"></div>
+      <!-- FIX TODAY — fleet-wide to-do, not affected by either filter -->
+      <div class="sec-h">
+        <h3>Fix today</h3>
+        <span class="scope">Whole fleet</span>
+        <span class="hint" id="hub-fix-hint">top = biggest hit to meetings</span>
       </div>
-
-      <div class="hub-hero">
-        <div class="card hub-verdict" id="hub-verdict">
-          <div class="hub-vdot"></div>
-          <div><h2>Loading…</h2><p>Reading the latest audit</p></div>
-        </div>
-        <div class="stats" id="hub-kpis">
-          <div class="card stat"><div class="lab">Reply rate</div><div class="num-hero">—</div></div>
-          <div class="card stat"><div class="lab">Bounce rate</div><div class="num-hero">—</div></div>
-          <div class="card stat"><div class="lab">Sent / day</div><div class="num-hero">—</div></div>
-          <div class="card stat"><div class="lab">Inbox issues</div><div class="num-hero">—</div></div>
-        </div>
-      </div>
-
-      <div class="sec-h"><h3>Fix today</h3><span class="hint" id="hub-fix-hint">top = biggest hit to meetings</span></div>
       <div class="card" style="padding:0;overflow:hidden" id="hub-fix"><div class="skel">Building today’s to-do…</div></div>
 
-      <div class="sec-h"><h3>Fleet heat map</h3><span class="hint">every client × every check — scan in 5 seconds</span></div>
+      <!-- FLEET HEAT MAP — the RANGE picker lives here, and only changes this -->
+      <div class="sec-h">
+        <h3>Fleet heat map</h3>
+        <span class="scope" id="hub-heat-scope">Whole fleet · last 30 days</span>
+        <div class="sec-ctrl">
+          <span class="ctrl-lab">Range</span>
+          <div class="hub-seg" id="hub-range" aria-label="Heat map date range">
+            <button data-win="7" type="button">7d</button><button data-win="14" type="button">14d</button><button data-win="30" type="button" class="on">30d</button>
+          </div>
+        </div>
+      </div>
       <div class="card heatwrap" style="padding:10px" id="hub-heat"><div class="skel">Loading fleet…</div></div>
 
-      <div class="sec-h"><h3>Inbox &amp; domain manager</h3><span class="hint">the full detail, when you need it</span></div>
+      <!-- INBOX & DOMAIN MANAGER — the CLIENT picker lives here, and only changes this -->
+      <div class="sec-h">
+        <h3>Inbox &amp; domain manager</h3>
+        <span class="scope" id="hub-mgr-scope">All clients</span>
+        <div class="sec-ctrl mgr-ctrl">
+          <span class="ctrl-lab">Client</span>
+          <div id="hub-chips" class="hub-chips"><button class="chip on" data-client="All" type="button">All clients</button></div>
+        </div>
+      </div>
       <div class="card" style="padding:0;overflow:hidden">
         <div class="mgr-tabs" id="hub-mgr-tabs" style="padding:8px 10px 0"></div>
         <div id="hub-mgr-body"><div class="skel" style="padding:18px">Loading…</div></div>
@@ -146,6 +137,10 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
 
   /* ---------- state ---------- */
   var LS = "mbxhub.client";
+  // S.win = the HEAT MAP range only (7/14/30). The Inbox & Domain manager is
+  // deliberately NOT range-scoped — it always shows the full MGR_WIN window so
+  // the two filters stay cleanly separated (range->heat map, client->manager).
+  var MGR_WIN = 30;
   var S = { client: "All", win: 30, deliv: null, cw: null, tags: null, labels: {}, vol: {} };
   try { var v = localStorage.getItem(LS); if (v) S.client = v; } catch (e) {}
 
@@ -293,28 +288,6 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     return { total: total, warmPct: Math.round(100 * wc / total) };
   }
 
-  /* ---------- fleet KPI figures ---------- */
-  function fleetKpis() {
-    var A = S.deliv, cw = S.cw, win = String(S.win);
-    var reply = A && A.reply_pct != null ? A.reply_pct : null;
-    var bounce = A && A.bounce_pct != null ? A.bounce_pct : null;
-    var sentDay = null, issues = null;
-    // prefer the selected client's window when a client is chosen and available
-    var wk = cw && cw.windows && cw.windows[win] ? cw.windows[win] : null;
-    var key = (S.client === "All") ? "__all" : clientKeyFor(S.client);
-    if (wk && wk[key]) {
-      var e = wk[key];
-      reply = pct(e.replied, e.sent); bounce = pct(e.bounced, e.sent);
-      sentDay = (e.sent || 0) / Number(win);
-    } else if (A && A.sent != null) { sentDay = A.sent; }
-    if (A) issues = issuesCount(A);
-    return { reply: reply, bounce: bounce, sentDay: sentDay, issues: issues };
-  }
-  function clientKeyFor(client) {
-    var labels = (S.cw && (S.cw.labels || S.cw.ws_labels)) || {};
-    if (labels[client]) return labels[client];
-    return client.toLowerCase();
-  }
   // Count-truth: the headline counts the reconciled ACTION LIST (the same
   // Fix-today rows the founder sees), NOT a raw sum of every flagged row —
   // so "Inbox issues" can't read 1,300 when there are a handful of real jobs.
@@ -345,47 +318,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       p: "A blank signature reads as spammy and hurts deliverability.", btn: "Fix" });
     return items;
   }
-  function issuesCount(A) { return buildFixItems(A).length; }
-  function urgentCount(A) { return buildFixItems(A).filter(function (it) { return it.lvl === "r"; }).length; }
-  function arrLen(x) { return Array.isArray(x) ? x.length : (Number(x) || 0); }
-
   /* ---------- renderers ---------- */
-  function renderVerdict() {
-    var k = fleetKpis(), A = S.deliv;
-    var issues = k.issues || 0, urgent = A ? urgentCount(A) : 0;
-    var dot = "", head, sub;
-    if (issues === 0) { dot = ""; head = "Looking healthy"; }
-    else if (urgent > 0) { dot = "r"; head = "Needs attention today"; }
-    else { dot = "a"; head = "A few things to review"; }
-    var date = (A && A.date) ? A.date : "latest";
-    var parts = [];
-    if (urgent) parts.push(urgent + " urgent");
-    var review = Math.max(0, issues - urgent);
-    if (review) parts.push(review + " to review");
-    parts.push(issues === 0 ? "all clear" : "rest healthy");
-    sub = esc(date) + " audit · " + parts.join(" · ");
-    el("hub-verdict").innerHTML =
-      '<div class="hub-vdot ' + dot + '"></div><div><h2>' + esc(head) + '</h2><p>' + sub + '</p></div>';
-  }
-
-  function kpiCard(lab, val, delta, dcls, valCls) {
-    return '<div class="card stat"><div class="lab">' + lab + '</div>' +
-      '<div class="num-hero"' + (valCls ? ' style="color:' + valCls + '"' : '') + '>' + val + '</div>' +
-      (delta ? '<div class="delta ' + (dcls || "mut") + '">' + delta + '</div>' : '') + '</div>';
-  }
-  function renderKpis() {
-    var k = fleetKpis();
-    var html = "";
-    html += kpiCard("Reply rate", k.reply == null ? "—" : fx(k.reply), null, null, null);
-    html += kpiCard("Bounce rate", k.bounce == null ? "—" : fx(k.bounce), null, null, k.bounce != null && k.bounce >= 3 ? "var(--red)" : null);
-    html += kpiCard("Sent / day", k.sentDay == null ? "—" : n(k.sentDay), null, null, null);
-    html += kpiCard("Inbox issues", k.issues == null ? "—" : String(k.issues),
-      (S.deliv ? urgentCount(S.deliv) : 0) ? (urgentCount(S.deliv) + " urgent") : "all clear",
-      (S.deliv && urgentCount(S.deliv)) ? "down" : "up",
-      (k.issues ? "var(--amber)" : null));
-    el("hub-kpis").innerHTML = html;
-  }
-
   function renderFix() {
     var A = S.deliv;
     if (!A) { USING_REP.fix = true; el("hub-fix").innerHTML = repFix(); return; }
@@ -418,6 +351,33 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   function heatCell(tone, big, small) {
     return '<td><div class="hcell h-' + tone + '">' + big + (small ? '<small>' + small + '</small>' : '') + '</div></td>';
   }
+  // Aggregate "All clients" total row — reconciles from RAW totals (not an
+  // average of per-client percentages): reply/bounce from the __all window
+  // totals, warm-up/capacity from summed capacity, blacklist summed. Range-scoped
+  // like every heat-map row. Returned as a row-shaped object so the existing
+  // per-client renderer draws it unchanged (with an isAll flag for styling).
+  function allClientsRow(rows) {
+    var win = String(S.win);
+    var all = S.cw && S.cw.windows && S.cw.windows[win] && S.cw.windows[win]["__all"];
+    var reply = (all && all.sent) ? pct(all.replied, all.sent) : null;
+    var bounce = (all && all.sent) ? pct(all.bounced, all.sent) : null;
+    var sumWarmCap = 0, sumCapDay = 0, sumSent = 0, capKnown = false, warmKnown = false, bl = 0, blKnown = false;
+    rows.forEach(function (r) {
+      if (r.capDay != null) { sumCapDay += r.capDay; capKnown = true; }
+      if (r.warmCap != null) { sumWarmCap += r.warmCap; warmKnown = true; }
+      if (r.sent != null) { sumSent += r.sent; }
+      if (r.bl != null) { bl += r.bl; blKnown = true; }
+    });
+    var winN = Number(win) || 30;
+    return {
+      isAll: true, name: "All clients", dom: null, inbox: null,
+      reply: reply, bounce: bounce,
+      warmPct: (capKnown && sumCapDay > 0 && warmKnown) ? Math.round(100 * sumWarmCap / sumCapDay) : null,
+      warmCap: warmKnown ? sumWarmCap : null, warmCapKnown: true,
+      cap: (capKnown && sumCapDay > 0) ? Math.round(100 * sumSent / (sumCapDay * winN)) : null,
+      capDay: null, bl: blKnown ? bl : null, nClients: rows.length
+    };
+  }
   function renderHeat() {
     var rows = clientRows();
     // Lazy-load: never pre-paint the REP_CLIENTS sample (fabricated numbers
@@ -438,9 +398,12 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       }
       return;
     }
-    var body = rows.map(function (r) {
-      var meta = (r.dom != null ? r.dom + " dom" : "") + (r.inbox != null ? " · " + r.inbox + " inbox" : "");
-      var tds = '<td class="n">' + esc(r.name) + (meta ? '<small>' + meta.replace(/^ · /, "") + '</small>' : '') + '</td>';
+    // Pin the aggregate "All clients" total as the first row.
+    var withAll = [allClientsRow(rows)].concat(rows);
+    var body = withAll.map(function (r) {
+      var meta = r.isAll ? ("fleet total · " + (r.nClients || 0) + " client" + (r.nClients === 1 ? "" : "s"))
+                         : ((r.dom != null ? r.dom + " dom" : "") + (r.inbox != null ? " · " + r.inbox + " inbox" : "")).replace(/^ · /, "");
+      var tds = '<td class="n">' + esc(r.name) + (meta ? '<small>' + esc(meta) + '</small>' : '') + '</td>';
       tds += heatCell(replyTone(r.reply), r.reply == null ? "—" : fx(r.reply), r.reply == null ? "" : (r.reply >= 3 ? "strong" : r.reply >= 1.5 ? "ok" : "soft"));
       tds += heatCell(bounceTone(r.bounce), r.bounce == null ? "—" : fx(r.bounce), r.bounce == null ? "" : (r.bounce < 2 ? "low" : r.bounce < 3 ? "watch" : "high"));
       // In warm-up = estimated sends/day currently being "repaired": Σ per
@@ -469,7 +432,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         r.cap == null ? "" : "of available sending capacity");
       var blTone = r.bl == null ? "mut" : r.bl === 0 ? "g1" : "r1";
       tds += heatCell(blTone, r.bl == null ? "—" : (r.bl === 0 ? "Clean" : r.bl + " flagged"), r.bl == null ? "" : (r.bl === 0 ? "0 flagged" : "paused"));
-      return "<tr>" + tds + "</tr>";
+      return '<tr' + (r.isAll ? ' class="heat-all"' : '') + '>' + tds + "</tr>";
     }).join("");
     el("hub-heat").innerHTML =
       '<div class="heatwrap"><table class="heat"><tr><th class="n">Client</th><th>Reply rate</th><th>Bounce</th><th>In warm-up</th><th>Capacity used</th><th>Blacklist</th></tr>' + body + '</table></div>' +
@@ -482,8 +445,14 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   }
 
   function mgrTags() {
+    // Performance-by-tag isn't attributable to a single client — it's a
+    // fleet-wide cut. Under a specific client, say so instead of showing fleet
+    // numbers that would read as that client's.
+    if (S.client !== "All") {
+      return '<div class="mgr-empty">Performance by tag is fleet-wide — it isn’t split per client. Switch the client filter back to <b>All clients</b> to view it.</div>';
+    }
     var rows = null, D = S.tags;
-    if (D && D.tagStats && D.tagStats[String(S.win)]) rows = D.tagStats[String(S.win)].filter(function (r) { return r.mailboxes > 0; });
+    if (D && D.tagStats && D.tagStats[String(MGR_WIN)]) rows = D.tagStats[String(MGR_WIN)].filter(function (r) { return r.mailboxes > 0; });
     /* Fidelity fix (23 Aug 2026): never paint REP_TAGS' fabricated reply/bounce/
        per-positive numbers as if real — the heat table warns when it falls back
        but this table did not, so empty tag stats read as genuine performance.
@@ -531,11 +500,52 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     var b = S.bundle && S.bundle.views && S.bundle.views[key];
     return (b && Array.isArray(b.rows)) ? b.rows : null;
   }
+
+  /* ---- client membership (the CLIENT filter scopes ONLY the manager) ----
+     A manager row belongs to the selected client if either:
+       • its workspace stamp matches the client's workspace slug (own-workspace
+         clients: Asteri / KRG / Grout, stamped by _deliv_merge_client_ws), OR
+       • its mailbox / domain is in the shared-fleet client's set from
+         /api/mailbox-client-map (Navreo-fleet mailboxes running that client's
+         campaigns).
+     Returns null for "All clients" — meaning no filtering. */
+  function clientMembership() {
+    if (S.client === "All") return null;
+    var labels = (S.cw && (S.cw.ws_labels || S.cw.labels)) || {};
+    var slug = String(labels[S.client] || S.client).toLowerCase();
+    var emails = {}, domains = {}, mapped = false;
+    var mcm = S.mcm, key = String(S.client).toLowerCase();
+    var list = mcm && mcm.clients && (mcm.clients[key] || null);
+    if (list && list.length) {
+      mapped = true;
+      list.forEach(function (e) { e = String(e).toLowerCase(); emails[e] = 1; var d = e.split("@")[1]; if (d) domains[d] = 1; });
+    }
+    return { slug: slug, emails: emails, domains: domains, mapped: mapped };
+  }
+  function mbxMatch(m, mem) {
+    if (!mem) return true;
+    if (m.workspace && String(m.workspace).toLowerCase() === mem.slug) return true;
+    if (m.email && mem.emails[String(m.email).toLowerCase()]) return true;
+    if (m.domain && mem.domains[String(m.domain).toLowerCase()]) return true;
+    return false;
+  }
+  function domMatch(d, mem) {
+    if (!mem) return true;
+    if (d.workspace && String(d.workspace).toLowerCase() === mem.slug) return true;
+    if (d.domain && mem.domains[String(d.domain).toLowerCase()]) return true;
+    return false;
+  }
+  // Client-scoped accessors used by the manager tabs + badges.
+  function bundleViewC(key) { var r = bundleView(key); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (x) { return mbxMatch(x, m); }) : r; }
+  function floorListC() { var r = floorList(); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (d) { return domMatch(d, m); }) : r; }
+  function highbListC() { var r = highbList(); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (d) { return domMatch(d, m); }) : r; }
+  function restingEntriesC() { var e = restingDomainEntries(); if (e == null) return null; var m = clientMembership(); return m ? e.filter(function (en) { return domMatch({ domain: en.dom }, m) || (en.rs && en.rs.some(function (r) { return mbxMatch(r, m); })); }) : e; }
+
   /* ---- shared data helpers (match the OLD deliverability manager) ---- */
   var FLOOR_STD = 0.7, FLOOR_MD = 0.5, BOUNCE_HOT = 3; // same thresholds as the old tab
-  function dhRows() { // domain-health rows for the active window
+  function dhRows() { // domain-health rows — manager uses the FIXED MGR_WIN, not the heat-map range
     var dh = S.bundle && S.bundle.dh; if (!dh) return null;
-    var w = dh[String(S.win)] || dh["30"] || dh["7"]; return (w && w.rows) || null;
+    var w = dh[String(MGR_WIN)] || dh["30"] || dh["7"]; return (w && w.rows) || null;
   }
   function floorList() { var r = dhRows(); if (r == null) return null; var ms = (S.bundle && S.bundle.minSent) || 500; var resting = restingSet();
     // Paused/resting domains belong to the In warm-up tab, not here — a domain that is
@@ -600,13 +610,15 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
 
   function mgrCount(key) {
     if (key === "tags") return null;
-    if (key === "lowrep") { var f = floorList(); return f ? f.length : null; }
-    if (key === "highb") { var h = highbList(); return h ? h.length : null; }
+    // Every badge reflects the CURRENT client filter (client-scoped accessors),
+    // so the tab counts always match what the table shows for that client.
+    if (key === "lowrep") { var f = floorListC(); return f ? f.length : null; }
+    if (key === "highb") { var h = highbListC(); return h ? h.length : null; }
     // Resting is a domain-grouped view (many mailboxes per domain, plus
     // ledger-only domains), so its badge counts DISTINCT resting domains via
     // the same canonical list the table renders — never just inwarmup rows.
-    if (key === "inwarmup") { var e = restingDomainEntries(); return e ? e.length : null; }
-    var rows = bundleView(key);
+    if (key === "inwarmup") { var e = restingEntriesC(); return e ? e.length : null; }
+    var rows = bundleViewC(key);
     if (!rows) return null;
     return rows.length;
   }
@@ -637,8 +649,8 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
 
   // ---- Below reply floor (old flow "floor"): Domain·Sent·Leads·Reply·Positive·Bounce·Action
   function mgrFloor() {
-    var rows = floorList(); if (rows == null) return null;
-    if (!rows.length) return '<div class="mgr-empty">✓ No domains below the ' + FLOOR_STD + '% reply floor in the last ' + S.win + ' days.</div>';
+    var rows = floorListC(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ No domains below the ' + FLOOR_STD + '% reply floor in the last ' + MGR_WIN + ' days.</div>';
     var body = rows.map(function (d) {
       // Every domain here has live sends below the floor (paused ones are filtered out
       // in floorList and live in the In warm-up tab), so the only action is Warm up.
@@ -652,12 +664,12 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         '<td style="text-align:right">' + action + '</td></tr>';
     }).join("");
     return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Leads</th><th class="num">Reply rate</th><th class="num">Positive</th><th class="num">Bounce</th><th style="text-align:right">Action</th>', body, null,
-      rows.length + ' domain(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + S.win + ' days. One button rests every mailbox on the domain.');
+      rows.length + ' domain(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + MGR_WIN + ' days. One button rests every mailbox on the domain.');
   }
   // ---- High bounce-rate (old flow "highbounce"): Domain·Sent·Bounces·Bounce rate·Reply rate·Action
   function mgrHighb() {
-    var rows = highbList(); if (rows == null) return null;
-    if (!rows.length) return '<div class="mgr-empty">✓ No domains over ' + BOUNCE_HOT + '% bounce in the last ' + S.win + ' days.</div>';
+    var rows = highbListC(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ No domains over ' + BOUNCE_HOT + '% bounce in the last ' + MGR_WIN + ' days.</div>';
     var body = rows.map(function (d) {
       var bn = (typeof d.bounced === "number") ? d.bounced : Math.round((d.bounce_rate || 0) * (d.sent || 0) / 100);
       return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
@@ -668,11 +680,11 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         '<td style="text-align:right">' + actBtn("bounce-pause", d.domain, null, "Pause", true) + '</td></tr>';
     }).join("");
     return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Bounces</th><th class="num">Bounce rate</th><th class="num">Reply rate</th><th style="text-align:right">Action</th>', body, null,
-      rows.length + ' domain(s) over ' + BOUNCE_HOT + '% bounce · last ' + S.win + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
+      rows.length + ' domain(s) over ' + BOUNCE_HOT + '% bounce · last ' + MGR_WIN + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
   }
   // ---- In warm-up (old flow "inwarmup", domain-grouped): Domain·Mailboxes·Due back·Status·Action(Restore)
   function mgrInWarmup() {
-    var doms = restingDomainEntries(); if (doms == null) return null;
+    var doms = restingEntriesC(); if (doms == null) return null;
     if (!doms.length) return '<div class="mgr-empty">None right now — nothing is resting.</div>';
     var mbxTotal = 0;
     var body = doms.map(function (e) {
@@ -690,7 +702,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   }
   // ---- Not warming (old flow "notwarming"): Domain / mailbox·Batch·Warmup·Action(Re-enable)
   function mgrWarmupOff() {
-    var rows = bundleView("warmupoff"); if (rows == null) return null;
+    var rows = bundleViewC("warmupoff"); if (rows == null) return null;
     if (!rows.length) return '<div class="mgr-empty">None right now — every mailbox is warming as expected.</div>';
     var shown = rows.slice(0, MGR_CAP);
     var body = shown.map(function (m) {
@@ -707,7 +719,7 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
   function mgrRowKey(m) { return String(m.id != null ? m.id : m.email); } // same key the old tab uses
   // ---- Needs reconnect (old flow "reconnect", flat rows): Mailbox·Failure reason·Action(Reconnect)
   function mgrReconnect() {
-    var rows = bundleView("reconnect"); if (rows == null) return null;
+    var rows = bundleViewC("reconnect"); if (rows == null) return null;
     if (!rows.length) return '<div class="mgr-empty">✓ Nothing needs attention — every mailbox is connected.</div>';
     var body = rows.slice(0, MGR_CAP).map(function (m) {
       return '<tr><td><div>' + esc(m.email || "—") + (m.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + (m.workspace ? ' <span class="pill n">' + esc(m.workspace) + '</span>' : '') + '</div><div class="mono t-mut" style="font-size:11px">' + esc(m.domain || "") + '</div></td>' +
@@ -736,34 +748,42 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
     names.sort(function (a, b) { var va = (vol[a] && vol[a].sent) || 0, vb = (vol[b] && vol[b].sent) || 0; return vb !== va ? vb - va : (a.toLowerCase() < b.toLowerCase() ? -1 : 1); });
     names = ["All"].concat(names);
     el("hub-chips").innerHTML = names.map(function (c) {
-      return '<button class="chip' + (S.client === c ? " on" : "") + '" data-client="' + esc(c) + '">' + (c === "All" ? "All clients" : esc(c)) + '</button>';
+      return '<button class="chip' + (S.client === c ? " on" : "") + '" data-client="' + esc(c) + '" type="button">' + (c === "All" ? "All clients" : esc(c)) + '</button>';
     }).join("");
-    var lens = el("hub-lens");
-    if (S.client === "All") { lens.style.display = "none"; }
-    else {
-      lens.style.display = "";
-      var isOwnWs = labels[S.client];
-      lens.textContent = isOwnWs ? "Showing " + S.client + "’s connected workspace." : S.client + " sends from the shared Navreo fleet — fleet health is " + S.client + "’s health.";
-    }
+    renderMgrScope();
   }
 
+  // Scope captions keep each filter's reach legible without interacting.
+  function renderHeatScope() {
+    var s = el("hub-heat-scope"); if (s) s.textContent = "Whole fleet · last " + S.win + " days";
+  }
+  function renderMgrScope() {
+    var s = el("hub-mgr-scope"); if (!s) return;
+    if (S.client === "All") { s.textContent = "All clients"; return; }
+    var mapped = (S.mcm && S.mcm.clients && S.mcm.clients[String(S.client).toLowerCase()]) ||
+                 (S.cw && (S.cw.ws_labels || S.cw.labels) && (S.cw.ws_labels || S.cw.labels)[S.client]);
+    s.textContent = S.client + (mapped ? "" : " · attributing…");
+  }
+
+  // Whole-page paint (initial load + background data lands). Range/client
+  // events use the section-scoped renderers below instead, so a filter only
+  // ever repaints the section it governs.
   function renderAll() {
-    renderVerdict(); renderKpis(); renderFix(); renderHeat(); renderMgrTabs();
+    renderFix(); renderHeatScope(); renderHeat(); renderMgrScope(); renderMgrTabs();
   }
 
-  /* ---------- events ---------- */
-  el("hub-chips").addEventListener("click", function (e) {
+  /* ---------- events — each filter repaints ONLY its own section ---------- */
+  el("hub-chips").addEventListener("click", function (e) {   // CLIENT → manager only
     var b = e.target.closest(".chip"); if (!b) return;
     S.client = b.getAttribute("data-client");
     try { localStorage.setItem(LS, S.client); } catch (e2) {}
-    renderChips(); renderAll();
+    renderChips(); renderMgrScope(); renderMgrTabs();
   });
-  el("hub-range").addEventListener("click", function (e) {
+  el("hub-range").addEventListener("click", function (e) {   // RANGE → heat map only
     var b = e.target.closest("button"); if (!b) return;
     S.win = +b.getAttribute("data-win");
     Array.prototype.forEach.call(el("hub-range").children, function (x) { x.classList.toggle("on", x === b); });
-    if (!S.tags) { loadTags(); } // tag-performance is per-window
-    renderAll();
+    renderHeatScope(); renderHeat();
   });
   el("hub-mgr-tabs").addEventListener("click", function (e) {
     var b = e.target.closest(".tab"); if (!b) return;
