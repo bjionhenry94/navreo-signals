@@ -422,6 +422,7 @@ let pollHandle = null;
 let pollDeadline = 0;
 let pollRestores = [];
 let pollBaselineCount = 0;
+let pollIdleTicks = 0;   // consecutive idle-with-nothing-new poll ticks
 const POLL_INTERVAL_MS = 4000;
 const POLL_MAX_MS = 3 * 60 * 1000;
 
@@ -821,6 +822,7 @@ function startGeneratingPoll(baselineCount) {
   stopGeneratingPoll();
   pollBaselineCount = baselineCount;
   pollDeadline = Date.now() + POLL_MAX_MS;
+  pollIdleTicks = 0;
   pollHandle = setInterval(pollGeneratingOnce, POLL_INTERVAL_MS);
 }
 
@@ -849,6 +851,7 @@ async function pollGeneratingOnce() {
   // A RETRAIN pass running behind a landed batch (fastloop: the deferred
   // interview merge, or a pool sweep) must not hold the cards hostage -
   // only an actual generate still building blocks the open.
+  if (gen.status === "running") pollIdleTicks = 0; // a sighting of running resets the idle grace
   if (gen.status === "running" && gen.kind !== "retrain") return; // still building - keep polling
   if (gen.status === "running" && CASES.length >= pollBaselineCount
       && !(((res.data && res.data.cases) || []).length > pollBaselineCount)) return;
@@ -869,7 +872,22 @@ async function pollGeneratingOnce() {
     renderCasesOrEmpty();
     return;
   }
+  // Idle with nothing new is NOT terminal on the first sighting: the POST
+  // answers "started" before the background worker stamps the running
+  // marker, so an early tick can read idle while the batch is still being
+  // built (live repro 2026-08-24: the trainer's first batch landed ~45s in,
+  // but the poll had already given up on tick one and the page never
+  // loaded). Only conclude after several consecutive idle ticks.
+  pollIdleTicks += 1;
+  if (pollIdleTicks < 4) return; // ~16s of grace before we believe "idle"
   endGeneratingPoll();
+  if (!CASES.length) {
+    // Nothing landed and nothing is open - saying "you have open scenarios
+    // ready to rate" here was a lie (live repro 2026-08-24). Be honest.
+    showError("We couldn't build scenarios just now - give it a minute and refresh, or tap Get more scenarios.");
+    renderCasesOrEmpty();
+    return;
+  }
   // The worker tops up every round with practice scenarios, so a 0-added
   // round here means this agent is already at its open-scenarios cap, not
   // that the well ran dry - never tell the trainer to wait.
@@ -1236,6 +1254,15 @@ function renderEmpty() {
         <div id="ivFirstHost"><div class="round-updating"><span class="spin"></span><span>Getting your questions ready…</span></div></div>
       </div>
     `;
+    // Head-start (owner ask 2026-08-24, "scenarios within 3 seconds"): the
+    // first batch takes ~45s of model time, so kick it off NOW, while the
+    // trainer is still reading and answering the five questions. By the time
+    // they hit Save, the round is usually already in the pool and opens
+    // instantly - generateMore's own POST then answers "already_running" and
+    // its poll finds the landed batch. Answers still shape everything: every
+    // interview save triggers the server's pool-redraft pass, which rewrites
+    // unanswered drafts with the new facts before the next round opens.
+    kickoffFirstBatchEarly();
     fetchInterviewQuestions().then((iv) => {
       const host = document.getElementById("ivFirstHost");
       if (!host) return;
@@ -1845,9 +1872,44 @@ async function startNextRoundOrGenerate() {
   generateMore();
 }
 
+/* First-batch head-start (owner ask 2026-08-24): fired from renderEmpty the
+   moment a share-mode trainer lands on an empty pool, so the ~45s model time
+   runs behind the five intake questions instead of after them. Silent - no
+   busy buttons, no poll; generateMore below rendezvouses with it. */
+let EARLY_KICKOFF = false;
+function kickoffFirstBatchEarly() {
+  if (EARLY_KICKOFF || !SHARE_MODE) return;
+  EARLY_KICKOFF = true;
+  fetchJson("/api/setter/training/generate", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ agent_id: selectedAgentId, batch_size: ROUND_SIZE, share: SHARE_TOKEN }),
+  }).catch(() => {});
+}
+
 async function generateMore() {
   if (generating) return;
   stopPrefetchPoll(); // the visible generate's own poll takes over from here
+  // Rendezvous with the head-start batch: if it already landed, open it now
+  // (this is the instant path); if it is still building, just watch it -
+  // never POST a second build on top of it.
+  if (EARLY_KICKOFF && !CASES.length) {
+    generating = true;
+    const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
+    generating = false;
+    if (snap.ok && snap.data) {
+      applyCasesSnapshot(snap.data);
+      const st = ((snap.data && snap.data.generating) || {}).status || "idle";
+      const open = CASES.filter((c) => !isAnswered(c.id)).length;
+      if (open && st !== "running") { clearError(); renderCasesOrEmpty(); return; }
+      if (st === "running") {
+        pollRestores = markGenerateButtonsBusy("Writing your first scenarios - nearly there…");
+        startGeneratingPoll(0);
+        return;
+      }
+      // idle with nothing landed - the head start came to nothing (e.g. the
+      // server refused it); fall through to a normal visible generate.
+    }
+  }
   const restores = markGenerateButtonsBusy("Building new scenarios and drafting our replies - under a minute…");
   generating = true;
   const baselineCount = CASES.length;
