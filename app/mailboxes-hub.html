@@ -430,9 +430,18 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // Pin the aggregate "All clients" total as the first row.
     var withAll = [allClientsRow(rows)].concat(rows);
     var body = withAll.map(function (r) {
-      var meta = r.isAll ? ("fleet total · " + (r.nClients || 0) + " client" + (r.nClients === 1 ? "" : "s"))
+      var meta = r.isAll ? ("Fleet health · " + (r.nClients || 0) + " client" + (r.nClients === 1 ? "" : "s"))
                          : ((r.dom != null ? r.dom + " dom" : "") + (r.inbox != null ? " · " + r.inbox + " inbox" : "")).replace(/^ · /, "");
-      var tds = '<td class="n">' + esc(r.name) + (meta ? '<small>' + esc(meta) + '</small>' : '') + '</td>';
+      // Verdict dot on the aggregate row so fleet health reads at a glance
+      // (worst of reply + bounce). Sourced from the row's own tones, not r.bl
+      // (which the aggregate no longer carries).
+      var vdot = "";
+      if (r.isAll) {
+        var tones = [replyTone(r.reply), bounceTone(r.bounce)];
+        var vc = tones.indexOf("r1") >= 0 ? "r" : (tones.indexOf("a1") >= 0 ? "a" : "g");
+        vdot = '<span class="fleetv ' + vc + '" aria-hidden="true"></span>';
+      }
+      var tds = '<td class="n">' + vdot + esc(r.name) + (meta ? '<small>' + esc(meta) + '</small>' : '') + '</td>';
       tds += heatCell(replyTone(r.reply), r.reply == null ? "—" : fx(r.reply), r.reply == null ? "" : (r.reply >= 3 ? "strong" : r.reply >= 1.5 ? "ok" : "soft"));
       tds += heatCell(bounceTone(r.bounce), r.bounce == null ? "—" : fx(r.bounce), r.bounce == null ? "" : (r.bounce < 2 ? "low" : r.bounce < 3 ? "watch" : "high"));
       // In warm-up = estimated sends/day currently being "repaired": Σ per
