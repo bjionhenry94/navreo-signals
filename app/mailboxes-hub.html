@@ -217,6 +217,11 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
         reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
         warm: pw ? pw.warmPct : null, warmKnown: !!pw,
         warmCap: wcap ? wcap.capacityPerDay : null, warmBoxes: wcap ? wcap.boxes : null, warmCapKnown: !!wcap,
+        // % of the client's TOTAL sending capacity (active + warm-up) currently
+        // in warm-up (being repaired) — server-computed from the one mirror
+        // source: warmupCap ÷ (warmupCap + activeCap). null → cell falls back to
+        // raw sends/day.
+        warmPct: wcap && wcap.warmPct != null ? wcap.warmPct : null,
         cap: capUsed, capDay: capDay, bl: null
       };
     });
@@ -442,14 +447,26 @@ table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size
       // warming box of its provider default (Outlook 2, Gmail 20, SMTP 15),
       // from /api/warmup-capacity. Shared-fleet clients (not their own
       // workspace) can't be split out of Navreo's pool → "—/shared".
-      var warmVal = r.warmCap == null ? "—" : n(r.warmCap) + "/day";
-      // Every client is attributed its own warm-up capacity now (no shared
-      // bucket); "—" only remains for a client we genuinely can't map yet.
-      var warmSub = r.warmCap == null ? (r.warmCapKnown === false ? "not mapped" : "")
-        : (r.warmBoxes + " box" + (r.warmBoxes === 1 ? "" : "es") + " warming");
+      // In warm-up = the SHARE of the client's total sending capacity currently
+      // in warm-up (being repaired): top = that %, bottom = the descriptor.
+      // Falls back to raw sends/day when the % can't be computed, and to
+      // "—/not mapped" for a client we can't attribute yet.
+      var warmVal, warmSub;
+      if (r.warmPct != null) {
+        warmVal = r.warmPct + "%";
+        warmSub = "of total sending capacity";
+      } else if (r.warmCap != null) {
+        warmVal = n(r.warmCap) + "/day";
+        warmSub = "in warm-up";
+      } else {
+        warmVal = "—";
+        warmSub = r.warmCapKnown === false ? "not mapped" : "";
+      }
       var warmTn = r.warmCap == null ? "mut" : (r.warmCap > 0 ? "g2" : "mut");
       tds += heatCell(warmTn, warmVal, warmSub);
-      tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%", r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day cap" : "used"));
+      // Capacity used: keep the % (top); bottom describes what it's a % OF.
+      tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%",
+        r.cap == null ? "" : "of available sending capacity");
       var blTone = r.bl == null ? "mut" : r.bl === 0 ? "g1" : "r1";
       tds += heatCell(blTone, r.bl == null ? "—" : (r.bl === 0 ? "Clean" : r.bl + " flagged"), r.bl == null ? "" : (r.bl === 0 ? "0 flagged" : "paused"));
       return "<tr>" + tds + "</tr>";
