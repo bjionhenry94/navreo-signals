@@ -12716,8 +12716,17 @@ def _resolve_outreach_tokens(text: str, first: str, company: str) -> str:
         out = out.replace(tok, (first or "there"))
     for tok in _OUTREACH_COMPANY_TOKENS:
         out = out.replace(tok, (company or "your team"))
+    # Smartlead merge tags such as %signature% are filled at send time and
+    # must never render raw in a practice thread (live blemish 2026-08-24).
+    # They use %...% delimiters, so the {...}-only line drop below never
+    # caught them. Match only letter-led tags so a literal "50% ... 20%" in
+    # the copy is left untouched.
+    out = re.sub(r"%[A-Za-z][A-Za-z0-9_]*%", "", out)
     lines = [ln for ln in out.split("\n") if not _LEFTOVER_TOKEN_LINE_RE.match(ln)]
-    return "\n".join(lines)
+    out = "\n".join(lines)
+    # A stripped trailing tag can leave a dangling blank run; tidy it.
+    out = re.sub(r"\n{3,}", "\n\n", out).strip("\n")
+    return out
 
 
 def _pending_staged_scenarios(agent: dict, existing_cases: list) -> list:
