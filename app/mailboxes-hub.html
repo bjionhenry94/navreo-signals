@@ -242,14 +242,12 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         // workspaces (KRG read active=0 while visibly sending 2.2k/day).
         warmPct: (wcap && capDay != null && (wcap.capacityPerDay + capDay) > 0)
           ? Math.round(100 * wcap.capacityPerDay / (wcap.capacityPerDay + capDay)) : null,
-        // ~average TOTAL sending capacity over the selected range = mean of the
-        // client's daily available-capacity series (full days only) + current
-        // warm-up capacity. The absolute number the warm-up % is a share of.
-        totalCap: (function () {
-          var avail = avgCapFor(name, labels, winN);
-          if (avail == null && !wcap) return null;
-          return Math.round((avail || 0) + (wcap ? wcap.capacityPerDay : 0));
-        })(),
+        // ~TOTAL sending capacity = the SAME two numbers this row already shows
+        // added together: In-warm-up volume + Available (Actively-sending's
+        // capDay). Owner 2026-08-24: the columns must visibly ADD UP — a
+        // range-averaged available made warm + available ≠ total on one row.
+        totalCap: (wcap == null && capDay == null) ? null
+          : Math.round((wcap ? wcap.capacityPerDay : 0) + (capDay || 0)),
         cap: capUsed, capDay: capDay, bl: null
       };
     });
@@ -313,26 +311,6 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     for (var i = series.length - 2; i >= 0; i--) if (series[i] != null) { done = series[i]; break; }
     if (today == null && done == null) return null;
     return Math.max(today || 0, done || 0);
-  }
-  // Mean available capacity/day over the selected range: the client's daily
-  // series (client_caps_daily for shared-fleet names, capacity[ws] for
-  // own-workspace clients), averaged over the window's FULL days — the final
-  // point is today's partial/apportioned figure (or null), which would drag
-  // the mean down, so it's dropped. null when no full day in range has data.
-  function avgCapFor(name, labels, winN) {
-    var cap = S.cap; if (!cap) return null;
-    var ccd = cap.client_caps_daily || {};
-    var series = ccd[name];
-    if (!series) { for (var k in ccd) { if (k.toLowerCase() === String(name).toLowerCase()) { series = ccd[k]; break; } } }
-    if (!series) {
-      var ws = labels[name] || String(name).toLowerCase();
-      series = cap.capacity && cap.capacity[ws];
-    }
-    if (!Array.isArray(series) || series.length < 2) return null;
-    var win = series.slice(0, -1).slice(-winN);   // full days only, range-scoped
-    var sum = 0, cnt = 0;
-    win.forEach(function (v) { if (v != null) { sum += v; cnt++; } });
-    return cnt ? sum / cnt : null;
   }
   // Emails ACTIVELY WARMING — the inwarmup view ONLY (warm-up-OFF boxes are not
   // warming; counting them here was the bug that made every client read ~34%).
