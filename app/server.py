@@ -20085,6 +20085,10 @@ def _restore_forecast(entries, mbx):
             "zero_cap_note": sum(e.get("zero_cap_boxes") or 0 for e in pend)}
 
 
+_MCM_SNAP_ID = "mailbox_client_map"
+_MCM_SNAP_STATE = {"saved_ts": 0.0, "fallback": None, "fallback_ts": 0.0}
+
+
 def api_mailbox_client_map():
     """Shared-fleet mailbox→client attribution for the Mailboxes tab's client
     filter (owner ask 2026-08-17: a shared-fleet chip must move the numbers,
@@ -20093,7 +20097,14 @@ def api_mailbox_client_map():
     membership source) joined to campaign_scorecard.client (the one label
     authority). No new Smartlead traffic: this rides the same 30-min sweep
     cache the restore forecast uses. Boxes attached to no labelled Navreo
-    campaign attribute to no client — they only ever show under All."""
+    campaign attribute to no client — they only ever show under All.
+
+    Durability (owner ask 2026-08-24, "not mapped must go away"): every ready
+    map is persisted to the deliverability_audit_cache blob store, and while
+    this instance's sweep is still building the persisted copy is served
+    (status ready, persisted=true). Membership drifts slowly, so a stale map
+    beats an unattributed fleet after every deploy/restart — the web instance
+    no longer depends on rebuilding the sweep before the column attributes."""
     sweep = None
     with _RESTORE_SWEEP_LOCK:
         if _RESTORE_SWEEP["data"] is not None:
@@ -20101,6 +20112,14 @@ def api_mailbox_client_map():
         err = _RESTORE_SWEEP["error"]
     st = _restore_sweep_start()   # cold: kick the build; stale: refresh behind the served data
     if sweep is None:
+        snap = _MCM_SNAP_STATE["fallback"]
+        if snap is None or time.time() - _MCM_SNAP_STATE["fallback_ts"] > 600:
+            blob = _blob_snapshot_load(_MCM_SNAP_ID) or {}
+            snap = blob if isinstance(blob.get("clients"), dict) and blob["clients"] else None
+            _MCM_SNAP_STATE.update(fallback=snap, fallback_ts=time.time())
+        if snap:
+            return {"status": "ready", "persisted": True,
+                    "snapshot_ts": snap.get("ts"), "clients": snap["clients"]}
         return {"status": "computing", "running": bool(st.get("running", True)), "error": err}
     try:
         score = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,client,workspace") or []
@@ -20122,9 +20141,15 @@ def api_mailbox_client_map():
             k = cl.lower()
             labels.setdefault(k, cl)
             emails.setdefault(k, set()).add(email)
-    return {"status": "ready",
-            "sweep_age_sec": round(time.time() - _RESTORE_SWEEP["ts"]),
-            "clients": {labels[k]: sorted(v) for k, v in emails.items()}}
+    out = {"status": "ready",
+           "sweep_age_sec": round(time.time() - _RESTORE_SWEEP["ts"]),
+           "clients": {labels[k]: sorted(v) for k, v in emails.items()}}
+    # Persist (throttled) so the NEXT cold instance attributes immediately.
+    if out["clients"] and time.time() - _MCM_SNAP_STATE["saved_ts"] > 1200:
+        _blob_snapshot_save(_MCM_SNAP_ID, {
+            "ts": _dtmod.datetime.utcnow().isoformat() + "Z", "clients": out["clients"]})
+        _MCM_SNAP_STATE["saved_ts"] = time.time()
+    return out
 
 
 # ── Performance by tag (fixes the broken "Performance by batch") ──────────

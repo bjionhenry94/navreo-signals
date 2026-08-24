@@ -291,10 +291,23 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var cc = cap.client_caps || {};
     if (cc[name] != null) return cc[name];
     for (var k in cc) { if (k.toLowerCase() === String(name).toLowerCase()) return cc[k]; }
-    var ws = labels[name] || String(name).toLowerCase();
-    var series = cap.capacity && cap.capacity[ws];
-    if (Array.isArray(series)) { for (var i = series.length - 1; i >= 0; i--) if (series[i] != null) return series[i]; }
-    return null;
+    // No client_caps yet (today's per-client blob is written overnight) → the
+    // client's own daily series first, then the workspace line. The series'
+    // final point is today's IN-PROGRESS high-water figure that grows through
+    // the day (a morning read showed Navreo "7.2k/day" against a real ~23k),
+    // so take max(today-so-far, latest completed day) — never the raw last point.
+    var ccd = cap.client_caps_daily || {};
+    var series = ccd[name];
+    if (!series) { for (var k2 in ccd) { if (k2.toLowerCase() === String(name).toLowerCase()) { series = ccd[k2]; break; } } }
+    if (!Array.isArray(series)) {
+      var ws = labels[name] || String(name).toLowerCase();
+      series = cap.capacity && cap.capacity[ws];
+    }
+    if (!Array.isArray(series) || !series.length) return null;
+    var today = series[series.length - 1], done = null;
+    for (var i = series.length - 2; i >= 0; i--) if (series[i] != null) { done = series[i]; break; }
+    if (today == null && done == null) return null;
+    return Math.max(today || 0, done || 0);
   }
   // Mean available capacity/day over the selected range: the client's daily
   // series (client_caps_daily for shared-fleet names, capacity[ws] for
@@ -469,9 +482,14 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // ("22.1k/day of available sending capacity") — the amount stays visible.
       tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%",
         r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day of available sending capacity" : "used"));
-      // ~Average total sending capacity over the selected range (black box,
-      // one number) — the absolute figure the warm-up % is a share of.
-      tds += heatCell("blk", r.totalCap == null ? "—" : "~" + n(r.totalCap), "");
+      // ~Average total sending capacity over the selected range (black box) —
+      // the absolute figure the warm-up % is a share of. Top = per day, bottom
+      // = the estimated monthly total (×30 — weekends are kept, matching the
+      // capacity convention everywhere else on this page).
+      var moCap = r.totalCap == null ? null : r.totalCap * 30;
+      var moTxt = moCap == null ? "" :
+        (moCap >= 1e6 ? "~" + (Math.round(moCap / 1e5) / 10) + "M/month" : "~" + n(moCap) + "/month");
+      tds += heatCell("blk", r.totalCap == null ? "—" : "~" + n(r.totalCap) + "/day", moTxt);
       return '<tr' + (r.isAll ? ' class="heat-all"' : '') + '>' + tds + "</tr>";
     }).join("");
     el("hub-heat").innerHTML =
