@@ -711,8 +711,14 @@ function setupChartTooltip(wrap) {
       fetch(`/api/jobs/${encodeURIComponent(jid)}/resume`, { method: "POST" })
         .then((r) => r.json().catch(() => ({})))
         .then((j) => {
-          if (j && j.job_id) { ping(); }          // new continuation job — refresh fast
-          else if (resume.isConnected) { resume.disabled = false; resume.textContent = "Resume"; }
+          if (j && j.job_id) {
+            // The continuation supersedes this row — drop the old interrupted
+            // job now so it leaves "Needs you" immediately instead of lingering
+            // there beside the new "Happening now" job until the next poll.
+            jobs = jobs.filter((x) => x.id !== jid);
+            render();
+            ping();                                // pull in the new continuation job
+          } else if (resume.isConnected) { resume.disabled = false; resume.textContent = "Resume"; }
         })
         .catch(() => { if (resume.isConnected) { resume.disabled = false; resume.textContent = "Resume"; } })
         .finally(() => resuming.delete(jid));

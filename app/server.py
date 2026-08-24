@@ -6485,6 +6485,21 @@ def _campaign_has_active_job(campaign_id) -> bool:
     return bool(rows)
 
 
+def _retire_resumed_job(jid: str):
+    """Drop the OLD interrupted row once a manual Resume has spawned its
+    continuation — otherwise the superseded task lingers in the rail's
+    'Needs you' zone forever (owner report 2026-08-24: Resume added a new
+    'Happening now' job but left the old one sitting under 'Needs you').
+    Best-effort: the continuation is already enqueued, so a failure here just
+    leaves a dismissable row, never a lost task."""
+    try:
+        with JOBS_LOCK:
+            JOBS.pop(jid, None)
+        sb("DELETE", f"app_jobs?id=eq.{jid}")
+    except Exception:  # noqa: BLE001 — never fail a successful resume over cleanup
+        pass
+
+
 def resume_job(jid: str):
     """Manual Resume (the sidebar button). Re-runs an interrupted verify job as
     a fresh continuation. Returns (body, status)."""
@@ -6520,6 +6535,7 @@ def resume_job(jid: str):
                              entity="domain")
             except Exception:  # noqa: BLE001
                 pass
+            _retire_resumed_job(jid)  # the continuation supersedes this row
             return {"job_id": body["job_id"]}, 202
         return (body if isinstance(body, dict) else {"error": "resume_failed"}), (st or 500)
     if kind not in ("verify", "remove_bad") or job.get("dry_run"):
@@ -6552,6 +6568,7 @@ def resume_job(jid: str):
                      entity="campaign", entity_id=campaign_id)
     except Exception:  # noqa: BLE001
         pass
+    _retire_resumed_job(jid)  # the continuation supersedes this row
     return {"job_id": new_job["id"]}, 202
 
 
