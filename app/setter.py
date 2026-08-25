@@ -95,6 +95,18 @@ SETTER_MONITOR_ALL_WS = os.environ.get("SETTER_MONITOR_ALL_WS", "1") not in ("0"
 
 # Never a real Setter reply source even if present in the table.
 _WS_MONITOR_SKIP = ("heyreach", "opan-test")
+
+# SENDABLE federated workspaces — the explicit, deliberate carve-out the design
+# note above calls for. A workspace listed here is a fully-managed client that
+# can SEND from the Setter (Approve / follow-up / subsequence / category writes
+# all reach the CLIENT's own Smartlead, because /campaigns/<id>/... resolves
+# that workspace's api_key via _sl_key_for). Everything NOT listed stays strict
+# monitor-only. Comma-separated env override; defaults to the workspaces we've
+# promoted. Removing an id here re-freezes it to review-only, no other change.
+_SENDABLE_WS = frozenset(
+    w.strip().lower() for w in
+    os.environ.get("SETTER_SENDABLE_WS", "krg").split(",") if w.strip()
+)
 _WS_IDS_CACHE = {"at": 0.0, "ids": None}
 
 
@@ -148,8 +160,12 @@ def _list_ws_filter() -> str:
 def _is_monitor_ws(ws) -> bool:
     """True for a workspace whose Setter rows are review-only and must NEVER
     send. Fail-closed: while the gate is on, ANYTHING that isn't navreo is
-    monitor-only, whether or not it is still in the enabled list."""
-    return bool(SETTER_MONITOR_ALL_WS) and (ws or "navreo") != "navreo"
+    monitor-only — UNLESS it's an explicitly promoted sendable workspace
+    (_SENDABLE_WS), which sends to its own client Smartlead like navreo does."""
+    w = (ws or "navreo")
+    if w == "navreo" or w.lower() in _SENDABLE_WS:
+        return False
+    return bool(SETTER_MONITOR_ALL_WS)
 
 # ── one OpenAI round trip, with a deadline and a retry ──────────────────────
 # Every model call used to be a bare _HTTP on http_json's 60s default with
