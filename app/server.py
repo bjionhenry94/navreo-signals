@@ -9008,11 +9008,21 @@ def _scorecard_sync_all():
                     m = _parse_smartlead_analytics(data)
                 except Exception:  # noqa: BLE001
                     continue
+                _ls = m.get("lead_stats") or {}
                 rows.append({"smartlead_campaign_id": cid, "workspace": wid,
                              "name": c.get("name") or "",
                              "status": m.get("status") or c.get("status"),
                              "sent": m["sent"], "replied": m["replied"], "positives": m["positives"],
                              "bounced": m["bounced"], "completed": m["completed"], "total": m["total"],
+                             # SmartLead's own per-lead audience split — persisted so
+                             # the campaigns-page progress dial can show real reach
+                             # ((total-notStarted)/total) for EVERY campaign, not just
+                             # the ≤150 that get a live sweep. Without this the dial
+                             # fell back to sent÷leads and saturated at 100% for any
+                             # multi-step campaign (433/564 rows). Fix 2026-08-25.
+                             "not_started": _ls.get("notStarted"), "inprogress": _ls.get("inprogress"),
+                             "paused": _ls.get("paused"), "blocked": _ls.get("blocked"),
+                             "stopped": _ls.get("stopped"),
                              # ONE client-label authority (consolidation 2026-08-02):
                              # the synced row carries the same label every UI
                              # surface computes, so readers stop re-deriving it.
@@ -9268,7 +9278,7 @@ def _all_campaign_scorecard() -> dict:
     str(smartlead_campaign_id), same shape the UI has always consumed.
     Meetings merged from the optimiser cache. HeyReach campaigns
     get their LinkedIn progress counts (people/replied) from the snapshot table."""
-    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status,sent,replied,positives,bounced,completed,total,client")
+    rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status,sent,replied,positives,bounced,completed,total,not_started,inprogress,paused,blocked,stopped,client")
     camps = {}
     for r in (rows or []):
         sid = str(r.get("smartlead_campaign_id"))
@@ -9276,7 +9286,8 @@ def _all_campaign_scorecard() -> dict:
         # Settings "Show demo clients" toggle is ON.
         if _client_hidden(_client_win_label(r.get("workspace") or "navreo", r.get("name") or "")):
             continue
-        camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total", "status")}
+        camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total",
+                                            "not_started", "inprogress", "paused", "blocked", "stopped", "status")}
         # the hourly sync stamps the one authoritative client label on each row
         # (backfilled column); surfaces read it instead of re-deriving
         camps[sid]["client"] = r.get("client")

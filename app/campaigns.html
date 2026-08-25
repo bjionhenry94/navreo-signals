@@ -2877,6 +2877,11 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
            scorecard row — the ring/bucket truth for rows outside the live
            check's 150-id cap (the sent÷(leads×2) heuristic is last resort) */
         completedLeads: s ? s.completed : null,
+        /* SmartLead's own not-started count off the synced scorecard row — lets
+           the progress dial show real reach ((total-notStarted)/total) for every
+           campaign, not just the ≤150 that get a live sweep (false-100% fix,
+           25 Aug 2026). null on rows synced before the column existed. */
+        notStarted: s && s.not_started != null ? s.not_started : null,
         source: s ? "scorecard" : "crunch"
       };
       /* House law: a booked meeting IS a positive (a Call Booked reply is a
@@ -3870,9 +3875,12 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     var clamp = function (v) { return Math.max(0, Math.min(100, v)); };
     var ls = STATE.liveStatus && STATE.liveStatus[c.id] && STATE.liveStatus[c.id].lead_stats;
     if (ls && ls.total) return clamp(100 * (ls.total - (ls.notStarted || 0)) / ls.total);
-    /* pre-live fallback (replaced in place by paintDial once live lands): a
-       rough contacted estimate from the sync stats, never the completion ring */
-    if (st.leads && st.sent != null) return clamp(100 * Math.min(st.sent, st.leads) / st.leads);
+    /* Same reach formula off the synced scorecard split (SmartLead's own
+       notStarted), so the ≥99% of rows without a live answer get an ACCURATE
+       reach too. Replaces the old sent÷leads fallback, which saturated at 100%
+       for any multi-step campaign (sent counts every sequence step, so
+       sent≥leads long before the list is worked) — false-100% fix 25 Aug 2026. */
+    if (st.notStarted != null && st.leads) return clamp(100 * (st.leads - st.notStarted) / st.leads);
     return null;
   }
   function dialInnerHTML(compPct) {
