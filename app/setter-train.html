@@ -698,7 +698,17 @@ async function loadTraining() {
    tick so they never drift out of sync with each other. */
 function applyCasesSnapshot(data) {
   CASES = (data && data.cases) || [];
-  ANSWERS = (data && data.answers) || {};
+  // Overlay optimistic answers whose POST is still in flight (audit
+  // 2026-08-25, bug: rated cards re-appear blank). A snapshot that races the
+  // answer POST (2s/5s retry backoff on a busy instance = multi-second
+  // windows) carries the server's PRE-answer copy; dropping our local answer
+  // would re-insert the just-rated card into the unanswered stream and
+  // re-ask it. Keep any in-flight answer the server hasn't confirmed yet.
+  const _srvAns = (data && data.answers) || {};
+  IN_FLIGHT_ANSWERS.forEach((id) => {
+    if (!_srvAns[id] && ANSWERS[id]) _srvAns[id] = ANSWERS[id];
+  });
+  ANSWERS = _srvAns;
   usedCount = (data && data.used_count) || usedCount;
   AGENT_MEMORY = (data && data.agent_memory) || [];
   INSTRUCTION_EDITS = (data && data.instruction_edits) || [];
@@ -827,16 +837,40 @@ function mountFirstInterviewForm(iv) {
   });
   // Proceed only ever runs AFTER the questions have been shown and the
   // trainer chose (answer or skip) - never on an empty/failed fetch.
+  let firstIvBusy = false;
   const proceed = () => {
+    if (firstIvBusy) return;
+    firstIvBusy = true;
     stopFirstIvRepeek();
     markFirstIvDone();
-    if (CASES.length) renderCasesOrEmpty();
-    else generateMore();
+    if (CASES.length) { renderCasesOrEmpty(); return; }
+    // Empty pool at boot (the first batch is still building): the interview
+    // form's own buttons are gone now, so generateMore's markGenerateButtons-
+    // Busy has nothing to grey out. Paint an explicit waiting state so the
+    // trainer isn't left staring at a frozen form (audit #11). generateMore's
+    // poll calls renderCasesOrEmpty() when the batch lands, replacing this.
+    const app = document.getElementById("trainApp");
+    if (app) app.innerHTML = `<div class="empty-flow"><div class="round-updating">`
+      + `<span class="spin"></span><span>Saved - writing your first scenarios, under a minute…</span></div></div>`;
+    generateMore();
   };
   const submitBtn = document.getElementById("ivSubmitBtn");
-  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, proceed));
+  if (submitBtn) submitBtn.addEventListener("click", async () => {
+    // One-shot: a second click before proceed() swaps the DOM used to
+    // re-POST the answers, appending a duplicate pending_merges each time
+    // (audit #11). Busy the button; re-enable only if the save didn't
+    // proceed (validation/POST failure leaves the form on screen).
+    if (firstIvBusy || submitBtn.dataset.busy) return;
+    submitBtn.dataset.busy = "1";
+    const orig = submitBtn.textContent;
+    submitBtn.textContent = "Saving…";
+    await submitInterviewAnswers(iv, proceed);
+    if (document.getElementById("ivSubmitBtn") === submitBtn) {
+      delete submitBtn.dataset.busy; submitBtn.textContent = orig;
+    }
+  });
   const skipBtn = document.getElementById("ivSkipBtn");
-  if (skipBtn) skipBtn.addEventListener("click", proceed);
+  if (skipBtn) skipBtn.addEventListener("click", () => { if (!firstIvBusy) proceed(); });
 }
 
 /* A round begins whenever the stream starts with no round in progress: at
@@ -1948,7 +1982,12 @@ function startPrefetchPoll() {
    its busy label and poll) when the pool is dry. */
 let roundOpening = false; // repeated clicks while opening are no-ops
 async function startNextRoundOrGenerate() {
-  if (roundOpening || generating) return;
+  // Guard only against re-entering THIS opener (audit #9): the old
+  // `|| generating` swallowed the click whenever a BACKGROUND prefetch was
+  // in flight - even though the local pool already had a full round ready to
+  // open instantly. A generate that's genuinely needed is still safe: the
+  // short-pool path calls generateMore, which self-guards on `generating`.
+  if (roundOpening) return;
   if (SHARE_MODE) {
     const openRound = () => {
       stopPrefetchPoll();

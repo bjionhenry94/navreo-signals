@@ -13963,17 +13963,21 @@ def route_training_generate(payload):
             return 200, {"ok": True, "status": "queued"}
 
         try:
-            marker_doc = _load_training(agent_id)
-            # Merge-preserve (2026-08-20): keep a retrain_queued flag a
-            # concurrent answer may have just written; a generate_queued flag
-            # is consumed - this generate IS its fulfilment.
-            gen0 = dict(marker_doc.get("generating") or {})
-            gen0.pop("generate_queued", None)
-            gen0.pop("kind", None)
-            marker_doc["generating"] = _merge_running_marker(
-                gen0, status="running", batch_size=batch_size,
-                started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
-            _save_training(agent_id, marker_doc)
+            # Doc lock (different registry from the gen lock above - nesting
+            # them is fine and matches the other marker sites) so this marker
+            # write can't clobber a concurrent answer.
+            with _get_training_doc_lock(agent_id):
+                marker_doc = _load_training(agent_id)
+                # Merge-preserve (2026-08-20): keep a retrain_queued flag a
+                # concurrent answer may have just written; a generate_queued flag
+                # is consumed - this generate IS its fulfilment.
+                gen0 = dict(marker_doc.get("generating") or {})
+                gen0.pop("generate_queued", None)
+                gen0.pop("kind", None)
+                marker_doc["generating"] = _merge_running_marker(
+                    gen0, status="running", batch_size=batch_size,
+                    started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
+                _save_training(agent_id, marker_doc)
         except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
             lock.release()
             raise
@@ -14017,25 +14021,29 @@ def _finish_training_generation(agent_id: str, status: str, error: str | None = 
     the success path merges those itself (see _training_generate_worker)
     since it needs the same fresh-reload-then-append protection."""
     try:
-        doc = _load_training(agent_id)
-        marker = {"status": status, "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
-        if error is not None:
-            marker["error"] = error
-        if added is not None:
-            marker["added"] = added
-        # A "remember" answer may have set retrain_queued on the CURRENT
-        # generating marker while this batch was building (see
-        # _kick_off_training_retrain) - carry it forward so
-        # _maybe_run_queued_retrain (checked right after this worker returns)
-        # still sees it, even when the batch itself failed or found nothing.
-        _rq = (doc.get("generating") or {}).get("retrain_queued")
-        if _rq:
-            # VALUE carry - "pool" vs True encodes the redraft mode.
-            marker["retrain_queued"] = _rq
-        if (doc.get("generating") or {}).get("generate_queued"):
-            marker["generate_queued"] = (doc.get("generating") or {}).get("generate_queued")
-        doc["generating"] = marker
-        _save_training(agent_id, doc)
+        # Doc lock: serialize this whole load→mutate→save against the answer
+        # route and every other writer so a client answer committed between
+        # this load and save is never clobbered (pure dict work + one save).
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            marker = {"status": status, "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
+            if error is not None:
+                marker["error"] = error
+            if added is not None:
+                marker["added"] = added
+            # A "remember" answer may have set retrain_queued on the CURRENT
+            # generating marker while this batch was building (see
+            # _kick_off_training_retrain) - carry it forward so
+            # _maybe_run_queued_retrain (checked right after this worker returns)
+            # still sees it, even when the batch itself failed or found nothing.
+            _rq = (doc.get("generating") or {}).get("retrain_queued")
+            if _rq:
+                # VALUE carry - "pool" vs True encodes the redraft mode.
+                marker["retrain_queued"] = _rq
+            if (doc.get("generating") or {}).get("generate_queued"):
+                marker["generate_queued"] = (doc.get("generating") or {}).get("generate_queued")
+            doc["generating"] = marker
+            _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001 - never raise out of a background thread
         pass
 
@@ -14393,33 +14401,38 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # a minute, and an answer may have been written to this same doc row
         # in the meantime - appending onto a stale in-memory copy would
         # silently drop it.
-        fresh_doc = _load_training(agent_id)
-        fresh_doc["cases"] = (list(fresh_doc.get("cases") or []) + new_cases
-                              + new_synthetic_cases + recycled_cases)
-        fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
-        if recycle_cursor is not None:
-            fresh_doc["recycle_cursor"] = recycle_cursor
-        if brain_covers_at:
-            fresh_doc["brain_covers_at"] = max(brain_covers_at, str(fresh_doc.get("brain_covers_at") or ""))
-        gen_marker = {
-            "status": "idle",
-            "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-            "added": len(new_cases) + len(new_synthetic_cases) + len(recycled_cases),
-        }
-        # Carry retrain_queued forward if a "remember" answer set it while
-        # this batch was building - see _finish_training_generation's own
-        # matching comment and _maybe_run_queued_retrain. Carry the VALUE,
-        # not a bare True - it encodes the redraft mode ("pool" vs owner) and
-        # flattening it once upgraded a share retrain to a full redraft over
-        # the client's round (fastloop 2026-08-20). Same carry for a queued
-        # generate.
-        _rq = (fresh_doc.get("generating") or {}).get("retrain_queued")
-        if _rq:
-            gen_marker["retrain_queued"] = _rq
-        if (fresh_doc.get("generating") or {}).get("generate_queued"):
-            gen_marker["generate_queued"] = (fresh_doc.get("generating") or {}).get("generate_queued")
-        fresh_doc["generating"] = gen_marker
-        _save_training(agent_id, fresh_doc)
+        # Doc lock: only the final reload→mutate→save is wrapped, NOT the
+        # classify()/draft_reply() loop above - the lock must never be held
+        # across a model call. Serializing just this window is enough to keep
+        # an answer that landed while the batch built from being clobbered.
+        with _get_training_doc_lock(agent_id):
+            fresh_doc = _load_training(agent_id)
+            fresh_doc["cases"] = (list(fresh_doc.get("cases") or []) + new_cases
+                                  + new_synthetic_cases + recycled_cases)
+            fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
+            if recycle_cursor is not None:
+                fresh_doc["recycle_cursor"] = recycle_cursor
+            if brain_covers_at:
+                fresh_doc["brain_covers_at"] = max(brain_covers_at, str(fresh_doc.get("brain_covers_at") or ""))
+            gen_marker = {
+                "status": "idle",
+                "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                "added": len(new_cases) + len(new_synthetic_cases) + len(recycled_cases),
+            }
+            # Carry retrain_queued forward if a "remember" answer set it while
+            # this batch was building - see _finish_training_generation's own
+            # matching comment and _maybe_run_queued_retrain. Carry the VALUE,
+            # not a bare True - it encodes the redraft mode ("pool" vs owner) and
+            # flattening it once upgraded a share retrain to a full redraft over
+            # the client's round (fastloop 2026-08-20). Same carry for a queued
+            # generate.
+            _rq = (fresh_doc.get("generating") or {}).get("retrain_queued")
+            if _rq:
+                gen_marker["retrain_queued"] = _rq
+            if (fresh_doc.get("generating") or {}).get("generate_queued"):
+                gen_marker["generate_queued"] = (fresh_doc.get("generating") or {}).get("generate_queued")
+            fresh_doc["generating"] = gen_marker
+            _save_training(agent_id, fresh_doc)
 
         if new_synthetic_cases:
             _log_synthetic_usage(agent_id, len(new_synthetic_cases), synthetic_trigger, is_share_mode)
@@ -14497,11 +14510,12 @@ def _flag_training_retrain_queued(agent_id: str, redraft=True):
     a queued share retrain can never run an owner-style redraft over cards
     under the client's eyes. Never raises out of a background thread."""
     try:
-        doc = _load_training(agent_id)
-        gen = dict(doc.get("generating") or {})
-        gen["retrain_queued"] = "pool" if redraft == "pool" else True
-        doc["generating"] = gen
-        _save_training(agent_id, doc)
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            gen = dict(doc.get("generating") or {})
+            gen["retrain_queued"] = "pool" if redraft == "pool" else True
+            doc["generating"] = gen
+            _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001
         pass
 
@@ -14574,13 +14588,14 @@ def _flag_training_generate_queued(agent_id: str, batch_size: int, is_share_mode
     a second identical batch on its heels is the old already_running
     semantics, and correct."""
     try:
-        doc = _load_training(agent_id)
-        gen = dict(doc.get("generating") or {})
-        is_real_generate = gen.get("status") == "running" and gen.get("kind") != "retrain"
-        if not is_real_generate:
-            gen["generate_queued"] = {"batch_size": int(batch_size), "share": bool(is_share_mode)}
-            doc["generating"] = gen
-            _save_training(agent_id, doc)
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            gen = dict(doc.get("generating") or {})
+            is_real_generate = gen.get("status") == "running" and gen.get("kind") != "retrain"
+            if not is_real_generate:
+                gen["generate_queued"] = {"batch_size": int(batch_size), "share": bool(is_share_mode)}
+                doc["generating"] = gen
+                _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001
         pass
 
@@ -14591,26 +14606,35 @@ def _maybe_run_queued_generate(agent_id):
     while a retrain (or an earlier batch) held the lock, run it now so no
     prefetch is ever silently dropped."""
     try:
-        doc = _load_training(agent_id)
-        gen = dict(doc.get("generating") or {})
-        queued = gen.get("generate_queued")
-        if not queued:
-            return
-        gen.pop("generate_queued", None)
-        doc["generating"] = gen
-        _save_training(agent_id, doc)
+        # Flag read+clear under the doc lock so a concurrent answer written
+        # between this load and save is never clobbered.
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            gen = dict(doc.get("generating") or {})
+            queued = gen.get("generate_queued")
+            if not queued:
+                return
+            gen.pop("generate_queued", None)
+            doc["generating"] = gen
+            _save_training(agent_id, doc)
         agent = _load_agent(agent_id)
         if not agent:
             return
         batch_size = max(1, min(int((queued or {}).get("batch_size") or TRAINING_BATCH_DEFAULT),
                                 TRAINING_BATCH_MAX))
-        marker_doc = _load_training(agent_id)
-        gen0 = dict(marker_doc.get("generating") or {})
-        gen0.pop("kind", None)
-        marker_doc["generating"] = _merge_running_marker(
-            gen0, status="running", batch_size=batch_size,
-            started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
-        _save_training(agent_id, marker_doc)
+        # The running-marker write is a full-doc save too - same lock, its own
+        # short window.
+        with _get_training_doc_lock(agent_id):
+            marker_doc = _load_training(agent_id)
+            gen0 = dict(marker_doc.get("generating") or {})
+            gen0.pop("kind", None)
+            marker_doc["generating"] = _merge_running_marker(
+                gen0, status="running", batch_size=batch_size,
+                started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
+            _save_training(agent_id, marker_doc)
+        # Worker acquires the doc lock itself for its final save - call it
+        # OUTSIDE the lock so the lock is never nested nor held across the
+        # classify/draft model work inside the worker.
         _training_generate_worker(agent_id, agent,
                                   [str(c) for c in (agent.get("campaign_ids") or [])],
                                   batch_size, is_share_mode=bool((queued or {}).get("share")))
@@ -14721,13 +14745,16 @@ def _redraft_training_pool(agent_id: str) -> int:
         # Persist NOW (fresh reload, same lost-update discipline as the other
         # workers): the pool must be visible to the portal's transition poll
         # before the merges behind it start burning their 5-15s each. Only
-        # `cases` and `brain_covers_at` are ours to write here.
-        fresh = _load_training(agent_id)
-        if updated:
-            fresh["cases"] = cases
-        if covers_at:
-            fresh["brain_covers_at"] = max(covers_at, str(fresh.get("brain_covers_at") or ""))
-        _save_training(agent_id, fresh)
+        # `cases` and `brain_covers_at` are ours to write here. Doc lock wraps
+        # ONLY this reload→save window, never the redraft loop above (which
+        # runs the model).
+        with _get_training_doc_lock(agent_id):
+            fresh = _load_training(agent_id)
+            if updated:
+                fresh["cases"] = cases
+            if covers_at:
+                fresh["brain_covers_at"] = max(covers_at, str(fresh.get("brain_covers_at") or ""))
+            _save_training(agent_id, fresh)
         return updated
     except Exception:  # noqa: BLE001 - never raise out of a background thread
         return 0
@@ -14742,13 +14769,19 @@ def _maybe_run_queued_retrain(agent_id):
     truthy else = the owner's full redraft) - see
     _flag_training_retrain_queued."""
     try:
-        doc = _load_training(agent_id)
-        gen = dict(doc.get("generating") or {})
-        flag = gen.get("retrain_queued")
+        flag = None
+        # Flag read+clear under the doc lock; the worker (which locks itself
+        # for its own saves and runs the model) is called OUTSIDE the lock so
+        # the lock is never nested nor held across a model call.
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            gen = dict(doc.get("generating") or {})
+            flag = gen.get("retrain_queued")
+            if flag:
+                gen["retrain_queued"] = False
+                doc["generating"] = gen
+                _save_training(agent_id, doc)
         if flag:
-            gen["retrain_queued"] = False
-            doc["generating"] = gen
-            _save_training(agent_id, doc)
             _training_retrain_worker(agent_id, redraft=("pool" if flag == "pool" else True))
     except Exception:  # noqa: BLE001 - never raise out of a background thread
         pass
@@ -15074,14 +15107,18 @@ def _finish_training_recheck(agent_id: str, rechecked: int = 0, error: str | Non
     marker alongside the `cases` merge, same discipline as
     _training_generate_worker."""
     try:
-        doc = _load_training(agent_id)
-        marker = {"status": "idle" if error is None else "failed", "kind": "recheck",
-                  "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-                  "rechecked": rechecked}
-        if error is not None:
-            marker["error"] = error
-        doc["generating"] = marker
-        _save_training(agent_id, doc)
+        # Doc lock: serialize this whole load→mutate→save so a client answer
+        # committed between the load and save is never clobbered (pure dict
+        # work + one save, no model/HTTP held).
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            marker = {"status": "idle" if error is None else "failed", "kind": "recheck",
+                      "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                      "rechecked": rechecked}
+            if error is not None:
+                marker["error"] = error
+            doc["generating"] = marker
+            _save_training(agent_id, doc)
     except Exception:  # noqa: BLE001
         pass
 
@@ -15167,20 +15204,22 @@ def _training_recheck_worker(agent_id: str, count: int):
 
         # Lost-update protection (see docstring): reload fresh right before
         # saving, and only merge `recheck` onto the specific cases this pass
-        # targeted.
-        fresh = _load_training(agent_id)
-        fresh_cases = list(fresh.get("cases") or [])
-        for c in fresh_cases:
-            cid = str(c.get("id"))
-            if cid in results:
-                c["recheck"] = results[cid]
-        fresh["cases"] = fresh_cases
-        fresh["generating"] = {
-            "status": "idle", "kind": "recheck",
-            "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
-            "rechecked": len(results),
-        }
-        _save_training(agent_id, fresh)
+        # targeted. Doc lock wraps ONLY this reload→save window, never the
+        # recheck ThreadPoolExecutor loop above (which runs the model).
+        with _get_training_doc_lock(agent_id):
+            fresh = _load_training(agent_id)
+            fresh_cases = list(fresh.get("cases") or [])
+            for c in fresh_cases:
+                cid = str(c.get("id"))
+                if cid in results:
+                    c["recheck"] = results[cid]
+            fresh["cases"] = fresh_cases
+            fresh["generating"] = {
+                "status": "idle", "kind": "recheck",
+                "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
+                "rechecked": len(results),
+            }
+            _save_training(agent_id, fresh)
     except Exception as e:  # noqa: BLE001 - never raise out of a background thread
         if _LOG:
             try:
@@ -15248,13 +15287,17 @@ def route_training_recheck(payload):
             return 200, {"ok": True, "status": "already_running"}
 
         try:
-            marker_doc = _load_training(agent_id)
-            # Merge-preserve (2026-08-20): queued flags survive this marker
-            # write like every other one - see the retrain worker's loop-top.
-            marker_doc["generating"] = _merge_running_marker(
-                marker_doc.get("generating"), status="running", kind="recheck", count=count,
-                started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
-            _save_training(agent_id, marker_doc)
+            # Doc lock (different registry from the gen lock above - nesting
+            # them is fine and matches the other marker sites) so this marker
+            # write can't clobber a concurrent answer.
+            with _get_training_doc_lock(agent_id):
+                marker_doc = _load_training(agent_id)
+                # Merge-preserve (2026-08-20): queued flags survive this marker
+                # write like every other one - see the retrain worker's loop-top.
+                marker_doc["generating"] = _merge_running_marker(
+                    marker_doc.get("generating"), status="running", kind="recheck", count=count,
+                    started_at=_dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"))
+                _save_training(agent_id, marker_doc)
         except Exception:  # noqa: BLE001 - never leave the lock held if writing the marker itself blows up
             lock.release()
             raise
@@ -15285,11 +15328,12 @@ def _drain_pending_merges(agent_id: str) -> list:
     save already uses, so an answer/cases write that lands concurrently is
     never clobbered. Returns the popped entries in submission order (empty
     list if nothing was queued)."""
-    doc = _load_training(agent_id)
-    pending = list(doc.get("pending_merges") or [])
-    if pending:
-        doc["pending_merges"] = []
-        _save_training(agent_id, doc)
+    with _get_training_doc_lock(agent_id):
+        doc = _load_training(agent_id)
+        pending = list(doc.get("pending_merges") or [])
+        if pending:
+            doc["pending_merges"] = []
+            _save_training(agent_id, doc)
     return pending
 
 
@@ -15318,18 +15362,22 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
     try:
         while True:
             started_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
-            marker_doc = _load_training(agent_id)
-            # MERGE into the existing generating dict, never replace it: a
-            # generate_queued flag written by the route's flagger milliseconds
-            # earlier must survive this pass (live-verify race 2026-08-20 -
-            # the wholesale replace here wiped the portal's queued first
-            # round). retrain_queued IS consumed: this pass is the queue's
-            # fulfilment.
-            gen0 = dict(marker_doc.get("generating") or {})
-            gen0.pop("retrain_queued", None)
-            marker_doc["generating"] = _merge_running_marker(
-                gen0, status="running", kind="retrain", started_at=started_at)
-            _save_training(agent_id, marker_doc)
+            # Doc lock around this marker write only; the pool redraft, the
+            # pending-merge model calls and the retrain loop below each lock
+            # independently (or run the model) and must NOT be held under it.
+            with _get_training_doc_lock(agent_id):
+                marker_doc = _load_training(agent_id)
+                # MERGE into the existing generating dict, never replace it: a
+                # generate_queued flag written by the route's flagger milliseconds
+                # earlier must survive this pass (live-verify race 2026-08-20 -
+                # the wholesale replace here wiped the portal's queued first
+                # round). retrain_queued IS consumed: this pass is the queue's
+                # fulfilment.
+                gen0 = dict(marker_doc.get("generating") or {})
+                gen0.pop("retrain_queued", None)
+                marker_doc["generating"] = _merge_running_marker(
+                    gen0, status="running", kind="retrain", started_at=started_at)
+                _save_training(agent_id, marker_doc)
 
             updated = 0
             cases = None
@@ -15409,22 +15457,23 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             # ours to write - answers/used_reply_ids/readiness_history are left
             # exactly as the fresh reload shows, so an answer that landed on any
             # case while classify/draft round trips were in flight is never lost.
-            fresh = _load_training(agent_id)
-            if cases is not None:
-                fresh["cases"] = cases
-            queued = bool((fresh.get("generating") or {}).get("retrain_queued"))
-            # A generate queued while THIS retrain held the lock must survive
-            # the marker overwrite (fastloop live-verify bug 2026-08-20: the
-            # clobber here silently dropped the portal's first-round batch) -
-            # _maybe_run_queued_generate reads it right after this worker
-            # returns.
-            gen_queued = (fresh.get("generating") or {}).get("generate_queued")
-            finished_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
-            fresh["generating"] = {"status": "idle", "kind": "retrain", "started_at": started_at,
-                                   "finished_at": finished_at, "updated": updated}
-            if gen_queued:
-                fresh["generating"]["generate_queued"] = gen_queued
-            _save_training(agent_id, fresh)
+            with _get_training_doc_lock(agent_id):
+                fresh = _load_training(agent_id)
+                if cases is not None:
+                    fresh["cases"] = cases
+                queued = bool((fresh.get("generating") or {}).get("retrain_queued"))
+                # A generate queued while THIS retrain held the lock must survive
+                # the marker overwrite (fastloop live-verify bug 2026-08-20: the
+                # clobber here silently dropped the portal's first-round batch) -
+                # _maybe_run_queued_generate reads it right after this worker
+                # returns.
+                gen_queued = (fresh.get("generating") or {}).get("generate_queued")
+                finished_at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+                fresh["generating"] = {"status": "idle", "kind": "retrain", "started_at": started_at,
+                                       "finished_at": finished_at, "updated": updated}
+                if gen_queued:
+                    fresh["generating"]["generate_queued"] = gen_queued
+                _save_training(agent_id, fresh)
 
             if not queued:
                 break
@@ -15432,12 +15481,15 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             # with the fresher digest.
     except Exception:  # noqa: BLE001 - a background thread must never raise
         try:
-            doc = _load_training(agent_id)
-            gen = dict(doc.get("generating") or {})
-            gen["status"] = "idle"
-            gen["finished_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
-            doc["generating"] = gen
-            _save_training(agent_id, doc)
+            # Any inner doc-lock `with` above has already released by the time
+            # this handler runs, so re-taking it here doesn't nest.
+            with _get_training_doc_lock(agent_id):
+                doc = _load_training(agent_id)
+                gen = dict(doc.get("generating") or {})
+                gen["status"] = "idle"
+                gen["finished_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+                doc["generating"] = gen
+                _save_training(agent_id, doc)
         except Exception:  # noqa: BLE001
             pass
 
@@ -15631,11 +15683,15 @@ def route_training_reset(payload):
                 return 409, {"error": "A scenario batch is still generating - "
                                       "try again in a moment."}
             try:
-                doc = {"cases": [], "answers": {}, "used_reply_ids": [],
-                       "readiness_history": [], "generating": {"status": "idle"},
-                       "pending_merges": [], "confirmed_examples": [],
-                       "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
-                _save_training(agent_id, doc)
+                # Doc lock (different registry from the gen lock; nesting is
+                # fine, matches the marker sites) so the wipe can't clobber an
+                # answer that lands as the reset fires.
+                with _get_training_doc_lock(agent_id):
+                    doc = {"cases": [], "answers": {}, "used_reply_ids": [],
+                           "readiness_history": [], "generating": {"status": "idle"},
+                           "pending_merges": [], "confirmed_examples": [],
+                           "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
+                    _save_training(agent_id, doc)
             finally:
                 lock.release()
             # A full reset wipes the interviews AND the pre-built scenario
@@ -15647,10 +15703,11 @@ def route_training_reset(payload):
             threading.Thread(target=_prewarm_training_interview, args=(agent_id,), daemon=True).start()
             threading.Thread(target=_prebuild_training_pool, args=(agent_id,), daemon=True).start()
             return 200, {"ok": True, "full": True}
-        doc = _load_training(agent_id)
-        doc["answers"] = {}
-        doc["readiness_history"] = []
-        _save_training(agent_id, doc)
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            doc["answers"] = {}
+            doc["readiness_history"] = []
+            _save_training(agent_id, doc)
         return 200, {"ok": True}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
