@@ -315,6 +315,22 @@ const SHARE_TOKEN = new URLSearchParams(location.search).get("share") || "";
 const SHARE_MODE = !!SHARE_TOKEN;
 let shareAgentName = "";
 
+/* Per-link sessionStorage scope (owner report 2026-08-25 "it skipped straight
+   past the questions"). Every training key below - firstIvDone, the answered-
+   question record, round ids/counters, last-feedback stamp - used to be a bare
+   sessionStorage key shared by every training link opened in the same tab. So
+   once a CSM did the intake for ONE agent, opening ANY other agent's link in
+   that tab inherited firstIvDone=1 and skipped the questions (and inherited a
+   stale round). Scoping every key to THIS share link (this agent in owner
+   mode) makes each link a clean slate. Scope is stable per link, so a refresh
+   still restores the right session. */
+const _SS_SCOPE = SHARE_TOKEN ? ("lnk_" + SHARE_TOKEN.slice(0, 28)) : "owner";
+const SS = {
+  get(k) { try { return sessionStorage.getItem(k + "::" + _SS_SCOPE); } catch { return null; } },
+  set(k, v) { try { sessionStorage.setItem(k + "::" + _SS_SCOPE, v); } catch { /* ignore */ } },
+  del(k) { try { sessionStorage.removeItem(k + "::" + _SS_SCOPE); } catch { /* ignore */ } },
+};
+
 if (SHARE_MODE) {
   document.body.classList.add("share-mode");
   document.getElementById("rail").outerHTML = "";
@@ -390,7 +406,7 @@ const ANSWERED_IV_LOCAL = { ids: new Set(), texts: new Set() };
 // answers after the background save lands, so a reload inside that window
 // would otherwise forget what was answered and re-ask (2026-08-25).
 try {
-  const s = JSON.parse(sessionStorage.getItem("trainIvAnswered") || "null");
+  const s = JSON.parse(SS.get("trainIvAnswered") || "null");
   if (s) {
     (s.ids || []).forEach((x) => ANSWERED_IV_LOCAL.ids.add(String(x)));
     (s.texts || []).forEach((x) => ANSWERED_IV_LOCAL.texts.add(String(x)));
@@ -398,7 +414,7 @@ try {
 } catch { /* ignore */ }
 function persistAnsweredIvLocal() {
   try {
-    sessionStorage.setItem("trainIvAnswered", JSON.stringify({
+    SS.set("trainIvAnswered", JSON.stringify({
       ids: [...ANSWERED_IV_LOCAL.ids], texts: [...ANSWERED_IV_LOCAL.texts] }));
   } catch { /* ignore */ }
 }
@@ -407,7 +423,7 @@ let chipPollHandle = null;
 let transitionPollHandle = null;
 let transitionStartedAt = 0;
 let lastFeedbackAt = "";      // server-time of MY newest teaching this sitting
-try { lastFeedbackAt = sessionStorage.getItem("trainLastFeedbackAt") || ""; } catch { /* ignore */ }
+try { lastFeedbackAt = SS.get("trainLastFeedbackAt") || ""; } catch { /* ignore */ }
 /* Feedback answers whose server timestamp hasn't come back yet. The done
    screen renders optimistically BEFORE the answer POST resolves, so for a
    beat the gate would compare against a STALE lastFeedbackAt and open on a
@@ -419,7 +435,7 @@ let pendingFeedbackSync = 0;
 function bumpLastFeedbackAt(at) {
   if (!at || at <= lastFeedbackAt) return;
   lastFeedbackAt = at;
-  try { sessionStorage.setItem("trainLastFeedbackAt", at); } catch { /* ignore */ }
+  try { SS.set("trainLastFeedbackAt", at); } catch { /* ignore */ }
 }
 function poolFresh() {
   if (pendingFeedbackSync > 0) return false;
@@ -682,7 +698,17 @@ async function loadTraining() {
    tick so they never drift out of sync with each other. */
 function applyCasesSnapshot(data) {
   CASES = (data && data.cases) || [];
-  ANSWERS = (data && data.answers) || {};
+  // Overlay optimistic answers whose POST is still in flight (audit
+  // 2026-08-25, bug: rated cards re-appear blank). A snapshot that races the
+  // answer POST (2s/5s retry backoff on a busy instance = multi-second
+  // windows) carries the server's PRE-answer copy; dropping our local answer
+  // would re-insert the just-rated card into the unanswered stream and
+  // re-ask it. Keep any in-flight answer the server hasn't confirmed yet.
+  const _srvAns = (data && data.answers) || {};
+  IN_FLIGHT_ANSWERS.forEach((id) => {
+    if (!_srvAns[id] && ANSWERS[id]) _srvAns[id] = ANSWERS[id];
+  });
+  ANSWERS = _srvAns;
   usedCount = (data && data.used_count) || usedCount;
   AGENT_MEMORY = (data && data.agent_memory) || [];
   INSTRUCTION_EDITS = (data && data.instruction_edits) || [];
@@ -732,10 +758,10 @@ function renderCasesOrEmpty() {
    before any card shows; view "interview" is a no-repaint state (render()
    leaves the DOM alone) so score updates never wipe a half-typed answer. */
 let firstIvDone = false;
-try { firstIvDone = sessionStorage.getItem("trainIvFirstDone") === "1"; } catch { /* ignore */ }
+try { firstIvDone = SS.get("trainIvFirstDone") === "1"; } catch { /* ignore */ }
 function markFirstIvDone() {
   firstIvDone = true;
-  try { sessionStorage.setItem("trainIvFirstDone", "1"); } catch { /* ignore */ }
+  try { SS.set("trainIvFirstDone", "1"); } catch { /* ignore */ }
 }
 
 /* Static CSM-gate copy (owner ruling 2026-08-25): when the pre-warmed
@@ -748,7 +774,7 @@ function firstInterviewBuildingHtml() {
     <div class="empty-flow">
       <p>Before we write anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
       <div class="build-notice" style="margin-top:14px;padding:14px 16px;border:1px solid var(--line,#e5e2dc);border-radius:10px;background:var(--card,#faf9f7);color:var(--ink-soft,#6b6b6b);font-weight:500">
-        Training is still being built. Come back in a minute.
+        Training is still being built. Come back later.
       </div>
     </div>`;
 }
@@ -811,16 +837,40 @@ function mountFirstInterviewForm(iv) {
   });
   // Proceed only ever runs AFTER the questions have been shown and the
   // trainer chose (answer or skip) - never on an empty/failed fetch.
+  let firstIvBusy = false;
   const proceed = () => {
+    if (firstIvBusy) return;
+    firstIvBusy = true;
     stopFirstIvRepeek();
     markFirstIvDone();
-    if (CASES.length) renderCasesOrEmpty();
-    else generateMore();
+    if (CASES.length) { renderCasesOrEmpty(); return; }
+    // Empty pool at boot (the first batch is still building): the interview
+    // form's own buttons are gone now, so generateMore's markGenerateButtons-
+    // Busy has nothing to grey out. Paint an explicit waiting state so the
+    // trainer isn't left staring at a frozen form (audit #11). generateMore's
+    // poll calls renderCasesOrEmpty() when the batch lands, replacing this.
+    const app = document.getElementById("trainApp");
+    if (app) app.innerHTML = `<div class="empty-flow"><div class="round-updating">`
+      + `<span class="spin"></span><span>Saved - writing your first scenarios, under a minute…</span></div></div>`;
+    generateMore();
   };
   const submitBtn = document.getElementById("ivSubmitBtn");
-  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, proceed));
+  if (submitBtn) submitBtn.addEventListener("click", async () => {
+    // One-shot: a second click before proceed() swaps the DOM used to
+    // re-POST the answers, appending a duplicate pending_merges each time
+    // (audit #11). Busy the button; re-enable only if the save didn't
+    // proceed (validation/POST failure leaves the form on screen).
+    if (firstIvBusy || submitBtn.dataset.busy) return;
+    submitBtn.dataset.busy = "1";
+    const orig = submitBtn.textContent;
+    submitBtn.textContent = "Saving…";
+    await submitInterviewAnswers(iv, proceed);
+    if (document.getElementById("ivSubmitBtn") === submitBtn) {
+      delete submitBtn.dataset.busy; submitBtn.textContent = orig;
+    }
+  });
   const skipBtn = document.getElementById("ivSkipBtn");
-  if (skipBtn) skipBtn.addEventListener("click", proceed);
+  if (skipBtn) skipBtn.addEventListener("click", () => { if (!firstIvBusy) proceed(); });
 }
 
 /* A round begins whenever the stream starts with no round in progress: at
@@ -833,7 +883,7 @@ function beginRoundIfNeeded() {
   // counting) a new one - the id set is persisted per sitting.
   if (!ROUND_IDS) {
     let saved = null;
-    try { saved = JSON.parse(sessionStorage.getItem("trainRoundIds") || "null"); } catch { /* ignore */ }
+    try { saved = JSON.parse(SS.get("trainRoundIds") || "null"); } catch { /* ignore */ }
     if (Array.isArray(saved) && saved.length) {
       const live = new Set(CASES.map((c) => String(c.id)));
       const restored = saved.filter((id) => live.has(String(id)));
@@ -846,22 +896,22 @@ function beginRoundIfNeeded() {
   ROUND_IDS = currentUnanswered().slice(0, ROUND_SIZE).map((c) => c.id);
   let n = 0, sitting = 0;
   try {
-    n = Number(sessionStorage.getItem("trainRoundNum") || "0");
-    sitting = Number(sessionStorage.getItem("trainRoundsSitting") || "0");
+    n = Number(SS.get("trainRoundNum") || "0");
+    sitting = Number(SS.get("trainRoundsSitting") || "0");
   } catch { /* ignore */ }
   try {
-    sessionStorage.setItem("trainRoundNum", String(n + 1));
-    sessionStorage.setItem("trainRoundsSitting", String(sitting + 1));
-    sessionStorage.setItem("trainRoundIds", JSON.stringify(ROUND_IDS));
+    SS.set("trainRoundNum", String(n + 1));
+    SS.set("trainRoundsSitting", String(sitting + 1));
+    SS.set("trainRoundIds", JSON.stringify(ROUND_IDS));
   } catch { /* ignore */ }
 }
 
 function currentRoundNum() {
-  try { return Math.max(1, Number(sessionStorage.getItem("trainRoundNum") || "1")); }
+  try { return Math.max(1, Number(SS.get("trainRoundNum") || "1")); }
   catch { return 1; }
 }
 function roundsThisSitting() {
-  try { return Number(sessionStorage.getItem("trainRoundsSitting") || "0"); }
+  try { return Number(SS.get("trainRoundsSitting") || "0"); }
   catch { return 0; }
 }
 
@@ -1542,7 +1592,7 @@ function growRoundIfShort() {
     .slice(0, ROUND_SIZE - ROUND_IDS.length).map((c) => c.id);
   if (!extra.length) return;
   ROUND_IDS = ROUND_IDS.concat(extra);
-  try { sessionStorage.setItem("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
+  try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
 }
 
 /* ── Offer interview (owner ruling 2026-08-20) ────────────────────────────
@@ -1932,7 +1982,12 @@ function startPrefetchPoll() {
    its busy label and poll) when the pool is dry. */
 let roundOpening = false; // repeated clicks while opening are no-ops
 async function startNextRoundOrGenerate() {
-  if (roundOpening || generating) return;
+  // Guard only against re-entering THIS opener (audit #9): the old
+  // `|| generating` swallowed the click whenever a BACKGROUND prefetch was
+  // in flight - even though the local pool already had a full round ready to
+  // open instantly. A generate that's genuinely needed is still safe: the
+  // short-pool path calls generateMore, which self-guards on `generating`.
+  if (roundOpening) return;
   if (SHARE_MODE) {
     const openRound = () => {
       stopPrefetchPoll();
@@ -1948,7 +2003,7 @@ async function startNextRoundOrGenerate() {
           .concat(CASES.filter((c) => !freshIds.has(String(c.id))));
       }
       ROUND_IDS = null;
-      try { sessionStorage.removeItem("trainRoundIds"); } catch { /* ignore */ }
+      try { SS.del("trainRoundIds"); } catch { /* ignore */ }
       beginRoundIfNeeded();
       idx = 0;
       view = "stream";
