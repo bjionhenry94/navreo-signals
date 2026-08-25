@@ -263,11 +263,22 @@ def pull_campaign_counts(smartlead_key: str):
             log(f"Campaign sweep: {i}/{len(active)} campaigns swept")
         time.sleep(0.35)
 
-    if failed:
-        # A partial sweep would write undercounts that look just as authoritative
-        # as real ones — preserve yesterday's values instead.
-        log(f"Campaign sweep: {failed}/{len(active)} campaigns failed — treating sweep as incomplete")
+    # A partial sweep undercounts mailboxes attached ONLY to the failed campaigns,
+    # so a heavily-incomplete sweep is untrustworthy and we preserve last-known.
+    # But all-or-nothing was fatal once the fleet grew to ~180 ACTIVE campaigns:
+    # a single flaky fetch out of 180 returned None EVERY run, so campaign_count
+    # stopped updating and decayed to 0 fleet-wide — which zeroed the whole
+    # capacity chart (m.campaign_count>0 matched nothing). Tolerate a small
+    # failure fraction: the worst case is a few boxes undercounted, vs. every
+    # box zeroed. Only bail when a large share failed (Bjion 2026-08-25).
+    tolerance = max(5, int(len(active) * 0.10))
+    if failed > tolerance:
+        log(f"Campaign sweep: {failed}/{len(active)} campaigns failed (> {tolerance} tolerated) "
+            "— treating sweep as incomplete, preserving last-known campaign_count")
         return None
+    if failed:
+        log(f"Campaign sweep: {failed}/{len(active)} campaigns failed (within {tolerance} tolerated) "
+            "— writing counts; boxes only on a failed campaign may undercount this run")
     return counts
 
 
