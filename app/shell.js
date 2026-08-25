@@ -37,8 +37,7 @@ const ICONS = {
   campaigns: ic8("paper-plane.svg", "lg"),
   lists: ic8("user.svg", "lg"),
   deliverability: ic8("analytics.svg", "lg"),
-  mailboxes: ic8("mail", "lg"),
-  mbxhub: ic8("analytics.svg", "lg"),
+  mbxhub: ic8("mail", "lg"),
   setter: ic8("reply", "lg"),
   settings: ic8("settings.svg", "lg"),
 };
@@ -50,8 +49,7 @@ const ICONS = {
 const NAV = [
   ["campaigns.html", "campaigns", "Campaigns"],
   ["deliverability.html", "deliverability", "Analytics"],
-  ["mailboxes.html", "mailboxes", "Mailboxes"],
-  ["mailboxes-hub.html", "mbxhub", "Mailboxes 2 (preview)"],
+  ["mailboxes-hub.html", "mbxhub", "Mailboxes"],
   ["setter.html", "setter", "Setter"],
 ];
 
