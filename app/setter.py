@@ -15638,9 +15638,14 @@ def route_training_reset(payload):
                 _save_training(agent_id, doc)
             finally:
                 lock.release()
-            # A full reset wipes the interviews too - pre-generate the next
-            # first-question set so the portal reopens with no spinner wait.
+            # A full reset wipes the interviews AND the pre-built scenario
+            # pool - rebuild both in the background so the portal reopens
+            # with no spinner wait and every round draws from a deep bank
+            # instead of a live just-in-time build (2026-08-25: a reset
+            # deliverable had only head-start crumbs, so every round break
+            # gambled on a 30-60s LLM batch and read as 'stuck').
             threading.Thread(target=_prewarm_training_interview, args=(agent_id,), daemon=True).start()
+            threading.Thread(target=_prebuild_training_pool, args=(agent_id,), daemon=True).start()
             return 200, {"ok": True, "full": True}
         doc = _load_training(agent_id)
         doc["answers"] = {}
