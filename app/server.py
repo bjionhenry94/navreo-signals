@@ -17359,7 +17359,26 @@ def warmup_capacity_get() -> tuple[dict, int]:
     _deliv_bundle_restore()
     with _DELIV_BUNDLE_LOCK:
         bundle = _DELIV_BUNDLE.get("data")
-    resting = ((((bundle or {}).get("views") or {}).get("inwarmup") or {}).get("rows")) or []
+    # Warm-up cohort = the SAME warming set the Inbox & Domain Manager's Resting
+    # tab renders: the deliverability bundle's inwarmup UNION rested views (dedup
+    # by email). Reading inwarmup alone (the old behaviour) hid every parked-but-
+    # warming domain — Smartlead warmup ACTIVE, no live campaign, sitting in the
+    # "rested" view — so a client whose whole fleet was parked (e.g. Arnic) read
+    # 0/day here while the Resting tab showed 14 domains "warming — sends held".
+    # The rested view is navreo-ws only (the client-ws merge emits inwarmup only
+    # for cap==0), so this cannot resurface the KRG cap>0 phantom; the client-ws
+    # guard (_clientws_resting) below still protects every non-navreo box.
+    _bv = ((bundle or {}).get("views") or {})
+    _seen_cohort: dict = {}
+    resting = []
+    for _r in ((((_bv.get("inwarmup") or {}).get("rows")) or [])
+               + (((_bv.get("rested") or {}).get("rows")) or [])):
+        _ek = str(_r.get("email") or _r.get("id") or "").lower()
+        if _ek and _ek in _seen_cohort:
+            continue
+        if _ek:
+            _seen_cohort[_ek] = 1
+        resting.append(_r)
     if not resting:
         # No bundle yet (or an empty view, which a real fleet never has) — a
         # cold/degraded instance, not a real zero. Never cache it.
@@ -17370,13 +17389,28 @@ def warmup_capacity_get() -> tuple[dict, int]:
     # Provider truth: mirror account_type by email (Smartlead's own field).
     try:
         mrows = sb_get_all("mailboxes?select=email,account_type,workspace,"
-                           "warmup_enabled,message_per_day") or []
+                           "warmup_enabled,message_per_day,warmup_status,tags") or []
     except Exception as e:  # noqa: BLE001
         if ent:
             return ent["data"], 200
         return {"error": "warmup_capacity_unavailable", "message": str(e)[:200]}, 502
     acct = {str(r.get("email") or "").lower(): str(r.get("account_type") or "").upper()
             for r in mrows if r.get("email")}
+    # Mirror tag names by email (Smartlead tag OBJECTS → plain names) and warmup
+    # state — used to attribute a rested navreo-ws box to its client even when the
+    # bundle row carries no tags, and to keep the cohort to genuinely-warming boxes.
+    def _tag_names(r):
+        out_ = []
+        for t in (r.get("tags") or []):
+            nm = t.get("tag_name") if isinstance(t, dict) else str(t)
+            if nm:
+                out_.append(str(nm))
+        return out_
+    mirror_tags = {str(r.get("email") or "").lower(): _tag_names(r)
+                   for r in mrows if r.get("email")}
+    mirror_warm = {str(r.get("email") or "").lower():
+                   str(r.get("warmup_status") or "").upper()
+                   for r in mrows if r.get("email")}
     # Client-workspace resting truth (owner audit #2, 2026-08-24): the bundle's
     # client-ws inwarmup rows are built on the mirror's campaign_count, which is
     # 0 on EVERY client-ws box (stale sync field) — so all 1,660 KRG boxes read
@@ -17427,7 +17461,9 @@ def warmup_capacity_get() -> tuple[dict, int]:
         known client ("Amplifyy - Hypertide", "Arnic - Temporary") is strong
         evidence. The map stays primary — this only fills its gaps, so every
         resting box still lands on a client instead of "not mapped"."""
-        for t in (r.get("tags") or []):
+        email_ = str(r.get("email") or "").lower()
+        cand = list(r.get("tags") or []) + mirror_tags.get(email_, [])
+        for t in cand:
             tl = str(t).lower()
             for token, disp in nav_clients.items():
                 if token in tl:
@@ -17479,6 +17515,14 @@ def warmup_capacity_get() -> tuple[dict, int]:
         # bundle rule swept in — not resting; skip it (see _clientws_resting).
         if ws != "navreo" and not _clientws_resting(email):
             continue
+        # Smartlead-faithful cohort: a navreo-ws box counts as warm-up only while
+        # Smartlead warmup is genuinely ACTIVE. If the mirror knows the box and
+        # says warmup is not active, it is not warming — skip it (unknown-to-mirror
+        # falls through and keeps the bundle view's verdict, same as provider).
+        if ws == "navreo":
+            _ws_state = mirror_warm.get(email)
+            if _ws_state and _ws_state != "ACTIVE":
+                continue
         cl = (email_client.get(email) or _tag_client(r) or "Navreo") if ws == "navreo" \
             else ws_display.get(ws, ws)
         prov = _provider(r, email)
