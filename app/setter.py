@@ -15740,7 +15740,22 @@ def route_training_interview(payload):
                 # Idempotent: an unanswered set is re-served, never re-generated
                 # (a refresh mid-questionnaire must not burn tokens or shuffle
                 # the questions under the client).
-                return 200, {"questions": latest["questions"], "asked_at": latest.get("asked_at") or ""}
+                return 200, {"questions": latest["questions"], "ready": True,
+                             "asked_at": latest.get("asked_at") or ""}
+            # PEEK (owner ruling 2026-08-25, CSM gate): a read-only probe that
+            # NEVER runs the model. The first-launch page uses it so the CSM
+            # sees either instant questions or a static "still being built"
+            # message - never a spinner, and NEVER a silent skip into the
+            # threads. `ready:false` means the background prewarm has not
+            # finished yet (or produced nothing); the caller shows the wait
+            # copy and does not proceed.
+            if payload.get("peek"):
+                # Kick a background prewarm so a link minted before prewarm
+                # existed (or whose set a reset wiped) converges to ready on
+                # the next peek - fire-and-forget, this response stays instant.
+                threading.Thread(target=_prewarm_training_interview,
+                                 args=(agent_id,), daemon=True).start()
+                return 200, {"questions": [], "ready": False}
             questions_text = _generate_interview_questions(agent, doc)
             questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in questions_text]
             with _get_training_doc_lock(agent_id):
@@ -15929,14 +15944,33 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
         if not key:
             return list(STATIC_FIRST_INTERVIEW)
         prior = []
+        answered_qs = []          # every question the owner actually answered
+        answered_rounds = 0       # interview sets with at least one answer
         for interview in (doc.get("interviews") or []):
             if not isinstance(interview, dict):
                 continue
             ans = dict(interview.get("answers") or {})
+            if ans:
+                answered_rounds += 1
             for q in (interview.get("questions") or []):
                 qid = str((q or {}).get("id"))
-                prior.append({"q": str((q or {}).get("q") or ""),
-                              "a": str(ans.get(qid) or "")})
+                a = str(ans.get(qid) or "")
+                prior.append({"q": str((q or {}).get("q") or ""), "a": a})
+                if a:
+                    answered_qs.append(str((q or {}).get("q") or ""))
+        # HARD REPEAT STOP (owner report 2026-08-25: "the questions started
+        # repeating, asking for the same information over and over"). The
+        # prospect-facing fact space is small and finite (_IV_TOPICS). Two
+        # deterministic ceilings END the interview instead of letting the
+        # model re-mine covered ground in fresh wording the topic-dedup can
+        # miss:
+        #   (a) once the owner has ANSWERED questions spanning >=7 distinct
+        #       topics, every common area is covered - ask no more.
+        #   (b) never run more than 3 interview ROUNDS total (the initial set
+        #       + 2 follow-ups); past that the interview is done for good.
+        covered_topics = {t for q in answered_qs if (t := _iv_topic(q))}
+        if len(covered_topics) >= 7 or answered_rounds >= 3:
+            return []
         r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
                  {"Authorization": f"Bearer {key}"},
                  {"model": OPENAI_MODEL,

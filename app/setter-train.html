@@ -688,15 +688,19 @@ function renderCasesOrEmpty() {
   // remembered per session only, so a skipper is gently re-asked next visit.
   const answeredIv = INTERVIEWS.some((i) => Object.keys((i && i.answers) || {}).length);
   if (SHARE_MODE && !firstIvDone && !answeredIv) {
-    renderBankFirstInterview();
+    renderFirstInterview();
     return;
   }
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; render(); return; }
-  // Same freshness door as round-open: never boot the stream onto drafts
-  // older than the newest teaching (the interview just taught; the bank's
-  // drafts predate it) - hold and let the transition poll open it.
-  if (SHARE_MODE && !unanswered.some(caseFresh)) {
+  // Open the round as soon as a full round of spares exists (owner ruling
+  // 2026-08-25, bug #2). The old freshness door bounced to the round-done
+  // screen + transition poll whenever no card was fresh yet - which, right
+  // after the intake is submitted, is ALWAYS (the pool predates the teaching)
+  // - so the very first round landed on a spinner/loop. Freshness now only
+  // orders the round; the background redraft still shapes later ones.
+  if (SHARE_MODE && unanswered.length < ROUND_SIZE) {
+    // Genuinely short pool: hold and let the transition poll / build fill it.
     view = "done";
     render();
     startTransitionPoll();
@@ -718,32 +722,89 @@ function markFirstIvDone() {
   try { sessionStorage.setItem("trainIvFirstDone", "1"); } catch { /* ignore */ }
 }
 
-function renderBankFirstInterview() {
+/* Static CSM-gate copy (owner ruling 2026-08-25): when the pre-warmed
+   questions are not ready yet, show THIS and nothing else - no spinner, and
+   NEVER a silent skip into the message threads (the old fail-OPEN path was
+   bug #1). The CSM only forwards the link once the questions load instantly;
+   until then this honest message stands. */
+function firstInterviewBuildingHtml() {
+  return `
+    <div class="empty-flow">
+      <p>Before we write anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
+      <div class="build-notice" style="margin-top:14px;padding:14px 16px;border:1px solid var(--line,#e5e2dc);border-radius:10px;background:var(--card,#faf9f7);color:var(--ink-soft,#6b6b6b);font-weight:500">
+        Training is still being built. Come back in a minute.
+      </div>
+    </div>`;
+}
+
+let firstIvRepeekHandle = null;
+function stopFirstIvRepeek() {
+  if (firstIvRepeekHandle) { clearInterval(firstIvRepeekHandle); firstIvRepeekHandle = null; }
+}
+
+/* THE one first-visit intake path (both the empty-pool and pre-loaded-bank
+   entries route here). Read-only PEEK for the pre-warmed questions:
+   - ready + questions  -> render the form instantly (the instant path).
+   - not ready          -> the static "still being built" message, NO
+                           spinner, NO skip. Silently re-peek a bounded
+                           number of times and upgrade to the form the moment
+                           it lands; if it never does, the static message
+                           stands and the CSM refreshes. */
+async function renderFirstInterview() {
   view = "interview";
+  const el = document.getElementById("trainApp");
+  stopFirstIvRepeek();
+  // Head-start the scenario pool behind the questions (unchanged intent).
+  kickoffFirstBatchEarly();
+  const iv = await fetchInterviewQuestions({ peek: true });
+  if (view !== "interview") return;
+  if (iv && iv.ready && (iv.questions || []).length) { mountFirstInterviewForm(iv); return; }
+  // Not ready - fail CLOSED to the static message, never into the threads.
+  el.innerHTML = firstInterviewBuildingHtml();
+  let tries = 0;
+  firstIvRepeekHandle = setInterval(async () => {
+    if (view !== "interview") { stopFirstIvRepeek(); return; }
+    tries += 1;
+    const again = await fetchInterviewQuestions({ peek: true });
+    if (again && again.ready && (again.questions || []).length) {
+      stopFirstIvRepeek();
+      if (view === "interview") mountFirstInterviewForm(again);
+    } else if (tries >= 12) {
+      stopFirstIvRepeek(); // give up quietly; the static message remains
+    }
+  }, 5000);
+}
+
+function mountFirstInterviewForm(iv) {
+  view = "interview";
+  INTERVIEWS.push(iv);
+  IV_CURRENT = iv; iv.answers = iv.answers || {};
   const el = document.getElementById("trainApp");
   el.innerHTML = `
     <div class="empty-flow">
       <p>Before you rate anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
-      <div id="ivFirstHost"><div class="round-updating"><span class="spin"></span><span>Getting your questions ready…</span></div></div>
+      <div id="ivFirstHost"></div>
     </div>`;
-  fetchInterviewQuestions().then((iv) => {
-    if (view !== "interview") return;
-    const host = document.getElementById("ivFirstHost");
-    if (!host) return;
-    const proceed = () => { markFirstIvDone(); renderCasesOrEmpty(); };
-    if (!iv || !(iv.questions || []).length) { proceed(); return; }
-    INTERVIEWS.push(iv);
-    host.innerHTML = interviewFormHtml(iv, {
-      title: "Five quick questions",
-      sub: "One line each - we use these in every reply we draft for you.",
-      cta: "Save answers & start rating",
-      skip: "Skip - take me to the scenarios",
-    });
-    const submitBtn = document.getElementById("ivSubmitBtn");
-    if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, proceed));
-    const skipBtn = document.getElementById("ivSkipBtn");
-    if (skipBtn) skipBtn.addEventListener("click", proceed);
+  const host = document.getElementById("ivFirstHost");
+  if (!host) return;
+  host.innerHTML = interviewFormHtml(iv, {
+    title: "Five quick questions",
+    sub: "One line each - we use these in every reply we draft for you.",
+    cta: "Save answers & start rating",
+    skip: "Skip - take me to the scenarios",
   });
+  // Proceed only ever runs AFTER the questions have been shown and the
+  // trainer chose (answer or skip) - never on an empty/failed fetch.
+  const proceed = () => {
+    stopFirstIvRepeek();
+    markFirstIvDone();
+    if (CASES.length) renderCasesOrEmpty();
+    else generateMore();
+  };
+  const submitBtn = document.getElementById("ivSubmitBtn");
+  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, proceed));
+  const skipBtn = document.getElementById("ivSkipBtn");
+  if (skipBtn) skipBtn.addEventListener("click", proceed);
 }
 
 /* A round begins whenever the stream starts with no round in progress: at
@@ -1227,8 +1288,9 @@ function render() {
   updateResetFoot();
   const el = document.getElementById("trainApp");
   if (view === "loading") { el.innerHTML = `<div class="empty">Loading…</div>`; return; }
-  // renderBankFirstInterview owns the DOM in this state - a stray render()
-  // (score update, poll tick) must never wipe a half-typed answer.
+  // renderFirstInterview owns the DOM in this state (the form OR the static
+  // "still being built" message) - a stray render() (score update, poll
+  // tick) must never wipe a half-typed answer or flip the gate.
   if (view === "interview") return;
   if (view === "no_agents") {
     el.innerHTML = `<div class="empty-flow"><p>No agents yet. Create one on the <a href="setter.html">Setter</a> page first, then come back here to train it.</p></div>`;
@@ -1258,49 +1320,11 @@ function renderEmpty() {
   // from real facts instead of guesses. Skippable; an already-answered
   // interview goes straight to the normal generate button.
   const answeredInterview = INTERVIEWS.some((i) => Object.keys((i && i.answers) || {}).length);
-  if (SHARE_MODE && !answeredInterview) {
-    el.innerHTML = `
-      <div class="empty-flow">
-        <p>Before we write anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
-        <div id="ivFirstHost"><div class="round-updating"><span class="spin"></span><span>Getting your questions ready…</span></div></div>
-      </div>
-    `;
-    // Head-start (owner ask 2026-08-24, "scenarios within 3 seconds"): the
-    // first batch takes ~45s of model time, so kick it off NOW, while the
-    // trainer is still reading and answering the five questions. By the time
-    // they hit Save, the round is usually already in the pool and opens
-    // instantly - generateMore's own POST then answers "already_running" and
-    // its poll finds the landed batch. Answers still shape everything: every
-    // interview save triggers the server's pool-redraft pass, which rewrites
-    // unanswered drafts with the new facts before the next round opens.
-    kickoffFirstBatchEarly();
-    fetchInterviewQuestions().then((iv) => {
-      const host = document.getElementById("ivFirstHost");
-      if (!host) return;
-      if (!iv || !(iv.questions || []).length) {
-        host.innerHTML = `<button class="btn primary" id="emptyGenerateBtn" type="button">Get scenarios to rate</button>`;
-        const b = document.getElementById("emptyGenerateBtn");
-        if (b) b.addEventListener("click", () => generateMore());
-        return;
-      }
-      INTERVIEWS.push(iv);
-      host.innerHTML = interviewFormHtml(iv, {
-        title: "Five quick questions",
-        sub: "One line each - we use these in every reply we draft for you.",
-        cta: "Save answers & show me scenarios",
-        skip: "Skip - just show me scenarios",
-      });
-      const firstGenSpinner = () => {
-        markFirstIvDone();
-        const h = document.getElementById("ivFirstHost");
-        if (h) h.innerHTML = `<div class="round-updating"><span class="spin"></span><span>Writing your first scenarios - under a minute…</span></div>`;
-        generateMore();
-      };
-      const submitBtn = document.getElementById("ivSubmitBtn");
-      if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(iv, firstGenSpinner));
-      const skipBtn = document.getElementById("ivSkipBtn");
-      if (skipBtn) skipBtn.addEventListener("click", firstGenSpinner);
-    });
+  if (SHARE_MODE && !answeredInterview && !firstIvDone) {
+    // Single fail-closed intake path (owner ruling 2026-08-25): instant
+    // questions when the prewarm is ready, else the static "still being
+    // built" message - never a spinner, never a silent skip.
+    renderFirstInterview();
     return;
   }
   el.innerHTML = `
@@ -1349,12 +1373,17 @@ function renderRoundDone() {
        <div class="db-msg">Round ${roundNum} done - we got ${right} of ${total} right this round.</div>`
     : "";
 
-  // Fastloop gate (2026-08-20): the next round opens only with cards drafted
-  // AFTER everything taught this round (caseFresh) - never the old stale
-  // pool. While the brain catches up (a few seconds), say so honestly and
-  // keep a fast poll running; the offer interview below fills the wait.
-  const freshSpares = CASES.filter((c) => !isAnswered(c.id) && caseFresh(c));
-  const ready = freshSpares.length > 0;
+  // Round-open gate (owner ruling 2026-08-25, bug #2 "Start round 2 goes in
+  // a circle"): the next round opens as soon as a FULL round of spares
+  // exists in the pre-built pool - freshness is a preference (fresh cards
+  // lead the round), NEVER a gate. The old gate waited for the brain to
+  // redraft every card after this round's teaching, so "Start round" bounced
+  // straight back here in a loop while the redraft ran. The deep pool means
+  // a full round is essentially always ready; the redraft still shapes later
+  // rounds in the background. Only a genuinely near-empty pool (<3 spares)
+  // shows a build state - and that builds MORE, it never loops.
+  const spares = CASES.filter((c) => !isAnswered(c.id));
+  const ready = spares.length >= ROUND_SIZE;
 
   const disp = displayScore(score); // cosmetic /100 scale (owner ruling 2026-08-21)
   let msg, buttons, updating = "";
@@ -1374,8 +1403,10 @@ function renderRoundDone() {
     msg = `We're at ${disp} of the 100 goal. The next round was drafted with everything you just taught us.`;
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
   } else {
+    // <ROUND_SIZE spares left and the session isn't over: build MORE (never
+    // loop). generateMore's poll opens the next round when they land.
     msg = `We're at ${disp} of the 100 goal.`;
-    updating = `<div class="round-updating" id="roundUpdating"><span class="spin"></span><span>Updating your AI with what you just taught it - the next round will already know…</span></div>`;
+    updating = `<div class="round-updating" id="roundUpdating"><span class="spin"></span><span>Preparing your next scenarios…</span></div>`;
     buttons = "";
   }
 
@@ -1395,7 +1426,10 @@ function renderRoundDone() {
   const reviewBtn = document.getElementById("doneReviewBtn");
   if (reviewBtn) reviewBtn.addEventListener("click", () => startReview());
   if (!trained && !capped) {
-    if (!ready) startTransitionPoll();
+    // Not ready means <ROUND_SIZE spares - build more (the poll opens the
+    // round on arrival). Never startTransitionPoll here: that waited on
+    // freshness and was half of the round-2 loop.
+    if (!ready && !POOL_COMPLETE && !generating) generateMore();
     maybeRenderInterview(roundNum);
   }
 }
@@ -1520,14 +1554,22 @@ function interviewFormHtml(iv, opts) {
     </div>`;
 }
 
-async function fetchInterviewQuestions() {
+async function fetchInterviewQuestions(opts) {
+  opts = opts || {};
   const body = { agent_id: selectedAgentId, action: "questions" };
+  if (opts.peek) body.peek = true;   // read-only: server never runs the model
   if (SHARE_MODE) body.share = SHARE_TOKEN;
   const res = await fetchJson("/api/setter/training/interview", {
     method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   if (!res.ok) return null;
-  return { questions: (res.data && res.data.questions) || [], asked_at: (res.data && res.data.asked_at) || "" };
+  return {
+    questions: (res.data && res.data.questions) || [],
+    // `ready` is explicit on peek (false = prewarm not finished). A normal
+    // fetch always answers with a real set, so treat it as ready.
+    ready: opts.peek ? !!(res.data && res.data.ready) : true,
+    asked_at: (res.data && res.data.asked_at) || "",
+  };
 }
 
 async function submitInterviewAnswers(iv, onDone) {
@@ -1879,27 +1921,15 @@ async function startNextRoundOrGenerate() {
     const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
     if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
     const spare = CASES.filter((c) => !isAnswered(c.id));
-    // Freshness is preferred HERE, the one door every entry point uses -
-    // live-verify 2026-08-20: the >=90 "Keep training (optional)" button
-    // skipped the round gate and opened on drafts older than the note taught
-    // 2s earlier. But freshness must NEVER trap the trainer (live incident
-    // 2026-08-21: covers stalled behind the last answer, no fresh card ever
-    // appeared, "Start round" did nothing). So we WAIT only while a brain
-    // pass is genuinely still RUNNING; if it's idle and still nothing is
-    // fresh, the redraft already did what it could - open with the best
-    // spares we have rather than blocking. A slightly-stale draft beats a
-    // dead button.
-    if (spare.length && !spare.some(caseFresh)) {
-      const running = (GENERATING && GENERATING.status === "running");
-      if (running) { view = "done"; render(); startTransitionPoll(); return; }
-      // idle + nothing fresh -> proceed to open with what exists (fall through)
-    }
-    if (spare.length) {
+    // Open the next round IMMEDIATELY whenever a full round of spares exists
+    // (owner ruling 2026-08-25, bug #2). NEVER bounce back to the round-done
+    // screen: the old code did `view="done"; render(); startTransitionPoll()`
+    // when nothing was "fresh" yet and a brain pass was running - that was
+    // the "Start round 2 goes in a circle" loop. Freshness now only ORDERS
+    // the round (fresh cards lead); it never blocks the open.
+    if (spare.length >= ROUND_SIZE) {
       stopPrefetchPoll();
       stopTransitionPoll();
-      // Fresh cards first (fastloop 2026-08-20): the round snapshot takes the
-      // head of the unanswered list, so cards drafted after this round's
-      // teaching lead and any straggler only fills a shortfall.
       const freshIds = new Set(spare.filter(caseFresh).map((c) => String(c.id)));
       if (freshIds.size && freshIds.size < spare.length) {
         CASES = CASES.filter((c) => freshIds.has(String(c.id)))
@@ -1913,6 +1943,8 @@ async function startNextRoundOrGenerate() {
       render();
       return;
     }
+    // Fewer than a full round left: build more (never loop). generateMore's
+    // poll opens the round when the batch lands.
     stopPrefetchPoll();
     stopTransitionPoll();
   }
