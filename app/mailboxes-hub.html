@@ -488,7 +488,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var warmVal = null, warmSub = null;
       if (r.warmCap != null) {
         warmVal = n(r.warmCap) + "/day";
-        warmSub = r.warmPct != null ? r.warmPct + "% of total sending capacity" : "in warm-up";
+        // A real-but-tiny share rounds to 0 (e.g. 102/day of a 23k fleet =
+        // 0.44%): print "<1%" so a non-zero volume never reads "0%".
+        warmSub = r.warmPct != null
+          ? (r.warmPct === 0 && r.warmCap > 0 ? "<1" : r.warmPct) + "% of total sending capacity"
+          : "in warm-up";
       }
       // Warm-up tone (owner 2026-08-24): <=20% green, 20-30% amber, 30%+ red
       // (share of total sending capacity tied up in repair).

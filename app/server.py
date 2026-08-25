@@ -17400,13 +17400,32 @@ def warmup_capacity_get() -> tuple[dict, int]:
     # Provider truth: mirror account_type by email (Smartlead's own field).
     try:
         mrows = sb_get_all("mailboxes?select=email,account_type,workspace,"
-                           "warmup_enabled,message_per_day,tags") or []
+                           "warmup_enabled,message_per_day,tags,domain") or []
     except Exception as e:  # noqa: BLE001
         if ent:
             return ent["data"], 200
         return {"error": "warmup_capacity_unavailable", "message": str(e)[:200]}, 502
     acct = {str(r.get("email") or "").lower(): str(r.get("account_type") or "").upper()
             for r in mrows if r.get("email")}
+    # Ledger-only domains: in the rest LEDGER (bundle.restDue — a row is deleted
+    # on restore, so a listed domain IS held) but with no held-box rows in either
+    # bundle view yet (refresh lag). The Resting tab lists them; without this the
+    # fleet number counted 0 boxes for them. Synthesize their held boxes from the
+    # mirror (navreo-ws only — the ledger is navreo-ws) so volume tracks the tab.
+    _rd_doms = {str(d).lower() for d in ((bundle or {}).get("restDue") or {})}
+    if _rd_doms:
+        _have_doms = {str(r.get("domain") or "").lower() for r in resting}
+        _have_emails = {str(r.get("email") or "").lower() for r in resting}
+        _ledger_only = _rd_doms - _have_doms
+        for m in mrows:
+            if str(m.get("workspace") or "") != "navreo":
+                continue
+            _dom = str(m.get("domain") or "").lower()
+            _em = str(m.get("email") or "").lower()
+            if _dom in _ledger_only and _em and _em not in _have_emails:
+                _have_emails.add(_em)
+                resting.append({"email": _em, "domain": _dom,
+                                "workspace": "navreo", "tags": [], "provider": ""})
     # Mirror tag names by email (Smartlead tag OBJECTS → plain names) — used to
     # attribute a rested navreo-ws box to its client even when the bundle row
     # carries no tags.
