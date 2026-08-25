@@ -17400,16 +17400,16 @@ def warmup_capacity_get() -> tuple[dict, int]:
     # Provider truth: mirror account_type by email (Smartlead's own field).
     try:
         mrows = sb_get_all("mailboxes?select=email,account_type,workspace,"
-                           "warmup_enabled,message_per_day,warmup_status,tags") or []
+                           "warmup_enabled,message_per_day,tags") or []
     except Exception as e:  # noqa: BLE001
         if ent:
             return ent["data"], 200
         return {"error": "warmup_capacity_unavailable", "message": str(e)[:200]}, 502
     acct = {str(r.get("email") or "").lower(): str(r.get("account_type") or "").upper()
             for r in mrows if r.get("email")}
-    # Mirror tag names by email (Smartlead tag OBJECTS → plain names) and warmup
-    # state — used to attribute a rested navreo-ws box to its client even when the
-    # bundle row carries no tags, and to keep the cohort to genuinely-warming boxes.
+    # Mirror tag names by email (Smartlead tag OBJECTS → plain names) — used to
+    # attribute a rested navreo-ws box to its client even when the bundle row
+    # carries no tags.
     def _tag_names(r):
         out_ = []
         for t in (r.get("tags") or []):
@@ -17418,9 +17418,6 @@ def warmup_capacity_get() -> tuple[dict, int]:
                 out_.append(str(nm))
         return out_
     mirror_tags = {str(r.get("email") or "").lower(): _tag_names(r)
-                   for r in mrows if r.get("email")}
-    mirror_warm = {str(r.get("email") or "").lower():
-                   str(r.get("warmup_status") or "").upper()
                    for r in mrows if r.get("email")}
     # Client-workspace resting truth (owner audit #2, 2026-08-24): the bundle's
     # client-ws inwarmup rows are built on the mirror's campaign_count, which is
@@ -17526,14 +17523,12 @@ def warmup_capacity_get() -> tuple[dict, int]:
         # bundle rule swept in — not resting; skip it (see _clientws_resting).
         if ws != "navreo" and not _clientws_resting(email):
             continue
-        # Smartlead-faithful cohort: a navreo-ws box counts as warm-up only while
-        # Smartlead warmup is genuinely ACTIVE. If the mirror knows the box and
-        # says warmup is not active, it is not warming — skip it (unknown-to-mirror
-        # falls through and keeps the bundle view's verdict, same as provider).
-        if ws == "navreo":
-            _ws_state = mirror_warm.get(email)
-            if _ws_state and _ws_state != "ACTIVE":
-                continue
+        # navreo-ws boxes are NOT gated on the mirror's Smartlead warmup_status:
+        # this cohort means "held from sending" (what the Resting tab shows), not
+        # "Smartlead warm-up job running". Maildoso boxes warm on Instantly, so
+        # their Smartlead job is INACTIVE by design, and parked/capped jobs read
+        # INACTIVE too — an ACTIVE-only gate dropped 599 genuinely-held boxes
+        # (2026-08-25) and made the fleet number contradict the Resting tab.
         cl = (email_client.get(email) or _tag_client(r) or "Navreo") if ws == "navreo" \
             else ws_display.get(ws, ws)
         prov = _provider(r, email)
