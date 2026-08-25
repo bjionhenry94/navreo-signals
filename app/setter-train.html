@@ -386,6 +386,22 @@ let INTERVIEWS = [];
 // unanswered - which is exactly the window where a staged-questions fetch
 // could re-ask them (2026-08-24). Never cleared, never clobbered.
 const ANSWERED_IV_LOCAL = { ids: new Set(), texts: new Set() };
+// Survive a mid-session refresh: the server copy of an interview only shows
+// answers after the background save lands, so a reload inside that window
+// would otherwise forget what was answered and re-ask (2026-08-25).
+try {
+  const s = JSON.parse(sessionStorage.getItem("trainIvAnswered") || "null");
+  if (s) {
+    (s.ids || []).forEach((x) => ANSWERED_IV_LOCAL.ids.add(String(x)));
+    (s.texts || []).forEach((x) => ANSWERED_IV_LOCAL.texts.add(String(x)));
+  }
+} catch { /* ignore */ }
+function persistAnsweredIvLocal() {
+  try {
+    sessionStorage.setItem("trainIvAnswered", JSON.stringify({
+      ids: [...ANSWERED_IV_LOCAL.ids], texts: [...ANSWERED_IV_LOCAL.texts] }));
+  } catch { /* ignore */ }
+}
 let LEARNED_CHIP = null;      // {kind, text, pending, source} - newest teach echo
 let chipPollHandle = null;
 let transitionPollHandle = null;
@@ -1598,6 +1614,7 @@ async function submitInterviewAnswers(iv, onDone) {
       ANSWERED_IV_LOCAL.texts.add(String(q.q || "").trim().toLowerCase());
     }
   });
+  persistAnsweredIvLocal();
   const body = { agent_id: selectedAgentId, action: "answers", answers, questions: sentQuestions };
   if (SHARE_MODE) body.share = SHARE_TOKEN;
   // OPTIMISTIC ADVANCE (owner report 2026-08-22: submit froze on "Teaching
@@ -1913,23 +1930,18 @@ function startPrefetchPoll() {
 /* Round-done "Start round N+1": open the prefetched batch instantly when
    one is already in the pool; only fall back to a visible generate (with
    its busy label and poll) when the pool is dry. */
+let roundOpening = false; // repeated clicks while opening are no-ops
 async function startNextRoundOrGenerate() {
+  if (roundOpening || generating) return;
   if (SHARE_MODE) {
-    // One fresh snapshot before opening (2026-08-20): cases that landed
-    // since the last poll tick join THIS round instead of straggling into a
-    // one-card round behind a slow prefetch.
-    const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
-    if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
-    const spare = CASES.filter((c) => !isAnswered(c.id));
-    // Open the next round IMMEDIATELY whenever a full round of spares exists
-    // (owner ruling 2026-08-25, bug #2). NEVER bounce back to the round-done
-    // screen: the old code did `view="done"; render(); startTransitionPoll()`
-    // when nothing was "fresh" yet and a brain pass was running - that was
-    // the "Start round 2 goes in a circle" loop. Freshness now only ORDERS
-    // the round (fresh cards lead); it never blocks the open.
-    if (spare.length >= ROUND_SIZE) {
+    const openRound = () => {
       stopPrefetchPoll();
       stopTransitionPoll();
+      // Freshness only ORDERS the round (fresh cards lead) - it NEVER
+      // blocks the open (owner ruling 2026-08-25, bug #2 "goes in a
+      // circle"): the old gate bounced back to round-done while the brain
+      // pass ran.
+      const spare = CASES.filter((c) => !isAnswered(c.id));
       const freshIds = new Set(spare.filter(caseFresh).map((c) => String(c.id)));
       if (freshIds.size && freshIds.size < spare.length) {
         CASES = CASES.filter((c) => freshIds.has(String(c.id)))
@@ -1941,10 +1953,38 @@ async function startNextRoundOrGenerate() {
       idx = 0;
       view = "stream";
       render();
+    };
+    // Open INSTANTLY from the local pool - the click must never wait on a
+    // network round-trip (2026-08-25: a busy instance turned the awaited
+    // pre-open snapshot into a ~20s dead button). The snapshot still runs,
+    // in the background, so late-landed cases join the pool for later
+    // rounds (it never touches cards already in the open round).
+    const localSpare = CASES.filter((c) => !isAnswered(c.id));
+    if (localSpare.length >= ROUND_SIZE) {
+      openRound();
+      fetchJson(`/api/setter/training?${trainingQS()}`)
+        .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); })
+        .catch(() => { /* background refresh only */ });
       return;
     }
-    // Fewer than a full round left: build more (never loop). generateMore's
-    // poll opens the round when the batch lands.
+    // Not enough locally: give the click INSTANT feedback, then check the
+    // server once (a prefetched batch may have landed) before building.
+    roundOpening = true;
+    const restores = markGenerateButtonsBusy("Opening the next round…");
+    try {
+      const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
+      if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
+      const spare = CASES.filter((c) => !isAnswered(c.id));
+      if (spare.length >= ROUND_SIZE) {
+        restores.forEach((r) => r());
+        openRound();
+        return;
+      }
+    } catch { /* fall through to the build */ }
+    finally { roundOpening = false; }
+    restores.forEach((r) => r());
+    // Fewer than a full round anywhere: build more (never loop).
+    // generateMore's poll opens the round when the batch lands.
     stopPrefetchPoll();
     stopTransitionPoll();
   }
