@@ -8097,6 +8097,9 @@ def route_agents_duplicate(payload):
                 "training_outreach": [],
             })
         saved = _save_agent(clone)
+        # Pre-generate the clone's first offer-interview questions so its
+        # training portal opens with no "Getting your questions ready" wait.
+        threading.Thread(target=_prewarm_training_interview, args=(new_id,), daemon=True).start()
         return 200, {"doc": saved, "fresh": bool(payload.get("fresh"))}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -15635,6 +15638,14 @@ def route_training_reset(payload):
                 _save_training(agent_id, doc)
             finally:
                 lock.release()
+            # A full reset wipes the interviews AND the pre-built scenario
+            # pool - rebuild both in the background so the portal reopens
+            # with no spinner wait and every round draws from a deep bank
+            # instead of a live just-in-time build (2026-08-25: a reset
+            # deliverable had only head-start crumbs, so every round break
+            # gambled on a 30-60s LLM batch and read as 'stuck').
+            threading.Thread(target=_prewarm_training_interview, args=(agent_id,), daemon=True).start()
+            threading.Thread(target=_prebuild_training_pool, args=(agent_id,), daemon=True).start()
             return 200, {"ok": True, "full": True}
         doc = _load_training(agent_id)
         doc["answers"] = {}
@@ -15729,7 +15740,22 @@ def route_training_interview(payload):
                 # Idempotent: an unanswered set is re-served, never re-generated
                 # (a refresh mid-questionnaire must not burn tokens or shuffle
                 # the questions under the client).
-                return 200, {"questions": latest["questions"], "asked_at": latest.get("asked_at") or ""}
+                return 200, {"questions": latest["questions"], "ready": True,
+                             "asked_at": latest.get("asked_at") or ""}
+            # PEEK (owner ruling 2026-08-25, CSM gate): a read-only probe that
+            # NEVER runs the model. The first-launch page uses it so the CSM
+            # sees either instant questions or a static "still being built"
+            # message - never a spinner, and NEVER a silent skip into the
+            # threads. `ready:false` means the background prewarm has not
+            # finished yet (or produced nothing); the caller shows the wait
+            # copy and does not proceed.
+            if payload.get("peek"):
+                # Kick a background prewarm so a link minted before prewarm
+                # existed (or whose set a reset wiped) converges to ready on
+                # the next peek - fire-and-forget, this response stays instant.
+                threading.Thread(target=_prewarm_training_interview,
+                                 args=(agent_id,), daemon=True).start()
+                return 200, {"questions": [], "ready": False}
             questions_text = _generate_interview_questions(agent, doc)
             questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in questions_text]
             with _get_training_doc_lock(agent_id):
@@ -15872,6 +15898,40 @@ def _dedupe_interview_questions(new_qs, prior_qs):
         return list(new_qs or [])
 
 
+def _prewarm_training_interview(agent_id: str):
+    """Pre-generate the first offer-interview question set in the background
+    (owner ask 2026-08-25: the portal's 'Getting your questions ready'
+    spinner ran a live LLM call on first open - pre-processing it at
+    share-mint / duplicate / reset time makes launch instant). The questions
+    route re-serves an unanswered set idempotently, so the page just finds
+    these waiting. Never stacks a second unanswered set; never raises."""
+    try:
+        agent = _load_agent(agent_id)
+        if not agent:
+            return
+        doc = _load_training(agent_id)
+        interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+        latest = interviews[-1] if interviews else None
+        if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
+            return  # an unanswered set is already waiting
+        questions_text = _generate_interview_questions(agent, doc)
+        if not questions_text:
+            return
+        questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in questions_text]
+        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+            latest = interviews[-1] if interviews else None
+            if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
+                return  # the page's own fetch beat us - keep its set
+            interviews.append({"questions": questions, "answers": {}, "asked_at": at})
+            doc["interviews"] = interviews[-12:]
+            _save_training(agent_id, doc)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _generate_interview_questions(agent: dict, doc: dict) -> list:
     """One gpt-5-mini call -> 0 to 5 fresh question strings (EMPTY when the
     offer is already fully covered, so the interview ends instead of repeating).
@@ -15884,14 +15944,33 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
         if not key:
             return list(STATIC_FIRST_INTERVIEW)
         prior = []
+        answered_qs = []          # every question the owner actually answered
+        answered_rounds = 0       # interview sets with at least one answer
         for interview in (doc.get("interviews") or []):
             if not isinstance(interview, dict):
                 continue
             ans = dict(interview.get("answers") or {})
+            if ans:
+                answered_rounds += 1
             for q in (interview.get("questions") or []):
                 qid = str((q or {}).get("id"))
-                prior.append({"q": str((q or {}).get("q") or ""),
-                              "a": str(ans.get(qid) or "")})
+                a = str(ans.get(qid) or "")
+                prior.append({"q": str((q or {}).get("q") or ""), "a": a})
+                if a:
+                    answered_qs.append(str((q or {}).get("q") or ""))
+        # HARD REPEAT STOP (owner report 2026-08-25: "the questions started
+        # repeating, asking for the same information over and over"). The
+        # prospect-facing fact space is small and finite (_IV_TOPICS). Two
+        # deterministic ceilings END the interview instead of letting the
+        # model re-mine covered ground in fresh wording the topic-dedup can
+        # miss:
+        #   (a) once the owner has ANSWERED questions spanning >=7 distinct
+        #       topics, every common area is covered - ask no more.
+        #   (b) never run more than 3 interview ROUNDS total (the initial set
+        #       + 2 follow-ups); past that the interview is done for good.
+        covered_topics = {t for q in answered_qs if (t := _iv_topic(q))}
+        if len(covered_topics) >= 7 or answered_rounds >= 3:
+            return []
         r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
                  {"Authorization": f"Bearer {key}"},
                  {"model": OPENAI_MODEL,
@@ -15984,6 +16063,9 @@ def route_training_share(payload):
         # opens to a full bank and never waits per round (owner ruling
         # 2026-08-22). Fire-and-forget; the client polls cases as they land.
         threading.Thread(target=_prebuild_training_pool, args=(agent_id,), daemon=True).start()
+        # Pre-generate the first offer-interview questions too, so the page's
+        # "Getting your questions ready" spinner has nothing left to wait for.
+        threading.Thread(target=_prewarm_training_interview, args=(agent_id,), daemon=True).start()
         # Decode the exp this exact token carries (rather than recomputing
         # it) so expires_at can never drift from what verify_training_share
         # will actually enforce.
