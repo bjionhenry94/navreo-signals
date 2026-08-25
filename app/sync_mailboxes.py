@@ -244,6 +244,18 @@ def pull_campaign_counts(smartlead_key: str):
         return None
     active = [c for c in camps if isinstance(c, dict) and c.get("status") == "ACTIVE"]
     log(f"Campaign sweep: {len(active)} ACTIVE campaigns (of {len(camps)} total)")
+    if not active:
+        # A workspace that is actually sending always has ACTIVE campaigns; an
+        # empty list here is a Smartlead-side glitch far more often than a real
+        # fleet-wide pause. Treat as incomplete so the caller omits the column
+        # (2026-08-25: a transient empty sweep "succeeded" and wrote
+        # campaign_count=0 across all 12,709 boxes, emptying the
+        # fleet_capacity_daily RPC and blanking the hub's capacity columns).
+        # Genuinely-idle workspaces (pre-launch Grout) lose nothing: omitting
+        # the column preserves their existing zeros.
+        log("Campaign sweep: 0 ACTIVE campaigns — implausible for a sending "
+            "workspace; treating sweep as incomplete")
+        return None
 
     counts = {}
     failed = 0
@@ -279,6 +291,13 @@ def pull_campaign_counts(smartlead_key: str):
     if failed:
         log(f"Campaign sweep: {failed}/{len(active)} campaigns failed (within {tolerance} tolerated) "
             "— writing counts; boxes only on a failed campaign may undercount this run")
+    if not counts:
+        # Every account list came back empty despite ACTIVE campaigns existing —
+        # the other face of the 2026-08-25 zeroing incident. Writing this map
+        # would set campaign_count=0 on every box; preserve last-known instead.
+        log(f"Campaign sweep: swept {len(active)} ACTIVE campaigns but matched 0 "
+            "attached accounts — implausible; treating sweep as incomplete")
+        return None
     return counts
 
 
