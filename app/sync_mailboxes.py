@@ -143,18 +143,23 @@ def pull_all_mailboxes(smartlead_key: str):
 
 
 # ---------- pull 2: per-mailbox 30d metrics ----------
-def pull_metrics(smartlead_key: str, start_date_str: str, end_date_str: str) -> list:
-    url = (f"{SMARTLEAD_BASE}/analytics/mailbox/name-wise-health-metrics"
-           f"?api_key={smartlead_key}&start_date={start_date_str}&end_date={end_date_str}&full_data=true")
+# How many mailboxes to request per metrics page. full_data=true on the whole
+# ~9k-box navreo account crosses Cloudflare's ~100s edge timeout and 524s EVERY
+# run (the failure that quietly froze mailbox_stats_daily + the capacity chart
+# from 2026-08-17). Server-side cost scales with the page size, so a bounded
+# page finishes in seconds and never trips the edge timeout — we walk offsets
+# until a short/empty page marks the end.
+METRICS_PAGE = 500
+METRICS_MAX_PAGES = 80   # 40k boxes — a runaway guard, far above the real fleet
+
+
+def _pull_metrics_page(url: str) -> list:
+    """One name-wise-health-metrics page. Returns the (possibly empty) list, or
+    raises after exhausting retries so the caller can skip this workspace's stats."""
     attempts = 4
     for attempt in range(1, attempts + 1):
         try:
-            # full_data=true on a ~9k-mailbox account is SLOW server-side and got
-            # slower as the fleet grew — it crossed the old 180s ceiling around
-            # 2026-08-17 and timed the whole sync out every run after (Bjion). Give
-            # it a very generous ceiling; the caller now treats a failure here as
-            # non-fatal, so this only needs to succeed often, not every time.
-            status, text, _ = _request("GET", url, {"User-Agent": server.UA}, timeout=600)
+            status, text, _ = _request("GET", url, {"User-Agent": server.UA}, timeout=180)
             if 200 <= status < 300:
                 import json as _json
                 try:
@@ -164,18 +169,38 @@ def pull_metrics(smartlead_key: str, start_date_str: str, end_date_str: str) -> 
                 lst = ((parsed or {}).get("data") or {}).get("email_health_metrics") if isinstance(parsed, dict) else None
                 if isinstance(lst, list):
                     return lst
-                log(f"Metrics pull attempt={attempt}: unexpected response shape, retrying")
+                log(f"Metrics page attempt={attempt}: unexpected response shape, retrying")
             else:
-                log(f"Metrics pull attempt={attempt}: HTTP {status} body={text[:300]}, retrying")
+                log(f"Metrics page attempt={attempt}: HTTP {status} body={text[:300]}, retrying")
         except Exception as e:  # noqa: BLE001
-            log(f"Metrics pull attempt={attempt}: fetch error ({e}), retrying")
+            log(f"Metrics page attempt={attempt}: fetch error ({e}), retrying")
         if attempt < attempts:
             # The endpoint 524s when it runs long (Cloudflare kills it ~100s), and
             # the account's 200-req/min cap then 429s a fast retry. Wait a full
             # minute so the rate window resets and any server-side cache of the
             # heavy computation can be served fast on the next attempt.
             time.sleep(60)
-    raise RuntimeError(f"Failed to pull name-wise-health-metrics after {attempts} attempts")
+    raise RuntimeError(f"Failed to pull a name-wise-health-metrics page after {attempts} attempts")
+
+
+def pull_metrics(smartlead_key: str, start_date_str: str, end_date_str: str) -> list:
+    """Paginated pull of per-mailbox 30d health metrics. Walks limit/offset pages
+    (each fast enough to clear Cloudflare's edge timeout) and concatenates them —
+    replaces the single unbounded full_data=true request that 524'd on big
+    workspaces and starved the capacity chart."""
+    base = (f"{SMARTLEAD_BASE}/analytics/mailbox/name-wise-health-metrics"
+            f"?api_key={smartlead_key}&start_date={start_date_str}&end_date={end_date_str}&full_data=true")
+    out: list = []
+    for page in range(METRICS_MAX_PAGES):
+        offset = page * METRICS_PAGE
+        rows = _pull_metrics_page(f"{base}&limit={METRICS_PAGE}&offset={offset}")
+        out.extend(rows)
+        if len(rows) < METRICS_PAGE:   # a short (or empty) page is the last page
+            break
+    else:
+        log(f"WARNING: metrics pull hit the {METRICS_MAX_PAGES}-page guard "
+            f"({len(out)} rows) — some mailboxes may be missing from this run")
+    return out
 
 
 # ---------- pull 3: ACTIVE-campaign attachment counts ----------
