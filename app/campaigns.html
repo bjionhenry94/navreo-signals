@@ -3873,14 +3873,24 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
   function headerDialPct(c) {
     var st = c.stats;
     var clamp = function (v) { return Math.max(0, Math.min(100, v)); };
+    /* Reserve a full 100% for campaigns where EVERY lead has been started —
+       while anyone is still notStarted the reach is held at 99% so a mid-flight
+       campaign never reads "100% complete" just because rounding swallowed a
+       handful of stragglers (e.g. 1 of 19,768 = 99.99% → 100). Bjion's original
+       report: "showing 100% but they aren't." Fix 25 Aug 2026. */
+    var reach = function (total, notStarted) {
+      var ns = notStarted || 0;
+      var p = clamp(100 * (total - ns) / total);
+      return ns > 0 ? Math.min(p, 99) : p;
+    };
     var ls = STATE.liveStatus && STATE.liveStatus[c.id] && STATE.liveStatus[c.id].lead_stats;
-    if (ls && ls.total) return clamp(100 * (ls.total - (ls.notStarted || 0)) / ls.total);
+    if (ls && ls.total) return reach(ls.total, ls.notStarted);
     /* Same reach formula off the synced scorecard split (SmartLead's own
        notStarted), so the ≥99% of rows without a live answer get an ACCURATE
        reach too. Replaces the old sent÷leads fallback, which saturated at 100%
        for any multi-step campaign (sent counts every sequence step, so
        sent≥leads long before the list is worked) — false-100% fix 25 Aug 2026. */
-    if (st.notStarted != null && st.leads) return clamp(100 * (st.leads - st.notStarted) / st.leads);
+    if (st.notStarted != null && st.leads) return reach(st.leads, st.notStarted);
     return null;
   }
   function dialInnerHTML(compPct) {
