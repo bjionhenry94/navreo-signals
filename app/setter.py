@@ -8097,6 +8097,9 @@ def route_agents_duplicate(payload):
                 "training_outreach": [],
             })
         saved = _save_agent(clone)
+        # Pre-generate the clone's first offer-interview questions so its
+        # training portal opens with no "Getting your questions ready" wait.
+        threading.Thread(target=_prewarm_training_interview, args=(new_id,), daemon=True).start()
         return 200, {"doc": saved, "fresh": bool(payload.get("fresh"))}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -15635,6 +15638,9 @@ def route_training_reset(payload):
                 _save_training(agent_id, doc)
             finally:
                 lock.release()
+            # A full reset wipes the interviews too - pre-generate the next
+            # first-question set so the portal reopens with no spinner wait.
+            threading.Thread(target=_prewarm_training_interview, args=(agent_id,), daemon=True).start()
             return 200, {"ok": True, "full": True}
         doc = _load_training(agent_id)
         doc["answers"] = {}
@@ -15872,6 +15878,40 @@ def _dedupe_interview_questions(new_qs, prior_qs):
         return list(new_qs or [])
 
 
+def _prewarm_training_interview(agent_id: str):
+    """Pre-generate the first offer-interview question set in the background
+    (owner ask 2026-08-25: the portal's 'Getting your questions ready'
+    spinner ran a live LLM call on first open - pre-processing it at
+    share-mint / duplicate / reset time makes launch instant). The questions
+    route re-serves an unanswered set idempotently, so the page just finds
+    these waiting. Never stacks a second unanswered set; never raises."""
+    try:
+        agent = _load_agent(agent_id)
+        if not agent:
+            return
+        doc = _load_training(agent_id)
+        interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+        latest = interviews[-1] if interviews else None
+        if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
+            return  # an unanswered set is already waiting
+        questions_text = _generate_interview_questions(agent, doc)
+        if not questions_text:
+            return
+        questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in questions_text]
+        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id)
+            interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+            latest = interviews[-1] if interviews else None
+            if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
+                return  # the page's own fetch beat us - keep its set
+            interviews.append({"questions": questions, "answers": {}, "asked_at": at})
+            doc["interviews"] = interviews[-12:]
+            _save_training(agent_id, doc)
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _generate_interview_questions(agent: dict, doc: dict) -> list:
     """One gpt-5-mini call -> 0 to 5 fresh question strings (EMPTY when the
     offer is already fully covered, so the interview ends instead of repeating).
@@ -15984,6 +16024,9 @@ def route_training_share(payload):
         # opens to a full bank and never waits per round (owner ruling
         # 2026-08-22). Fire-and-forget; the client polls cases as they land.
         threading.Thread(target=_prebuild_training_pool, args=(agent_id,), daemon=True).start()
+        # Pre-generate the first offer-interview questions too, so the page's
+        # "Getting your questions ready" spinner has nothing left to wait for.
+        threading.Thread(target=_prewarm_training_interview, args=(agent_id,), daemon=True).start()
         # Decode the exp this exact token carries (rather than recomputing
         # it) so expires_at can never drift from what verify_training_share
         # will actually enforce.
