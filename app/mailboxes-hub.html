@@ -138,20 +138,18 @@ table.heat tr.heat-all + tr td{padding-top:9px}
 
       <!-- PERFORMANCE BY TAG — fleet-wide, its OWN section below the heat map
            (owner 2026-08-25). Pulled out of the manager tab strip so it isn't
-           scoped by the client chips; it carries its OWN 7/14/30 range picker
-           (separate from the heat map's), so switching it never disturbs the
-           manager or the heat map. Height-capped + scrollable. -->
+           scoped by the client chips. FIXED at the 30-day window: the audit of
+           2026-08-25 proved 7/14-day sends can't be computed accurately from the
+           current data (windowed Sent was a delta of the ROLLING-30d sent_30d
+           counter, which collapses toward 0 for steady sending — Smartlead
+           showed the 7d number was ~10x understated). sent_30d IS Smartlead's
+           own 30-day counter, so the 30-day view is exact; the shorter windows
+           return only once daily_sent_count capture is repaired. Height-capped +
+           scrollable. -->
       <section class="mbx-sec" id="sec-tags">
       <div class="sec-h">
         <h3>Performance by tag</h3>
-        <span class="scope" id="hub-tags-scope"><b>Whole fleet</b> · last 30 days</span>
-        <div class="sec-ctrl">
-          <span class="ctrl-lab">Range</span>
-          <div class="hub-seg" id="hub-tags-range" role="radiogroup" aria-label="Performance-by-tag date range">
-            <button data-win="7" type="button" role="radio" aria-checked="false">7d</button><button data-win="14" type="button" role="radio" aria-checked="false">14d</button><button data-win="30" type="button" role="radio" aria-checked="true" class="on">30d</button>
-          </div>
-          <span class="ctrl-scope">↑ changes this table only</span>
-        </div>
+        <span class="scope"><b>Whole fleet</b> · last 30 days</span>
       </div>
       <div class="card" style="padding:0;overflow:hidden">
         <div id="hub-tags-body" style="max-height:500px;overflow:auto"><div class="skel" style="padding:18px">Loading…</div></div>
@@ -191,10 +189,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // deliberately NOT range-scoped — it always shows the full MGR_WIN window so
   // the two filters stay cleanly separated (range->heat map, client->manager).
   var MGR_WIN = 30;
-  // TAG_WIN = the Performance-by-tag range (7/14/30), independent of the heat
-  // map's S.win and the manager's fixed MGR_WIN. Volume columns (Sent,
-  // Positives, Capacity used) are windowed by this; rate columns stay on the
-  // 30d cohort (see tag_performance in server.py).
+  // TAG_WIN = the Performance-by-tag window. FIXED at 30 (audit 2026-08-25):
+  // the backend's 7/14d Sent is a delta of the rolling-30d sent_30d counter,
+  // which under-reports badly (Smartlead-verified ~10x low at 7d), so only the
+  // 30d view — which reads sent_30d directly = Smartlead's own 30d counter — is
+  // trustworthy. The picker is removed until daily_sent_count capture is fixed.
   var TAG_WIN = 30;
   var S = { client: "All", win: 7, deliv: null, cw: null, tags: null, labels: {}, vol: {} };
   try { var v = localStorage.getItem(LS); if (v) S.client = v; } catch (e) {}
@@ -942,15 +941,6 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-checked", on ? "true" : "false");
     });
     renderHeatScope(); renderHeat(); flashSection("sec-heat");
-  });
-  el("hub-tags-range").addEventListener("click", function (e) {   // RANGE → tag table only
-    var b = e.target.closest("button"); if (!b) return;
-    TAG_WIN = +b.getAttribute("data-win");
-    Array.prototype.forEach.call(el("hub-tags-range").children, function (x) {
-      var on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-checked", on ? "true" : "false");
-    });
-    var s = el("hub-tags-scope"); if (s) s.innerHTML = "<b>Whole fleet</b> · last " + TAG_WIN + " days";
-    renderTags(); flashSection("sec-tags");
   });
   el("hub-refresh").addEventListener("click", function () {   // hard refresh → recompute warm-up + capacity now
     var b = el("hub-refresh"); b.classList.add("busy");
