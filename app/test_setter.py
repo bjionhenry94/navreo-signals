@@ -11916,11 +11916,35 @@ def test_enrich_unions_three_providers():
         setter._ENRICH_INFLIGHT.discard("u@ex.com")
 
 
+def test_bettercontact_flattens_list_additional():
+    """Better Contact returns contact_additional_phone_number as a LIST for some
+    leads; the adapter must FLATTEN it, never store the stringified list as one
+    junk number (the bug the 2026-08-26 backfill surfaced)."""
+    real_http, real_keys, real_sleep = setter._HTTP, setter._KEYS, setter._time.sleep
+    try:
+        setter._KEYS = {"BETTERCONTACT_API_KEY": "k"}
+        setter._time.sleep = lambda *_a, **_k: None
+        def fake_http(method, url, headers, body=None, timeout=30):
+            if method == "POST":
+                return {"id": "job1"}
+            return {"status": "terminated", "data": [{
+                "contact_phone_number": "+1 415 231 9225",
+                "contact_additional_phone_number": ["+1 425 533 1832", "+44 20 7946 0000"]}]}
+        setter._HTTP = fake_http
+        nums = setter._bettercontact_enrich("a@b.com", "Ann", "Bee", "Co", "b.com")
+        check("bc: list additional flattened to 3 distinct numbers",
+              nums == ["+1 415 231 9225", "+1 425 533 1832", "+44 20 7946 0000"], nums)
+        check("bc: no stringified-list junk entry", not any("[" in n for n in nums), nums)
+    finally:
+        setter._HTTP, setter._KEYS, setter._time.sleep = real_http, real_keys, real_sleep
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_harvest_phones()
     test_enrich_claims_lead_once()
     test_enrich_unions_three_providers()
+    test_bettercontact_flattens_list_additional()
     test_guess_timezone()
     test_pick_slots()
     test_slot_situation_transparency()

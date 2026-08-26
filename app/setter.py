@@ -10919,10 +10919,15 @@ def _bettercontact_enrich(email: str, first: str, last: str, company: str = "",
             if isinstance(st, dict) and st.get("status") == "terminated":
                 row = (st.get("data") or [{}])[0]
                 nums = []
+                # contact_additional_phone_number can come back as a LIST (a lead
+                # with several extra numbers), so flatten - str() on a list would
+                # store one junk "number" like "['+1 415…', '+1 425…']".
                 for fld in ("contact_phone_number", "contact_additional_phone_number"):
-                    v = str(row.get(fld) or "").strip()
-                    if v:
-                        nums.append(v)
+                    raw = row.get(fld)
+                    for cand in (raw if isinstance(raw, list) else [raw]):
+                        v = str(cand or "").strip()
+                        if v:
+                            nums.append(v)
                 return nums
         return []
     except Exception:  # noqa: BLE001
