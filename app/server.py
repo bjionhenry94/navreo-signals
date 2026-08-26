@@ -15129,7 +15129,10 @@ def _booked_sweep_bg():
         return
     try:
         import sync_booked
-        counts = sync_booked.pause_call_booked(full_verify=True)
+        # full_verify=False: each run skips already-processed leads and advances
+        # through the booked set, so repeated runs converge (a True re-scans from
+        # the top every time and, under the time budget, never reaches the tail).
+        counts = sync_booked.pause_call_booked(full_verify=False)
         log_activity("/api/cron/booked-sweep", actor="cron", action="booked_sweep",
                      entity="campaigns", payload=counts)
     except Exception as e:  # noqa: BLE001 — a failed sweep must be visible

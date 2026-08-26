@@ -241,6 +241,21 @@ def main():
     except Exception as e:  # noqa: BLE001 — observability must never kill the run
         print(f"capacity check · FAILED: {str(e)[:200]}")
 
+    # Booked-lead pause backstop (Bjion 2026-08-26: the tool is the point of
+    # truth — Call Booked -> paused in every live campaign, no Notion). The
+    # instant categoriser hook (/api/notify/positive-card) does the real-time
+    # pausing; this catches bookings set straight in Smartlead or via Calendly
+    # that skip the hook. Piggybacked here for the same reason as the capacity
+    # check — separate crons aren't reliably provisioned. full_verify=False so
+    # each run skips already-handled leads and advances/converges.
+    try:
+        import sync_booked  # noqa: E402
+        c = sync_booked.pause_call_booked(full_verify=False)
+        print(f"booked sweep · paused {c['paused']} across {c['leads']} leads "
+              f"({c['skipped']} already handled, {c['errors']} errors)")
+    except Exception as e:  # noqa: BLE001 — the sweep must never kill the run
+        print(f"booked sweep · FAILED: {str(e)[:200]}")
+
 
 if __name__ == "__main__":
     main()
