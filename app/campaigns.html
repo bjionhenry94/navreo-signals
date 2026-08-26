@@ -3161,18 +3161,29 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     if (s.indexOf("DRAFT") !== -1) return "drafted";
     if (s.indexOf("PAUS") !== -1 || s.indexOf("STOP") !== -1) return "paused";
     if (s.indexOf("ACTIVE") !== -1 || s.indexOf("START") !== -1 || s.indexOf("RUNNING") !== -1) {
-      /* Smartlead keeps a fully-sent campaign labelled ACTIVE; the list must
-         not — 100% completion files it under Completed, off the Active pick */
+      var cc = STATE.byId && STATE.byId[id];
+      /* Owner ruling 26 Aug 2026 (Bjion): the moment the progress dial reads
+         100% the campaign files under Completed, even while Smartlead still
+         labels it ACTIVE and follow-ups are draining. headerDialPct is THE
+         number the row ring + header dial show, and its 99% straggler cap
+         means it only returns 100 once every lead has entered the sequence
+         (notStarted == 0) — never a rounding false-positive — so the ring, the
+         chip and the Status filter always agree: a row showing 100% is always
+         Completed. Supersedes the 23 Aug rule that kept a 100%-reached but
+         mid-sequence campaign under Active. */
+      var dialPct = cc ? headerDialPct(cc) : null;
+      if (dialPct != null && dialPct >= 100) return "completed";
+      /* A genuine completion-100 (every lead finished the whole sequence) is
+         Completed too — the live platform answer, trusted over any heuristic. */
       if ((ls && ls.completion != null && ls.completion >= 100) ||
           (ls && ls.total > 0 && ls.completed != null && ls.completed >= ls.total)) return "completed";
       /* a LIVE answer that carries completion data and says mid-flight is
          final — never let a synced heuristic overrule the live check */
       if (ls && (ls.completion != null || (ls.total > 0 && ls.completed != null))) return "active";
-      /* No live answer (150-id cap): the synced scorecard's own per-lead
-         split decides, and the sent ÷ (leads × 2) ring heuristic only when
-         the sync doesn't carry it — the same order rowHTML draws the ring
-         with, so ring, chip and filter can never disagree. */
-      var cc = STATE.byId && STATE.byId[id], st = cc && cc.stats;
+      /* No live answer (150-id cap) and no reach number: the synced scorecard's
+         own per-lead split decides, and the sent ÷ (leads × 2) ring heuristic
+         only when the sync doesn't carry it. */
+      var st = cc && cc.stats;
       if (st) {
         if (st.completedLeads != null && st.leads > 0)
           return st.completedLeads >= st.leads ? "completed" : "active";
@@ -3520,9 +3531,9 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     /* ring = PROGRESS through the list (contacted / total), the SAME single
        function the detail-page dial uses (headerDialPct) so the list ring and
        the campaign dial can never show different numbers (fidelity fix, 23 Aug
-       2026). This is deliberately NOT completion: the "Completed" status filter
-       keys off liveBucket, which still tests finished/total — so a 100%-
-       contacted but mid-sequence campaign correctly stays under Active. */
+       2026). liveBucket reads this same number: the moment the ring hits 100%
+       (every lead contacted) the campaign files under Completed, off the Active
+       pick (owner ruling 26 Aug 2026) — so ring, chip and Status filter agree. */
     var ringPct = headerDialPct(c);
     if (ringPct != null) ringPct = Math.round(ringPct);
     var ringTitle = ringPct != null ? "of the list contacted so far" : "";
