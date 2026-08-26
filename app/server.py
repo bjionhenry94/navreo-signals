@@ -15117,6 +15117,26 @@ _MAILBOX_SYNC_LOCK = threading.Lock()
 # Supabase `replies` becomes the complete single source of truth (incl.
 # subsequence + webhook-lagged replies). Dedup is exact — see setter.run_reply_sync.
 _REPLY_SYNC_LOCK = threading.Lock()
+_BOOKED_SWEEP_LOCK = threading.Lock()
+
+
+def _booked_sweep_bg():
+    """Backstop for the instant categoriser pause: re-derive every Call Booked
+    lead the tool holds (replies + meetings) and pause any still sitting in a live
+    campaign. Catches bookings set straight in Smartlead or via Calendly that never
+    hit the instant hook. No Notion involved."""
+    if not _BOOKED_SWEEP_LOCK.acquire(blocking=False):
+        return
+    try:
+        import sync_booked
+        counts = sync_booked.pause_call_booked(full_verify=True)
+        log_activity("/api/cron/booked-sweep", actor="cron", action="booked_sweep",
+                     entity="campaigns", payload=counts)
+    except Exception as e:  # noqa: BLE001 — a failed sweep must be visible
+        log_activity("/api/cron/booked-sweep", actor="cron", action="booked_sweep_failed",
+                     entity="campaigns", payload={"error": str(e)[:300]})
+    finally:
+        _BOOKED_SWEEP_LOCK.release()
 
 
 def _reply_sync_bg():
@@ -20999,7 +21019,7 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                     "/api/cron/reply-sync", "/api/cron/reply-caps",
+                     "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/cron/booked-sweep",
                      # A cron path must appear in BOTH this set and the token-gate
                      # tuple in do_POST: this one clears the session gate, that one
                      # makes the handler reachable and token-guarded. Missing from
@@ -22914,6 +22934,7 @@ class Handler(SimpleHTTPRequestHandler):
         "/api/auth/login", "/api/cron/pull-all", "/api/cron/heyreach-sync",
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
         "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/notify/positive-card",
+        "/api/cron/booked-sweep",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
         "/api/warmup-live",  # read-only Smartlead read — must not nuke SWR caches
         # act-state clicks touch only cockpit_action_assignments (whose GET is
@@ -23143,7 +23164,7 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/"):
             return self._qa_gate_post(path)
         if path in ("/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
-                   "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/setter/poll",
+                   "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/cron/booked-sweep", "/api/setter/poll",
                    # Both provider-scoped cap engines. Their handlers live INSIDE
                    # this gate, so a path missing here is not merely unguarded —
                    # it is unreachable. google-reply-caps shipped 07-28 without
@@ -23347,7 +23368,38 @@ class Handler(SimpleHTTPRequestHandler):
                     return self._json({"ok": False, "error": "campaign_id, email, category required"}, 400)
                 log_activity(path, actor="categoriser", action="card_notify", entity="replies")
                 res = positive_card_notify(cid, email, category)
+                # INSTANT PAUSE (Bjion ruling 2026-08-26): the moment the tool marks
+                # Call Booked, pause the lead in every live campaign — no Notion, no
+                # 30-min wait. Backgrounded so Make's webhook never blocks on it; the
+                # /api/cron/booked-sweep run is the backstop for anything set straight
+                # in Smartlead or via Calendly.
+                if (category or "").strip().lower() == "call booked":
+                    def _instant_pause_bg(_email=email):
+                        try:
+                            import sync_booked
+                            r = sync_booked.pause_one(_email)
+                            log_activity(path, actor="categoriser", action="call_booked_pause",
+                                         entity="campaigns",
+                                         payload={"email": _email, "found": r.get("found"),
+                                                  "paused": r.get("paused"),
+                                                  "campaigns": r.get("campaigns"),
+                                                  "errors": r.get("errors")})
+                        except Exception as e:  # noqa: BLE001 — a miss must be visible
+                            log_activity(path, actor="categoriser",
+                                         action="call_booked_pause_failed", entity="campaigns",
+                                         payload={"email": _email, "error": str(e)[:200]})
+                    threading.Thread(target=_instant_pause_bg, daemon=True).start()
+                    res["call_booked_pause"] = "queued"
                 return self._json(res, 200 if res.get("ok") else 502)
+            if path == "/api/cron/booked-sweep":
+                # Backstop sweep for the instant Call-Booked pause (tool is truth,
+                # no Notion). Any scheduler can hit this — pg_cron, Make, a manual
+                # curl. Long-running, so background it and ack immediately.
+                if _BOOKED_SWEEP_LOCK.locked():
+                    return self._json({"ok": True, "started": False, "busy": True}, 200)
+                log_activity(path, actor="cron", action="booked_sweep_start", entity="campaigns")
+                threading.Thread(target=_booked_sweep_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/reply-sync":
                 # Backstop: pull the master inbox and feed unseen replies to the
                 # categoriser hook. Runs longer than pg_net's timeout under a

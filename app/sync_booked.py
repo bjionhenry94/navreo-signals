@@ -792,10 +792,210 @@ def run_client(client: str, cfg: dict, full_verify: bool) -> dict:
     return counts
 
 
+# ---------- UNIVERSAL CALL-BOOKED PAUSE (Bjion ruling 2026-08-26) ----------
+# The tool is the point of truth: any lead the tool records as Call Booked —
+# replies.category='Call Booked' OR a booked meeting — is paused in EVERY
+# non-terminal campaign it sits in, across every Smartlead workspace, with no
+# dependency on Notion or client config. Idempotent + resumable via
+# booked_leads(client=CB_STATE_CLIENT); a soft time budget keeps one run inside a
+# cron slot and the next run continues where this one stopped.
+CB_STATE_CLIENT = "__call_booked__"
+CB_KEY_ENVS = ("SMARTLEAD_API_KEY", "KRG_SMARTLEAD_API_KEY", "GROUT_SMARTLEAD_API_KEY")
+
+
+def plan_cb_pause(memberships: list[dict], camp_status: dict[int, str],
+                  already_paused: set[int]) -> list[int]:
+    """Non-terminal campaigns the lead sits in that we have not already paused.
+    Unknown campaign status counts as pausable (fail safe)."""
+    out = []
+    for m in memberships:
+        cid = m.get("campaign_id")
+        if not cid or cid in already_paused:
+            continue
+        if camp_status.get(cid, "") not in TERMINAL_CAMPAIGN_STATUSES:
+            out.append(cid)
+    return sorted(set(out))
+
+
+def _cb_booked_emails() -> set[str]:
+    """Every email the tool holds as Call Booked (reply category + booked meeting)."""
+    emails: set[str] = set()
+    for r in server.sb_get_all(
+            "replies?category=eq." + urllib.parse.quote("Call Booked") + "&select=email") or []:
+        if r.get("email"):
+            emails.add(r["email"].strip().lower())
+    for r in server.sb_get_all("meetings?select=raw_attendee_email") or []:
+        if r.get("raw_attendee_email"):
+            emails.add(r["raw_attendee_email"].strip().lower())
+    return emails
+
+
+def _cb_global_paused() -> dict[str, set[int]]:
+    """email -> campaigns already paused, unioned across ALL booked_leads state
+    (per-client passes + prior CB runs) so we never re-pause what is done."""
+    out: dict[str, set[int]] = {}
+    for r in server.sb_get_all("booked_leads?select=email,campaigns_paused") or []:
+        cp = r.get("campaigns_paused") or {}
+        paused = cp if isinstance(cp, list) else (cp.get("paused") or [])
+        if r.get("email"):
+            out.setdefault(r["email"].strip().lower(), set()).update(paused)
+    return out
+
+
+def pause_call_booked(full_verify: bool = False, budget_s: int = 480) -> dict:
+    counts = {"paused": 0, "leads": 0, "errors": 0, "skipped": 0, "no_smartlead": 0}
+    start = time.monotonic()
+    booked = _cb_booked_emails()
+    log(f"[call-booked] tool-truth booked emails: {len(booked)}")
+    camp_status: dict[int, str] = {}
+    camp_key: dict[int, str] = {}
+    keys = [(e, server.KEYS.get(e)) for e in CB_KEY_ENVS if server.KEYS.get(e)]
+    for env, k in keys:
+        try:
+            for c in sl_json("GET", "/campaigns", k) or []:
+                camp_status[c["id"]] = (c.get("status") or "").upper()
+                camp_key[c["id"]] = k
+        except Exception as e:  # noqa: BLE001
+            log(f"[call-booked] campaign list failed for {env}: {e}")
+    global_paused = _cb_global_paused()
+    processed = {r["email"] for r in (server.sb_get_all(
+        f"booked_leads?client=eq.{CB_STATE_CLIENT}&select=email") or []) if r.get("email")}
+    main_key = server.KEYS.get("SMARTLEAD_API_KEY", "")
+    ledger_rows: list[dict] = []
+    for email in sorted(booked):
+        if email in processed and not full_verify:
+            counts["skipped"] += 1
+            continue
+        if time.monotonic() - start > budget_s:
+            log("[call-booked] time budget hit — remaining emails deferred to next run")
+            break
+        already = set(global_paused.get(email, set()))
+        lead = None
+        for _env, k in keys:
+            try:
+                r = sl_json("GET", f"/leads/?email={urllib.parse.quote(email)}", k)
+            except Exception:  # noqa: BLE001
+                r = None
+            if r and r.get("id"):
+                lead = r
+                break
+        if not lead or not lead.get("id"):
+            counts["no_smartlead"] += 1
+            if not DRY:  # record so we don't re-check a lead that isn't in Smartlead
+                upsert_state(CB_STATE_CLIENT, email,
+                             {"source": "call_booked", "campaigns_paused": {"paused": sorted(already)}})
+            continue
+        lid = lead["id"]
+        to_pause = plan_cb_pause(lead.get("lead_campaign_data") or [], camp_status, already)
+        newly = []
+        for cid in to_pause:
+            try:
+                if not DRY:
+                    sl_json("POST", f"/campaigns/{cid}/leads/{lid}/pause",
+                            camp_key.get(cid, main_key), {})
+                counts["paused"] += 1
+                newly.append(cid)
+                ledger_rows.append({"client": CB_STATE_CLIENT, "email": email,
+                                    "action": "paused_in_campaign", "direction": "tool->smartlead",
+                                    "dry_run": DRY, "after_state": f"campaign {cid} paused",
+                                    "detail": {"campaign_id": cid, "lead_id": lid,
+                                               "reason": "Call Booked (tool is truth)"}})
+            except Exception as e:  # noqa: BLE001
+                counts["errors"] += 1
+                ledger_rows.append({"client": CB_STATE_CLIENT, "email": email,
+                                    "action": "error_pause", "dry_run": DRY,
+                                    "detail": {"campaign_id": cid, "error": str(e)[:200]}})
+        if newly:
+            counts["leads"] += 1
+        if not DRY:
+            upsert_state(CB_STATE_CLIENT, email, {"source": "call_booked",
+                         "booked_at": datetime.now(timezone.utc).isoformat(),
+                         "campaigns_paused": {"paused": sorted(already | set(newly))}})
+    for j in range(0, len(ledger_rows), 50):
+        ledger(ledger_rows[j:j + 50])
+    ledger([{"client": CB_STATE_CLIENT, "action": "run_summary", "dry_run": DRY, "detail": counts}])
+    log(f"[call-booked] done: {counts}")
+    return counts
+
+
+def pause_one(email: str) -> dict:
+    """Pause ONE lead in every non-terminal campaign it sits in — the instant,
+    event-driven path used by the categoriser hook the moment Call Booked is set
+    (no Notion, no batch wait). Lean: one /leads lookup + a pause per live
+    campaign, using the campaign_status carried on each membership. Idempotent
+    against booked_leads state. Whichever workspace key finds the lead owns all
+    its campaigns."""
+    email = (email or "").strip().lower()
+    out = {"email": email, "found": False, "paused": 0, "campaigns": [], "errors": 0}
+    if not email:
+        return out
+    already: set[int] = set()
+    for r in server.sb_get_all(
+            f"booked_leads?email=eq.{urllib.parse.quote(email)}&select=campaigns_paused") or []:
+        cp = r.get("campaigns_paused") or {}
+        already |= set(cp if isinstance(cp, list) else (cp.get("paused") or []))
+    lead = None
+    used_key = ""
+    for env in CB_KEY_ENVS:
+        k = server.KEYS.get(env)
+        if not k:
+            continue
+        try:
+            r = sl_json("GET", f"/leads/?email={urllib.parse.quote(email)}", k)
+        except Exception:  # noqa: BLE001
+            r = None
+        if r and r.get("id"):
+            lead, used_key = r, k
+            break
+    if not lead or not lead.get("id"):
+        return out
+    out["found"] = True
+    lid = lead["id"]
+    rows = []
+    for m in lead.get("lead_campaign_data") or []:
+        cid = m.get("campaign_id")
+        if not cid or cid in already:
+            continue
+        if (m.get("campaign_status") or "").upper() in TERMINAL_CAMPAIGN_STATUSES:
+            continue
+        try:
+            if not DRY:
+                sl_json("POST", f"/campaigns/{cid}/leads/{lid}/pause", used_key, {})
+            out["paused"] += 1
+            out["campaigns"].append(cid)
+            rows.append({"client": CB_STATE_CLIENT, "email": email,
+                         "action": "paused_in_campaign", "direction": "tool->smartlead",
+                         "dry_run": DRY, "after_state": f"campaign {cid} paused",
+                         "detail": {"campaign_id": cid, "lead_id": lid,
+                                    "reason": "Call Booked (instant categoriser hook)"}})
+        except Exception as e:  # noqa: BLE001
+            out["errors"] += 1
+            rows.append({"client": CB_STATE_CLIENT, "email": email, "action": "error_pause",
+                         "dry_run": DRY, "detail": {"campaign_id": cid, "error": str(e)[:200]}})
+    if out["campaigns"] and not DRY:
+        upsert_state(CB_STATE_CLIENT, email, {"source": "call_booked_instant",
+                     "booked_at": datetime.now(timezone.utc).isoformat(),
+                     "campaigns_paused": {"paused": sorted(already | set(out["campaigns"]))}})
+    for j in range(0, len(rows), 50):
+        ledger(rows[j:j + 50])
+    log(f"[call-booked] instant pause {email}: {out['paused']} campaigns")
+    return out
+
+
 def main() -> int:
+    now = datetime.now(timezone.utc)
+    full_verify = os.environ.get("BOOKED_SYNC_FULL", "") == "1" or (
+        now.hour % 6 == 0 and now.minute < 30)
+    # Universal Call-Booked pause runs FIRST and needs no Notion (Bjion 2026-08-26:
+    # the tool is the point of truth; Call Booked anywhere -> paused everywhere).
+    if os.environ.get("BOOKED_SYNC_CB_PAUSE", "1") != "0":
+        try:
+            pause_call_booked(full_verify=full_verify)
+        except Exception as e:  # noqa: BLE001
+            log(f"[call-booked] FAILED: {e}")
     if not server.KEYS.get("NOTION_API_KEY"):
-        log("NOTION_API_KEY missing — booked-sync idle (add it to the navreo-secrets "
-            "env group; see booked-sync-orchestrator skill Step 0). Exiting 0.")
+        log("NOTION_API_KEY missing — Notion mirror skipped (Call-Booked pause "
+            "already ran). Exiting 0.")
         return 0
     raw = json.loads(CONFIG_PATH.read_text())
     defaults = raw.pop("_defaults", {})
@@ -809,9 +1009,6 @@ def main() -> int:
             log(f"[{client}] skipped — notion_database_id not provisioned yet")
             continue
         cfgs[client] = merged
-    now = datetime.now(timezone.utc)
-    full_verify = os.environ.get("BOOKED_SYNC_FULL", "") == "1" or (
-        now.hour % 6 == 0 and now.minute < 30)
     log(f"booked-sync start dry={DRY} full_verify={full_verify} clients={list(cfgs)}")
     failures = 0
     for client, cfg in cfgs.items():
