@@ -10860,30 +10860,73 @@ def _prospeo_enrich(email: str, linkedin: str = "") -> dict:
             "company": company, "payload": body}
 
 
-def _getleads_enrich(email: str) -> dict:
-    """GetLeads adapter - DORMANT: GetLeads has no public HTTP API today
-    (OAuth MCP only). The moment GETLEADS_API_URL + GETLEADS_API_KEY appear
-    in the env this slot goes first in the waterfall; shape mirrors
-    _prospeo_enrich's return."""
-    base = (_KEYS.get("GETLEADS_API_URL") or "").rstrip("/")
+def _getleads_enrich(first: str, last: str, company: str = "", domain: str = "") -> str:
+    """GetLeads /enrich/from-person -> the lead's cellphone, or '' on any miss.
+    Matches on NAME + company/domain (not the bare email). Auth is a Bearer
+    glb_live_ key; base defaults to app.getleads.io (override GETLEADS_API_URL).
+    1 plan credit per success, misses free. A phone-only supplement to Prospeo
+    in the reply-time union (verified live 2026-08-26)."""
     key = _KEYS.get("GETLEADS_API_KEY") or ""
-    if not (base and key and email and _HTTP):
-        return {}
+    first, last = (first or "").strip(), (last or "").strip()
+    if not (key and first and last and (company or domain) and _HTTP):
+        return ""
+    base = (_KEYS.get("GETLEADS_API_URL") or "https://app.getleads.io").rstrip("/")
     try:
-        j = _HTTP("POST", f"{base}/enrich-person", {"Authorization": f"Bearer {key}"},
-                  {"email": email, "include_phone": True}, timeout=45)
+        j = _HTTP("POST", f"{base}/api/v1/enrich/from-person",
+                  {"Authorization": f"Bearer {key}"},
+                  {"items": [{"first_name": first, "last_name": last,
+                              "company_name": company or "", "email_domain": domain or ""}]},
+                  timeout=30)
         if not isinstance(j, dict):
-            return {}
-        person = j.get("person") if isinstance(j.get("person"), dict) else j
-        comp = j.get("company") if isinstance(j.get("company"), dict) else {}
-        phone = str(person.get("phone") or person.get("mobile") or "").strip()
-        return {"phone": phone, "phone_source": "getleads" if phone else "",
-                "company": {k: comp.get(k) for k in ("name", "description", "employee_count",
-                                                     "employee_range", "city", "state",
-                                                     "country", "industry", "linkedin_url")},
-                "payload": j}
+            return ""
+        row = (j.get("results") or [{}])[0] if isinstance(j.get("results"), list) else {}
+        if not row.get("success"):
+            return ""
+        return str((row.get("data") or {}).get("cellphone") or "").strip()
     except Exception:  # noqa: BLE001
-        return {}
+        return ""
+
+
+def _bettercontact_enrich(email: str, first: str, last: str, company: str = "",
+                          domain: str = "", linkedin: str = "") -> list:
+    """One Better Contact phone lookup (async) -> a list of the DISTINCT numbers
+    it found (contact + any additional), or [] on a miss. ~10 credits per number
+    FOUND, misses free. Polls up to ~90s, so callers run it in the background,
+    never on a request thread. A phone-only supplement to Prospeo in the union.
+    NOTE: the async POST returns the job id under `id` (NOT `request_id`), and
+    the call needs the app's real User-Agent or Better Contact's Cloudflare 403s
+    (error 1010) - both handled by _HTTP (server.http_json). Verified live
+    2026-08-26."""
+    key = _KEYS.get("BETTERCONTACT_API_KEY") or ""
+    first, last = (first or "").strip(), (last or "").strip()
+    if not (key and first and last and (company or domain) and _HTTP):
+        return []
+    try:
+        r = _HTTP("POST", "https://app.bettercontact.rocks/api/v2/async",
+                  {"X-API-Key": key},
+                  {"data": [{"first_name": first, "last_name": last,
+                             "company": company or "", "company_domain": domain or "",
+                             "linkedin_url": linkedin or "", "email": email,
+                             "custom_fields": {"uuid": "1"}}],
+                   "enrich_email_address": False, "enrich_phone_number": True},
+                  timeout=30)
+        rid = ((r or {}).get("id") or (r or {}).get("request_id")) if isinstance(r, dict) else ""
+        deadline = _time.time() + 90
+        while rid and _time.time() < deadline:
+            _time.sleep(6)
+            st = _HTTP("GET", f"https://app.bettercontact.rocks/api/v2/async/{rid}",
+                       {"X-API-Key": key}, None, timeout=30)
+            if isinstance(st, dict) and st.get("status") == "terminated":
+                row = (st.get("data") or [{}])[0]
+                nums = []
+                for fld in ("contact_phone_number", "contact_additional_phone_number"):
+                    v = str(row.get(fld) or "").strip()
+                    if v:
+                        nums.append(v)
+                return nums
+        return []
+    except Exception:  # noqa: BLE001
+        return []
 
 
 def _phone_provider_label(source: str) -> str:
@@ -10953,7 +10996,14 @@ def _harvest_phones(enr: dict, sl_phone: str) -> list:
     add(_dig(company, "phone_hq.phone_hq", "phone_hq.phone_hq_international",
              "phone", "phone_number"),
         "office", f"{(company.get('name') or 'Company')} · office")
-    # 3) The Smartlead-listed number - the one we used to overwrite and lose.
+    # 3) Numbers the reply-time union harvested from the OTHER providers
+    #    (GetLeads cellphone, Better Contact) - stored as a normalized list so
+    #    this stays provider-agnostic. Deduped on digits against the above, so a
+    #    GetLeads number that equals Prospeo's mobile just collapses.
+    for xp in (payload.get("_extra_phones") or []):
+        if isinstance(xp, dict):
+            add(xp.get("number"), xp.get("kind") or "mobile", xp.get("source") or "On file")
+    # 4) The Smartlead-listed number - the one we used to overwrite and lose.
     add(sl_phone, "listed", "Smartlead")
     return out[:6]
 
@@ -10990,11 +11040,14 @@ def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) 
             # (a bare contact@ NO_MATCHes) - use the people table's slug when
             # we hold one, exactly like the Make scenario does.
             linkedin = ""
+            first = last = ""
             try:
                 ppl = _SB("GET", f"people?email=eq.{quote(email, safe='')}"
-                                 "&select=linkedin_slug&limit=1")
-                slug = (ppl[0].get("linkedin_slug") or "").strip().strip("/") \
-                    if isinstance(ppl, list) and ppl else ""
+                                 "&select=linkedin_slug,first_name,last_name&limit=1")
+                prow = ppl[0] if isinstance(ppl, list) and ppl else {}
+                first = (prow.get("first_name") or "").strip()
+                last = (prow.get("last_name") or "").strip()
+                slug = (prow.get("linkedin_slug") or "").strip().strip("/")
                 if slug:
                     linkedin = slug if slug.startswith("http") \
                         else f"https://www.linkedin.com/in/{slug}"
@@ -11014,7 +11067,13 @@ def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) 
                             else f"https://www.linkedin.com/in/{lp.strip('/')}"
                 except Exception:  # noqa: BLE001
                     pass
-            res = _getleads_enrich(email) or _prospeo_enrich(email, linkedin)
+            # Prospeo is the ANCHOR: it returns the rich company+person payload
+            # the sidebar's warm-call facts read (office line, description,
+            # headcount) plus a verified mobile. GetLeads and Better Contact are
+            # phone-only supplements unioned in below so the call dropdown offers
+            # every number we can find - all three consolidated INTO the tool
+            # (owner ruling 2026-08-26), no Make/Notion round-trip.
+            res = _prospeo_enrich(email, linkedin)
             comp = res.get("company") or {}
             # Bank real attempts only: a NO_MATCH is a real miss (never re-pay),
             # but an auth/credit/network failure must NOT poison the cache -
@@ -11030,13 +11089,29 @@ def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) 
                               "&phone=is.null&payload=is.null&notes=is.null",
                     prefer="return=minimal")
                 return
+            # Company name for the name-keyed providers (GetLeads/Better Contact
+            # match on name+company, not the bare email).
+            company_name = (comp.get("name") or "").strip()
+            if not company_name and domain:
+                company_name = str((_company_row(domain) or {}).get("name") or "").strip()
+            # FAST supplement: GetLeads /enrich/from-person returns data.cellphone
+            # in ~1-2s, so fold it into the first write. The harvester dedups it
+            # against Prospeo's mobile, so a matching number just confirms it.
+            extras = []
+            gl_phone = _getleads_enrich(first, last, company_name, domain)
+            if gl_phone:
+                extras.append({"number": gl_phone, "source": "Get Leads", "kind": "mobile"})
+            primary = (res.get("phone") or "").strip() or gl_phone
+            primary_src = res.get("phone_source") or ("getleads" if gl_phone else "")
+            if not isinstance(payload, dict):
+                payload = {}
+            if extras:
+                payload["_extra_phones"] = list(extras)
             # We hold the claim, so fill our row in place (a plain UPDATE - the
             # placeholder already exists from the claim insert above).
             _SB("PATCH", f"setter_lead_enrichment?lead_email=eq.{quote(email, safe='')}", {
-                "phone": res.get("phone") or "",
-                "phone_source": res.get("phone_source") or "",
-                "company_domain": (domain or "").lower(),
-                "payload": res.get("payload"),
+                "phone": primary, "phone_source": primary_src,
+                "company_domain": (domain or "").lower(), "payload": payload,
             }, prefer="return=minimal")
             if domain and any(v for v in comp.values()):
                 _SB("POST", "companies?on_conflict=domain", {
@@ -11045,6 +11120,23 @@ def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) 
                 }, prefer="resolution=merge-duplicates,return=minimal")
             for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
                 _LEAD_CONTACT_CACHE.pop(k, None)
+            # SLOW supplement: Better Contact is an async job (polls up to ~90s),
+            # so it runs AFTER the fast numbers are banked and appends its number
+            # with a SECOND write - the mobile still lands in seconds. Union mode
+            # (owner 2026-08-26): always called, even when Prospeo already found a
+            # mobile, so the dropdown can offer BC's number too.
+            bc_nums = _bettercontact_enrich(email, first, last, company_name, domain, linkedin)
+            if bc_nums:
+                for bn in bc_nums:
+                    extras.append({"number": bn, "source": "Better Contact", "kind": "mobile"})
+                payload["_extra_phones"] = list(extras)
+                patch = {"payload": payload, "company_domain": (domain or "").lower()}
+                if not primary:
+                    patch["phone"], patch["phone_source"] = bc_nums[0], "bettercontact"
+                _SB("PATCH", f"setter_lead_enrichment?lead_email=eq.{quote(email, safe='')}",
+                    patch, prefer="return=minimal")
+                for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
+                    _LEAD_CONTACT_CACHE.pop(k, None)
         finally:
             _ENRICH_INFLIGHT.discard(email)
     except Exception:  # noqa: BLE001 - enrichment is a nice-to-have, never a crash

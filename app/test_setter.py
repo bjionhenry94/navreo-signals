@@ -11769,6 +11769,24 @@ def test_harvest_phones():
          "payload": {"company": {"phone_hq": {"phone_hq": "12345"}}}}, "")
     check("harvest: sub-7-digit junk office number is dropped", len(got_junk) == 1, got_junk)
 
+    # Extra provider numbers (GetLeads cell, Better Contact) ride in
+    # payload._extra_phones and must surface, deduped, alongside Prospeo's.
+    enr_x = {"phone": "+13105551212", "phone_source": "prospeo",
+             "payload": {"person": {"mobile": {"mobile": "+13105551212"}},
+                         "company": {"name": "Acme", "phone_hq": {"phone_hq": "+13330001111"}},
+                         "_extra_phones": [{"number": "+14445556666", "source": "Get Leads", "kind": "mobile"},
+                                           {"number": "+17778889999", "source": "Better Contact", "kind": "mobile"}]}}
+    got_x = setter._harvest_phones(enr_x, "")
+    nums_x = [re.sub(r"[^+\d]", "", p["number"]) for p in got_x]
+    check("harvest: GetLeads + Better Contact numbers surface from _extra_phones",
+          "+14445556666" in nums_x and "+17778889999" in nums_x, nums_x)
+    check("harvest: union yields all four distinct numbers (mobile+office+GL+BC)", len(got_x) == 4, got_x)
+    check("harvest: a GetLeads number equal to the primary mobile dedups (no phantom row)",
+          len(setter._harvest_phones(
+              {"phone": "+13105551212", "phone_source": "prospeo",
+               "payload": {"_extra_phones": [{"number": "+1 310-555-1212", "source": "Get Leads"}]}}, "")) == 1,
+          "GL==primary dedups")
+
 
 def test_enrich_claims_lead_once():
     """The reply-time enricher must spend AT MOST ONE provider credit per lead,
@@ -11777,12 +11795,15 @@ def test_enrich_claims_lead_once():
     bails with zero provider calls, and a transient miss releases the claim so
     the lead is retried, not stranded."""
     real = (setter._SB, setter._enrichment_row, setter._getleads_enrich,
-            setter._prospeo_enrich, setter._sl_get)
+            setter._prospeo_enrich, setter._sl_get, setter._bettercontact_enrich,
+            setter._company_row)
     for e in ("lead@ex.com", "lead2@ex.com", "lead3@ex.com"):
         setter._ENRICH_INFLIGHT.discard(e)
     try:
         setter._enrichment_row = lambda e: None
-        setter._getleads_enrich = lambda e: {}
+        setter._getleads_enrich = lambda *a, **k: ""        # supplement misses
+        setter._bettercontact_enrich = lambda *a, **k: []   # supplement misses (list contract)
+        setter._company_row = lambda d: {}
         setter._sl_get = lambda *a, **k: {}
         calls = []
         prospeo_hits = []
@@ -11840,15 +11861,66 @@ def test_enrich_claims_lead_once():
               not any(c[0] == "PATCH" for c in calls), calls)
     finally:
         (setter._SB, setter._enrichment_row, setter._getleads_enrich,
-         setter._prospeo_enrich, setter._sl_get) = real
+         setter._prospeo_enrich, setter._sl_get, setter._bettercontact_enrich,
+         setter._company_row) = real
         for e in ("lead@ex.com", "lead2@ex.com", "lead3@ex.com"):
             setter._ENRICH_INFLIGHT.discard(e)
+
+
+def test_enrich_unions_three_providers():
+    """Reply-time enrichment UNIONS Prospeo (anchor + mobile), GetLeads
+    (cellphone, folded into the fast first write) and Better Contact (async,
+    appended by a second write) so the call dropdown offers every number."""
+    real = (setter._SB, setter._enrichment_row, setter._prospeo_enrich,
+            setter._getleads_enrich, setter._bettercontact_enrich,
+            setter._sl_get, setter._company_row)
+    setter._ENRICH_INFLIGHT.discard("u@ex.com")
+    try:
+        setter._enrichment_row = lambda e: None
+        setter._sl_get = lambda *a, **k: {}
+        setter._company_row = lambda d: {"name": "Acme"}
+        setter._prospeo_enrich = lambda e, li="": {
+            "phone": "+13105550000", "phone_source": "prospeo", "company": {},
+            "payload": {"person": {"mobile": {"mobile": "+13105550000"}}, "company": {}}}
+        gl_calls, bc_calls = [], []
+        setter._getleads_enrich = lambda first, last, company="", domain="": (
+            gl_calls.append((first, last, company, domain)) or "+14445556666")
+        setter._bettercontact_enrich = lambda *a, **k: (bc_calls.append(a) or ["+17778889999"])
+        writes = []
+
+        def rec_sb(method, path, body=None, prefer=""):
+            writes.append((method, path.split("?", 1)[0], body, prefer))
+            if method == "POST" and path.startswith("setter_lead_enrichment") and "ignore-duplicates" in prefer:
+                return [{"lead_email": (body or {}).get("lead_email")}]
+            if method == "GET" and path.startswith("people"):
+                return [{"first_name": "Sam", "last_name": "Lee", "linkedin_slug": ""}]
+            return None
+        setter._SB = rec_sb
+        setter._enrich_on_reply("u@ex.com", "ex.com", "navreo", 1)
+
+        check("union: GetLeads called with the lead's real name", bool(gl_calls) and gl_calls[0][0] == "Sam", gl_calls)
+        check("union: Better Contact called too (union mode, always)", len(bc_calls) == 1, bc_calls)
+        patches = [w for w in writes if w[0] == "PATCH"]
+        check("union: two PATCHes - fast Prospeo+GetLeads, then Better Contact", len(patches) == 2, [p[3] for p in patches])
+        final_payload = (patches[-1][2] or {}).get("payload", {}) if patches else {}
+        xnums = [p["number"] for p in (final_payload.get("_extra_phones") or [])]
+        check("union: _extra_phones carries the GetLeads number", "+14445556666" in xnums, xnums)
+        check("union: _extra_phones carries the Better Contact number", "+17778889999" in xnums, xnums)
+        harvested = setter._harvest_phones(
+            {"phone": "+13105550000", "phone_source": "prospeo", "payload": final_payload}, "")
+        check("union: harvester turns the stored row into 3 distinct dropdown numbers", len(harvested) == 3, harvested)
+    finally:
+        (setter._SB, setter._enrichment_row, setter._prospeo_enrich,
+         setter._getleads_enrich, setter._bettercontact_enrich,
+         setter._sl_get, setter._company_row) = real
+        setter._ENRICH_INFLIGHT.discard("u@ex.com")
 
 
 if __name__ == "__main__":
     test_lexicon()
     test_harvest_phones()
     test_enrich_claims_lead_once()
+    test_enrich_unions_three_providers()
     test_guess_timezone()
     test_pick_slots()
     test_slot_situation_transparency()

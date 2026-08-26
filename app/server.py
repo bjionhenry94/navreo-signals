@@ -15162,6 +15162,20 @@ def _reply_sync_bg():
                 "action": ("client_positive_done" if res4.get("ok")
                            else "client_positive_failed"),
                 "entity": "replies", "payload": res4})
+        # Client-CARD backfill: the client-facing "New Positive Response" card
+        # (Make 8946472 -> the client's own channel, e.g. #touchpoint-navreo) is
+        # posted by positive_card_notify, whose Smartlead lead lookup can miss on
+        # a seconds-old reply (the 2026-08-26 zach@cbdforlife.us drop: internal
+        # card fired, TouchPoint client card did not). Those misses now log to
+        # app_activity_log; this re-drives any that never recovered, keyed on
+        # campaign+email so a card that already posted is never re-sent.
+        res5 = client_card_backfill_sweep()
+        if res5.get("missed") or not res5.get("ok"):
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+                "action": ("client_card_backfill_done" if res5.get("ok")
+                           else "client_card_backfill_failed"),
+                "entity": "replies", "payload": res5})
     except Exception as e:  # noqa: BLE001 — record, never crash the thread
         print(f"[reply-sync] FAILED: {e}", file=sys.stderr)
         sb("POST", "app_activity_log",
@@ -15251,41 +15265,133 @@ def compose_positive_card_payload(lead: dict, history: list, campaign_id, catego
 
 def positive_card_notify(campaign_id, email: str, category: str) -> dict:
     """Fetch lead + thread from Smartlead, compose the card payload, POST it
-    to the client-card hook. Two attempts; failures land in app_activity_log
-    (actor='positive_card') so a miss is visible, never silent."""
-    lead_resp = setter._sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
+    to the client-card hook (Make 8946472 -> the client's own channel).
+
+    The Smartlead lead lookup is RETRIED: a just-arrived reply can be
+    momentarily unindexed / the read can time out, which on 2026-08-26 dropped a
+    TouchPoint positive (zach@cbdforlife.us) from #touchpoint-navreo while the
+    internal card fired fine. A genuine lookup miss AND a post failure BOTH land
+    in app_activity_log (actor='positive_card', action=lead_lookup_miss /
+    card_notify_failed) so a drop is never silent, and the reply-sync tick's
+    client_card_backfill_sweep() can re-drive it. A success writes a 'card_sent'
+    row keyed by campaign+email; the backfill re-drives only misses with no later
+    card_sent, so it can never double-post a card."""
+    cid_s = str(campaign_id or "").strip()
+    email_n = (email or "").strip().lower()
     lead = None
-    if isinstance(lead_resp, dict):
-        lead = lead_resp.get("lead") if isinstance(lead_resp.get("lead"), dict) else lead_resp
-    elif isinstance(lead_resp, list) and lead_resp:
-        first = lead_resp[0]
-        lead = first.get("lead") if isinstance(first, dict) and isinstance(first.get("lead"), dict) else first
+    for attempt in range(3):
+        lead_resp = setter._sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
+        if isinstance(lead_resp, dict):
+            lead = lead_resp.get("lead") if isinstance(lead_resp.get("lead"), dict) else lead_resp
+        elif isinstance(lead_resp, list) and lead_resp:
+            first = lead_resp[0]
+            lead = first.get("lead") if isinstance(first, dict) and isinstance(first.get("lead"), dict) else first
+        if isinstance(lead, dict) and lead.get("id"):
+            break
+        lead = None
+        if attempt < 2:
+            time.sleep(2 + 2 * attempt)  # 2s, 4s — ride out Smartlead index lag
     if not isinstance(lead, dict) or not lead.get("id"):
+        sb("POST", "app_activity_log",
+           {"actor": "positive_card", "endpoint": "/api/notify/positive-card",
+            "action": "lead_lookup_miss", "entity": "replies",
+            "payload": {"campaign_id": cid_s, "email": email_n, "category": category}})
         return {"ok": False, "error": "lead not found in Smartlead"}
     hist_resp = setter._sl_get(f"/campaigns/{campaign_id}/leads/{lead['id']}/message-history")
     hist = hist_resp.get("history") if isinstance(hist_resp, dict) else hist_resp
     payload = compose_positive_card_payload(lead, hist if isinstance(hist, list) else [],
                                             campaign_id, category)
     err = ""
+    ok = False
     for _ in range(2):
         try:
             http_json("POST", POSITIVE_CARD_HOOK, {}, payload)
-            return {"ok": True, "campaign_id": campaign_id, "email": email,
-                    "category": category, "client_id": payload.get("client_id"),
-                    "campaign_name": payload.get("campaign_name")}
+            ok = True
+            break
         except ValueError:
             # Make webhooks answer a bare "Accepted" (non-JSON 2xx) — that IS success.
-            return {"ok": True, "campaign_id": campaign_id, "email": email,
-                    "category": category, "client_id": payload.get("client_id"),
-                    "campaign_name": payload.get("campaign_name")}
+            ok = True
+            break
         except Exception as e:  # noqa: BLE001 — retry once, then report
             err = str(e)[:300]
+    if ok:
+        sb("POST", "app_activity_log",
+           {"actor": "positive_card", "endpoint": "/api/notify/positive-card",
+            "action": "card_sent", "entity": "replies",
+            "payload": {"campaign_id": cid_s, "email": email_n, "category": category,
+                        "client_id": payload.get("client_id"),
+                        "campaign_name": payload.get("campaign_name")}})
+        return {"ok": True, "campaign_id": campaign_id, "email": email,
+                "category": category, "client_id": payload.get("client_id"),
+                "campaign_name": payload.get("campaign_name")}
     sb("POST", "app_activity_log",
        {"actor": "positive_card", "endpoint": "/api/notify/positive-card",
         "action": "card_notify_failed", "entity": "replies",
-        "payload": {"campaign_id": campaign_id, "email": email,
+        "payload": {"campaign_id": cid_s, "email": email_n,
                     "category": category, "error": err}})
     return {"ok": False, "error": err}
+
+
+def client_card_backfill_sweep(hours: int = 72, cap: int = 15) -> dict:
+    """Re-drive client "New Positive Response" cards that positive_card_notify
+    logged as a miss (lead_lookup_miss / card_notify_failed) and that have not
+    since been carded. positive_card_notify is only ever called for a positive,
+    so its miss-logs are an exact list of client cards that failed; a later
+    card_sent for the same campaign+email means it already recovered — so this
+    can never re-post a card that already landed (no cutoff, no replies scan
+    needed). Rides the reply-sync tick; in steady state it is one Supabase read.
+    Idempotent: a recovered card writes card_sent and is not re-driven again; a
+    still-failing one re-logs a miss and retries next tick. Never raises."""
+    out = {"ok": True, "missed": 0, "redriven": 0, "recovered": 0,
+           "still_failing": 0, "errors": 0}
+    try:
+        from datetime import datetime, timedelta, timezone
+        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        logs = sb("GET", "app_activity_log?actor=eq.positive_card"
+                         "&ts=gte.%s&select=action,ts,payload"
+                         "&order=ts.desc&limit=1000" % since)
+        if not isinstance(logs, list):
+            out["ok"] = False
+            out["errors"] += 1
+            out["error"] = "activity-log read returned non-list"
+            return out
+        carded = {}   # (campaign_id, email) -> latest card_sent ts
+        missed = {}   # (campaign_id, email) -> {ts, campaign_id, email, category}
+        for r in logs:
+            if not isinstance(r, dict):
+                continue
+            p = r.get("payload") if isinstance(r.get("payload"), dict) else {}
+            cid = str(p.get("campaign_id") or "").strip()
+            email = (p.get("email") or "").strip().lower()
+            if not cid or not email:
+                continue
+            key = (cid, email)
+            ts = r.get("ts") or ""
+            act = r.get("action")
+            if act == "card_sent":
+                if ts > carded.get(key, ""):
+                    carded[key] = ts
+            elif act in ("lead_lookup_miss", "card_notify_failed"):
+                cur = missed.get(key)
+                if cur is None or ts > cur["ts"]:
+                    missed[key] = {"ts": ts, "campaign_id": cid, "email": email,
+                                   "category": p.get("category") or "Interested"}
+        pending = [m for key, m in missed.items() if carded.get(key, "") < m["ts"]]
+        pending.sort(key=lambda m: m["ts"])
+        out["missed"] = len(pending)
+        for m in pending[:cap]:
+            try:
+                res = positive_card_notify(m["campaign_id"], m["email"], m["category"])
+                out["redriven"] += 1
+                out["recovered" if res.get("ok") else "still_failing"] += 1
+            except Exception:  # noqa: BLE001 — one bad row must not stop the sweep
+                out["errors"] += 1
+        return out
+    except Exception as e:  # noqa: BLE001 — record, never crash the cron thread
+        out["ok"] = False
+        out["errors"] += 1
+        out["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        return out
 
 
 def _mailbox_sync_bg():
