@@ -10971,6 +10971,21 @@ def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) 
         try:
             if _enrichment_row(email):
                 return
+            # Claim this lead ATOMICALLY before spending a provider credit. The
+            # in-process _ENRICH_INFLIGHT guard cannot stop a double-charge when
+            # the poll cron and a web-dyno sidebar hydrate both enrich the same
+            # fresh reply - they are separate processes with separate sets. So
+            # insert the row FIRST with resolution=ignore-duplicates plus
+            # return=representation: PostgREST hands the winner the new row and
+            # every loser an empty list, so exactly one process reaches the
+            # provider call (verified live 2026-08-26). A transient miss releases
+            # the claim below so the empty placeholder never poisons the
+            # never-re-pay guard.
+            claim = _SB("POST", "setter_lead_enrichment?on_conflict=lead_email",
+                        {"lead_email": email, "company_domain": (domain or "").lower()},
+                        prefer="resolution=ignore-duplicates,return=representation")
+            if not (isinstance(claim, list) and claim):
+                return
             # A LinkedIn profile matches far more reliably than a bare email
             # (a bare contact@ NO_MATCHes) - use the people table's slug when
             # we hold one, exactly like the Make scenario does.
@@ -11007,13 +11022,22 @@ def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) 
             payload = res.get("payload") if isinstance(res.get("payload"), dict) else {}
             err = str(payload.get("error_code") or "") if payload.get("error") else ""
             if not res or (err and err != "NO_MATCH"):
+                # Transient failure (auth/credit/network) - release the claim so
+                # a later open retries. The filter deletes ONLY the still-pristine
+                # placeholder we inserted, never a row a notes write or a
+                # concurrent winner has since filled.
+                _SB("DELETE", f"setter_lead_enrichment?lead_email=eq.{quote(email, safe='')}"
+                              "&phone=is.null&payload=is.null&notes=is.null",
+                    prefer="return=minimal")
                 return
-            _SB("POST", "setter_lead_enrichment?on_conflict=lead_email", {
-                "lead_email": email, "phone": res.get("phone") or "",
+            # We hold the claim, so fill our row in place (a plain UPDATE - the
+            # placeholder already exists from the claim insert above).
+            _SB("PATCH", f"setter_lead_enrichment?lead_email=eq.{quote(email, safe='')}", {
+                "phone": res.get("phone") or "",
                 "phone_source": res.get("phone_source") or "",
                 "company_domain": (domain or "").lower(),
                 "payload": res.get("payload"),
-            }, prefer="resolution=merge-duplicates,return=minimal")
+            }, prefer="return=minimal")
             if domain and any(v for v in comp.values()):
                 _SB("POST", "companies?on_conflict=domain", {
                     "domain": domain.lower(),

@@ -11770,9 +11770,85 @@ def test_harvest_phones():
     check("harvest: sub-7-digit junk office number is dropped", len(got_junk) == 1, got_junk)
 
 
+def test_enrich_claims_lead_once():
+    """The reply-time enricher must spend AT MOST ONE provider credit per lead,
+    even when the poll cron and a sidebar hydrate race on separate processes. It
+    claims the row (insert-if-absent) BEFORE calling the provider: the loser
+    bails with zero provider calls, and a transient miss releases the claim so
+    the lead is retried, not stranded."""
+    real = (setter._SB, setter._enrichment_row, setter._getleads_enrich,
+            setter._prospeo_enrich, setter._sl_get)
+    for e in ("lead@ex.com", "lead2@ex.com", "lead3@ex.com"):
+        setter._ENRICH_INFLIGHT.discard(e)
+    try:
+        setter._enrichment_row = lambda e: None
+        setter._getleads_enrich = lambda e: {}
+        setter._sl_get = lambda *a, **k: {}
+        calls = []
+        prospeo_hits = []
+
+        def tbl(p):
+            return p.split("?", 1)[0]
+
+        def winner_sb(method, path, body=None, prefer=""):
+            calls.append((method, path, prefer))
+            if method == "POST" and tbl(path) == "setter_lead_enrichment" and "ignore-duplicates" in prefer:
+                return [{"lead_email": (body or {}).get("lead_email")}]   # WON the claim
+            if method == "GET":
+                return []
+            return None
+        setter._prospeo_enrich = lambda e, li="": (prospeo_hits.append(e) or
+            {"phone": "+15551230000", "phone_source": "prospeo",
+             "company": {}, "payload": {"person": {}, "company": {}}})
+
+        # WINNER: one claim insert, one provider call, one PATCH (never a 2nd upsert).
+        setter._SB = winner_sb
+        setter._enrich_on_reply("lead@ex.com", "ex.com", "navreo", 123)
+        sle_posts = [c for c in calls if c[0] == "POST" and tbl(c[1]) == "setter_lead_enrichment"]
+        check("claim/winner: provider called exactly once", prospeo_hits == ["lead@ex.com"], prospeo_hits)
+        check("claim/winner: the only enrichment POST is the ignore-duplicates claim",
+              len(sle_posts) == 1 and "ignore-duplicates" in sle_posts[0][2], sle_posts)
+        check("claim/winner: result banked via PATCH, not a re-insert",
+              any(c[0] == "PATCH" and tbl(c[1]) == "setter_lead_enrichment" for c in calls), calls)
+
+        # LOSER: claim comes back empty -> zero provider calls, zero writes.
+        calls.clear(); prospeo_hits.clear()
+
+        def loser_sb(method, path, body=None, prefer=""):
+            calls.append((method, path, prefer))
+            if method == "POST" and "ignore-duplicates" in prefer:
+                return []            # someone else already holds the lead
+            if method == "GET":
+                return []
+            return None
+        setter._SB = loser_sb
+        setter._enrich_on_reply("lead2@ex.com", "ex.com", "navreo", 123)
+        check("claim/loser: ZERO provider calls", prospeo_hits == [], prospeo_hits)
+        check("claim/loser: writes nothing (no PATCH, no DELETE)",
+              not any(c[0] in ("PATCH", "DELETE") for c in calls), calls)
+
+        # TRANSIENT provider failure: claim won, provider errors -> release the claim.
+        calls.clear(); prospeo_hits.clear()
+        setter._SB = winner_sb
+        setter._prospeo_enrich = lambda e, li="": {"payload": {"error": True, "error_code": "TIMEOUT"}}
+        setter._enrich_on_reply("lead3@ex.com", "ex.com", "navreo", 123)
+        dels = [c for c in calls if c[0] == "DELETE" and tbl(c[1]) == "setter_lead_enrichment"]
+        check("claim/transient: the claim is released with a DELETE", bool(dels), calls)
+        check("claim/transient: DELETE only targets a pristine placeholder (phone.is.null guard)",
+              bool(dels) and "phone=is.null" in dels[0][1], dels)
+        check("claim/transient: nothing banked (no PATCH on a failed pull)",
+              not any(c[0] == "PATCH" for c in calls), calls)
+    finally:
+        (setter._SB, setter._enrichment_row, setter._getleads_enrich,
+         setter._prospeo_enrich, setter._sl_get) = real
+        for e in ("lead@ex.com", "lead2@ex.com", "lead3@ex.com"):
+            setter._ENRICH_INFLIGHT.discard(e)
+
+
 if __name__ == "__main__":
     test_lexicon()
     test_harvest_phones()
+    test_enrich_claims_lead_once()
     test_guess_timezone()
     test_pick_slots()
     test_slot_situation_transparency()
