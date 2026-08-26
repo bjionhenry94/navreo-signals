@@ -11718,8 +11718,61 @@ def test_attach_campaign_names():
         setter._CAMP_NAME_CACHE.update(real_cache)
 
 
+def test_harvest_phones():
+    """The warm-call dropdown only appears when _harvest_phones returns 2+
+    DISTINCT numbers. Prospeo nests its second number at
+    company.phone_hq.phone_hq (and the mobile at person.mobile.mobile) - the
+    original flat lookups (company.phone / person.direct_dial) matched nothing,
+    so real two-number leads collapsed to one and the dropdown never showed.
+    These lock the nested Prospeo shape in."""
+    # Real Prospeo shape: verified mobile primary + a distinct company HQ line.
+    enr = {
+        "phone": "+971 50 123 5375",
+        "phone_source": "prospeo",
+        "payload": {
+            "person": {"mobile": {"mobile": "+971 50 123 5375",
+                                  "mobile_international": "+971 50 123 5375"}},
+            "company": {"name": "Emerging Global Technologies",
+                        "phone_hq": {"phone_hq": "+97126263611",
+                                     "phone_hq_international": "+97126263611"}},
+        },
+    }
+    got = setter._harvest_phones(enr, "")
+    nums = [re.sub(r"[^+\d]", "", p["number"]) for p in got]
+    check("harvest: Prospeo mobile + company HQ yield 2 distinct numbers", len(got) == 2, got)
+    check("harvest: mobile pinned/first present", "+971501235375" in nums, nums)
+    check("harvest: company HQ number surfaced (was dropped before)", "+97126263611" in nums, nums)
+    check("harvest: office number labelled with the company name",
+          any(p["kind"] == "office" and "Emerging Global Technologies" in p["source"] for p in got), got)
+
+    # Mobile == primary must NOT duplicate (dedup on digits).
+    enr_dupe = {"phone": "+97126263611", "phone_source": "prospeo",
+                "payload": {"company": {"name": "Acme",
+                                        "phone_hq": {"phone_hq": "+971 2 626 3611"}}}}
+    got_dupe = setter._harvest_phones(enr_dupe, "")
+    check("harvest: same office number as primary dedups to 1 (no phantom dropdown)",
+          len(got_dupe) == 1, got_dupe)
+
+    # A genuinely distinct Smartlead-listed number still rides along as #2.
+    enr_solo = {"phone": "+13105551212", "phone_source": "prospeo", "payload": {}}
+    got_sl = setter._harvest_phones(enr_solo, "+442071234567")
+    check("harvest: distinct Smartlead number becomes the second option",
+          len(got_sl) == 2 and any("442071234567" in re.sub(r"[^+\d]", "", p["number"]) for p in got_sl), got_sl)
+
+    # No payload numbers, blank Smartlead -> single number, single button (no dropdown).
+    got_one = setter._harvest_phones({"phone": "+13105551212", "phone_source": "prospeo", "payload": {}}, "")
+    check("harvest: lone mobile stays a single one-tap button", len(got_one) == 1, got_one)
+
+    # Junk (<7 digits) is dropped.
+    got_junk = setter._harvest_phones(
+        {"phone": "+13105551212", "phone_source": "prospeo",
+         "payload": {"company": {"phone_hq": {"phone_hq": "12345"}}}}, "")
+    check("harvest: sub-7-digit junk office number is dropped", len(got_junk) == 1, got_junk)
+
+
 if __name__ == "__main__":
     test_lexicon()
+    test_harvest_phones()
     test_guess_timezone()
     test_pick_slots()
     test_slot_situation_transparency()

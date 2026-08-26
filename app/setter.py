@@ -10921,14 +10921,38 @@ def _harvest_phones(enr: dict, sl_phone: str) -> list:
     if (enr.get("phone") or "").strip():
         add(enr["phone"], "mobile" if src in ("prospeo", "getleads") else "listed", label)
     # 2) Extra numbers already sitting in the stored provider payload - never
-    #    invented, only surfaced if they are actually there.
+    #    invented, only surfaced if they are actually there. Prospeo NESTS its
+    #    numbers - the verified cell at person.mobile.mobile and the office line
+    #    at company.phone_hq.phone_hq - so the old flat lookups (company.phone,
+    #    person.direct_dial) matched nothing and the second number was silently
+    #    dropped: the dropdown never had a reason to appear. We now read both
+    #    the nested Prospeo shape AND the flat keys other providers use.
     payload = enr.get("payload") if isinstance(enr.get("payload"), dict) else {}
     person = payload.get("person") if isinstance(payload.get("person"), dict) else {}
     company = payload.get("company") if isinstance(payload.get("company"), dict) else {}
-    for cand in (person.get("direct_dial"), person.get("phone"), person.get("phone_number")):
-        add(cand, "direct", f"{label} · direct")
-    add(company.get("phone") or company.get("phone_number"), "office",
-        f"{(company.get('name') or 'Company')} · office")
+
+    def _dig(node, *keys):
+        """First non-empty string at a flat key or a dotted a.b path in node."""
+        for k in keys:
+            cur = node
+            for seg in str(k).split("."):
+                cur = cur.get(seg) if isinstance(cur, dict) else None
+                if cur is None:
+                    break
+            if isinstance(cur, str) and cur.strip():
+                return cur
+        return ""
+
+    # Person cell / direct dial. person.mobile.mobile is usually the same
+    # number already pinned as primary above, so it dedups harmlessly; the flat
+    # keys keep non-Prospeo providers working.
+    add(_dig(person, "mobile.mobile", "mobile.mobile_international",
+             "direct_dial", "phone", "phone_number"),
+        "mobile", f"{label} · mobile")
+    # Company office line - the real second number for ~9 in 10 enriched leads.
+    add(_dig(company, "phone_hq.phone_hq", "phone_hq.phone_hq_international",
+             "phone", "phone_number"),
+        "office", f"{(company.get('name') or 'Company')} · office")
     # 3) The Smartlead-listed number - the one we used to overwrite and lose.
     add(sl_phone, "listed", "Smartlead")
     return out[:6]
