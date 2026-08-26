@@ -25,10 +25,28 @@ days as (select generate_series((select d0 from bounds),(select d1 from bounds),
 rep as (
   select (r.replied_at at time zone 'utc')::date as d,
          coalesce(c.client,'__unassigned') as client,
-         count(*) as replies_all,
-         count(*) filter (where r.category in ('Interested','Call Booked','Meeting Request','Information Request')) as positives
+         count(*) as replies_all
   from replies r left join cmap c on c.cid = r.smartlead_campaign_id::text
   where r.replied_at >= (select t0 from bounds)
+  group by 1,2
+),
+pos_base as (
+  -- ONE positive per LEAD (owner ruling 2026-08-26): Smartlead counts a
+  -- campaign's positives as distinct interested leads, and the archive holds
+  -- several positive rows per lead (a lead who replies twice, or replies on two
+  -- variants) — so each lead counts ONCE, dated at their FIRST positive reply.
+  -- Mirrors mtg_base's per-person rule; unbounded scan on purpose so a lead whose
+  -- first positive predates the window is not recounted inside it.
+  select r.smartlead_campaign_id::text as cid, lower(r.email) as email,
+         (min(r.replied_at) at time zone 'utc')::date as d
+  from replies r
+  where r.category in ('Interested','Call Booked','Meeting Request','Information Request')
+  group by 1,2
+),
+pos as (
+  select b.d, coalesce(c.client,'__unassigned') as client, count(*) as positives
+  from pos_base b left join cmap c on c.cid = b.cid
+  where b.d >= (select d0 from bounds)
   group by 1,2
 ),
 mtg_base as (
@@ -61,7 +79,7 @@ mtg as (
 ),
 facts as (
   select d, client, replies_all as n, 'replies'::text as metric from rep
-  union all select d, client, positives, 'interested' from rep
+  union all select d, client, positives, 'interested' from pos
   union all select d, client, n,         'meetings'   from mtg
 ),
 factsx as (

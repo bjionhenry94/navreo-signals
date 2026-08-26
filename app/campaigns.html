@@ -3433,6 +3433,9 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         STATE.liveStatus = (r && r.campaigns) || {};
         STATE.liveCheckedAt = (r && r.checked_at) || new Date().toISOString();
         STATE.liveError = !r || !r.campaigns || Object.keys(STATE.liveStatus).length === 0;
+        /* overlay the fresh Smartlead positive count onto every card so the
+           list's Positives / sends-per-positive never lag the hourly sync */
+        (STATE.campaigns || []).forEach(function (c) { overlayLivePositives(c); });
         renderLiveMeta();
         renderRows();
       })
@@ -3924,6 +3927,87 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     el.innerHTML = dialInnerHTML(compPct);
   }
 
+  /* The glance scoreboard's inner HTML, rebuilt from c.stats so a live-status
+     landing can repaint it in place (paintPositives) when the fresh Smartlead
+     positive count differs from the hourly-synced one. Kept as its own builder
+     so campaignPageHTML and the repaint can never drift. */
+  function glanceCardInner(c) {
+    var st = c.stats;
+    var replyPct = pct(st.replied, st.sent, 2);
+    var gSpp = st.positives ? Math.round(st.sent / st.positives) : null;
+    var gPosPct = (st.positives && st.replied) ? pct(st.positives, st.replied, 1) : null;
+    var gClass, gWord, gPill, gSub;
+    if (!st.sent) {
+      gClass = "gv-neutral"; gWord = "Not sending yet."; gPill = "Draft";
+      gSub = "No emails have gone out on this campaign yet.";
+    } else if (!st.positives) {
+      gClass = "gv-bad"; gWord = "Nothing landed yet."; gPill = "No positives";
+      gSub = "No positives yet from " + fmtInt(st.sent) + " emails sent.";
+    } else if (gSpp <= 1500) {
+      gClass = "gv-good"; gWord = "It’s working."; gPill = "Healthy";
+      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — good, under the 1,500 line.";
+    } else if (gSpp <= 2500) {
+      gClass = "gv-avg"; gWord = "Ticking along."; gPill = "Average";
+      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — average (1,500–2,500).";
+    } else {
+      gClass = "gv-bad"; gWord = "Underperforming."; gPill = "Needs work";
+      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — high, over the 2,500 line.";
+    }
+    var gSync = (st.source === "crunch"
+      ? "From the morning-crunch snapshot; the Smartlead sync is refilling now."
+      : (st.livePos
+          ? "Live from Smartlead just now"
+          : "Campaign-to-date, from the daily Smartlead sync" + (STATE.insights.stats_updated_at ? ", synced " + esc(localStamp(STATE.insights.stats_updated_at)) : "")) + ".") +
+      " Positives = Smartlead’s interested mark. Under 1,500 emails per positive is good, 1,500–2,500 average, above that poor.";
+    return '<div class="gv-head"><div class="card-title" style="margin:0">The campaign at a glance</div>' +
+      '<details class="gv-info"><summary aria-label="about these numbers">i</summary><p>' + gSync + "</p></details></div>" +
+      '<span class="gv-pill ' + gClass + '">' + esc(gPill) + "</span>" +
+      '<p class="gv-word ' + gClass + '">' + gWord + "</p>" +
+      '<p class="gv-sub">' + gSub + "</p>" +
+      '<div class="gv-quad">' +
+      '<div class="gv-q"><span class="gv-n tnum">' + fmtInt(st.sent) + '</span><span class="gv-l">Sent</span></div>' +
+      '<div class="gv-q"><span class="gv-n tnum">' + (replyPct != null ? replyPct + "%" : fmtInt(st.replied)) + "</span>" + (replyPct != null ? '<span class="gv-c tnum">' + fmtInt(st.replied) + "</span>" : "") + '<span class="gv-l">Replied</span></div>' +
+      '<div class="gv-q"><span class="gv-n tnum ' + gClass + '">' + fmtInt(st.positives != null ? st.positives : 0) + "</span>" + (gPosPct != null ? '<span class="gv-c tnum">' + gPosPct + "%</span>" : "") + '<span class="gv-l">Positives</span></div>' +
+      '<div class="gv-q"><span class="gv-n tnum' + ((st.meetings || 0) > 0 ? " gv-good" : "") + '">' + (st.meetings != null ? fmtInt(st.meetings) : "-") + '</span><span class="gv-l">Meetings</span></div>' +
+      "</div>" +
+      '<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>';
+  }
+
+  /* Overlay the LIVE Smartlead positive count (from /api/cockpit/live-status)
+     onto a campaign's stats, re-applying the meeting-floor house law and
+     recomputing the sends-per-positive ratio. Returns true when the number
+     actually moved — the hourly scorecard could be stale-high after a lead was
+     re-categorised out of a positive, which is what made the tool read 2 while
+     Smartlead already read 1 (parity fix 2026-08-26). A campaign the live sweep
+     didn't resolve (beyond the 150 cap, or Smartlead down) has no live value,
+     so the synced number stands — never blanked, never guessed. */
+  function overlayLivePositives(c) {
+    var ls = STATE.liveStatus && STATE.liveStatus[c.id];
+    if (!ls || typeof ls.positives !== "number") return false;
+    var st = c.stats;
+    var eff = ls.positives;
+    /* same house law as the join: a booked meeting IS a positive, so never
+       show fewer positives than meetings (line ~2892). */
+    if (st.meetings != null && st.meetings > eff) eff = st.meetings;
+    if (eff === st.positives) { st.livePos = true; return false; }
+    st.positives = eff;
+    st.livePos = true;
+    c.ratio = (st.positives > 0 && st.sent) ? Math.round(st.sent / st.positives) : null;
+    c.sortKey = (st.positives === 0 || st.positives == null) ? (1e12 + (st.sent || 0)) : c.ratio;
+    return true;
+  }
+
+  /* Repaint the open detail's glance scoreboard in place after a live-positive
+     overlay moved the number — mirrors paintAudience (rebuild the card body,
+     then re-fill the audience panel the rebuild reset). */
+  function paintPositives(c) {
+    if (!onPage(c.id)) return;
+    var el = document.getElementById("gv-card");
+    if (!el) return;
+    el.innerHTML = glanceCardInner(c);
+    paintAudience(c);
+  }
+
   function campaignPageHTML(c, tab) {
     var st = c.stats;
     var replyPct = pct(st.replied, st.sent, 2);
@@ -3987,42 +4071,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
        with the count beside it, Positives as a count with its rate beside it,
        Meetings), and the audience split (completed / in progress / not started)
        hydrated async into #ovm-status from the campaign-detail payload. */
-    var gSpp = st.positives ? Math.round(st.sent / st.positives) : null;
-    var gPosPct = (st.positives && st.replied) ? pct(st.positives, st.replied, 1) : null;
-    var gClass, gWord, gPill, gSub;
-    if (!st.sent) {
-      gClass = "gv-neutral"; gWord = "Not sending yet."; gPill = "Draft";
-      gSub = "No emails have gone out on this campaign yet.";
-    } else if (!st.positives) {
-      gClass = "gv-bad"; gWord = "Nothing landed yet."; gPill = "No positives";
-      gSub = "No positives yet from " + fmtInt(st.sent) + " emails sent.";
-    } else if (gSpp <= 1500) {
-      gClass = "gv-good"; gWord = "It’s working."; gPill = "Healthy";
-      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — good, under the 1,500 line.";
-    } else if (gSpp <= 2500) {
-      gClass = "gv-avg"; gWord = "Ticking along."; gPill = "Average";
-      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — average (1,500–2,500).";
-    } else {
-      gClass = "gv-bad"; gWord = "Underperforming."; gPill = "Needs work";
-      gSub = "1 positive every <b>" + fmtInt(gSpp) + " emails</b> — high, over the 2,500 line.";
-    }
-    var gSync = (c.stats.source === "crunch"
-      ? "From the morning-crunch snapshot; the Smartlead sync is refilling now."
-      : "Campaign-to-date, from the daily Smartlead sync" + (STATE.insights.stats_updated_at ? ", synced " + esc(localStamp(STATE.insights.stats_updated_at)) : "") + ".") +
-      " Positives = Smartlead’s interested mark. Under 1,500 emails per positive is good, 1,500–2,500 average, above that poor.";
-    h.push('<div class="ov-card gv-card"><div class="gv-head"><div class="card-title" style="margin:0">The campaign at a glance</div>' +
-      '<details class="gv-info"><summary aria-label="about these numbers">i</summary><p>' + gSync + "</p></details></div>" +
-      '<span class="gv-pill ' + gClass + '">' + esc(gPill) + "</span>" +
-      '<p class="gv-word ' + gClass + '">' + gWord + "</p>" +
-      '<p class="gv-sub">' + gSub + "</p>" +
-      '<div class="gv-quad">' +
-      '<div class="gv-q"><span class="gv-n tnum">' + fmtInt(st.sent) + '</span><span class="gv-l">Sent</span></div>' +
-      '<div class="gv-q"><span class="gv-n tnum">' + (replyPct != null ? replyPct + "%" : fmtInt(st.replied)) + "</span>" + (replyPct != null ? '<span class="gv-c tnum">' + fmtInt(st.replied) + "</span>" : "") + '<span class="gv-l">Replied</span></div>' +
-      '<div class="gv-q"><span class="gv-n tnum ' + gClass + '">' + fmtInt(st.positives != null ? st.positives : 0) + "</span>" + (gPosPct != null ? '<span class="gv-c tnum">' + gPosPct + "%</span>" : "") + '<span class="gv-l">Positives</span></div>' +
-      '<div class="gv-q"><span class="gv-n tnum' + ((st.meetings || 0) > 0 ? " gv-good" : "") + '">' + (st.meetings != null ? fmtInt(st.meetings) : "-") + '</span><span class="gv-l">Meetings</span></div>' +
-      "</div>" +
-      '<div class="gv-aud" id="ovm-status"><p class="lw-loading">Loading the audience&hellip;</p></div>' +
-      "</div>");
+    h.push('<div class="ov-card gv-card" id="gv-card">' + glanceCardInner(c) + "</div>");
     /* Insights section removed entirely (Bjion, 31 Jul 2026): the Suggested
        actions below usually mirror the insights, so it was redundant. */
     /* actions */
@@ -5858,12 +5907,26 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         '<td class="tnum" data-label="Sent / meeting"><span class="ring-caption">&mdash;</span></td></tr>';
     }
     /* posGap < 0: the version counters add to MORE than the campaign total —
-       Smartlead counts a person once for the campaign but once per version
-       they replied on. State the arithmetic plainly instead of hiding it. */
-    var posNote = (campaignPositives != null && posGap < 0)
-      ? '<p class="sample-footer">Smartlead counts each person once in the campaign total (' + fmtInt(campaignPositives) +
-        ' positives) but once per email version they replied to in the rows above (' + fmtInt(vPosSum) +
-        ' added up) &mdash; someone who replied positively to more than one email shows on each of those versions.</p>'
+       Smartlead credits a positive to EACH version a lead replied on, but the
+       campaign counts that lead ONCE. Show the dedup as its own row so the
+       Positives column visibly NETS to the per-lead campaign total (owner rule
+       2026-08-26: one positive per lead) instead of a column that sums above it. */
+    var posDupe = (campaignPositives != null && posGap < 0) ? (vPosSum - campaignPositives) : 0;
+    var dedupHTML = '';
+    if (posDupe > 0) {
+      var dupWhy = 'Smartlead credits a positive to each email version a lead replied on; the campaign counts that lead once. This row removes the double-count so the Positives column adds up to the ' + fmtInt(campaignPositives) + ' distinct positive leads the campaign actually has.';
+      dedupHTML = '<tr class="vp-unattr"><td data-label="Version">Same lead, more than one version <span class="ring-caption">counted once for the campaign</span></td>' +
+        '<td class="tnum" data-label="Sent"><span class="ring-caption">&mdash;</span></td>' +
+        '<td class="tnum" data-label="Replies"><span class="ring-caption">&mdash;</span></td>' +
+        '<td class="tnum" data-label="Positives"><span title="' + esc(dupWhy) + '">&minus;' + fmtInt(posDupe) + '</span></td>' +
+        '<td class="tnum" data-label="Sent / positive"><span class="ring-caption">&mdash;</span></td>' +
+        '<td class="tnum" data-label="Meetings"><span class="ring-caption">&mdash;</span></td>' +
+        '<td class="tnum" data-label="Sent / meeting"><span class="ring-caption">&mdash;</span></td></tr>';
+    }
+    var posNote = (posDupe > 0)
+      ? '<p class="sample-footer">One positive per lead: the versions above add to ' + fmtInt(vPosSum) +
+        ' because Smartlead shows a lead on every version they replied to, but this campaign has ' + fmtInt(campaignPositives) +
+        ' distinct positive leads &mdash; the &ldquo;same lead&rdquo; row nets the difference out so the column matches.</p>'
       : '';
     /* calendar-link bookings + still-unattributed meetings get a VISIBLE
        sentence, not just a hover tooltip (founder panel 2026-08-09: a meeting
@@ -5884,7 +5947,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     if (mtSentences.length) mtNote = '<p class="sample-footer">' + mtSentences.join(' ') + '</p>';
     return '<div class="leads-table-wrap"><table class="leads-table version-perf-table">' +
       '<thead><tr><th>Version</th><th class="tnum">Sent</th><th class="tnum">Replies</th><th class="tnum">Positives</th><th class="tnum">Sent / positive</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead>' +
-      '<tbody>' + rows + unattrHTML + comboHTML + '</tbody></table></div>' + posNote + mtNote +
+      '<tbody>' + rows + unattrHTML + dedupHTML + comboHTML + '</tbody></table></div>' + posNote + mtNote +
       (note ? '<p class="sample-footer">' + esc(note) + '</p>' : '');
   }
 
@@ -7489,6 +7552,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         }
         paintAudience(c); /* exact split rides this fetch; also settles the estimate note */
         paintDial(c); /* header dial upgrades to the live answer on the same landing */
+        if (overlayLivePositives(c)) paintPositives(c); /* live positive count refreshes the glance scoreboard */
       })
       .catch(function () {
         (STATE.liveTried = STATE.liveTried || {})[c.id] = true;

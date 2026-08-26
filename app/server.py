@@ -9161,7 +9161,7 @@ def _subseq_stats_sync_all():
         try:
             _since30 = (_end - _dtmod.timedelta(days=29)).isoformat()
             _pq = urllib.parse.quote(",".join(_AH_POSITIVE_CATS))
-            _pos_rows = sb_get_all("replies?select=smartlead_campaign_id,replied_at"
+            _pos_rows = sb_get_all("replies?select=smartlead_campaign_id,email,replied_at"
                                    f"&category=in.({_pq})&replied_at=gte.{_since30}&order=id") or []
             for r in (sb_get_all("replies?select=smartlead_campaign_id,email,replied_at"
                                  f"&category=eq.{urllib.parse.quote('Call Booked')}&order=id") or []):
@@ -9193,9 +9193,15 @@ def _subseq_stats_sync_all():
                     _since = (_end - _dtmod.timedelta(days=_w - 1)).isoformat()
                     win[str(_w)] = {
                         "sent": (e.get("wsent") or {}).get(_w, 0),
-                        "positives": sum(1 for r in _pos_rows
-                                         if str(r.get("smartlead_campaign_id")) in _subs
-                                         and str(r.get("replied_at") or "") >= _since),
+                        # ONE positive per LEAD (owner ruling 2026-08-26): distinct
+                        # (campaign, email) with a positive reply in the window, so a
+                        # lead who replies more than once counts once — same grain as
+                        # Smartlead's `interested` and the booked line right below.
+                        "positives": len({(str(r.get("smartlead_campaign_id")),
+                                           (r.get("email") or "").strip().lower())
+                                          for r in _pos_rows
+                                          if str(r.get("smartlead_campaign_id")) in _subs
+                                          and str(r.get("replied_at") or "") >= _since}),
                         "booked": sum(1 for (_c, _em), t in _first_cb.items()
                                       if _c in _subs and t >= _since)}
                 rec["win"] = win
@@ -10345,17 +10351,28 @@ def _cockpit_messaging(cid) -> dict:
         # calendar-link bookings credited to the last email received (no reply,
         # so no positive backs them) — the UI footnotes these
         meetings["calendar_direct"] = direct_ct
-    # Campaign-level positives from the SAME scorecard row the overview glance
-    # reads, so the table can reconcile its Positives column against the tile
-    # (messaging-truth sweep 2026-08-09: an interested lead with no tracked
-    # reply on any version left the column summing 1 short of the overview).
+    # Campaign-level positives so the table can reconcile its Positives column
+    # against the tile (messaging-truth sweep 2026-08-09: an interested lead
+    # with no tracked reply on any version left the column summing 1 short of
+    # the overview). Read LIVE off Smartlead's own /analytics first — the SAME
+    # source (and the same per-variant grain) the variant rows above already
+    # come from — so a re-categorised positive can't leave the hourly scorecard
+    # stale-high and spawn a phantom "No version" positive row while the live
+    # per-variant sum has already dropped (parity fix 2026-08-26). Scorecard is
+    # the fallback when the live call can't answer.
     campaign_positives = None
     try:
-        _sc = sb("GET", f"campaign_scorecard?smartlead_campaign_id=eq.{n}&select=positives")
-        if isinstance(_sc, list) and _sc:
-            campaign_positives = _sc[0].get("positives")
-    except Exception:  # noqa: BLE001 — reconciliation is best-effort, never break the tab
-        pass
+        _a = _smartlead_json("GET", f"/campaigns/{n}/analytics", timeout=10, attempts=2)
+        campaign_positives = _parse_smartlead_analytics(_a).get("positives")
+    except Exception:  # noqa: BLE001 — live read is best-effort; fall back below
+        campaign_positives = None
+    if campaign_positives is None:
+        try:
+            _sc = sb("GET", f"campaign_scorecard?smartlead_campaign_id=eq.{n}&select=positives")
+            if isinstance(_sc, list) and _sc:
+                campaign_positives = _sc[0].get("positives")
+        except Exception:  # noqa: BLE001 — reconciliation is best-effort, never break the tab
+            pass
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "campaign_positives": campaign_positives,
             "combinations": vpaths.get("combinations") or {},
@@ -10528,6 +10545,14 @@ def _cockpit_live_status(ids_csv: str) -> dict:
         comp = round(completed / total * 100) if total else None
         return cid, {"status": m.get("status") or "", "completed": completed,
                      "total": total, "completion": comp,
+                     # LIVE positive count off the same /analytics body the
+                     # hourly scorecard reads (positive_reply_count or
+                     # interested). The card + glance overlay this so the tool's
+                     # positive number tracks Smartlead the instant a lead is
+                     # (re)categorised, instead of lagging the hourly sync — the
+                     # gap that let a re-categorised positive show 2-vs-1
+                     # against Smartlead (parity fix 2026-08-26).
+                     "positives": m.get("positives"),
                      "lead_stats": m.get("lead_stats")}
 
     out = {}
@@ -18304,7 +18329,7 @@ def _client_win_build():
     try:
         _pos_q = urllib.parse.quote(",".join(_AH_POSITIVE_CATS))
         _since30 = (end - _dtmod.timedelta(days=29)).isoformat()
-        _reps = sb_get_all("replies?select=smartlead_campaign_id,category,replied_at"
+        _reps = sb_get_all("replies?select=smartlead_campaign_id,email,category,replied_at"
                            f"&category=in.({_pos_q})&replied_at=gte.{_since30}&order=id") or []
         _bkd = sb_get_all("replies?select=smartlead_campaign_id,email,replied_at,src:raw->>source"
                           f"&category=eq.{urllib.parse.quote('Call Booked')}&order=id") or []
@@ -18332,10 +18357,20 @@ def _client_win_build():
             _first[(_c, _em + "|" + _d)] = _d  # one countable event per booking day
         for w in _CLIENT_WIN_WINDOWS:
             _since = (end - _dtmod.timedelta(days=w - 1)).isoformat()
+            # ONE positive per LEAD (owner ruling 2026-08-26): Smartlead counts a
+            # campaign's positives as distinct interested leads, and the archive
+            # holds several positive rows per lead (a lead who replies twice) —
+            # so dedupe by (campaign, email), never a raw row count, exactly like
+            # the meetings block just below.
             _pos_by: dict = {}
+            _pos_seen: set = set()
             for r in _reps:
                 if str(r.get("replied_at") or "") >= _since:
                     _c = str(r.get("smartlead_campaign_id"))
+                    _key = (_c, (r.get("email") or "").strip().lower())
+                    if _key in _pos_seen:
+                        continue
+                    _pos_seen.add(_key)
                     _pos_by[_c] = _pos_by.get(_c, 0) + 1
             _mtg_by: dict = {}
             for (_c, _em), t in _first.items():
