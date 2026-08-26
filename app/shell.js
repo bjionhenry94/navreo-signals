@@ -476,7 +476,7 @@ function setupChartTooltip(wrap) {
   border: 1px solid var(--line, #ECECEA); border-right: none;
   border-radius: 10px 0 0 10px;
   padding: 12px 8px; cursor: pointer;
-  font: 500 12px var(--font-sans, sans-serif); letter-spacing: -0.01em;
+  font: 500 12px var(--font-sans, "DM Sans", "Helvetica Neue", system-ui, sans-serif); letter-spacing: -0.01em;
   display: flex; flex-direction: column; align-items: center; gap: 8px;
   box-shadow: -2px 2px 10px rgba(20, 17, 14, 0.08);
 }
@@ -506,8 +506,14 @@ function setupChartTooltip(wrap) {
   background: var(--bg, #fff); border-left: 1px solid var(--line, #ECECEA);
   box-shadow: -8px 0 24px rgba(20, 17, 14, 0.12);
   z-index: 201; display: none; flex-direction: column;
+  /* Self-contained font: the panel is injected on every page, so it carries the
+     full Navreo stack itself and never inherits the host <body> — which falls to
+     the browser-default serif whenever a page's navreo.css font tokens don't load. */
+  font-family: var(--font-sans, "DM Sans", "Helvetica Neue", system-ui, sans-serif);
   transform: translateX(100%); transition: transform 0.22s ease;
 }
+/* Buttons don't inherit font-family from ancestors by UA rule — pull them back in. */
+#nav-jobs-panel button { font-family: inherit; }
 #nav-jobs-panel.nj-open { display: flex; transform: translateX(0); }
 #nav-jobs-tab.nj-shifted { right: min(320px, 90vw); z-index: 202; }
 #nav-jobs-panel .nj-head {
@@ -515,7 +521,7 @@ function setupChartTooltip(wrap) {
   padding: 16px 16px 12px; border-bottom: 1px solid var(--line, #ECECEA); flex: none;
 }
 #nav-jobs-panel .nj-title {
-  font-family: var(--font-display, sans-serif); font-size: 15px; color: var(--ink, #14110E);
+  font-family: var(--font-display, "Acid Grotesk", "DM Sans", "Helvetica Neue", system-ui, sans-serif); font-size: 15px; color: var(--ink, #14110E);
 }
 #nav-jobs-panel .nj-close {
   border: none; background: none; cursor: pointer; font-size: 18px; line-height: 1;
@@ -583,7 +589,7 @@ function setupChartTooltip(wrap) {
   color: var(--ink-3, #6B6055);
 }
 .sr-zone:first-child { margin-top: 4px; }
-.sr-zone .sr-zn { margin-left: auto; font-family: var(--font-mono, monospace); letter-spacing: 0; }
+.sr-zone .sr-zn { margin-left: auto; font-family: var(--font-mono, "JetBrains Mono", ui-monospace, "SF Mono", monospace); letter-spacing: 0; }
 .sr-row {
   display: flex; align-items: center; gap: 11px; padding: 11px 2px;
   border-bottom: 1px solid var(--line, #ECECEA);
@@ -603,7 +609,7 @@ function setupChartTooltip(wrap) {
 @media (prefers-reduced-motion: reduce) { .sr-spin { animation: none; } }
 .sr-txt { flex: 1; min-width: 0; font-size: 13px; line-height: 1.35; color: var(--ink, #14110E); }
 .sr-txt b { font-weight: 600; }
-.sr-num { font-family: var(--font-mono, monospace); font-variant-numeric: tabular-nums; font-weight: 500; }
+.sr-num { font-family: var(--font-mono, "JetBrains Mono", ui-monospace, "SF Mono", monospace); font-variant-numeric: tabular-nums; font-weight: 500; }
 .sr-soft { color: var(--ink-3, #6B6055); }
 .sr-when { color: var(--ink-3, #6B6055); font-size: 11px; margin-top: 1px; }
 .sr-detail { color: var(--red, #C2371F); font-size: 11px; margin-top: 1px; }
@@ -616,7 +622,7 @@ function setupChartTooltip(wrap) {
 .sr-more {
   width: 100%; margin-top: 10px; border: 1px solid var(--line, #ECECEA);
   background: var(--card, #fff); color: var(--ink-3, #6B6055);
-  font: 600 11.5px var(--font-sans, sans-serif); padding: 7px; border-radius: 999px; cursor: pointer;
+  font: 600 11.5px var(--font-sans, "DM Sans", "Helvetica Neue", system-ui, sans-serif); padding: 7px; border-radius: 999px; cursor: pointer;
 }
 .sr-more:hover { color: var(--ink, #14110E); border-color: var(--line-2, #DDDDDA); }
 .sr-foot { text-align: center; color: var(--ink-3, #6B6055); font-size: 11.5px; margin-top: 18px; padding-bottom: 6px; }
