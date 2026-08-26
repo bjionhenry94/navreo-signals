@@ -14320,6 +14320,28 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # pre-sized list at its own index rather than trusting completion
         # order.
         start_idx = len(existing_cases)
+
+        # Staggered landing (owner ask 2026-08-26: "once one draft is ready
+        # they can read it while the other two are still generating"): each
+        # finished case is persisted the moment its future completes, so the
+        # portal's poll can show scenario 1 within one draft's latency
+        # instead of after the whole batch. The final reload→save below
+        # stays as the reconciler and skips ids already landed here. Doc
+        # order for landed cases is completion order, which is fine - cases
+        # are independent and rounds don't depend on intra-batch order.
+        def _land_case(case):
+            if not case:
+                return
+            try:
+                with _get_training_doc_lock(agent_id):
+                    fd = _load_training(agent_id)
+                    have = {str(x.get("id")) for x in (fd.get("cases") or [])}
+                    if str(case.get("id")) not in have:
+                        fd["cases"] = list(fd.get("cases") or []) + [case]
+                        _save_training(agent_id, fd)
+            except Exception:  # noqa: BLE001 - landing is best-effort; the final save reconciles
+                pass
+
         results: list = [None] * len(replies)
         if replies:
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(replies))) as pool:
@@ -14332,6 +14354,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                     i = future_to_idx[fut]
                     try:
                         results[i] = fut.result()
+                        _land_case(results[i])
                     except Exception as e:  # noqa: BLE001 - one bad case must never sink the batch
                         if _LOG:
                             try:
@@ -14361,6 +14384,13 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                     i = future_to_idx[fut]
                     try:
                         synthetic_results[i] = fut.result()
+                        # staged_key must ride the incremental landing too
+                        # (the batch-end stamping below only touches the
+                        # local copy, which the final save then skips as an
+                        # already-landed id).
+                        if synthetic_results[i] and i < len(scenarios) and scenarios[i].get("staged_key"):
+                            synthetic_results[i]["staged_key"] = scenarios[i]["staged_key"]
+                        _land_case(synthetic_results[i])
                     except Exception as e:  # noqa: BLE001 - one bad scenario must never sink the batch
                         if _LOG:
                             try:
@@ -14423,8 +14453,13 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # an answer that landed while the batch built from being clobbered.
         with _get_training_doc_lock(agent_id):
             fresh_doc = _load_training(agent_id)
-            fresh_doc["cases"] = (list(fresh_doc.get("cases") or []) + new_cases
-                                  + new_synthetic_cases + recycled_cases)
+            # Most real/synthetic cases already landed incrementally above -
+            # append only what hasn't (recycled cases, or landings that
+            # failed), keyed by id so nothing ever duplicates.
+            _have_ids = {str(x.get("id")) for x in (fresh_doc.get("cases") or [])}
+            _to_add = [c for c in (new_cases + new_synthetic_cases + recycled_cases)
+                       if str(c.get("id")) not in _have_ids]
+            fresh_doc["cases"] = list(fresh_doc.get("cases") or []) + _to_add
             fresh_doc["used_reply_ids"] = list(fresh_doc.get("used_reply_ids") or []) + new_used_ids
             if recycle_cursor is not None:
                 fresh_doc["recycle_cursor"] = recycle_cursor
@@ -14747,6 +14782,27 @@ def _redraft_training_pool(agent_id: str) -> int:
             if slot_status0 != "ok":
                 avail, slot_status0 = _synthetic_training_avail(now), "ok"
             stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+
+            # Staggered landing (owner ask 2026-08-26): persist each
+            # redrafted case the moment it completes, merged into the FRESH
+            # doc by id - the portal's freshness hold opens the round on the
+            # first fresh card while the rest are still redrafting. Landing
+            # by id (never wholesale) also stops this sweep from clobbering
+            # cases a concurrent generate landed mid-pass.
+            def _land_redraft(case):
+                try:
+                    with _get_training_doc_lock(agent_id):
+                        fresh = _load_training(agent_id)
+                        fcases = list(fresh.get("cases") or [])
+                        for j, fc in enumerate(fcases):
+                            if str(fc.get("id")) == str(case.get("id")):
+                                fcases[j] = case
+                                fresh["cases"] = fcases
+                                _save_training(agent_id, fresh)
+                                return
+                except Exception:  # noqa: BLE001 - best-effort; the final save reconciles
+                    pass
+
             with concurrent.futures.ThreadPoolExecutor(max_workers=min(6, len(pool))) as pool_exec:
                 futs = {pool_exec.submit(_retrain_one_training_case, c, train_agent, eff, avail,
                                          slot_status0, now, digest): c for c in pool}
@@ -14756,18 +14812,24 @@ def _redraft_training_pool(agent_id: str) -> int:
                         fut.result()
                         c["redrafted_at"] = stamp
                         updated += 1
+                        _land_redraft(c)
                     except Exception:  # noqa: BLE001 - one bad case must never sink the sweep
                         pass
         # Persist NOW (fresh reload, same lost-update discipline as the other
         # workers): the pool must be visible to the portal's transition poll
         # before the merges behind it start burning their 5-15s each. Only
-        # `cases` and `brain_covers_at` are ours to write here. Doc lock wraps
-        # ONLY this reload→save window, never the redraft loop above (which
-        # runs the model).
+        # the redrafted cases and `brain_covers_at` are ours to write here -
+        # merged into the fresh doc BY ID, never `fresh["cases"] = cases`
+        # wholesale (that overwrote cases a concurrent generate landed while
+        # this sweep ran). Doc lock wraps ONLY this reload→save window,
+        # never the redraft loop above (which runs the model).
         with _get_training_doc_lock(agent_id):
             fresh = _load_training(agent_id)
             if updated:
-                fresh["cases"] = cases
+                redrafted = {str(c.get("id")): c for c in cases
+                             if str(c.get("redrafted_at") or "") == stamp}
+                fcases = list(fresh.get("cases") or [])
+                fresh["cases"] = [redrafted.get(str(fc.get("id")), fc) for fc in fcases]
             if covers_at:
                 fresh["brain_covers_at"] = max(covers_at, str(fresh.get("brain_covers_at") or ""))
             _save_training(agent_id, fresh)

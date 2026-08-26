@@ -734,7 +734,10 @@ function renderCasesOrEmpty() {
     return;
   }
   const unanswered = currentUnanswered();
-  if (!unanswered.length) { view = "done"; render(); return; }
+  if (!unanswered.length) {
+    if (shortRoundHolding()) { renderShortRoundWait(); return; }
+    view = "done"; render(); return;
+  }
   // Open the round as soon as a full round of spares exists (owner ruling
   // 2026-08-25, bug #2). The old freshness door bounced to the round-done
   // screen + transition poll whenever no card was fresh yet - which, right
@@ -1358,6 +1361,9 @@ function render() {
   // "still being built" message) - a stray render() (score update, poll
   // tick) must never wipe a half-typed answer or flip the gate.
   if (view === "interview") return;
+  // Staggered short round: the waiting card owns the DOM until the next
+  // landing (or the poll's deadline) flips the view - see renderShortRoundWait.
+  if (view === "shortwait") { renderShortRoundWait(); return; }
   if (view === "no_agents") {
     el.innerHTML = `<div class="empty-flow"><p>No agents yet. Create one on the <a href="setter.html">Setter</a> page first, then come back here to train it.</p></div>`;
     return;
@@ -1369,10 +1375,14 @@ function render() {
   // prefetched next batch is already sitting unanswered in the pool - the
   // round-done screen must show between rounds.
   if (SHARE_MODE && ROUND_IDS && ROUND_IDS.length && ROUND_IDS.every((id) => isAnswered(id))) {
+    if (shortRoundHolding()) { renderShortRoundWait(); return; }
     view = "done"; renderDone(); return;
   }
   const unanswered = currentUnanswered();
-  if (!unanswered.length) { view = "done"; renderDone(); return; }
+  if (!unanswered.length) {
+    if (shortRoundHolding()) { renderShortRoundWait(); return; }
+    view = "done"; renderDone(); return;
+  }
   if (idx >= unanswered.length) idx = unanswered.length - 1;
   if (idx < 0) idx = 0;
   renderCase(unanswered, idx);
@@ -1584,6 +1594,50 @@ function mergeCasesSnapshot(data, opts) {
    still filling) absorbs freshly-landed cases up to ROUND_SIZE, so 1-card
    rounds stop existing. Never rerenders - the progress line catches up on
    the next natural render. */
+/* ── Short-round top-up (staggered open, owner ask 2026-08-26) ────────────
+   A round opened on its FIRST fresh card keeps polling while the trainer
+   reads: each poll merges the server snapshot (incremental landings from
+   the generate/redraft workers) and growRoundIfShort appends fresh cards
+   until the round reaches ROUND_SIZE. If the trainer out-rates the
+   landings, renderShortRoundWait holds an honest "next scenario is just
+   landing…" card instead of a premature 1-of-1 round-done; the poll
+   resumes the stream the moment the next card exists. Bounded: on the
+   deadline the round simply ends at its real size. */
+let shortRoundPollHandle = null;
+function stopShortRoundPoll() {
+  if (shortRoundPollHandle) { clearInterval(shortRoundPollHandle); shortRoundPollHandle = null; }
+}
+function startShortRoundPoll() {
+  stopShortRoundPoll();
+  const deadline = Date.now() + 90000;
+  shortRoundPollHandle = setInterval(async () => {
+    if (!ROUND_IDS || ROUND_IDS.length >= ROUND_SIZE || Date.now() > deadline) {
+      stopShortRoundPoll();
+      if (view === "shortwait") { view = "done"; render(); }
+      return;
+    }
+    try {
+      const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+      if (res.ok) mergeCasesSnapshot(res.data, { replaceUnanswered: true });
+    } catch { /* transient - next tick retries, deadline bounds the wait */ }
+    if (view === "shortwait" && currentUnanswered().length) {
+      view = "stream";
+      idx = 0;
+      render();
+    }
+  }, 2500);
+}
+function shortRoundHolding() {
+  return SHARE_MODE && !!shortRoundPollHandle && !!ROUND_IDS && ROUND_IDS.length < ROUND_SIZE;
+}
+function renderShortRoundWait() {
+  view = "shortwait";
+  const el = document.getElementById("trainApp");
+  if (!el || document.getElementById("shortRoundWaitMsg")) return;
+  el.innerHTML = `<div class="empty-flow"><div class="round-updating" id="shortRoundWaitMsg">`
+    + `<span class="spin"></span><span>Nice - your next scenario is just landing…</span></div></div>`;
+}
+
 function growRoundIfShort() {
   if (!SHARE_MODE || view !== "stream" || !ROUND_IDS || ROUND_IDS.length >= ROUND_SIZE) return;
   if (!ROUND_IDS.some((id) => !isAnswered(id))) return; // round already over
@@ -1992,6 +2046,7 @@ async function startNextRoundOrGenerate() {
     const openRound = () => {
       stopPrefetchPoll();
       stopTransitionPoll();
+      stopShortRoundPoll();
       // Freshness only ORDERS the round (fresh cards lead) - it NEVER
       // blocks the open (owner ruling 2026-08-25, bug #2 "goes in a
       // circle"): the old gate bounced back to round-done while the brain
@@ -2054,9 +2109,32 @@ async function startNextRoundOrGenerate() {
           if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
         } catch { /* transient - the deadline below still guarantees an open */ }
         const fresh = CASES.filter((c) => !isAnswered(c.id)).filter(caseFresh);
+        // Staggered open (owner ask 2026-08-26): ONE fresh card is enough
+        // to start - the trainer reads scenario 1 while the brain pass
+        // finishes the rest, and startShortRoundPoll grows the round to
+        // ROUND_SIZE behind their reading. The round is built from FRESH
+        // cards only (a stale filler card would show pre-teaching drafts -
+        // the exact "not listening" bug this hold exists to prevent); the
+        // deadline open below stays as the freshest-first fallback.
         if (fresh.length >= ROUND_SIZE || Date.now() > deadline) {
           roundOpening = false;
           openRound();
+          return;
+        }
+        if (fresh.length >= 1) {
+          roundOpening = false;
+          stopPrefetchPoll();
+          stopTransitionPoll();
+          const freshUn = fresh.slice(0, ROUND_SIZE);
+          const fids = new Set(freshUn.map((c) => String(c.id)));
+          CASES = CASES.filter((c) => fids.has(String(c.id)))
+            .concat(CASES.filter((c) => !fids.has(String(c.id))));
+          ROUND_IDS = freshUn.map((c) => c.id);
+          try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
+          idx = 0;
+          view = "stream";
+          render();
+          startShortRoundPoll();
           return;
         }
         setTimeout(tick, 2500);
@@ -2592,7 +2670,7 @@ function submitAndAdvance(c) {
   markSaving();
 
   const unanswered = currentUnanswered();
-  if (!unanswered.length) { view = "done"; } else {
+  if (!unanswered.length) { view = shortRoundHolding() ? "shortwait" : "done"; } else {
     if (idx >= unanswered.length) idx = unanswered.length - 1;
     view = "stream";
   }
@@ -2734,7 +2812,7 @@ function skipAndAdvance(c) {
   markSaving();
 
   const unanswered = currentUnanswered();
-  if (!unanswered.length) { view = "done"; } else {
+  if (!unanswered.length) { view = shortRoundHolding() ? "shortwait" : "done"; } else {
     if (idx >= unanswered.length) idx = unanswered.length - 1;
     view = "stream";
   }
