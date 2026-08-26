@@ -2009,17 +2009,59 @@ async function startNextRoundOrGenerate() {
       view = "stream";
       render();
     };
-    // Open INSTANTLY from the local pool - the click must never wait on a
-    // network round-trip (2026-08-25: a busy instance turned the awaited
-    // pre-open snapshot into a ~20s dead button). The snapshot still runs,
-    // in the background, so late-landed cases join the pool for later
-    // rounds (it never touches cards already in the open round).
+    // Open INSTANTLY from the local pool when a full round of FRESH cards
+    // is ready - the click must never wait on a network round-trip
+    // (2026-08-25: a busy instance turned the awaited pre-open snapshot
+    // into a ~20s dead button). The snapshot still runs, in the background,
+    // so late-landed cases join the pool for later rounds.
     const localSpare = CASES.filter((c) => !isAnswered(c.id));
-    if (localSpare.length >= ROUND_SIZE) {
+    const freshSpare = localSpare.filter(caseFresh);
+    if (freshSpare.length >= ROUND_SIZE) {
       openRound();
       fetchJson(`/api/setter/training?${trainingQS()}`)
         .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); })
         .catch(() => { /* background refresh only */ });
+      return;
+    }
+    // Pool is deep but the upcoming drafts predate the newest teaching
+    // (owner bug 2026-08-26: "it feels like my answers aren't being
+    // listened to" - instant rounds were serving pre-brain-pass drafts).
+    // Hold HONESTLY and briefly: tell the trainer their teaching is being
+    // folded in, poll for the redrafted cards, and open the moment a full
+    // fresh round exists. Bounded: after ~45s open with freshest-first
+    // (openRound orders fresh cards to the front) - never an endless
+    // circle, never an uncommunicated dead button.
+    if (localSpare.length >= ROUND_SIZE) {
+      roundOpening = true;
+      const el = document.getElementById("trainApp");
+      if (el) {
+        const host = el.querySelector("#roundHoldMsg") ? null : el;
+        if (host) {
+          const btnRow = el.querySelector("#doneGenerateBtn, #shareNextRoundBtn");
+          const msg = document.createElement("div");
+          msg.id = "roundHoldMsg";
+          msg.className = "round-updating";
+          msg.innerHTML = `<span class="spin"></span><span>Folding in what you just taught - the next round starts in a moment…</span>`;
+          if (btnRow && btnRow.parentNode) btnRow.parentNode.insertBefore(msg, btnRow.nextSibling);
+          else host.appendChild(msg);
+        }
+      }
+      const deadline = Date.now() + 45000;
+      const tick = async () => {
+        if (!roundOpening) return; // a rerender/answer superseded this hold
+        try {
+          const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
+          if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
+        } catch { /* transient - the deadline below still guarantees an open */ }
+        const fresh = CASES.filter((c) => !isAnswered(c.id)).filter(caseFresh);
+        if (fresh.length >= ROUND_SIZE || Date.now() > deadline) {
+          roundOpening = false;
+          openRound();
+          return;
+        }
+        setTimeout(tick, 2500);
+      };
+      setTimeout(tick, 1500);
       return;
     }
     // Not enough locally: give the click INSTANT feedback, then check the
@@ -2841,6 +2883,24 @@ document.addEventListener("click", (e) => {
   if (step && step.advanceOnVerdict && e.target.closest && e.target.closest("#clientVerdictBtns")) {
     setTimeout(() => { if (tutActive && TUT_STEPS[tutStep] === step) tutNext(); }, 400);
   }
+}, true);
+
+/* ── Draft hyperlinks (owner bug 2026-08-26: "the hyperlinks don't work so
+   I can't test them") ─────────────────────────────────────────────────────
+   Anchors inside the reply live in a contenteditable div, and browsers
+   deliberately don't follow links there - a click just places the caret.
+   Delegate on the document so every rendered a[href] in the training app
+   (editable draft, thread cards, review panes) opens in a NEW TAB: the
+   trainer can check a link without navigating away mid-round, and the
+   click never falls through to the click-to-edit handler. */
+document.addEventListener("click", (e) => {
+  const a = e.target.closest && e.target.closest("#trainApp a[href]");
+  if (!a) return;
+  const href = a.getAttribute("href") || "";
+  if (!/^https?:\/\//i.test(href) && !/^www\./i.test(href)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  window.open(/^www\./i.test(href) ? "https://" + href : href, "_blank", "noopener");
 }, true);
 
 /* ── Boot ──────────────────────────────────────────────── */
