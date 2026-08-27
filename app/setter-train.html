@@ -1991,6 +1991,18 @@ function maybePrefetchNextRound() {
   if (roundsThisSitting() >= ROUND_CAP) return;            // no further round is offered
   if ((Number(READINESS.score) || 0) >= 90) return;        // next round is optional past the goal
   PREFETCHED_ROUND = rn;
+  // Staged-questions prewarm (owner report 2026-08-27: "takes a long time to
+  // even load the first question"): the between-rounds question set used to
+  // generate ON the round-done screen (a 5-15s model call the trainer sat
+  // through). Fire it here, mid-round, fire-and-forget: the server stores the
+  // set and the round-done fetch re-serves it instantly (the questions route
+  // is idempotent over an unanswered set). Local INTERVIEWS is untouched -
+  // the round-done flow appends it exactly as before.
+  fetchJson("/api/setter/training/interview", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(SHARE_MODE ? { agent_id: selectedAgentId, action: "questions", share: SHARE_TOKEN }
+                                    : { agent_id: selectedAgentId, action: "questions" }),
+  }).catch(() => { /* prewarm only - round-done fetch is the real read */ });
   const inRound = new Set(ROUND_IDS.map(String));
   const spares = CASES.filter((c) => !isAnswered(c.id) && !inRound.has(String(c.id))).length;
   if (spares >= ROUND_SIZE) return;                        // next round already waiting
@@ -2041,7 +2053,14 @@ async function startNextRoundOrGenerate() {
   // in flight - even though the local pool already had a full round ready to
   // open instantly. A generate that's genuinely needed is still safe: the
   // short-pool path calls generateMore, which self-guards on `generating`.
-  if (roundOpening) return;
+  if (roundOpening) {
+    // Never a silently-swallowed click (owner report 2026-08-27: "I was
+    // sitting there clicking it and nothing happened"): re-surface the hold
+    // message so a repeat click always shows SOMETHING is in progress.
+    const m = document.getElementById("roundHoldMsg");
+    if (m) { m.scrollIntoView({ block: "center" }); m.style.fontWeight = "600"; }
+    return;
+  }
   if (SHARE_MODE) {
     const openRound = () => {
       stopPrefetchPoll();
@@ -2104,6 +2123,10 @@ async function startNextRoundOrGenerate() {
       const deadline = Date.now() + 45000;
       const tick = async () => {
         if (!roundOpening) return; // a rerender/answer superseded this hold
+        // Deadline FIRST and crash-proof (owner stall 2026-08-27): any
+        // unexpected throw below must never kill the chain - the catch at
+        // the bottom re-schedules, and this check guarantees the open.
+        if (Date.now() > deadline) { roundOpening = false; openRound(); return; }
         try {
           const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
           if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
@@ -2137,9 +2160,10 @@ async function startNextRoundOrGenerate() {
           startShortRoundPoll();
           return;
         }
-        setTimeout(tick, 2500);
+        setTimeout(safeTick, 2500);
       };
-      setTimeout(tick, 1500);
+      const safeTick = () => { tick().catch(() => { if (roundOpening) setTimeout(safeTick, 2500); }); };
+      setTimeout(safeTick, 1500);
       return;
     }
     // Not enough locally: give the click INSTANT feedback, then check the
