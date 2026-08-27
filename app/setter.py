@@ -1503,6 +1503,27 @@ def lint_draft(html: str, ctx: dict):
         resource_urls = instruction_urls - {_norm_url(booking)}
         if resource_urls and not (set(draft_urls) & resource_urls):
             return False, "The draft offers a resource but links only the booking link."
+    # ANSWER-PRICING-FIRST (owner report 2026-08-27: a bare "What's your
+    # price?" got an assessment preamble as paragraph one - "tone deaf, that
+    # first paragraph is irrelevant". The answer-first prompt rule keeps
+    # losing to offer-context preambles, so enforce it): when the lead's
+    # primary intent is pricing, the FIRST paragraph after the greeting must
+    # itself be the pricing answer.
+    if str(ctx.get("primary_intent") or "") == "pricing":
+        _pf_paras = [
+            _TAG_RE.sub(" ", p).strip()
+            for p in re.split(r"<br\s*/?>|</div>|</p>", text)
+        ]
+        _pf_paras = [p for p in _pf_paras if p]
+        # Drop a short greeting line ("Hi Sam,") - the answer starts after it.
+        if _pf_paras and len(_pf_paras[0]) < 40 and re.match(r"(hi|hello|hey)\b", _pf_paras[0], re.I):
+            _pf_paras = _pf_paras[1:]
+        if _pf_paras and not re.search(
+                r"pric|tier|cost|fee|charge|quote|rate|\bfigure\b|\bnumber\b",
+                _pf_paras[0], re.I):
+            return False, ("The lead asked about price - the first paragraph after the "
+                           "greeting must BE the pricing answer, with no offer or "
+                           "assessment preamble before it.")
     # LEAD-PROPOSED TIME enforcement (owner report 2026-08-27: "countless
     # times" - the drafter kept answering a lead's own proposed window with
     # the generic two-fresh-times shape plus unasked-for setup info; the
@@ -1895,7 +1916,7 @@ Rules:
 - When slots are supplied and slot_status is "ok" AND call_ask is "required" or absent, include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. When the slots you were given carry NO link (an empty link field - this sender has no booking system wired up), write that same two-call-times paragraph with each time as PLAIN TEXT - no anchors, no invented or guessed URLs - and write the follow-up paragraph as plain text with the literal placeholder [BOOKING LINK] where the link would go ("If those times aren't suitable, my booking link is [BOOKING LINK]."). The same placeholder rule applies whenever the lead directly asks for the booking link and the booking_link you were given is empty: answer with the literal text [BOOKING LINK] - the owner fills it in during training - and NEVER paste a slot URL, a URL fragment, or any invented address as the booking link. This is the default ONLY for a call-ready reply. It is OFF whenever call_ask is "avoid" or "only_if_relevant" (add NO two-times paragraph at all in those cases, the sole exception being a lead who PROPOSED their own time, per the LEAD-PROPOSED TIME rule). And it NEVER comes before answering the lead's actual question: always answer what they asked - a resource, their booking link, your phone number, case studies, or a specific question - on its own terms FIRST per the SELF-SERVE ASSET and ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST rules, and add the two-times only when call_ask is "required"/absent and the answer itself genuinely invites a call. Three things, and only these three, override the two-times default even when call_ask is "required". FIRST, a stated constraint: the lead's stated timing or channel constraint (see the constraint rule below) suppresses call times and booking links entirely - it always wins. SECOND, call_ask: when call_ask is "avoid" the lead is already sorted for a call (a time is agreed, they have booked, or they have just told you when they are free) or has asked something that a fresh call pitch would talk straight past - answer THAT message on its own terms and do not open with a generic two-fresh-times ask. The ONE case where you still name times under "avoid" is a lead who PROPOSED their own time or window: follow the LEAD-PROPOSED TIME rule below, which accepts a slot that fits their ask or counters with your slots when none fit - that is answering their proposal, not a fresh pitch; when call_ask is "only_if_relevant" a call has already been offered earlier in this thread and their latest message is not about scheduling, so lead with the actual answer and only reach for times if the answer genuinely needs a call; when call_ask is "required" or absent, the default above stands. Never re-propose times a lead has already turned down or already accepted. THIRD, reviewer_feedback about WHICH times to offer ("offer different times", "offer next week"): the slots you have been given have ALREADY been re-picked from the real calendar to match that request, so propose exactly the slots in front of you and do not apologise for or refer to the times a previous draft proposed. You still never invent a time: if the feedback asks for times the calendar cannot supply, say so in feedback_note and use the fallback ladder instead of making one up. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), meaning real dates or times written out as data and never a formatting template, an example time, or a rule about where times come from, pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone - converting means changing the clock time itself, never just swapping the timezone label; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href - unless booking_link is empty, in which case write instead, as plain text with no anchor: "When would be a good time for us to talk? My booking link is [BOOKING LINK]." (the owner fills the placeholder in during training). Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
 - NO BACKUP BOOKING LINK. When booking_link is empty, there is NO standalone backup booking link, so you must NOT output a "see my availability here" paragraph, a "my availability" booking-link paragraph, or ANY standalone booking/scheduling link anywhere in the draft. The two call-time paragraph (each time its own per-slot link) is unchanged when live slots exist. Wherever the examples show the "If those times aren't suitable, feel free to see my availability here and book in directly" booking-link fallback paragraph, write instead this plain-text paragraph with NO link: "If those times aren't suitable, feel free to suggest some times that work for you." And when there are no call times at all, ask for the lead's availability with that same plain-text sentence, never a booking or calendar link. This overrides the RESOURCE + CALL example's fallback line and every fallback-ladder step that would otherwise carry BOOKING_LINK.
 - If pricing is one of the intents, quote the instructions content verbatim (the actual numbers/structure) rather than paraphrasing them away.
-- PRICING COMES ONLY FROM THIS AGENT'S INSTRUCTIONS (owner rule 2026-08-21, every agent - this closes an exemplar-bleed where a client draft quoted another team's fees). If the instructions state pricing, convey THAT, verbatim where it gives figures. If the instructions describe a pricing MODEL without a number (e.g. "we do not quote a fixed number, it depends on scope and is worked out on a call"), convey that model and steer to the next step - do NOT bolt a number onto it. If the instructions contain NO pricing at all, do NOT quote, invent, infer, or borrow any pricing - not from the PRICING example in this prompt, not from any other client - answer per the "answer not in the instructions" rule: say plainly you will confirm the exact terms and come back, or put the number behind the call. A figure, fee, or term that is not in THIS agent's instructions must never appear in the draft.
+- PRICING COMES ONLY FROM THIS AGENT'S INSTRUCTIONS (owner rule 2026-08-21, every agent - this closes an exemplar-bleed where a client draft quoted another team's fees). If the instructions state pricing, convey THAT, verbatim where it gives figures. If the instructions describe a pricing MODEL without a number (e.g. "we do not quote a fixed number, it depends on scope and is worked out on a call"), convey that model and steer to the next step - do NOT bolt a number onto it. If the instructions contain NO pricing at all, do NOT quote, invent, infer, or borrow any pricing - not from the PRICING example in this prompt, not from any other client - answer per the "answer not in the instructions" rule: say plainly you will confirm the exact terms and come back, or put the number behind the call. A figure, fee, or term that is not in THIS agent's instructions must never appear in the draft. And when the lead's message IS a pricing question ("what's your price?", "how much?"), the pricing answer is the FIRST paragraph after the greeting - never an offer, product, or assessment preamble first: opening with anything but the pricing answer reads as dodging the question (owner report 2026-08-27). Context about the offer may follow AFTER the pricing answer only when it genuinely helps the pricing explanation.
 - If the intent needs a human (bespoke, objection, other, wrong_person, etc.) still write a warm, honest best-effort draft for a human to edit - never invent a fact, number, or promise not present in the resource, instructions, or thread; keep it short and let the human add specifics.
 - Never invent a number, date, or fact that isn't in the instructions, the reply thread, or the call-time slots given to you. Never claim a resource covers a specific topic (a fix, a policy, a category, a mechanism) unless the instructions state that it does - "here's the breakdown, it covers exactly how we'd handle your verification issue" is an invented claim when the instructions never say so.
 - Match the tone AND the exact recurring phrasing of the real examples above - the goal is a reply indistinguishable from what the team actually sends.
@@ -5555,10 +5576,11 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
             "thread_text": f"{body_text} {thread_text}",
             "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
-            # LEAD-PROPOSED TIME enforcement (owner report 2026-08-27)
+            # LEAD-PROPOSED TIME + answer-first enforcement (owner reports 2026-08-27)
             "call_ask": _call_ask,
             "lead_proposed_time": bool(classification.get("lead_proposed_time")),
             "reply_body": body_text,
+            "primary_intent": classification.get("primary_intent") or "",
         }
         lint_ok, lint_reason = lint_draft(draft_body, ctx_lint)
 
@@ -12473,6 +12495,7 @@ def _redraft_sync(payload):
                 "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
                 "thread_text": f"{body_text} {thread_text}",
                 "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+                "primary_intent": classification.get("primary_intent") or "",
             })
         first_touch = True
         if not row.get("is_test") and _SB:
@@ -13694,11 +13717,12 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                 "instructions": _agent_instructions(agent),
                 "booking_link": _booking_link(agent), "thread_text": body,
                 "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
-                # LEAD-PROPOSED TIME enforcement fields (owner report
-                # 2026-08-27) - without these the lint's shape checks are dead.
+                # LEAD-PROPOSED TIME + answer-first enforcement fields (owner
+                # reports 2026-08-27) - without these the shape checks are dead.
                 "call_ask": _train_ca,
                 "lead_proposed_time": bool(cls.get("lead_proposed_time")),
                 "reply_body": body,
+                "primary_intent": cls.get("primary_intent") or "",
             }
             # One lint-feedback redraft (owner report 2026-08-27, "countless
             # times"): a training draft that fails lint used to ship to the
@@ -15217,6 +15241,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     "instructions": _agent_instructions(agent_snapshot),
                     "booking_link": _booking_link(agent_snapshot), "thread_text": body,
                     "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+                    "primary_intent": cls.get("primary_intent") or "",
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
@@ -15345,6 +15370,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     "instructions": _agent_instructions(agent_snapshot),
                     "booking_link": _booking_link(agent_snapshot), "thread_text": body,
                     "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+                    "primary_intent": cls.get("primary_intent") or "",
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
