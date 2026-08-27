@@ -1231,7 +1231,7 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
           <div class="tray-body" id="trayBody"></div>
         </div>
         <div class="il-search">
-          <input type="search" id="inboxSearch" name="inbox-search" placeholder="Search name, email, campaign, reply…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore>
+          <input type="search" id="inboxSearch" name="inbox-search" placeholder="Search name, email, campaign, reply…" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-form-type="other" data-lpignore="true" data-1p-ignore readonly>
           <div class="il-search-notes">
             <span class="small muted">&uarr;&darr; to move between replies</span>
             <span class="small muted" id="searchAllNote" style="display:none">searching this filter only</span>
@@ -6847,7 +6847,37 @@ function pollResultNote(done) {
 // the note affordance update immediately; the list/KPIs repaint once the typing
 // pauses (~130ms), the same trailing-debounce shape scheduleSmartleadSearch uses.
 let _localSearchTimer = null;
+/* Autofill guard (2026-08-27): Chrome ignores autocomplete="off" on a search
+   box and drops the logged-in Gmail address into it — most visibly when a
+   background re-render re-runs the page's autofill heuristics while the user
+   is scrolling deep through old replies ("it randomly populates my username").
+   Two layers, because a single trick isn't reliable across Chrome versions:
+     1. The field starts `readonly`, so it is never an autofill target, and
+        only becomes editable when the user actually clicks or tabs into it.
+        It re-arms on blur when empty, so a later programmatic focus can't
+        reopen the hole.
+     2. A trusted-input gate: we only accept a value the user actually typed
+        (a real keydown/paste sets `_userEngaged`). Any value that appears
+        WITHOUT that — i.e. autofill — is wiped and ignored. This is the
+        backstop for any autofill path that slips past readonly. */
+let _inboxSearchEngaged = false;
+(function armInboxSearchAutofillGuard() {
+  const el = document.getElementById("inboxSearch");
+  if (!el) return;
+  const unlock = () => el.removeAttribute("readonly");
+  const engage = () => { _inboxSearchEngaged = true; unlock(); };
+  el.addEventListener("pointerdown", unlock);   // focusing to type
+  el.addEventListener("focus", unlock);         // keyboard Tab into the box
+  el.addEventListener("keydown", engage);       // a real keystroke = the user
+  el.addEventListener("paste", engage);
+  el.addEventListener("blur", () => {
+    if (!el.value) { el.setAttribute("readonly", ""); _inboxSearchEngaged = false; }
+  });
+})();
 document.getElementById("inboxSearch").addEventListener("input", (e) => {
+  // Backstop: an `input` with no prior real keystroke/paste is browser
+  // autofill dropping the logged-in email in — discard it silently.
+  if (!_inboxSearchEngaged) { e.target.value = ""; inboxSearchQuery = ""; return; }
   inboxSearchQuery = e.target.value || "";
   inboxPage = 1;
   const note = document.getElementById("searchAllNote");
