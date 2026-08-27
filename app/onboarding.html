@@ -1,0 +1,813 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Onboarding · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* onboarding-v1 — the client onboarding hub (panel-locked prototype, 2026-08-27).
+   One page, one next thing. Each task opens its own dedicated page (#/route).
+   Email Infrastructure page = the Settings → Email Infrastructure "Tracker"
+   design (infrastructure.html), adapted to the client journey. Simulated
+   state only — localStorage, no APIs. */
+
+body { background:var(--bg); }
+.ob-app { max-width:760px; margin:0 auto; padding:0 20px 110px; min-height:100vh; }
+
+/* ---------- top bar ---------- */
+.ob-top { display:flex; justify-content:space-between; align-items:center; gap:12px;
+  padding:20px 0 6px; flex-wrap:wrap; }
+.ob-brand { font-family:var(--font-display); font-weight:700; font-size:18px;
+  letter-spacing:-.01em; color:var(--ink); }
+.ob-brand em { font-style:normal; color:var(--orange); }
+.ob-brand span { font-family:var(--font-sans); font-weight:400; font-size:13.5px;
+  color:var(--ink-3); margin-left:8px; }
+.ob-date { display:inline-flex; align-items:center; gap:8px; background:#fff;
+  border:1px solid var(--line-2); border-radius:999px; padding:8px 16px;
+  font-family:var(--font-mono); font-size:11.5px; font-weight:700; color:var(--ink);
+  cursor:pointer; }
+.ob-date:focus-visible { outline:none; box-shadow:var(--focus); }
+.ob-date.locked { color:var(--green); }
+.ob-date u { text-decoration:none; border-bottom:1.5px dotted var(--line-2); }
+
+/* ---------- stage dots ---------- */
+.ob-stgbtn { border:none; background:none; width:100%; padding:0 0 10px; cursor:pointer; display:block; }
+.ob-stgbtn:focus-visible { outline:none; box-shadow:var(--focus); border-radius:10px; }
+.ob-dots { display:flex; align-items:center; justify-content:center; gap:16px; margin:16px 0 8px; }
+.ob-dot { width:9px; height:9px; border-radius:50%; background:var(--line-2); transition:transform .2s; }
+.ob-dot.done { background:var(--green); }
+.ob-dot.now { background:var(--orange); transform:scale(1.5); box-shadow:0 0 0 4px var(--orange-100); }
+@media (prefers-reduced-motion: reduce){ .ob-dot { transition:none; } }
+.ob-snow { display:flex; justify-content:center; }
+.ob-snow span { font-size:12px; color:var(--ink-2); }
+.ob-snow b { color:var(--ink); }
+.ob-snow u { text-decoration:none; border-bottom:1.5px dotted var(--line-2); }
+
+/* ---------- whose move ---------- */
+.ob-move { display:flex; justify-content:center; margin:14px 0 20px; }
+.ob-move .chip { display:inline-flex; align-items:center; gap:8px; border-radius:999px;
+  padding:7px 15px; font-size:13.5px; font-weight:500; }
+.ob-move .you { background:var(--orange-100); color:var(--orange-700); }
+.ob-move .us { background:#fff; color:var(--ink-3); border:1px solid var(--line); }
+.ob-move .team { background:var(--amber-bg); color:var(--amber); }
+.ob-move .live { background:var(--green-bg); color:var(--green); }
+.ob-move .chip i { width:7px; height:7px; border-radius:50%; background:currentColor; display:block; flex:none; }
+
+/* ---------- hero + list (hub) ---------- */
+.ob-hero { background:#fff; border:1px solid var(--line); border-radius:14px;
+  box-shadow:0 1px 2px rgba(20,17,14,.04); padding:24px; display:grid; gap:12px;
+  max-width:560px; margin:0 auto; }
+.ob-k { font-size:12px; font-weight:700; letter-spacing:.1em; color:var(--ink-3); text-transform:uppercase; }
+.ob-hero h1 { font-family:var(--font-display); font-weight:700;
+  font-size:clamp(25px,6.5vw,30px); letter-spacing:-.01em; margin:0; line-height:1.12; }
+.ob-sub { color:var(--ink-2); font-size:15px; margin:0; max-width:44ch; }
+.ob-row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.btn-go { font:inherit; font-size:14.5px; font-weight:600; color:#fff; background:var(--orange);
+  border:0; border-radius:9px; padding:12px 20px; cursor:pointer;
+  box-shadow:0 2px 6px rgba(255,77,0,.25); }
+.btn-go:hover { background:var(--orange-600); }
+.btn-go:focus-visible { outline:none; box-shadow:var(--focus); }
+.btn-go[disabled] { background:#fff; color:var(--ink-3); border:1.5px solid var(--line-2);
+  box-shadow:none; cursor:default; }
+.btn-ghost { font:inherit; font-size:14px; font-weight:500; color:var(--ink);
+  background:#fff; border:1.5px solid var(--line-2); border-radius:9px; padding:11px 18px; cursor:pointer; }
+.btn-ghost:hover { background:var(--cream-50); }
+.btn-ghost:focus-visible { outline:none; box-shadow:var(--focus); }
+.linkbtn { font:inherit; font-size:13px; color:var(--ink-3); background:none; border:0;
+  cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+.linkbtn:hover { color:var(--ink); }
+.ob-t { font-size:11.5px; font-weight:600; color:var(--ink-3); background:var(--bg-sunken);
+  border-radius:7px; padding:4px 9px; }
+.ob-t.clock { color:var(--amber); background:var(--amber-bg); }
+.ob-t.ok { color:var(--green); background:var(--green-bg); }
+
+.ob-listwrap { margin:26px auto 0; max-width:560px; }
+.ob-lh { font-size:12px; font-weight:700; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ink-3); margin:0 4px 10px; }
+.ob-list { display:grid; gap:8px; }
+.ob-item { display:flex; align-items:center; gap:12px; background:#fff; border:1px solid var(--line);
+  border-radius:12px; padding:12px 16px; width:100%; text-align:left; font:inherit; font-size:15px;
+  color:var(--ink); min-height:50px; cursor:pointer; }
+.ob-item:hover { border-color:var(--line-2); }
+.ob-item:focus-visible { outline:none; box-shadow:var(--focus); }
+.ob-item .st { width:22px; height:22px; border-radius:50%; flex:none; display:grid;
+  place-items:center; font-size:11.5px; border:1.5px solid var(--line-2); color:transparent; }
+.ob-item.done .st { background:var(--green); border-color:var(--green); color:#fff; }
+.ob-item.nxt .st { border-color:var(--orange); box-shadow:0 0 0 3px var(--orange-100); }
+.ob-item .t { flex:1; font-weight:500; min-width:0; }
+.ob-item.done .t { color:var(--ink-3); font-weight:400; }
+.ob-item .meta { font-size:12px; color:var(--brown-400); flex:none; }
+.ob-item.updup .meta { opacity:.85; }
+.ob-item .badge { font-size:11px; font-weight:700; color:var(--amber); background:var(--amber-bg);
+  border-radius:6px; padding:2px 7px; flex:none; }
+
+.ob-panelbox { background:#fff; border:1px solid var(--line); border-radius:14px;
+  padding:8px 22px 12px; }
+.ob-help { margin-top:32px; text-align:center; font-size:13px; color:var(--ink-3); }
+
+/* ---------- task pages ---------- */
+.ob-back { display:inline-flex; align-items:center; gap:6px; font-size:13.5px; color:var(--ink-3);
+  text-decoration:none; margin:8px 0 0; border:none; background:none; cursor:pointer; font-family:inherit; }
+.ob-back:hover { color:var(--ink); }
+.col { max-width:680px; margin:34px auto 0; }
+.headline { font-family:var(--font-display); font-weight:700; font-size:30px; line-height:1.22;
+  letter-spacing:-.01em; text-align:center; text-wrap:balance; color:var(--ink); }
+.headline .date { color:var(--orange); white-space:nowrap; }
+.subline { text-align:center; font-size:14px; color:var(--ink-3); margin-top:12px; }
+.ob-body { margin-top:30px; }
+.ob-foot2 { margin-top:26px; display:flex; gap:14px; align-items:center; justify-content:center; flex-wrap:wrap; }
+.ob-note { font-size:13px; color:var(--ink-3); text-align:center; margin-top:14px; }
+
+/* ---------- tracker (from infrastructure.html) ---------- */
+.tracker { display:flex; margin:40px 4px 0; }
+.step { flex:1; display:flex; flex-direction:column; align-items:center; position:relative; }
+.step .bar { position:absolute; top:7px; left:-50%; width:100%; height:3px;
+  background:var(--line-2); border-radius:2px; }
+.step:first-child .bar { display:none; }
+.step.done .bar { background:var(--orange); }
+.step.now .bar { background:linear-gradient(90deg, var(--orange) 0%, #FFE4D6 100%); }
+.step .knot { width:17px; height:17px; border-radius:50%; background:#fff;
+  border:3px solid var(--line-2); position:relative; z-index:1; }
+.step.done .knot { background:var(--orange); border-color:var(--orange); }
+.step.done .knot::after { content:""; position:absolute; inset:0;
+  background:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 12 12"><path d="M2.5 6.2l2.4 2.4 4.6-5" fill="none" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>') center/9px no-repeat; }
+.step.now .knot { border-color:var(--orange); background:#FFE4D6;
+  animation:infra-pulse 2.4s ease-in-out infinite; }
+.step .lbl { margin-top:10px; font-size:12px; color:var(--brown-400); text-align:center; }
+.step.done .lbl { color:var(--ink-3); }
+.step.now .lbl { color:var(--ink); font-weight:600; }
+@keyframes infra-pulse { 0%,100% { box-shadow:0 0 0 0 rgba(255,77,0,.30); }
+  50% { box-shadow:0 0 0 8px rgba(255,77,0,0); } }
+@media (prefers-reduced-motion: reduce) { .step.now .knot { animation:none; } }
+
+/* ---------- domain card (from infrastructure.html) ---------- */
+.dcard { margin-top:36px; background:var(--card); border:1px solid var(--line);
+  border-radius:14px; box-shadow:0 1px 2px rgba(20,17,14,.04); }
+.drow { display:flex; align-items:center; gap:14px; padding:16px 20px; }
+.drow + .drow { border-top:1px solid var(--line); }
+.drow .name { font-size:14.5px; font-weight:600; color:var(--ink); }
+.mbcount { font-size:12px; color:var(--brown-400); white-space:nowrap; margin-left:2px; }
+.mbcount .tick { color:var(--green); }
+.drow .status { margin-left:auto; text-align:right; font-size:13px; color:var(--ink-3); white-space:nowrap; }
+.drow .status b { font-weight:600; }
+.drow .status .ok { color:var(--green); }
+.drow .status .live { color:var(--orange-600); }
+.drow .status .dim { color:var(--brown-400); font-weight:400; }
+.drow .status .when { color:var(--brown-400); font-weight:400; margin-left:6px; }
+.foot { margin-top:24px; display:flex; align-items:center; justify-content:space-between;
+  gap:16px; padding:0 4px; flex-wrap:wrap; }
+.quiet { font-size:12.5px; color:var(--brown-400); display:flex; gap:18px; flex-wrap:wrap; }
+.quiet .tick { color:var(--green); margin-right:5px; }
+.nudge2 { margin:26px auto 0; max-width:460px; background:var(--cream-50);
+  border:1px solid var(--line); border-radius:999px; padding:12px 22px; text-align:center;
+  font-size:13.5px; color:var(--ink-2); }
+
+/* ---------- cream panel (from infrastructure.html) ---------- */
+.panel2 { margin-top:32px; background:var(--cream-50); border:1px solid var(--line);
+  border-radius:14px; padding:22px 24px; }
+.sectionlbl { font-size:12px; font-weight:700; color:var(--ink-3); text-transform:uppercase;
+  letter-spacing:.06em; margin:22px 0 10px; }
+.panel2 .sectionlbl:first-child { margin-top:0; }
+.hintline { font-size:12px; color:var(--brown-400); margin-top:6px; }
+.prow2 { display:flex; justify-content:space-between; align-items:center; gap:10px;
+  border-top:1px solid var(--line); padding:12px 2px; font-size:14.5px; }
+.prow2:first-of-type { border-top:none; }
+.prow2 .okc { font-size:11px; font-weight:700; color:var(--green); background:var(--green-bg);
+  border-radius:6px; padding:3px 8px; flex:none; }
+.prow2 .waitc { font-size:11px; font-weight:700; color:var(--amber); background:var(--amber-bg);
+  border-radius:6px; padding:3px 8px; flex:none; }
+.prow2 .mini { font:inherit; font-size:12.5px; border:1px solid var(--line-2); background:#fff;
+  border-radius:8px; padding:5px 10px; cursor:pointer; flex:none; }
+
+/* ---------- shared task widgets ---------- */
+.ob-steps { display:grid; gap:9px; }
+.ob-s3 { display:flex; gap:12px; align-items:center; background:#fff; border:1px solid var(--line);
+  border-radius:12px; padding:13px 15px; font-size:14.5px; }
+.ob-s3 .n { font-weight:700; font-size:12px; color:var(--orange-700); background:var(--orange-100);
+  width:24px; height:24px; border-radius:50%; display:grid; place-items:center; flex:none; }
+.ob-q { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; }
+.ob-q .q { font-weight:700; font-size:15.5px; margin-bottom:8px; }
+.ob-q .a { font-size:14.5px; color:var(--ink-2); }
+.ob-q textarea { width:100%; box-sizing:border-box; border:1.5px solid var(--orange-100);
+  border-radius:9px; background:var(--cream-50); color:var(--ink); padding:10px;
+  font:inherit; font-size:14px; min-height:64px; resize:vertical; margin-top:4px; }
+.ob-q textarea:focus { outline:none; border-color:var(--orange); }
+.frombadge { display:inline-block; font-size:11px; font-weight:700; color:var(--amber);
+  background:var(--amber-bg); border-radius:6px; padding:2px 7px; margin-top:10px; }
+.pnote { font-size:12px; font-weight:600; color:var(--ink-3); }
+.pbar { height:6px; border-radius:4px; background:var(--bg-sunken); overflow:hidden;
+  margin:0 0 8px; border:1px solid var(--line); }
+.pbar i { display:block; height:100%; background:var(--orange); border-radius:4px; }
+textarea.ob-dnc { width:100%; box-sizing:border-box; border:1.5px solid var(--line-2);
+  border-radius:12px; background:#fff; color:var(--ink); padding:12px; font:inherit;
+  font-size:14.5px; min-height:96px; resize:vertical; }
+textarea.ob-dnc:focus { outline:none; box-shadow:var(--focus); }
+input.ob-inp { border:1.5px solid var(--line-2); border-radius:9px; background:#fff;
+  color:var(--ink); padding:10px 12px; font:inherit; font-size:14px; flex:1; min-width:0; }
+input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
+.ob-inprow { display:flex; gap:8px; margin-top:12px; }
+.ob-slots { display:grid; gap:9px; }
+.ob-slot { display:flex; justify-content:space-between; align-items:center; background:#fff;
+  border:1.5px solid var(--line-2); border-radius:12px; padding:14px 16px; font:inherit;
+  font-size:15px; font-weight:500; color:var(--ink); width:100%; cursor:pointer; }
+.ob-slot:hover { border-color:var(--orange); }
+.ob-slot:focus-visible { outline:none; box-shadow:var(--focus); }
+.ob-slot .keeps { font-size:11.5px; font-weight:600; color:var(--green); }
+.ob-slot .moves { font-size:11.5px; font-weight:600; color:var(--amber); }
+.ob-offer { background:#fff; border:1.5px solid var(--line-2); border-radius:12px;
+  padding:14px 16px; width:100%; text-align:left; font:inherit; font-size:14.5px;
+  display:grid; gap:3px; cursor:pointer; color:var(--ink); }
+.ob-offer:focus-visible { outline:none; box-shadow:var(--focus); }
+.ob-offer b { font-size:15px; }
+.ob-offer span { color:var(--ink-3); font-size:13px; }
+.ob-offer.picked { border-color:var(--green); background:var(--green-bg); }
+.ob-offer .pk { font-size:11px; font-weight:700; color:var(--green); }
+.ob-mail { background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px; font-size:14.5px; }
+.ob-mail .fr { font-family:var(--font-mono); font-size:10.5px; color:var(--ink-3); margin-bottom:8px; }
+.ob-mail p { margin:0 0 8px; color:var(--ink-2); }
+.ob-deck { display:flex; justify-content:space-between; align-items:center; margin:14px 0 6px; gap:10px; }
+.ob-deck .cnt { font-size:12px; font-weight:600; color:var(--ink-3); }
+.ob-deck button { font:inherit; border:1.5px solid var(--line-2); background:#fff;
+  border-radius:9px; padding:8px 14px; font-size:14px; font-weight:500; cursor:pointer; }
+.ob-deck button[disabled] { opacity:.4; cursor:default; }
+.ob-readbar { display:flex; gap:4px; margin-top:10px; }
+.ob-readbar i { flex:1; height:4px; border-radius:2px; background:var(--line); }
+.ob-readbar i.on { background:var(--green); }
+.notetog { border:none; background:none; color:var(--ink-3); font:inherit; font-size:13px; padding:0;
+  cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+.ob-scen { background:var(--cream-50); border:1px solid var(--line); border-radius:12px;
+  padding:14px 16px; font-size:14.5px; }
+.ob-scen .in { color:var(--ink-3); font-size:13.5px; margin-bottom:8px; }
+.ob-scen .dr { color:var(--ink-2); border-left:3px solid var(--orange); padding-left:10px; margin-bottom:10px; }
+.ob-scen .acts { display:flex; gap:8px; flex-wrap:wrap; }
+.ob-scen .acts button { font:inherit; border:1.5px solid var(--line-2); background:#fff;
+  border-radius:9px; padding:8px 13px; font-size:13.5px; cursor:pointer; }
+.ob-vid { border-radius:12px; background:var(--ink); color:var(--cream); padding:26px 16px;
+  display:grid; place-items:center; gap:8px; text-align:center; }
+.ob-vid .play { width:46px; height:46px; border-radius:50%; background:var(--orange);
+  display:grid; place-items:center; color:#fff; font-size:17px; }
+.ob-vid .t { font-size:13.5px; font-weight:700; }
+.ob-vid .s { font-size:11px; color:var(--brown-300); }
+.ob-lead { display:flex; align-items:center; gap:12px; background:#fff; border:1px solid var(--line);
+  border-radius:12px; padding:13px 16px; width:100%; text-align:left; font:inherit; min-width:0;
+  color:var(--ink); cursor:pointer; }
+.ob-lead:focus-visible { outline:none; box-shadow:var(--focus); }
+.ob-lead .av { width:34px; height:34px; border-radius:50%; background:var(--orange-100);
+  color:var(--orange-700); display:grid; place-items:center; font-weight:700; font-size:13.5px; flex:none; }
+.ob-lead .who { flex:1; min-width:0; }
+.ob-lead .who b { display:block; font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.ob-lead .who span { display:block; font-size:13px; color:var(--ink-3); white-space:nowrap;
+  overflow:hidden; text-overflow:ellipsis; }
+.ob-lead .tag { font-size:11px; font-weight:700; border-radius:6px; padding:3px 8px; flex:none; }
+.tag-hot { color:var(--orange-700); background:var(--orange-100); }
+.tag-warm { color:var(--amber); background:var(--amber-bg); }
+.tag-meet { color:var(--green); background:var(--green-bg); }
+.ob-stats { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; }
+.ob-stat { background:#fff; border:1px solid var(--line); border-radius:14px; padding:16px 8px;
+  display:grid; gap:4px; justify-items:center; text-align:center; }
+.ob-stat .v { font-family:var(--font-display); font-weight:700; font-size:40px; line-height:1; }
+.ob-stat .lab2 { font-size:11.5px; font-weight:700; letter-spacing:.08em; color:var(--ink-3); }
+.ob-yard { font-size:13.5px; color:var(--ink-3); margin:10px 2px 0; }
+.chain { display:grid; margin:8px 0 2px; }
+.clink { display:grid; grid-template-columns:16px 1fr auto; gap:12px; align-items:center;
+  padding:11px 0; border-top:1px dashed var(--line); font-size:14.5px; }
+.clink:first-child { border-top:none; }
+.clink .d { width:10px; height:10px; border-radius:50%; background:var(--line-2); }
+.clink.ok .d { background:var(--green); }
+.clink.now .d { background:var(--orange); box-shadow:0 0 0 3px var(--orange-100); }
+.clink .o { font-size:11.5px; font-weight:600; color:var(--ink-3); text-align:right; }
+.physics { font-size:13px; color:var(--ink-3); border-left:3px solid var(--orange);
+  padding:2px 0 2px 10px; margin-top:12px; }
+
+/* ---------- overlays (chain + journey only) ---------- */
+.ob-scrim { position:fixed; inset:0; background:rgba(20,17,14,.42); display:none;
+  align-items:center; justify-content:center; z-index:50; padding:20px; }
+.ob-scrim.open { display:flex; }
+.ob-pop { background:#fff; width:100%; max-width:520px; border-radius:14px;
+  border:1px solid var(--line); padding:22px 24px; max-height:86vh; overflow-y:auto; position:relative; }
+.ob-pop h2 { font-family:var(--font-display); font-size:20px; font-weight:700; margin:0 0 4px; padding-right:44px; }
+.ob-pop .lead { color:var(--ink-2); font-size:14px; margin:0 0 12px; }
+.ob-x { position:absolute; top:10px; right:12px; border:none; background:var(--bg-sunken);
+  color:var(--ink-3); width:40px; height:40px; border-radius:50%; font-size:16px; cursor:pointer; }
+.ob-x:focus-visible { outline:none; box-shadow:var(--focus); }
+.mutline { font-size:13px; color:var(--ink-3); margin:12px 0 0; }
+
+/* ---------- toast + demo ---------- */
+.ob-toast { position:fixed; left:50%; transform:translateX(-50%) translateY(20px); bottom:24px;
+  background:var(--ink); color:var(--cream-50); border-radius:12px; padding:12px 18px;
+  font-size:14.5px; font-weight:500; opacity:0; pointer-events:none; transition:all .3s;
+  z-index:70; max-width:88vw; text-align:center; }
+.ob-toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+@media (prefers-reduced-motion:reduce){ .ob-toast { transition:opacity .1s; } }
+.ob-demo { position:fixed; left:12px; bottom:12px; display:flex; gap:6px; z-index:60; opacity:.75; }
+.ob-demo button { font-family:var(--font-mono); font-size:10.5px; border:1px solid var(--line-2);
+  background:#fff; color:var(--ink-3); border-radius:999px; padding:6px 11px; cursor:pointer; }
+.ob-demo button:hover { color:var(--ink); }
+</style>
+</head>
+<body>
+<div class="ob-app" id="app"></div>
+<div class="ob-scrim" id="scrim"></div>
+<div class="ob-toast" id="toast"></div>
+<div class="ob-demo">
+  <button id="demoBtn" title="Demo only — clients never see this">▸ preview · demo only</button>
+  <button id="resetBtn" title="Reset the demo">↺</button>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+var STAGES=["Set up","First call","The plan","Your emails","Final prep","Live"];
+var CARDS=[
+ {id:"infrastructure",stage:0,title:"Your email addresses",time:"3 min",clock:true},
+ {id:"call",stage:0,title:"Book your first call",time:"1 min"},
+ {id:"offers",stage:0,title:"Pick your offers",time:"5 min",badge:"for your call"},
+ {id:"business",stage:0,title:"About your business",time:"10 min"},
+ {id:"slack",stage:0,title:"Join us on Slack",time:"2 min"},
+ {id:"home",stage:0,title:"Your home base",time:"1 min"},
+ {id:"block",stage:0,title:"Who we should never email",time:"2 min"},
+ {id:"emails",stage:3,title:"Read + approve your emails",time:"12 min"},
+ {id:"quote",stage:4,title:"What your AI can quote",time:"5 min"},
+ {id:"train",stage:4,title:"Teach your AI",time:"15 min"},
+ {id:"calendar",stage:4,title:"Connect calendars",time:"2 min"}
+];
+var DOMAINS=["acmecorp-hq.com","tryacmecorp.com","acmecorp-team.com"];
+var EMAILS=[
+ {to:"Dana Reeve — VP Ops, Northgate 3PL",body:"Hi Dana — noticed Northgate opened two new DCs this year. We wrote a 5-page teardown of where mid-size 3PLs leak margin during exactly that kind of scale-up — want a copy?"},
+ {to:"Dana Reeve — follow-up, day 3",body:"Bumping this in case it got buried, Dana — the teardown takes 6 minutes to read and covers the three leaks we see most. Shall I send it over?"},
+ {to:"Dana Reeve — follow-up, day 7",body:"Last nudge from me, Dana. If margin during scale-up isn’t the priority right now, no stress at all — I’ll leave you in peace."},
+ {to:"Tom Barrett — COO, Fleetline",body:"Tom — congrats on the Houston expansion. When 3PLs grow that fast, ops costs usually grow faster. We map exactly where. Worth a 5-page look?"},
+ {to:"Tom Barrett — follow-up, day 3",body:"One more try, Tom — the map is free, takes 6 minutes, and you’ll know your three biggest leaks by Friday. Want it?"},
+ {to:"Priya Lund — Ops Director, Corewell",body:"Priya — saw you’re hiring two ops managers. Teams that scale headcount usually scale waste with it. Our teardown shows where. Send it over?"},
+ {to:"Priya Lund — follow-up, day 4",body:"Quick bump, Priya — happy to tailor the teardown to Corewell’s setup. Yes / no either way is totally fine."},
+ {to:"Marcus King — VP Supply Chain, Fleetline",body:"Marcus — quick one. We helped a 3PL your size cut fulfilment cost 14% in a quarter. The playbook is written up. Want the 5 pages?"},
+ {to:"Marcus King — follow-up, day 3",body:"Bumping once, Marcus — the 14% case study names the exact changes. If it’s useful, it’s yours."},
+ {to:"Elena Ford — CEO, Parkway Logistics",body:"Elena — most CEOs we talk to can’t see which lane is quietly losing money. Our teardown finds it in 6 minutes of reading. Want a copy?"},
+ {to:"Elena Ford — follow-up, day 5",body:"Last one from me, Elena — if now’s not the moment I’ll close the loop here. The offer stands whenever it’s useful."}
+];
+var QS=[
+ {q:"What do customers complain about most — in their words?",a:"“We’re spending a fortune on ads but can’t prove what’s driving revenue.”"},
+ {q:"Who is your dream customer?",a:"Mid-size logistics companies, 50–500 staff, US + UK, the ops leader or founder."},
+ {q:"What makes you different from the next company that does what you do?",a:"Fixed monthly price, results in the first month, and clients keep the playbook."}
+];
+var SCENS=[
+ {in:"“Interesting — how much does this cost?”",dr:"Great question — it depends on volume, so the honest answer is a 15-minute call. Would Tue or Thu suit for a quick run-through?"},
+ {in:"“Can you send more info first?”",dr:"Of course — here’s the 5-page teardown. If it lands, grab 15 minutes with Sarah here: [link]. No chase if not."},
+ {in:"“We already work with someone for this.”",dr:"Totally fair — most of our clients did too. If it’s ever worth a second opinion, the teardown is free and yours to keep."}
+];
+
+var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
+ notes:{},offers:{},own:[],quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,tw:false,mine:{}};
+var S=JSON.parse(JSON.stringify(FRESH));
+try{var raw=localStorage.getItem("nav_onboarding_v1");if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=p;}}catch(e){}
+function save(){try{localStorage.setItem("nav_onboarding_v1",JSON.stringify(S));}catch(e){}}
+
+function LDATE(){return S.slotMoves?"Thu Sep 18":"Mon Sep 15";}
+function warmDayNum(){return S.done.infrastructure?[1,4,6,9,12,14][S.stage]:0;}
+function noteCount(){var n=0;for(var k in S.notes){if(S.notes[k]&&String(S.notes[k]).trim())n++;}return n;}
+function cardsIn(st){return CARDS.filter(function(c){return c.stage===st;});}
+function undone(st){return cardsIn(st).filter(function(c){return !S.done[c.id];});}
+function nextCard(){var u=undone(S.stage);return u.length?u[0]:null;}
+function go(route){location.hash=route?("#/"+route):"#/";}
+function toast(msg){var t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");
+ clearTimeout(t._h);t._h=setTimeout(function(){t.classList.remove("show");},2600);}
+
+function complete(id,msg){
+ var was=S.done[id];S.done[id]=true;
+ if(S.stage===0&&undone(0).length===0){S.stage=1;save();go();render();toast("Set up — done. We take it from here for a bit.");return;}
+ if(S.stage===3&&S.done.emails){S.stage=4;S.locked=true;save();go();render();
+  var nn=noteCount();toast(nn?("Approved with "+nn+" change"+(nn>1?"s":"")+" — revised versions tomorrow. "+LDATE()+" locked"):("Approved — "+LDATE()+" is locked"));return;}
+ if(S.stage===4&&undone(4).length===0){S.stage=5;save();go();render();
+  toast("Everything’s ready. Launching "+(S.slotMoves?"Thursday":"Monday"));return;}
+ save();go();render();
+ if(msg&&!was)toast(msg);
+}
+function demoSkip(){
+ if(S.stage===5)return;
+ cardsIn(S.stage).forEach(function(c){S.done[c.id]=true;});
+ if(!S.slot)S.slot="Thu 4 Sep · 10:00";
+ if(S.stage===0){S.stage=1;toast("Set up — done.");}
+ else if(S.stage===1){S.stage=2;toast("Great first call. Your plan lands Thu · 17:00.");}
+ else if(S.stage===2){S.stage=3;toast("Your emails are ready to read.");}
+ else if(S.stage===3){S.stage=4;S.locked=true;toast("Approved — "+LDATE()+" locked");}
+ else if(S.stage===4){S.stage=5;S.trained=12;S.mikeOk=true;toast("Everything’s ready. Launching "+(S.slotMoves?"Thursday":"Monday"));}
+ save();go();render();
+}
+function resetAll(){S=JSON.parse(JSON.stringify(FRESH));save();go();render();toast("Demo reset");}
+
+/* ---------- overlays (chain + journey) ---------- */
+var scrim=document.getElementById("scrim");
+function closePop(){scrim.classList.remove("open");scrim.innerHTML="";}
+scrim.addEventListener("click",function(e){if(e.target===scrim)closePop();});
+document.addEventListener("keydown",function(e){if(e.key==="Escape")closePop();});
+function openPop(html){scrim.innerHTML='<div class="ob-pop"><button class="ob-x" data-x aria-label="Close">×</button>'+html+'</div>';
+ scrim.classList.add("open");scrim.querySelector("[data-x]").addEventListener("click",closePop);}
+
+function chainHTML(){
+ var wd=warmDayNum();
+ return '<h2 class="mono">'+LDATE()+' — why that date</h2>'
+ +'<div class="chain">'
+ +'<div class="clink '+(S.done.infrastructure?"ok":"now")+'"><span class="d"></span><span>Your addresses — '+(S.done.infrastructure?"approved + bought":"waiting on you")+'</span><span class="o">'+(S.done.infrastructure?"DONE":"3 MIN")+'</span></div>'
+ +'<div class="clink '+(S.stage>=5?"ok":(S.done.infrastructure?"now":""))+'"><span class="d"></span><span>Warm-up — 14 days of good behaviour</span><span class="o">'+(S.done.infrastructure?(S.stage>=5?"DONE — 14 OF 14":"DAY "+wd+" OF 14"):"STARTS THE DAY YOU APPROVE")+'</span></div>'
+ +'<div class="clink '+(S.done.emails?"ok":"")+'"><span class="d"></span><span>Your emails — approved</span><span class="o">'+(S.done.emails?"DONE":"UP AHEAD")+'</span></div>'
+ +'<div class="clink '+(S.stage>=5?"now":"")+'"><span class="d"></span><span>Launch</span><span class="o">'+LDATE().toUpperCase()+' '+(S.locked?"· LOCKED":"· +2 SPARE DAYS")+'</span></div>'
+ +'</div>'
+ +(S.slotMoves?'<p class="mutline">You picked Monday’s call — that’s the move from Sep 15 to Sep 18.</p>':"")
+ +'<p class="physics">Warm-up is physics — brand-new addresses must earn trust slowly. Nobody can skip it, which is why it starts the moment you approve.</p>';
+}
+function journeyHTML(){
+ var lines=["Your 7 quick things — done in ~30 min","30 minutes with Jordan — bring your offers","Jordan drafts it; you two decide together","Read all 11, then approve — locks your date","What your AI can quote, teaching it, calendars","Replies land, meetings book, weekly reports"];
+ var out='<h2>Your whole journey</h2><p class="lead">Six stages, about two weeks. You are here:</p><div class="chain">';
+ for(var i=0;i<STAGES.length;i++){
+  out+='<div class="clink '+(i<S.stage?"ok":(i===S.stage?"now":""))+'"><span class="d"></span><span><b>'+STAGES[i]+'</b> — '+lines[i]+'</span><span class="o">'+(i<S.stage?"DONE":(i===S.stage?"NOW":""))+'</span></div>';
+ }
+ return out+'</div><p class="mutline mono">Launch: '+LDATE()+(S.locked?" · locked ✓":"")+'</p>';
+}
+
+/* ---------- infra page (the Settings → Email Infrastructure Tracker design) ---------- */
+var ISTEPS=["Setup","Buying","Mailboxes","Warming","Ready"];
+function infraStageIdx(){
+ if(!S.done.infrastructure)return 0;
+ if(S.stage===0)return 1;              /* just approved — buying */
+ if(S.stage===1)return 3;              /* warming d4 */
+ if(S.stage>=5)return 5;               /* ready */
+ return 3;                              /* warming through plan/emails/prep */
+}
+function trackerHTML(cur){
+ return '<div class="tracker">'+ISTEPS.map(function(l,i){
+  var cls=i<cur?"done":(i===cur?"now":"");
+  return '<div class="step '+cls+'"><span class="bar"></span><span class="knot"></span><span class="lbl">'+l+'</span></div>';
+ }).join("")+'</div>';
+}
+function infraRows(idx){
+ function row(name,mb,status){return '<div class="drow"><span class="name">'+name+'</span><span class="mbcount">'+mb+'</span><span class="status">'+status+'</span></div>';}
+ if(idx===0)return DOMAINS.map(function(d){return row(d,"3 inboxes planned",'<b class="dim">Waiting for your go-ahead</b>');}).join("");
+ if(idx===1)return row(DOMAINS[0],"3 inboxes planned",'<b class="ok">Bought ✓</b><span class="when">today · mailboxes queued</span>')
+  +row(DOMAINS[1],"3 inboxes planned",'<b class="live">Buying now</b><span class="when">from Porkbun</span>')
+  +row(DOMAINS[2],"3 inboxes planned",'<b class="dim">Waiting its turn</b><span class="when">tomorrow — spaced on purpose</span>');
+ if(idx===5)return DOMAINS.map(function(d){return row(d,'3 inboxes <span class="tick">✓</span>','<b class="ok">Ready ✓</b><span class="when">Fri 12 Sep</span>');}).join("");
+ var wd=warmDayNum();
+ return DOMAINS.map(function(d){return row(d,'3 inboxes <span class="tick">✓</span>','<b>Warming</b><span class="when">· day '+wd+' of 14 · ready Fri 12 Sep</span>');}).join("");
+}
+function infraPage(){
+ var idx=infraStageIdx();
+ if(idx===0){ /* awaiting the client's go-ahead */
+  return '<div class="headline">Your sending addresses, ready for <span class="date">your go-ahead</span>.</div>'
+  +'<div class="subline">We never send from acmecorp.com. These three are near-copies we bought and own — so your real address can never get in trouble.</div>'
+  +trackerHTML(0)
+  +'<div class="dcard">'+infraRows(0)+'</div>'
+  +'<div class="panel2">'
+   +'<div class="sectionlbl">Who’s sending</div>'
+   +'<div class="prow2"><span>Sarah Chen — <b>your</b> VP Sales</span><span class="okc">AGREED TO BE SENDER ✓</span></div>'
+   +'<div class="prow2"><span>Mike Torres — <b>your</b> Head of Growth</span><span class="okc">AGREED TO BE SENDER ✓</span></div>'
+   +'<div class="hintline">9 inboxes on 3 domains ≈ your 5,000 emails a month — we sort the inbox mix for you. When people reply, our AI drafts the answer in your words — a person presses send, every time.</div>'
+  +'</div>'
+  +'<div style="margin-top:26px"><div class="ob-vid"><div class="play">▶</div><div class="t">Email addresses, explained — Bjion, Navreo</div><div class="s">2 MIN · WHAT WE BUY, WHY IT’S SAFE, HOW WE RUN IT</div></div></div>'
+  +'<div class="ob-foot2"><button class="btn-go" data-infra-go>Use these — starts your 2-week clock</button>'
+  +'<button class="linkbtn" data-back2>Different names? Tell us on your call</button></div>';
+ }
+ var h,s;
+ if(idx===1){h='Buying your 3 domains <span class="date">quietly over 2 days</span>.';
+  s='Spread out and from different places — on purpose. Nothing needed from you.';}
+ else if(idx===5){h='All 3 domains are ready — <span class="date">9 inboxes</span>, good to go.';
+  s='Sending as Sarah + Mike · visitors land on acmecorp.com · watched every day.';}
+ else {h='Your inboxes are warming — ready <span class="date">Fri 12 Sep</span>.';
+  s='Warming = sending friendly practice emails so inbox providers trust you. Nothing needed from you.';}
+ return '<div class="headline">'+h+'</div><div class="subline">'+s+'</div>'
+ +trackerHTML(idx)
+ +'<div class="dcard">'+infraRows(idx)+'</div>'
+ +'<div class="foot"><div class="quiet">'
+ +'<span><span class="tick">✓</span>Checked automatically</span>'
+ +'<span><span class="tick">✓</span>Your team sees every step in Slack</span>'
+ +'</div></div>'
+ +(idx===5?'<div class="nudge2">They’re warmed and trusted — your campaigns send from these.</div>':'');
+}
+
+/* ---------- other task pages ---------- */
+function pageWrap(inner){return '<div class="col">'+inner+'</div>';}
+var PAGES={
+ infrastructure:function(){return infraPage();},
+ call:function(){return '<div class="headline">Book your <span class="date">first call</span>.</div>'
+  +'<div class="subline">30 minutes with Jordan — times are your local time. Monday costs three days; the slot says so.</div>'
+  +'<div class="ob-body ob-slots">'
+  +'<button class="ob-slot" data-slot="Thu 4 Sep · 10:00" data-moves="0"><span>Thu 4 Sep · 10:00</span><span class="keeps">keeps Sep 15</span></button>'
+  +'<button class="ob-slot" data-slot="Fri 5 Sep · 14:00" data-moves="0"><span>Fri 5 Sep · 14:00</span><span class="keeps">keeps Sep 15</span></button>'
+  +'<button class="ob-slot" data-slot="Mon 8 Sep · 11:00" data-moves="1"><span>Mon 8 Sep · 11:00</span><span class="moves">moves launch to Sep 18</span></button>'
+  +'</div>';},
+ offers:function(){
+  var picked=Object.keys(S.offers).filter(function(k){return S.offers[k];}).length+S.own.length;
+  return '<div class="headline">Pick the offers you’d <span class="date">feel good running</span>.</div>'
+  +'<div class="subline">The offer decides everything in cold email. We drafted two from your sales calls — pick, tweak, or add your own. We choose the winner together on your call.</div>'
+  +'<div class="ob-body" style="display:grid;gap:9px">'
+  +'<button class="ob-offer '+(S.offers.o1?"picked":"")+'" data-offer="o1"><b>Free margin teardown</b><span>“5 pages on where companies like yours leak money — free, keep it either way.”</span>'+(S.offers.o1?'<span class="pk">PICKED ✓</span>':"")+'</button>'
+  +'<button class="ob-offer '+(S.offers.o2?"picked":"")+'" data-offer="o2"><b>First month proves it</b><span>“If month one doesn’t book real meetings, month two is free.”</span>'+(S.offers.o2?'<span class="pk">PICKED ✓</span>':"")+'</button>'
+  +(S.own.length?'<p class="ob-note" style="text-align:left;margin:0">Yours: '+S.own.join(" · ")+'</p>':"")
+  +'<div class="ob-inprow"><input class="ob-inp" id="ownOffer" placeholder="Add one of your own…"><button class="btn-ghost" data-ownadd>Add</button></div>'
+  +'</div>'
+  +'<div class="ob-foot2"><button class="btn-go" data-done="offers" '+(picked?"":"disabled")+'>'+(picked?("Save my picks ("+picked+")"):"Pick at least one to save")+'</button><span class="ob-t clock">bring these to your call</span></div>';},
+ business:function(){
+  if(S.q>=QS.length){return '<div class="headline">About your business — <span class="date">checked</span>.</div>'
+   +'<div class="subline">3 checked · 19 pre-filled the same way. Skim the rest any time before your call — change anything, whenever.</div>'
+   +'<div class="ob-foot2"><button class="btn-go" data-done="business">All done</button><button class="linkbtn" data-qreset>Look again</button></div>';}
+  var i=S.q,item=QS[i];
+  return '<div class="headline">Your job is <span class="date">checking</span>, not typing.</div>'
+  +'<div class="subline">Pre-filled from your sales calls. Question '+(i+7)+' of 22 · saved as you go.</div>'
+  +'<div class="ob-body"><div class="pbar"><i style="width:'+Math.round(((i+7)/22)*100)+'%"></i></div>'
+  +'<div class="ob-q"><div class="q">'+item.q+'</div>'
+  +(S.editQ===i?'<textarea id="qedit">'+item.a.replace(/&/g,"&amp;")+'</textarea>':'<div class="a">'+item.a+'</div>')
+  +'<span class="frombadge">FROM YOUR SALES CALL — CHECK IT</span></div></div>'
+  +'<div class="ob-foot2">'+(S.editQ===i
+   ?'<button class="btn-go" data-qsave>Save my version →</button>'
+   :'<button class="btn-ghost" data-qok>Looks right →</button><button class="btn-ghost" data-qfix>Fix it</button>')+'</div>';},
+ slack:function(){
+  if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
+   +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
+  return '<div class="headline">Join us on <span class="date">Slack</span>.</div>'
+  +'<div class="subline">Quick questions, wins, updates — one room, your team and ours. Prefer email? Totally fine — updates mirror there.</div>'
+  +'<div class="ob-body ob-steps">'
+  +'<div class="ob-s3"><span class="n">1</span><span>No Slack? Use it in the browser — nothing to install</span></div>'
+  +'<div class="ob-s3"><span class="n">2</span><span>Tap your invite to <b>#acme-navreo</b></span></div>'
+  +'<div class="ob-s3"><span class="n">3</span><span>Say hi — we’ll spot you arrive, nothing to tick</span></div>'
+  +'</div>'
+  +'<div class="ob-foot2"><button class="btn-go" data-slack>Open my invite</button></div>';},
+ home:function(){return '<div class="headline">Your <span class="date">home base</span>.</div>'
+  +'<div class="subline">Contracts, invoices, recordings, weekly reports — one page, always up to date. Nothing to install.</div>'
+  +'<div class="ob-body"><div class="dcard">'
+  +'<div class="drow"><span class="name">Contract</span><span class="status"><b class="ok">Filed ✓</b></span></div>'
+  +'<div class="drow"><span class="name">Invoice</span><span class="status"><b class="ok">Filed ✓</b></span></div>'
+  +'<div class="drow"><span class="name">Call recordings</span><span class="status"><b>2</b></span></div>'
+  +'<div class="drow"><span class="name">Weekly reports</span><span class="status"><b class="dim">from Sep 22</b></span></div>'
+  +'</div></div>'
+  +'<p class="ob-note">Tap ☆ in your browser to save it — and it’s pinned in Slack, always.</p>'
+  +'<div class="ob-foot2"><button class="btn-go" data-done="home">Got it</button></div>';},
+ block:function(){return '<div class="headline">Who we should <span class="date">never email</span>.</div>'
+  +'<div class="subline">Your clients, live deals, competitors. Type or paste — no spreadsheet needed. We’ll double-check with you 2 days before launch.</div>'
+  +'<div class="ob-body"><textarea class="ob-dnc" placeholder="Northwind Logistics · jane@bigclient.com · rivalco.com"></textarea></div>'
+  +'<div class="ob-foot2"><button class="btn-ghost" data-done="block">Save list</button><button class="btn-ghost" data-done2="block">Nobody to block</button></div>';},
+ emails:function(){
+  var i=S.eIdx,e=EMAILS[i],read=S.eRead,all=EMAILS.length,left=all-read;
+  var bars="";for(var b=0;b<all;b++){bars+='<i class="'+(b<read?"on":"")+'"></i>';}
+  var nn=noteCount();
+  return '<div class="headline">Read + approve <span class="date">your emails</span>.</div>'
+  +'<div class="subline">3 different angles · 11 emails · about 12 minutes. Real emails to real people from your list. Changes? Every round comes back in under a day.</div>'
+  +'<div class="ob-body"><div class="ob-mail"><div class="fr">'+(i+1)+' OF 11 · TO: '+e.to.toUpperCase()+' · FROM: SARAH (acmecorp-hq.com)</div><p>'+e.body+'</p>'
+  +'<div>'+(S.notes[i]!==undefined
+   ?'<textarea class="ob-dnc" id="noteTxt" style="min-height:52px" placeholder="What should change?">'+(S.notes[i]||"")+'</textarea><p class="ob-note" style="text-align:left;margin-top:6px">Jordan gets this with your approval — revised version back in under a day.</p>'
+   :'<button class="notetog" data-note>✏️ Ask for a change on this one</button>')+'</div></div>'
+  +'<div class="ob-deck"><button data-eprev '+(i===0?"disabled":"")+'>← Back</button><span class="cnt">Read '+read+' of 11</span><button data-enext '+(i===all-1?"disabled":"")+'>Next →</button></div>'
+  +'<div class="ob-readbar">'+bars+'</div></div>'
+  +'<div class="ob-foot2"><button class="btn-go" data-approve '+(read>=all?"":"disabled")+'>'+(read>=all?((nn?("Approve with "+nn+" change"+(nn>1?"s":"")):"Approve")+" — locks "+LDATE()):("Read "+left+" more to approve"))+'</button></div>';},
+ quote:function(){return '<div class="headline">What your AI <span class="date">can quote</span>.</div>'
+  +'<div class="subline">When people reply, your AI answers in your voice. Give it the good stuff.</div>'
+  +'<div class="ob-body"><div class="dcard">'
+  +'<div class="drow"><span class="name">Case studies</span><span class="status"><b class="ok">2 in ✓</b><span class="when">from your sales call</span></span></div>'
+  +'<div class="drow"><span class="name">Pricing one-pager</span><span class="status"><b class="ok">In ✓</b><span class="when">from your sales call</span></span></div>'
+  +'<div class="drow"><span class="name">Your best objection answers</span><span class="status">'+(S.quoteObj?'<b class="ok">In ✓</b>':'<b class="live">Still needed</b>')+'</span></div>'
+  +'<div class="drow"><span class="name">FAQ</span><span class="status"><b class="dim">Nice to have</b></span></div>'
+  +'</div>'
+  +(S.quoteObj?"":'<div class="ob-inprow"><input class="ob-inp" id="quoteInp" placeholder="Paste a link, or type your best answer…"><button class="btn-ghost" data-quoteadd>Add</button></div>')+'</div>'
+  +'<div class="ob-foot2"><button class="btn-go" data-done="quote" '+(S.quoteObj?"":"disabled")+'>'+(S.quoteObj?"All in ✓":"Add your objection answers first")+'</button></div>';},
+ train:function(){
+  if(S.trained>=12){return '<div class="headline">Your AI sounds like <span class="date">you</span> now.</div>'
+   +'<div class="subline">12 of 12 practice replies good enough to send. Your team still OKs every send.</div>'
+   +'<div class="ob-foot2"><button class="btn-go" data-done="train">Done ✓</button></div>';}
+  var idx=Math.min(Math.max(0,S.trained-7),SCENS.length-1),sc=SCENS[idx];
+  return '<div class="headline">Teach <span class="date">your AI</span>.</div>'
+  +'<div class="subline">It drafts, you judge. '+S.trained+' of 12 practice replies good enough to send — about 5 minutes left.</div>'
+  +'<div class="ob-body"><div class="pbar"><i style="width:'+Math.round(S.trained/12*100)+'%"></i></div>'
+  +'<div class="ob-scen"><div class="in">They wrote: '+sc.in+'</div><div class="dr">Your AI drafts: “'+sc.dr+'”</div>'
+  +(S.tw?'<textarea class="ob-dnc" id="twTxt" style="min-height:52px" placeholder="What would you change?"></textarea><div class="acts" style="margin-top:8px"><button data-tweaksave>Teach it →</button></div>'
+   :'<div class="acts"><button data-rate>Send as is 👍</button><button data-tweak>I’d tweak it ✏️</button></div>')+'</div></div>';},
+ calendar:function(){return '<div class="headline">Connect the calendar of whoever <span class="date">takes the calls</span>.</div>'
+  +'<div class="subline">When a prospect says yes, we book straight into the right diary. Connect once — it just works after that. Two or more people? Bookings rotate to whoever’s free.</div>'
+  +'<div class="ob-body"><div class="dcard">'
+  +'<div class="drow"><span class="name">Sarah Chen</span><span class="status"><b class="ok">Calendar connected ✓</b></span></div>'
+  +'<div class="drow"><span class="name">Mike Torres</span><span class="status">'+(S.mikeOk?'<b class="ok">Calendar connected ✓</b>':'<b class="live">Invite sent</b>')+'</span>'+(S.mikeOk?"":'<button class="prow2 mini" data-mike style="border-radius:8px">Nudge Mike</button>')+'</div>'
+  +S.people.map(function(pn){return '<div class="drow"><span class="name">'+pn+'</span><span class="status"><b class="live">Invite sent</b></span></div>';}).join("")
+  +'</div>'
+  +'<div class="ob-inprow"><input class="ob-inp" id="personInp" placeholder="Add another call-taker (name)…"><button class="btn-ghost" data-personadd>Invite</button></div></div>'
+  +'<div class="ob-foot2"><button class="btn-go" data-done="calendar" '+(S.mikeOk?"":"disabled")+'>'+(S.mikeOk?"All set":"Waiting on Mike’s calendar")+'</button></div>';},
+ plan:function(){return '<div class="headline">Your plan — <span class="date">tonight’s reading</span>.</div>'
+  +'<div class="subline">Who we’d email, and why. Nothing needed from you — we decide everything together on your plan call (Tue 9 Sep · 14:00). React if you like; Jordan sees it.</div>'
+  +'<div class="ob-body dcard">'
+  +planRow("b1","Mid-size logistics firms — ops leaders","4,200 people · free teardown angle")
+  +planRow("b2","Companies hiring sales reps","1,850 · “you’re scaling — here’s the playbook”")
+  +planRow("b3","Companies like your best clients","2,900 · case-study led")
+  +'</div>'
+  +'<p class="ob-note">Counts already skip your never-email list. We email about 214 a day — pools this size last months.</p>'
+  +'<div class="ob-foot2"><button class="btn-ghost" data-done="plan">Seen it — see you Tuesday</button></div>';},
+ lead1:function(){return '<div class="headline">Dana Reeve — <span class="date">Northgate 3PL</span>.</div>'
+  +'<div class="subline">Replied 22 minutes ago to email 1.</div>'
+  +'<div class="ob-body"><div class="ob-mail"><div class="fr">DANA REEVE — VP OPS</div><p>“This is timely — send the teardown over.”</p></div>'
+  +(S.mine.Dana?'<p class="ob-note"><b>Yours ✓</b> — we’re holding off. Sarah stands down; Dana’s details are in your Slack.</p>'
+   :'<p class="ob-note">Sarah — your VP Sales — is calling Dana at 14:40 today. Booked automatically into the calendar she connected.</p>')+'</div>'
+  +(S.mine.Dana?"":'<div class="ob-foot2"><button class="btn-ghost" data-takeit="Dana">I’ll take this one myself</button></div>');},
+ lead2:function(){return '<div class="headline">Marcus King — <span class="date">Fleetline</span>.</div>'
+  +'<div class="subline">Replied an hour ago to email 8.</div>'
+  +'<div class="ob-body"><div class="ob-mail"><div class="fr">MARCUS KING — VP SUPPLY CHAIN</div><p>“Who have you done this for in freight?”</p></div>'
+  +(S.mine.Marcus?'<p class="ob-note"><b>Yours ✓</b> — we’re holding off. The drafted answer is in your Slack to send as you.</p>'
+   :'<p class="ob-note">Your AI drafted the answer (the 14% case study) — Sarah OKs it within the hour.</p>')+'</div>'
+  +(S.mine.Marcus?"":'<div class="ob-foot2"><button class="btn-ghost" data-takeit="Marcus">I’ll take this one myself</button></div>');}
+};
+function planRow(id,b,s){var r=S.reacts[id]||"";
+ return '<div class="drow"><span style="min-width:0"><span class="name">'+b+'</span><span class="mbcount" style="display:block;margin:2px 0 0">'+s+'</span></span>'
+ +'<span class="status"><button class="prow2 mini '+(r==="up"?"":"")+'" data-react="'+id+':up" style="border-radius:8px'+(r==="up"?";border-color:var(--orange);background:var(--orange-100)":"")+'">👍</button> '
+ +'<button class="prow2 mini" data-react="'+id+':down" style="border-radius:8px'+(r==="down"?";border-color:var(--orange);background:var(--orange-100)":"")+'">👎</button></span></div>';}
+
+/* ---------- render ---------- */
+function route(){var h=location.hash.replace(/^#\/?/,"");return h||"";}
+function render(){
+ var app=document.getElementById("app");
+ var r=route();
+ var out='<div class="ob-top"><div class="ob-brand">nav<em>reo</em><span>· Acme Corp</span></div>'
+  +'<button class="ob-date mono '+(S.locked?"locked":"")+'" data-pop="chain">🚀 <u>'+LDATE()+(S.locked?" · locked ✓":"")+'</u></button></div>';
+
+ if(r&&PAGES[r]){
+  out+='<button class="ob-back" data-backhub>← Your hub</button>';
+  out+='<div class="col">'+PAGES[r]()+'</div>';
+ } else {
+  out+='<button class="ob-stgbtn" data-pop="journey" aria-label="See your whole journey">'
+   +'<span class="ob-dots" aria-hidden="true">';
+  for(var i=0;i<STAGES.length;i++){out+='<span class="ob-dot '+(i<S.stage?"done":(i===S.stage?"now":""))+'"></span>';}
+  out+='</span><span class="ob-snow"><span><b>'+STAGES[S.stage]+'</b> · '+(S.stage+1)+' of 6 · <u>see all</u></span></span></button>';
+  var mv;
+  if(S.stage===0){var n=undone(0).length;mv='<span class="chip you"><i></i>Your move · '+n+' thing'+(n===1?"":"s")+' left</span>';}
+  else if(S.stage===1){mv='<span class="chip us"><i></i>Nothing needed until your call ('+(S.slot||"Thu 4 Sep · 10:00")+')</span>';}
+  else if(S.stage===2){mv='<span class="chip us"><i></i>Nothing needed — Jordan’s writing your plan</span>';}
+  else if(S.stage===3){mv='<span class="chip you"><i></i>Your move · 1 thing (~12 min)</span>';}
+  else if(S.stage===4){var u=undone(4);
+   if(u.length===1&&u[0].id==="calendar"&&!S.mikeOk){mv='<span class="chip team"><i></i>Waiting on Mike — calendar invite</span>';}
+   else if(u.length){mv='<span class="chip you"><i></i>Your move · '+u.length+' thing'+(u.length===1?"":"s")+' left</span>';}
+   else{mv='<span class="chip us"><i></i>Final checks — nothing needed</span>';}}
+  else{mv='<span class="chip live"><i></i>You’re live · Sarah’s on both replies</span>';}
+  out+='<div class="ob-move">'+mv+'</div>';
+  if(S.stage===5){out+=liveView();}
+  else{out+=heroView();out+=listView();}
+  out+='<p class="ob-help">Stuck or curious? Message us in Slack — a human answers.</p>';
+ }
+ app.innerHTML=out;
+ bindAll();
+}
+
+function heroView(){
+ if(S.stage===0){
+  var c=nextCard();if(!c)return "";
+  var subs={infrastructure:"Do this first — it starts the 2-week clock that sets your launch date. Your real address never gets touched.",
+   call:"30 minutes with Jordan. Each slot shows your launch date.",
+   offers:"We drafted two from your sales calls. Pick, tweak, or add your own.",
+   business:"Pre-filled from your sales calls — just check what we heard.",
+   slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
+   home:"One page where everything lives. Worth a star.",
+   block:"Clients, live deals, competitors — tell us who’s off-limits."};
+  var ctas={infrastructure:"See them",call:"Pick a time",offers:"Pick them",business:"Check it",slack:"Open my invite",home:"Have a look",block:"Tell us"};
+  return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>'+c.title+'</h1><p class="ob-sub">'+subs[c.id]+'</p>'
+   +'<div class="ob-row"><button class="btn-go" data-go="'+c.id+'">'+ctas[c.id]+'</button><span class="ob-t">'+c.time+'</span>'+(c.clock?'<span class="ob-t clock">⏱ starts your 2-week clock</span>':"")+'</div></div>';
+ }
+ if(S.stage===1){
+  return '<div class="ob-hero"><span class="ob-k">All set</span><h1>See you '+(S.slot||"Thu 4 Sep · 10:00")+'</h1>'
+   +'<p class="ob-sub">30 minutes with Jordan. Bring the offers you picked — that’s it. Calendar invite’s in your inbox ✓</p>'
+   +'<div class="ob-row"><span class="ob-t ok mono">WARM-UP · DAY '+warmDayNum()+' OF 14</span><button class="btn-ghost" data-go="infrastructure">Watch your addresses</button></div></div>';
+ }
+ if(S.stage===2){
+  return '<div class="ob-hero"><span class="ob-k">Nothing needed from you</span><h1>Jordan’s writing your plan</h1>'
+   +'<p class="ob-sub">It lands Thu · 17:00, here. Peek if you’re curious — every decision gets made together on your plan call (Tue 9 Sep · 14:00). We’ll ping you in Slack the moment it’s ready.</p>'
+   +'<div class="ob-row"><button class="btn-ghost" data-go="plan">Have a peek</button><span class="ob-t ok mono">WARM-UP · DAY '+warmDayNum()+' OF 14</span></div></div>';
+ }
+ if(S.stage===3){
+  return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>Read + approve your emails</h1>'
+   +'<p class="ob-sub">3 different angles · 11 emails · about 12 minutes. You’ll see every one before anything locks.</p>'
+   +'<div class="ob-row"><button class="btn-go" data-go="emails">Read them</button><span class="ob-t">12 min</span></div></div>';
+ }
+ if(S.stage===4){
+  var c2=nextCard();
+  if(!c2)return '<div class="ob-hero"><span class="ob-k">Almost</span><h1>Final checks on our side</h1><p class="ob-sub">Launching '+(S.slotMoves?"Thursday":"Monday")+' ('+LDATE()+'). Nothing needed from you.</p></div>';
+  var subs2={quote:"Case studies, pricing, objection answers — everything your AI can quote.",
+   train:S.trained+" of 12 practice replies good enough to send — nearly there.",
+   calendar:"Connect once. Bookings just appear in the right diary."};
+  var ctas2={quote:"Add files",train:"Keep teaching",calendar:"Connect"};
+  return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>'+c2.title+'</h1><p class="ob-sub">'+subs2[c2.id]+'</p>'
+   +'<div class="ob-row"><button class="btn-go" data-go="'+c2.id+'">'+ctas2[c2.id]+'</button><span class="ob-t">'+c2.time+'</span></div></div>';
+ }
+ return "";
+}
+function listView(){
+ if(S.stage===1||S.stage===2){
+  var wd=warmDayNum();
+  return '<div class="ob-listwrap"><p class="ob-lh">What we’re doing</p><div class="ob-panelbox"><div class="chain">'
+  +'<div class="clink now"><span class="d"></span><span>Warming your addresses</span><span class="o">DAY '+wd+' OF 14</span></div>'
+  +'<div class="clink '+(S.stage===2?"ok":"")+'"><span class="d"></span><span>Building your target lists</span><span class="o">'+(S.stage===2?"DONE":"WED")+'</span></div>'
+  +'<div class="clink '+(S.stage===2?"now":"")+'"><span class="d"></span><span>Jordan — writing your plan</span><span class="o">LANDS THU · 17:00</span></div>'
+  +'<div class="clink"><span class="d"></span><span>Your 11 emails, 3 different angles</span><span class="o">AFTER YOUR PLAN CALL</span></div>'
+  +'</div></div></div>';
+ }
+ var cs,title;
+ if(S.stage===0){cs=cardsIn(0);title="Everything · do the top one first";}
+ else if(S.stage===3){cs=cardsIn(3);title="This week";}
+ else {cs=cardsIn(4);title="Last three things";}
+ if(!cs.length)return "";
+ var nc=nextCard();
+ var out='<div class="ob-listwrap"><p class="ob-lh">'+title+'</p><div class="ob-list">';
+ cs.forEach(function(c){
+  var d=!!S.done[c.id];
+  var isHero=nc&&nc.id===c.id;
+  out+='<button class="ob-item'+(d?" done":"")+(isHero?" nxt updup":"")+'" data-go="'+c.id+'"><span class="st">✓</span><span class="t">'+c.title+'</span>'
+   +(c.badge&&!d?'<span class="badge">'+c.badge+'</span>':"")
+   +'<span class="meta">'+(d?"done":(isHero?"↑ up top":c.time))+'</span></button>';
+ });
+ return out+'</div></div>';
+}
+function liveView(){
+ return '<div class="ob-hero"><span class="ob-k">Live · day 1</span><h1>Your first emails went out this morning</h1>'
+  +'<p class="ob-sub">214 today on purpose — full speed by week 2. First replies usually land in 2–5 days; today you got lucky.</p></div>'
+  +'<div class="ob-listwrap"><p class="ob-lh">Today</p><div class="ob-stats mono">'
+  +'<div class="ob-stat"><span class="v">214</span><span class="lab2">SENT</span></div>'
+  +'<div class="ob-stat"><span class="v">3</span><span class="lab2">REPLIES</span></div>'
+  +'<div class="ob-stat"><span class="v">1</span><span class="lab2">MEETING</span></div>'
+  +'</div><p class="ob-yard">3 replies from 214 sends is a strong day 1. The goal we’re chasing: about 10 meetings a month.</p></div>'
+  +'<div class="ob-listwrap"><p class="ob-lh">The 3 replies</p><div class="ob-list">'
+  +'<button class="ob-lead" data-go="lead1"><span class="av">DR</span><span class="who"><b>Dana Reeve · Northgate 3PL</b><span>“This is timely — send the teardown over.”</span></span><span class="tag '+(S.mine.Dana?"tag-meet\">YOURS":"tag-hot\">HOT")+'</span></button>'
+  +'<button class="ob-lead" data-go="lead2"><span class="av">MK</span><span class="who"><b>Marcus King · Fleetline</b><span>“Who have you done this for in freight?”</span></span><span class="tag '+(S.mine.Marcus?"tag-meet\">YOURS":"tag-warm\">WARM")+'</span></button>'
+  +'<div class="ob-lead" style="cursor:default"><span class="av">PL</span><span class="who"><b>Priya Lund · Corewell</b><span>Meeting booked — Thu · 14:40 with Sarah ✓</span></span><span class="tag tag-meet">MEETING</span></div>'
+  +'</div></div>'
+  +'<div class="ob-listwrap"><p class="ob-lh">What we’re doing</p><div class="ob-panelbox"><div class="chain">'
+  +'<div class="clink now"><span class="d"></span><span>Adding 400 fresh names to your pool</span><span class="o">WED</span></div>'
+  +'<div class="clink"><span class="d"></span><span>Watching the quiet angle — we swap it if it stays flat</span><span class="o">THU</span></div>'
+  +'</div></div></div>'
+  +'<div class="ob-listwrap"><p class="ob-lh">Next</p><div class="ob-list"><div class="ob-item" style="cursor:default"><span class="st" style="border-color:var(--orange)"></span><span class="t">Your first weekly report</span><span class="meta mono">MON SEP 22</span></div></div></div>'
+  +'<div class="ob-listwrap"><p class="ob-lh">Your addresses</p><div class="ob-list"><button class="ob-item" data-go="infrastructure"><span class="st" style="background:var(--green);border-color:var(--green);color:#fff">✓</span><span class="t">All 3 domains ready — 9 inboxes</span><span class="meta">open</span></button></div></div>';
+}
+
+/* ---------- bindings ---------- */
+function bindAll(){
+ var app=document.getElementById("app");
+ function qa(sel){return Array.prototype.slice.call(app.querySelectorAll(sel));}
+ qa("[data-go]").forEach(function(b){b.addEventListener("click",function(){go(b.getAttribute("data-go"));});});
+ qa("[data-backhub],[data-back2]").forEach(function(b){b.addEventListener("click",function(){go();});});
+ qa("[data-pop]").forEach(function(b){b.addEventListener("click",function(){
+  openPop(b.getAttribute("data-pop")==="chain"?chainHTML():journeyHTML());});});
+ var el=app.querySelector("[data-infra-go]");
+ if(el)el.addEventListener("click",function(){complete("infrastructure","Done — your 2-week clock is running ⏱");});
+ qa("[data-done]").forEach(function(b){if(b.disabled)return;b.addEventListener("click",function(){
+  var id=b.getAttribute("data-done");
+  complete(id,({home:"Saved — it’s pinned in Slack too",business:"3 checked, 19 waiting whenever you fancy — thank you",offers:"Saved — bring them to your call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
+ var el2=app.querySelector("[data-done2]");
+ if(el2)el2.addEventListener("click",function(){complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
+ qa("[data-slot]").forEach(function(b){b.addEventListener("click",function(){
+  S.slot=b.getAttribute("data-slot");S.slotMoves=b.getAttribute("data-moves")==="1";
+  complete("call","Booked — "+S.slot+" with Jordan"+(S.slotMoves?" · launch is now Thu Sep 18":" ✓"));});});
+ var sl=app.querySelector("[data-slack]");
+ if(sl)sl.addEventListener("click",function(){S.slackWait=true;save();render();
+  setTimeout(function(){S.slackWait=false;complete("slack","Spotted you — welcome in 👋");},1400);});
+ var qok=app.querySelector("[data-qok]");
+ if(qok)qok.addEventListener("click",function(){S.q++;save();render();});
+ var qfix=app.querySelector("[data-qfix]");
+ if(qfix)qfix.addEventListener("click",function(){S.editQ=S.q;render();var t=app.querySelector("#qedit")||document.getElementById("qedit");if(t)t.focus();});
+ var qsave=app.querySelector("[data-qsave]");
+ if(qsave)qsave.addEventListener("click",function(){var t=document.getElementById("qedit");if(t)QS[S.q].a=t.value||QS[S.q].a;S.editQ=undefined;S.q++;save();render();toast("Saved your version ✓");});
+ var qreset=app.querySelector("[data-qreset]");
+ if(qreset)qreset.addEventListener("click",function(){S.q=0;save();render();});
+ qa("[data-offer]").forEach(function(b){b.addEventListener("click",function(){var k=b.getAttribute("data-offer");S.offers[k]=!S.offers[k];save();render();});});
+ var oa=app.querySelector("[data-ownadd]");
+ if(oa)oa.addEventListener("click",function(){var i=document.getElementById("ownOffer");if(i&&i.value.trim()){S.own.push(i.value.trim());save();render();}});
+ qa("[data-react]").forEach(function(b){b.addEventListener("click",function(){var kv=b.getAttribute("data-react").split(":");S.reacts[kv[0]]=(S.reacts[kv[0]]===kv[1]?"":kv[1]);save();render();toast("Noted — Jordan sees this before your plan call");});});
+ var en=app.querySelector("[data-enext]");
+ if(en&&!en.disabled)en.addEventListener("click",function(){S.eIdx++;S.eRead=Math.max(S.eRead,S.eIdx+1);save();render();});
+ var ep=app.querySelector("[data-eprev]");
+ if(ep&&!ep.disabled)ep.addEventListener("click",function(){S.eIdx--;save();render();});
+ var nt=app.querySelector("[data-note]");
+ if(nt)nt.addEventListener("click",function(){S.notes[S.eIdx]="";save();render();var nf=document.getElementById("noteTxt");if(nf)nf.focus();});
+ var ntx=document.getElementById("noteTxt");
+ if(ntx)ntx.addEventListener("input",function(){S.notes[S.eIdx]=ntx.value;save();});
+ var ap=app.querySelector("[data-approve]");
+ if(ap&&!ap.disabled)ap.addEventListener("click",function(){complete("emails");});
+ var am=app.querySelector("[data-quoteadd]");
+ if(am)am.addEventListener("click",function(){var i=document.getElementById("quoteInp");if(i&&i.value.trim()){S.quoteObj=true;save();render();toast("In — your AI just got sharper");}});
+ var rt=app.querySelector("[data-rate]");
+ if(rt)rt.addEventListener("click",function(){S.trained=Math.min(12,S.trained+2);save();render();if(S.trained<12)toast("Noted — it learns from every answer");});
+ var tw=app.querySelector("[data-tweak]");
+ if(tw)tw.addEventListener("click",function(){S.tw=true;render();var t2=document.getElementById("twTxt");if(t2)t2.focus();});
+ var tws=app.querySelector("[data-tweaksave]");
+ if(tws)tws.addEventListener("click",function(){S.tw=false;S.trained=Math.min(12,S.trained+2);save();render();toast("Taught — it won’t make that mistake twice");});
+ var mk=app.querySelector("[data-mike]");
+ if(mk)mk.addEventListener("click",function(){S.mikeOk=true;save();render();toast("Mike’s connected ✓");});
+ var pa=app.querySelector("[data-personadd]");
+ if(pa)pa.addEventListener("click",function(){var i=document.getElementById("personInp");if(i&&i.value.trim()){S.people.push(i.value.trim());save();render();toast("Invite sent to "+i.value.trim());}});
+ qa("[data-takeit]").forEach(function(b){b.addEventListener("click",function(){var nm=b.getAttribute("data-takeit");S.mine[nm]=true;save();render();toast(nm+" is yours — we’re holding off");});});
+}
+
+var demoArm=null;
+document.getElementById("demoBtn").addEventListener("click",function(){
+ var b=document.getElementById("demoBtn");
+ if(demoArm){clearTimeout(demoArm);demoArm=null;b.textContent="▸ preview · demo only";demoSkip();return;}
+ b.textContent="tap again to skip ahead";
+ demoArm=setTimeout(function(){demoArm=null;b.textContent="▸ preview · demo only";},2500);
+});
+document.getElementById("resetBtn").addEventListener("click",resetAll);
+window.addEventListener("hashchange",render);
+render();
+})();
+</script>
+</body>
+</html>
