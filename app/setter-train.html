@@ -1692,6 +1692,48 @@ async function fetchInterviewQuestions(opts) {
   };
 }
 
+/* ── Streamed interview answers (owner ask 2026-08-27: "maybe if, as we're
+   answering the questions, we're automatically saving it into the new
+   brain") ──────────────────────────────────────────────────────────────
+   Each answer is POSTed the moment the trainer finishes typing it (1.2s
+   idle, or leaving the field), so the merge + pool-redraft pipeline runs
+   WHILE the remaining answers are typed instead of starting only at Save.
+   IV_STREAM_SENT remembers what was already sent so the final Save only
+   submits what changed - usually nothing, making Save→next-round instant. */
+const IV_STREAM_SENT = {};
+let ivStreamTimers = {};
+function streamOneInterviewAnswer(inp) {
+  const qid = inp.getAttribute("data-qid");
+  const val = (inp.value || "").trim();
+  if (!qid || !val || IV_STREAM_SENT[qid] === val) return;
+  IV_STREAM_SENT[qid] = val;
+  const lab = inp.closest(".iv-q") ? inp.closest(".iv-q").querySelector("label") : null;
+  const q = { id: qid, q: lab ? (lab.textContent || "").trim() : "" };
+  ANSWERED_IV_LOCAL.ids.add(String(qid));
+  ANSWERED_IV_LOCAL.texts.add(String(q.q).toLowerCase());
+  persistAnsweredIvLocal();
+  const body = { agent_id: selectedAgentId, action: "answers",
+                 answers: { [qid]: val }, questions: [q] };
+  if (SHARE_MODE) body.share = SHARE_TOKEN;
+  fetchJson("/api/setter/training/interview", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }).catch(() => { delete IV_STREAM_SENT[qid]; /* retried by the final Save */ });
+}
+document.addEventListener("input", (e) => {
+  const inp = e.target;
+  if (!inp || !inp.matches || !inp.matches("#ivForm .iv-q input[data-qid]")) return;
+  const qid = inp.getAttribute("data-qid");
+  clearTimeout(ivStreamTimers[qid]);
+  ivStreamTimers[qid] = setTimeout(() => streamOneInterviewAnswer(inp), 1200);
+});
+document.addEventListener("focusout", (e) => {
+  const inp = e.target;
+  if (!inp || !inp.matches || !inp.matches("#ivForm .iv-q input[data-qid]")) return;
+  clearTimeout(ivStreamTimers[inp.getAttribute("data-qid")]);
+  streamOneInterviewAnswer(inp);
+});
+
 async function submitInterviewAnswers(iv, onDone) {
   const answers = {};
   let n = 0;
@@ -1719,7 +1761,16 @@ async function submitInterviewAnswers(iv, onDone) {
     }
   });
   persistAnsweredIvLocal();
-  const body = { agent_id: selectedAgentId, action: "answers", answers, questions: sentQuestions };
+  // Streaming already delivered most answers while the trainer typed - only
+  // submit what changed since. When nothing is left, skip the POST entirely
+  // and advance immediately (the pipeline has been running for a while).
+  const unsent = {};
+  for (const [qid, val] of Object.entries(answers)) {
+    if (IV_STREAM_SENT[qid] !== val) unsent[qid] = val;
+  }
+  if (!Object.keys(unsent).length) { if (onDone) onDone(); return; }
+  Object.assign(IV_STREAM_SENT, unsent);
+  const body = { agent_id: selectedAgentId, action: "answers", answers: unsent, questions: sentQuestions };
   if (SHARE_MODE) body.share = SHARE_TOKEN;
   // OPTIMISTIC ADVANCE (owner report 2026-08-22: submit froze on "Teaching
   // your AI..." when the save collided with the share-time pre-build). The
@@ -2120,7 +2171,12 @@ async function startNextRoundOrGenerate() {
           else host.appendChild(msg);
         }
       }
-      const deadline = Date.now() + 45000;
+      // 10s ceiling (owner ruling 2026-08-27: "a max of 10 seconds"): with
+      // answers streamed into the brain while the trainer typed, the redraft
+      // pipeline has a head start - open with the freshest cards by 10s no
+      // matter what, and let the short-round poll swap fresher drafts in
+      // behind the trainer's reading.
+      const deadline = Date.now() + 10000;
       const tick = async () => {
         if (!roundOpening) return; // a rerender/answer superseded this hold
         // Deadline FIRST and crash-proof (owner stall 2026-08-27): any
