@@ -413,6 +413,102 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 .ob-demo button { font-family:var(--font-mono); font-size:10.5px; border:1px solid var(--line-2);
   background:#fff; color:var(--ink-3); border-radius:999px; padding:6px 11px; cursor:pointer; }
 .ob-demo button:hover { color:var(--ink); }
+
+/* ---------- offers section (teach → pick) ---------- */
+.ofr-kick { text-align:center; font-size:12px; font-weight:700; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--orange-700); margin-bottom:6px; }
+.ofr-vid { position:relative; width:100%; padding:0; font:inherit; margin-top:4px; border-radius:14px;
+  overflow:hidden; aspect-ratio:16/9; background:radial-gradient(120% 120% at 30% 0%, #3a322c 0%, #211d19 70%);
+  display:grid; place-items:center; border:1px solid var(--line); cursor:pointer; }
+.ofr-vid:focus-visible { outline:none; box-shadow:var(--focus); }
+.ofr-vid .play { width:58px; height:58px; border-radius:50%; background:var(--orange); color:#fff;
+  display:grid; place-items:center; font-size:20px; box-shadow:0 6px 22px rgba(255,77,0,.45); transition:transform .15s; }
+.ofr-vid:hover .play { transform:scale(1.06); }
+.ofr-vid .cap { position:absolute; left:15px; bottom:13px; color:var(--cream-50); font-size:12.5px;
+  font-weight:600; text-shadow:0 1px 5px rgba(0,0,0,.6); }
+.ofr-vid .dur { position:absolute; right:15px; bottom:13px; color:var(--cream); font-family:var(--font-mono);
+  font-size:10.5px; background:rgba(0,0,0,.42); padding:3px 8px; border-radius:6px; }
+@media (prefers-reduced-motion:reduce){ .ofr-vid:hover .play { transform:none; } }
+.ofr-flip { display:grid; grid-template-columns:1fr auto 1fr; gap:11px; align-items:stretch; margin-top:14px; }
+.ofr-side { border-radius:12px; padding:13px 15px; border:1px solid var(--line); display:grid; gap:4px; align-content:start; }
+.ofr-side.svc { background:var(--bg-sunken); }
+.ofr-side.off { background:var(--orange-100); border-color:var(--orange); }
+.ofr-side .lab { font-size:10.5px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.ofr-side.svc .lab { color:var(--ink-3); }
+.ofr-side.off .lab { color:var(--orange-700); }
+.ofr-side .txt { font-size:14px; line-height:1.35; }
+.ofr-side.svc .txt { color:var(--ink-3); }
+.ofr-side.off .txt { color:var(--ink); }
+.ofr-arrow { display:grid; place-items:center; color:var(--orange); font-size:19px; font-weight:700; }
+.ofr-trip { display:grid; grid-template-columns:repeat(3,1fr); gap:9px; margin-top:14px; }
+.ofr-leg { background:#fff; border:1px solid var(--line); border-radius:12px; padding:15px 12px;
+  text-align:center; display:grid; gap:6px; align-content:start; }
+.ofr-leg .ic { font-size:22px; line-height:1; }
+.ofr-leg .h { font-size:13.5px; font-weight:700; color:var(--ink); }
+.ofr-leg .s { font-size:11.5px; color:var(--ink-3); line-height:1.32; }
+.ofr-tripnote { text-align:center; font-size:12.5px; color:var(--ink-3); margin-top:11px; }
+.ofr-tripnote b { color:var(--ink-2); }
+.ofr-reassure { margin:16px auto 0; max-width:540px; background:var(--cream-50); border:1px solid var(--line);
+  border-radius:12px; padding:12px 18px; text-align:center; font-size:13.5px; color:var(--ink-2); }
+.ofr-audrow { display:grid; gap:6px; margin-bottom:15px; }
+.ofr-audlab { font-size:11.5px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:var(--ink-3); }
+.ofr-cards { display:grid; gap:10px; }
+.ofr-card { position:relative; background:#fff; border:1.5px solid var(--line-2); border-radius:12px;
+  padding:14px 16px; text-align:left; width:100%; font:inherit; cursor:pointer; display:grid; gap:5px; color:var(--ink); }
+.ofr-card:focus-visible { outline:none; box-shadow:var(--focus); }
+.ofr-card.picked { border-color:var(--green); background:var(--green-bg); }
+.ofr-card .top { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.ofr-card .nm { font-size:15px; font-weight:700; }
+.ofr-card .ln { font-size:14px; color:var(--ink-2); line-height:1.4; }
+.ofr-card .wy { font-size:12px; color:var(--ink-3); line-height:1.35; }
+.ofr-badge { font-size:11px; font-weight:700; letter-spacing:.02em; padding:3px 9px; border-radius:20px; white-space:nowrap; }
+.ofr-badge.lead_magnet { background:#e8f1fb; color:#2b5f9e; }
+.ofr-badge.pay_after_result { background:#e9f6ec; color:#2e7d43; }
+.ofr-badge.pay_per_result { background:#fdf2e3; color:#a05c12; }
+.ofr-badge.guarantee_refund { background:#f5e9f7; color:#7d3a8f; }
+.ofr-card .yours { font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--amber); }
+.ofr-card .ofr-pick { margin-left:auto; font-size:10.5px; font-weight:700; color:var(--green); opacity:0; }
+.ofr-card.picked .ofr-pick { opacity:1; }
+.ofr-ownwrap { display:grid; gap:7px; }
+.ofr-owntools { display:flex; gap:8px; }
+.ofr-owntools button { font:inherit; font-size:12.5px; border:1px solid var(--line-2); background:#fff;
+  color:var(--ink-3); border-radius:8px; padding:6px 12px; cursor:pointer; }
+.ofr-owntools button:hover { color:var(--ink); border-color:var(--ink-3); }
+.ofr-add { margin-top:8px; }
+.ofr-addlab { font-size:12.5px; color:var(--ink-3); margin-bottom:2px; }
+.ofr-csgrid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.ofr-cs { background:#fff; border:1px solid var(--line); border-radius:12px; padding:12px 14px; display:grid; gap:6px; align-content:start; }
+.ofr-cshead { display:flex; align-items:center; gap:8px; }
+.ofr-csind { font-size:11.5px; font-weight:700; color:var(--ink-3); letter-spacing:.02em; }
+.ofr-csrow { display:grid; grid-template-columns:48px 1fr; gap:8px; align-items:start; }
+.ofr-cstag { font-size:9.5px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--ink-3);
+  background:var(--bg-sunken); border-radius:5px; padding:3px 5px; text-align:center; }
+.ofr-cstag.off { color:var(--orange-700); background:var(--orange-100); }
+.ofr-cssvc { font-size:13px; color:var(--ink-3); line-height:1.35; }
+.ofr-csoff { font-size:13.5px; color:var(--ink); font-weight:500; line-height:1.38; }
+.ofr-csres { font-size:11.5px; font-weight:700; color:var(--green); }
+.ofr-leg .ic { color:var(--orange); }
+.ofr-leg .ic svg { display:block; }
+.ofr-skipbar { position:sticky; top:0; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:10px;
+  background:var(--bg); padding:10px 0 9px; margin-bottom:6px; border-bottom:1px solid var(--line); }
+.ofr-skipbar .lk { font:inherit; font-size:13.5px; color:var(--ink-3); background:none; border:none; cursor:pointer; text-decoration:underline; text-underline-offset:3px; }
+.ofr-skipbar .lk:hover { color:var(--ink); }
+.ofr-skip { font:inherit; font-size:13.5px; font-weight:600; color:#fff; background:var(--orange); border:0; border-radius:9px; padding:9px 15px; cursor:pointer; white-space:nowrap; box-shadow:0 2px 6px rgba(255,77,0,.22); }
+.ofr-skip:hover { background:var(--orange-600); }
+.ofr-legs { display:flex; gap:5px; margin-top:1px; flex-wrap:wrap; }
+.ofr-leg-tag { font-size:9.5px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; padding:2px 7px; border-radius:20px; color:var(--ink-3); background:var(--bg-sunken); border:1px solid var(--line); }
+.ofr-rec { font-size:10px; font-weight:700; letter-spacing:.03em; color:var(--orange-700); background:var(--orange-100); border-radius:20px; padding:3px 9px; }
+.ofr-pickhelp { font-size:12.5px; color:var(--ink-3); margin:-4px 2px 14px; }
+.ofr-pickhelp b { color:var(--ink); }
+.ofr-csres svg { color:var(--green); }
+.ofr-proofnote { font-size:11.5px; color:var(--brown-400); text-align:center; margin-top:14px; }
+.ofr-skiprow { text-align:center; margin-top:12px; }
+@media (max-width:600px){ .ofr-csgrid { grid-template-columns:1fr; } }
+@media (max-width:560px){
+  .ofr-flip { grid-template-columns:1fr; }
+  .ofr-arrow { transform:rotate(90deg); }
+  .ofr-trip { grid-template-columns:1fr; }
+}
 </style>
 </head>
 <body>
@@ -477,6 +573,12 @@ var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,
  redirect:"",domainPicks:{}};
 var S=JSON.parse(JSON.stringify(FRESH));
 try{var raw=localStorage.getItem("nav_onboarding_v1");if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=p;}}catch(e){}
+/* offers-section state migration: own[] may hold legacy strings; normalise to offer objects + default new fields. */
+if(!Array.isArray(S.own))S.own=[];
+S.own=S.own.map(function(o){return (o&&typeof o==="object")?o:{name:String(o),line:String(o),mech:"lead_magnet",raw:String(o),pick:true};});
+if(typeof S.offerStep!=="number")S.offerStep=0;
+if(typeof S.offerAudience!=="string")S.offerAudience="";
+if(!S.offers||typeof S.offers!=="object")S.offers={};
 /* backfill keys added after a client's state was first saved (legacy state safety) */
 for(var _k in FRESH){if(!(_k in S))S[_k]=JSON.parse(JSON.stringify(FRESH[_k]));}
 if(!Array.isArray(S.senders)||!S.senders.length)S.senders=JSON.parse(JSON.stringify(FRESH.senders));
@@ -712,17 +814,7 @@ var PAGES={
  "infra-senders":function(){return S.done.infrastructure?infraPage():infraSenders();},
  "infra-domains":function(){return S.done.infrastructure?infraPage():infraDomains();},
  "infra-confirm":function(){return S.done.infrastructure?infraPage():infraConfirm();},
- offers:function(){
-  var picked=Object.keys(S.offers).filter(function(k){return S.offers[k];}).length+S.own.length;
-  return '<div class="headline">Pick the offers you’d <span class="date">feel good running</span>.</div>'
-  +'<div class="subline">The offer decides everything in cold email. We drafted two from your sales calls — pick, tweak, or add your own. We choose the winner together on your call.</div>'
-  +'<div class="ob-body" style="display:grid;gap:9px">'
-  +'<button class="ob-offer '+(S.offers.o1?"picked":"")+'" data-offer="o1"><b>Free margin teardown</b><span>“5 pages on where companies like yours leak money — free, keep it either way.”</span>'+(S.offers.o1?'<span class="pk">PICKED ✓</span>':"")+'</button>'
-  +'<button class="ob-offer '+(S.offers.o2?"picked":"")+'" data-offer="o2"><b>First month proves it</b><span>“If month one doesn’t book real meetings, month two is free.”</span>'+(S.offers.o2?'<span class="pk">PICKED ✓</span>':"")+'</button>'
-  +(S.own.length?'<p class="ob-note" style="text-align:left;margin:0">Yours: '+S.own.join(" · ")+'</p>':"")
-  +'<div class="ob-inprow"><input class="ob-inp" id="ownOffer" placeholder="Add one of your own…"><button class="btn-ghost" data-ownadd>Add</button></div>'
-  +'</div>'
-  +'<div class="ob-foot2"><button class="btn-go" data-done="offers" '+(picked?"":"disabled")+'>'+(picked?("Save my picks ("+picked+")"):"Pick at least one to save")+'</button><span class="ob-t clock">bring these to your call</span></div>';},
+ offers:function(){ return S.offerStep>=2?offersExamples():(S.offerStep===1?offersProof():offersIntro()); },
  slack:function(){
   if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
    +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
@@ -813,6 +905,96 @@ var PAGES={
    :'<p class="ob-note">Your AI drafted the answer (the 14% case study) — Sarah OKs it within the hour.</p>')+'</div>'
   +(S.mine.Marcus?"":'<div class="ob-foot2"><button class="btn-ghost" data-takeit="Marcus">I’ll take this one myself</button></div>');}
 };
+/* ---------- offers section: teach → pick (onboarding-offers-section skill) ---------- */
+var OMECH={lead_magnet:"Free thing first",pay_after_result:"Pay after the work",pay_per_result:"Pay per result",guarantee_refund:"Refund if we miss"};
+var OSVG={shield:'<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.4-3 7.6-7 9-4-1.4-7-4.6-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>',bolt:'<svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h7l-1 8 9-12h-7l1-8z"/></svg>',gem:'<svg viewBox="0 0 24 24" width="23" height="23" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3h12l3 6-9 12L3 9z"/><path d="M3 9h18M9 3L7.5 9 12 21 16.5 9 15 3"/></svg>',play:'<svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l10.5-6.5z"/></svg>',star:'<svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor" aria-hidden="true" style="vertical-align:-1px"><path d="M12 2.5l2.7 5.9 6.3.6-4.7 4.3 1.3 6.2L12 16.7 6.1 19.7l1.3-6.2-4.7-4.3 6.3-.6z"/></svg>',check:'<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="vertical-align:-1px"><path d="M5 12l4.5 4.5L19 7"/></svg>'};
+/* Pre-made, on-narrative examples. In production these are generated at onboarding
+   setup from the client's pre-loaded business profile and SIGNED OFF BY THE CSM
+   before the client sees them. Simulated here (localStorage prototype, no APIs). */
+var OFFERS_EG=[
+ {id:"o1",mech:"lead_magnet",name:"Free margin teardown",rec:true,legs:["safe","easy","valuable"],
+  line:"A free 5-page teardown of where mid-size 3PLs quietly leak margin — yours to keep either way.",
+  why:"Safe: free, a 6-minute read, no data from you. Valuable: an insider map of your own leaks."},
+ {id:"o2",mech:"pay_after_result",name:"Pay once it’s booking meetings",legs:["safe","easy"],
+  line:"We run your outbound for 30 days. No real meetings booked? Month one’s on us.",
+  why:"Safe: the risk sits with us — you only pay once it’s working."},
+ {id:"o3",mech:"pay_per_result",name:"Only pay per meeting that shows",legs:["safe","easy"],
+  line:"You pay for qualified meetings that actually happen — nothing for the ones that don’t.",
+  why:"Safe: pure downside protection — every pound maps to a real conversation."},
+ {id:"o4",mech:"guarantee_refund",name:"10 meetings in 90 days — or money back",legs:["safe","easy","valuable"],
+  line:"If we don’t book you 10 qualified meetings in 90 days, we refund the difference.",
+  why:"Safe + Valuable: a bold, concrete promise — the number does the convincing."}
+];
+/* Case studies for the proof slide — anonymised service→offer transformations
+   across varied industries. Volume + variety is the point: it builds trust. */
+var CASES=[
+ {ind:"Interior design",mech:"lead_magnet",svc:"“Interior design & sourcing.”",off:"“A free mood board, render & sourcing snapshot in 48 hours — no charge.”",res:"38 interested replies · best line"},
+ {ind:"Web design",mech:"pay_after_result",svc:"“We build websites.”",off:"“You only pay after we’ve built it — zero upfront.”",res:"12 interested replies"},
+ {ind:"Lead generation",mech:"guarantee_refund",svc:"“We run cold outreach.”",off:"“30 qualified leads in 90 days, or we refund the difference.”",res:"30+ interested replies"},
+ {ind:"Recruitment",mech:"pay_after_result",svc:"“We place sales hires.”",off:"“We shortlist 3 candidates first — pay only if you hire one.”",res:"9 discovery calls booked"},
+ {ind:"Commercial solar",mech:"lead_magnet",svc:"“We install solar.”",off:"“A free roof-by-roof savings snapshot — see payback before you spend.”",res:"21 interested replies"},
+ {ind:"Analytics / SaaS",mech:"lead_magnet",svc:"“We build data dashboards.”",off:"“We’ll build one live dashboard on your data, free — keep it either way.”",res:"15 demos booked"},
+ {ind:"Performance ads",mech:"pay_per_result",svc:"“We manage paid ads.”",off:"“We only get paid on the leads we deliver.”",res:"16 booked calls"}
+];
+function oesc(s){var d=document.createElement("div");d.textContent=s==null?"":s;return d.innerHTML;}
+function oatt(s){return oesc(s).replace(/"/g,"&quot;");}
+function offCount(){var n=0;["o1","o2","o3","o4"].forEach(function(k){if(S.offers[k])n++;});(S.own||[]).forEach(function(o){if(o&&o.pick!==false)n++;});return n;}
+function offShort(s){var w=String(s).split(" ").slice(0,5);while(w.length>2&&/^(that|the|a|an|of|to|for|and|with|their|your|our|on|in|so)$/i.test(w[w.length-1]))w.pop();return w.join(" ");}
+function offMk(mech,t){var core=t.replace(/^(?:we'?ve|we have|we|i'?ve|i have|i|our team)\s+(?:built|make|made|created?|offer|do|run|provide|have|use|give|sell)\s+/i,"").replace(/^(?:a|an|the)\s+/i,"").replace(/^free\s+/i,"");var cap=core.charAt(0).toUpperCase()+core.slice(1);
+ if(mech==="lead_magnet")return {mech:mech,name:"Free "+offShort(core),line:"A free "+core+" — genuinely useful, and yours to keep either way.",raw:t,pick:true};
+ if(mech==="pay_after_result")return {mech:mech,name:"Pay once it works",line:cap+" — and you only pay once you’re happy with it.",raw:t,pick:true};
+ if(mech==="pay_per_result")return {mech:mech,name:"Pay per result",line:cap+" — you only pay for the results that actually land.",raw:t,pick:true};
+ return {mech:mech,name:offShort(cap),line:cap+".",raw:t,pick:true};}
+function tidyOffer(raw){var t=raw.trim().replace(/\s+/g," ").replace(/[.\s]+$/,"");var low=t.toLowerCase();
+ if(/refund|guarantee|money ?back|\bor we\b|or it'?s free/.test(low))return offMk("guarantee_refund",t);
+ if(/per (lead|meeting|result|booking|appointment|sale)|pay per/.test(low))return offMk("pay_per_result",t);
+ if(/pay after|only pay|pay once|when you'?re happy|after we/.test(low))return offMk("pay_after_result",t);
+ if(/free|audit|teardown|report|calculator|\btool\b|sample|template|breakdown|demo|snapshot|mock ?up|mood ?board|checklist|scorecard|guide|blueprint/.test(low))return offMk("lead_magnet",t);
+ var svc=t.match(/^(?:we|i|our team)\s+(?:do|design|build|make|create|provide|offer|run|handle|specialise in|specialize in|help with)\s+(.+)$/i);
+ if(svc)return {mech:"pay_after_result",name:"Pay only when you’re happy",line:"We’ll "+svc[1].toLowerCase()+" — and you only pay once you’re happy with the result.",raw:t,pick:true};
+ return offMk("lead_magnet",t);}
+function offCard(o,key,isOwn,idx){var picked=isOwn?(o.pick!==false):!!S.offers[key];
+ var head='<div class="top"><span class="ofr-badge '+oesc(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+(isOwn?'<span class="yours">Yours</span>':'')+'<span class="ofr-pick">PICKED '+OSVG.check+'</span></div>';
+ var body='<div class="nm">'+oesc(o.name)+'</div><div class="ln">'+oesc(o.line)+'</div>';
+ var card='<button class="ofr-card'+(picked?' picked':'')+'" data-pick="'+(isOwn?('own:'+idx):oatt(key))+'">'+head+body+'</button>';
+ if(!isOwn)return card;
+ if(S.editOwn===idx)return '<div class="ofr-ownwrap"><textarea class="ob-dnc" id="ownEdit" style="min-height:68px">'+oesc(o.line)+'</textarea><div class="ofr-owntools"><button data-ownsave="'+idx+'">Save wording</button><button data-owncancel>Cancel</button></div></div>';
+ return '<div class="ofr-ownwrap">'+card+'<div class="ofr-owntools"><button data-ownedit="'+idx+'">Edit wording</button><button data-owndel="'+idx+'">Remove</button></div></div>';}
+function offersIntro(){return '<div class="ofr-kick">What makes a good offer</div>'
+ +'<div class="headline">An offer they’d feel <span class="date">silly ignoring</span>.</div>'
+ +'<div class="subline">A 2-minute watch, then a few we’ve drafted for you. We pick the winner together on your call.</div>'
+ +'<div class="ob-body">'
+ +'<button class="ofr-vid" data-loom aria-label="Play the 2-minute walkthrough"><span class="play">'+OSVG.play+'</span><span class="cap">What makes a good offer — Bjion, Navreo</span><span class="dur">2:14</span></button>'
+ +'<div class="ofr-flip"><div class="ofr-side svc"><div class="lab">A service</div><div class="txt">“I design websites.”</div></div><div class="ofr-arrow">→</div><div class="ofr-side off"><div class="lab">An offer</div><div class="txt">“I’ll build your website — pay only when you’re happy.”</div></div></div>'
+ +'<div class="ofr-trip"><div class="ofr-leg"><span class="ic">'+OSVG.shield+'</span><span class="h">Feels safe</span><span class="s">Low cost, low effort, quick — easy to say yes</span></div><div class="ofr-leg"><span class="ic">'+OSVG.bolt+'</span><span class="h">Easy to deliver</span><span class="s">Templated &amp; repeatable, so it works at scale</span></div><div class="ofr-leg"><span class="ic">'+OSVG.gem+'</span><span class="h">Feels valuable</span><span class="s">Solves a real pain and looks impressive</span></div></div>'
+ +'<div class="ofr-tripnote">Like a tripod — <b>all three legs</b>, or it tips over.</div>'
+ +'</div>'
+ +'<div class="ofr-reassure">Nothing here is set in stone, and you don’t need the answers now — this just gives us a head start before your call.</div>'
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="2">In a rush? Skip straight to picking →</button></div>';}
+function offersProof(){var grid=CASES.map(function(c){
+ return '<div class="ofr-cs"><div class="ofr-cshead"><span class="ofr-badge '+oesc(c.mech)+'">'+oesc(OMECH[c.mech])+'</span><span class="ofr-csind">'+oesc(c.ind)+'</span></div>'
+  +'<div class="ofr-csrow"><span class="ofr-cstag">Service</span><span class="ofr-cssvc">'+oesc(c.svc)+'</span></div>'
+  +'<div class="ofr-csrow"><span class="ofr-cstag off">Offer</span><span class="ofr-csoff">'+oesc(c.off)+'</span></div>'
+  +'<div class="ofr-csres">'+OSVG.star+' '+oesc(c.res)+'</div></div>';}).join("");
+ return '<div class="ofr-skipbar"><button class="lk" data-offstep="0">← Watch the intro</button><button class="ofr-skip" data-offstep="2">Skip to your offers →</button></div>'
+ +'<div class="ofr-kick">Proof</div>'
+ +'<div class="headline">The same move, <span class="date">every industry</span>.</div>'
+ +'<div class="subline">Seven quick before-and-afters — a service turned into an offer, and what it did. Real campaigns, names changed. <b>Skim or skip</b> — yours gets built on the call.</div>'
+ +'<div class="ob-body"><div class="ofr-csgrid">'+grid+'</div></div>'
+ +'<div class="ofr-proofnote">Each number is real interested-reply or booked-meeting volume from a live campaign — the full context (list size, dates) comes on your call.</div>'+'<div class="ofr-reassure">Different industries, same three-legged offer — that’s the play we run for you.</div>'
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="2">See the offers we drafted you →</button><span class="ob-t clock">bring these to your call</span></div>';}
+function offersExamples(){var n=offCount();
+ var cards=OFFERS_EG.map(function(o){return offCard(o,o.id,false);}).join("");
+ var own=(S.own||[]).map(function(o,idx){return offCard(o,null,true,idx);}).join("");
+ return '<button class="linkbtn" data-offstep="1">← See the case studies</button>'
+ +'<div class="headline">Offers we’d <span class="date">start you with</span>.</div>'
+ +'<div class="subline">Pick the ones that feel right — we shape the winner together on your call.</div>'
+ +'<div class="ob-body">'
+ +'<div class="ofr-audrow"><label class="ofr-audlab" for="offAud">Who’s this for?</label><input class="ob-inp" id="offAud" value="'+oatt(S.offerAudience||"")+'" placeholder="e.g. mid-size 3PLs — ops leaders (optional)"></div>'
+ +'<div class="ofr-cards">'+cards+own+'</div>'
+ +'<div class="ofr-add"><div class="ofr-addlab">Got one of your own? Add it — we’ll tidy it up.</div><div class="ob-inprow"><input class="ob-inp" id="ownOffer" placeholder="e.g. “we built an ROI calculator”, or an offer you already run…"><button class="btn-ghost" data-ownadd>Add</button></div></div>'
+ +'</div>'
+ +'<div class="ob-foot2"><button class="btn-go" data-done="offers" '+(n?"":"disabled")+'>'+(n?("Save my picks ("+n+")"):"Pick at least one to save")+'</button><span class="ob-t clock">bring these to your call</span></div>';}
 function planRow(id,b,s){var r=S.reacts[id]||"";
  return '<div class="drow"><span style="min-width:0"><span class="name">'+b+'</span><span class="mbcount" style="display:block;margin:2px 0 0">'+s+'</span></span>'
  +'<span class="status"><button class="prow2 mini '+(r==="up"?"":"")+'" data-react="'+id+':up" style="border-radius:8px'+(r==="up"?";border-color:var(--orange);background:var(--orange-100)":"")+'">👍</button> '
@@ -857,11 +1039,11 @@ function heroView(){
  if(S.stage===0){
   var c=nextCard();if(!c)return "";
   var subs={infrastructure:"Do this first — it starts the 2-week clock that sets your launch date. Your real address never gets touched.",
-   offers:"We drafted two from your sales calls. Pick, tweak, or add your own.",
+   offers:"A 2-minute watch on what makes a good offer, then pick a few we’ve drafted.",
    slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
    home:"One page where everything lives. Worth a star.",
    block:"Clients, live deals, competitors — tell us who’s off-limits."};
-  var ctas={infrastructure:"See them",offers:"Pick them",slack:"Open my invite",home:"Have a look",block:"Tell us"};
+  var ctas={infrastructure:"See them",offers:"Have a look",slack:"Open my invite",home:"Have a look",block:"Tell us"};
   return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>'+c.title+'</h1><p class="ob-sub">'+subs[c.id]+'</p>'
    +'<div class="ob-row"><button class="btn-go" data-go="'+c.id+'">'+ctas[c.id]+'</button><span class="ob-t">'+c.time+'</span>'+(c.clock?'<span class="ob-t clock">⏱ starts your 2-week clock</span>':"")+'</div></div>';
  }
@@ -993,9 +1175,19 @@ function bindAll(){
  if(qsave)qsave.addEventListener("click",function(){var t=document.getElementById("qedit");if(t)QS[S.q].a=t.value||QS[S.q].a;S.editQ=undefined;S.q++;save();render();toast("Saved your version ✓");});
  var qreset=app.querySelector("[data-qreset]");
  if(qreset)qreset.addEventListener("click",function(){S.q=0;save();render();});
- qa("[data-offer]").forEach(function(b){b.addEventListener("click",function(){var k=b.getAttribute("data-offer");S.offers[k]=!S.offers[k];save();render();});});
- var oa=app.querySelector("[data-ownadd]");
- if(oa)oa.addEventListener("click",function(){var i=document.getElementById("ownOffer");if(i&&i.value.trim()){S.own.push(i.value.trim());save();render();}});
+ qa("[data-offstep]").forEach(function(b){b.addEventListener("click",function(){S.offerStep=+b.getAttribute("data-offstep");save();render();window.scrollTo(0,0);});});
+ qa("[data-loom]").forEach(function(b){b.addEventListener("click",function(){toast("The 2-min walkthrough plays here in your live hub ▶");});});
+ var offAud=document.getElementById("offAud");
+ if(offAud)offAud.addEventListener("input",function(){S.offerAudience=offAud.value;save();});
+ qa("[data-pick]").forEach(function(b){b.addEventListener("click",function(){var k=b.getAttribute("data-pick");if(k.indexOf("own:")===0){var ix=+k.slice(4);if(S.own[ix]){var cur=S.own[ix].pick!==false;S.own[ix].pick=!cur;}}else{S.offers[k]=!S.offers[k];}save();render();});});
+ var oadd=app.querySelector("[data-ownadd]");
+ if(oadd)oadd.addEventListener("click",function(){var i=document.getElementById("ownOffer");if(!i||!i.value.trim())return;var raw=i.value.trim();oadd.disabled=true;oadd.textContent="Tidying…";setTimeout(function(){S.own.push(tidyOffer(raw));save();render();toast("Tidied into an offer — edit the wording any time ✎");},820);});
+ var oinp=document.getElementById("ownOffer");
+ if(oinp)oinp.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();var b2=app.querySelector("[data-ownadd]");if(b2)b2.click();}});
+ qa("[data-ownedit]").forEach(function(b){b.addEventListener("click",function(){S.editOwn=+b.getAttribute("data-ownedit");render();var t=document.getElementById("ownEdit");if(t)t.focus();});});
+ qa("[data-ownsave]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-ownsave");var t=document.getElementById("ownEdit");if(t&&S.own[ix])S.own[ix].line=(t.value.trim()||S.own[ix].line);S.editOwn=undefined;save();render();toast("Wording saved ✓");});});
+ qa("[data-owncancel]").forEach(function(b){b.addEventListener("click",function(){S.editOwn=undefined;render();});});
+ qa("[data-owndel]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-owndel");S.own.splice(ix,1);save();render();});});
  qa("[data-react]").forEach(function(b){b.addEventListener("click",function(){var kv=b.getAttribute("data-react").split(":");S.reacts[kv[0]]=(S.reacts[kv[0]]===kv[1]?"":kv[1]);save();render();toast("Noted — Jordan sees this before your plan call");});});
  var en=app.querySelector("[data-enext]");
  if(en&&!en.disabled)en.addEventListener("click",function(){S.eIdx++;S.eRead=Math.max(S.eRead,S.eIdx+1);save();render();});
