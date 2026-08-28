@@ -180,6 +180,95 @@ body { background:var(--bg); }
 .prow2 .mini { font:inherit; font-size:12.5px; border:1px solid var(--line-2); background:#fff;
   border-radius:8px; padding:5px 10px; cursor:pointer; flex:none; }
 
+/* ---------- infra wizard (4 pages: intro bento → senders → domains → confirm) ---------- */
+.wsteps { display:flex; align-items:center; justify-content:center; gap:6px; margin:26px 0 20px; flex-wrap:wrap; }
+.wsteps i { width:26px; height:4px; border-radius:2px; background:var(--line-2); }
+.wsteps i.on { background:var(--orange); }
+.wsteps span { font-family:var(--font-mono); font-size:10px; font-weight:700;
+  letter-spacing:.08em; color:var(--ink-3); margin-left:8px; }
+/* Apple-style bento — white cells float on a soft grey field, soft shadow, generous radius */
+.bentowrap { margin-top:26px; background:var(--bg-sunken); border:1px solid var(--line);
+  border-radius:22px; padding:14px; }
+.bento { display:grid; grid-template-columns:repeat(6,1fr); gap:14px; }
+.bcell { grid-column:span 2; background:#fff; border:1px solid var(--line); border-radius:18px;
+  padding:22px 22px 20px; display:flex; flex-direction:column; gap:8px; min-width:0;
+  box-shadow:0 1px 2px rgba(20,17,14,.05), 0 8px 24px -18px rgba(20,17,14,.25); }
+.bcell .bk { font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:.11em;
+  color:var(--brown-400); }
+.bcell h3 { font-size:16.5px; font-weight:700; letter-spacing:-.01em; margin:0; color:var(--ink); line-height:1.25; }
+.bcell p { font-size:13px; color:var(--ink-3); margin:0; line-height:1.55; }
+.bcell .art { margin-top:auto; padding-top:16px; }
+.bcell .art svg { display:block; width:100%; height:auto; }
+.b3 { grid-column:span 3; }
+.b4 { grid-column:span 4; }
+.b6 { grid-column:span 6; }
+.bcell.dark { background:var(--ink); border-color:var(--ink);
+  box-shadow:0 1px 2px rgba(20,17,14,.05), 0 18px 40px -20px rgba(20,17,14,.5); }
+.bcell.dark h3 { color:#fff; }
+.bcell.dark p { color:var(--brown-300); }
+.bcell.dark .bk { color:var(--orange); }
+.fiftyrow { display:flex; gap:16px; align-items:center; flex-wrap:wrap; }
+.fiftyrow > div { flex:1; min-width:200px; display:grid; gap:7px; }
+.bignum { font-family:var(--font-display); font-weight:400; line-height:.9; letter-spacing:-.03em;
+  color:var(--orange); font-size:clamp(56px,10vw,88px); flex:none; }
+.sparebar { display:flex; gap:6px; margin-top:14px; }
+.sparebar i { flex:1; height:16px; border-radius:5px; background:var(--orange); min-width:0; }
+.sparebar i.sp { background:none; border:1.5px dashed #6B6055; }
+.sparelab { font-family:var(--font-mono); font-size:10px; font-weight:700; letter-spacing:.06em;
+  color:var(--brown-300); margin-top:10px; display:flex; justify-content:space-between; gap:10px; }
+/* provider slots styled as ready-for-logo app tiles */
+.logorow { display:flex; gap:12px; margin-top:auto; padding-top:16px; }
+.logocol { flex:1; min-width:0; display:grid; gap:6px; justify-items:center; }
+.logoslot { width:100%; aspect-ratio:1/1; max-height:56px; border:1.5px dashed var(--line-2);
+  border-radius:14px; display:grid; place-items:center; background:var(--bg-sunken); }
+.logoslot span { font-family:var(--font-mono); font-size:9px; font-weight:700; letter-spacing:.02em;
+  color:var(--brown-400); }
+.logocol .cap { font-size:11px; font-weight:600; color:var(--ink-3); }
+/* pipeline mini-diagram tiles (rounded-square nodes + dotted connectors, Apple-bento style) */
+.flowdiag { display:flex; align-items:center; gap:8px; }
+.fnode { width:34px; height:34px; border-radius:10px; background:var(--bg-sunken); border:1px solid var(--line);
+  display:grid; place-items:center; flex:none; font-family:var(--font-mono); font-size:8.5px;
+  font-weight:700; color:var(--ink-3); text-align:center; line-height:1; padding:2px; }
+.fnode.on { background:var(--orange-100); border-color:var(--orange-100); color:var(--orange-700); }
+.fnode.ink { background:var(--ink); border-color:var(--ink); color:#fff; }
+.fdash { flex:1; min-width:8px; height:0; border-top:2px dotted var(--line-2); }
+.fstack { display:flex; flex-direction:column; gap:5px; }
+.fstack .fnode { width:30px; height:22px; border-radius:8px; }
+@media (max-width:640px){ .bcell,.b3,.b4 { grid-column:span 6; } .fiftyrow { gap:12px; } }
+.srow { display:flex; gap:8px; align-items:center; background:#fff; border:1px solid var(--line);
+  border-radius:12px; padding:10px 12px; }
+.srow .av { width:34px; height:34px; border-radius:50%; background:var(--orange-100);
+  color:var(--orange-700); display:grid; place-items:center; font-weight:700; font-size:13px; flex:none; }
+.srow input { flex:1; min-width:0; border:1.5px solid var(--line-2); border-radius:9px;
+  background:#fff; color:var(--ink); padding:9px 11px; font:inherit; font-size:14px; }
+.srow input:focus { outline:none; box-shadow:var(--focus); }
+.srow input.nm { flex:1.2; font-weight:600; }
+.srow .srm { border:none; background:var(--bg-sunken); color:var(--ink-3); width:32px; height:32px;
+  border-radius:50%; font-size:15px; cursor:pointer; flex:none; }
+.srow .srm:hover { color:var(--ink); }
+.srow .srm:focus-visible { outline:none; box-shadow:var(--focus); }
+.splitbar { display:flex; gap:5px; margin-top:4px; }
+.splitbar span { flex:1; min-width:0; text-align:center; background:var(--orange-100);
+  color:var(--orange-700); font-size:11.5px; font-weight:700; border-radius:7px; padding:6px 2px;
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sigprev p { margin:0; line-height:1.55; }
+.sigaddr { margin-top:10px !important; font-size:12px; color:var(--ink-3); border-top:1px solid var(--line);
+  padding-top:8px; }
+.inplab { font-size:11px; font-weight:700; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink-3); margin:0 0 6px; }
+.trkline { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:10px; }
+.trkline code { font-family:var(--font-mono); font-size:11.5px; color:var(--ink-2); background:#fff;
+  border:1px solid var(--line); border-radius:8px; padding:7px 10px; overflow-wrap:anywhere; min-width:0; }
+.estrow { display:flex; justify-content:flex-end; margin:6px 0 -6px; }
+.estchip { display:inline-grid; gap:2px; text-align:right; background:#fff;
+  border:1px solid var(--line-2); border-radius:12px; padding:9px 14px; }
+.estchip .lb { font-size:9.5px; font-weight:700; letter-spacing:.09em; color:var(--ink-3); }
+.estchip b { font-family:var(--font-mono); font-size:14px; color:var(--ink); }
+.warncard { background:var(--amber-bg); border:1px solid var(--amber-line); border-radius:12px;
+  padding:14px 16px; font-size:13.5px; color:#6B4A00; margin-top:14px; line-height:1.5; }
+.warncard b { display:block; margin-bottom:2px; }
+
+
 /* ---------- shared task widgets ---------- */
 .ob-steps { display:grid; gap:9px; }
 .ob-s3 { display:flex; gap:12px; align-items:center; background:#fff; border:1px solid var(--line);
@@ -357,12 +446,25 @@ var SCENS=[
 ];
 
 var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
- notes:{},offers:{},own:[],quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,tw:false,mine:{}};
+ notes:{},offers:{},own:[],quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,tw:false,mine:{},
+ senders:[{name:"Sarah Chen",title:"VP Sales"},{name:"Mike Torres",title:"Head of Growth"}],
+ sigCompany:"Acme Corp",sigAddr:"",sigPhone:"",redirects:{}};
 var S=JSON.parse(JSON.stringify(FRESH));
 try{var raw=localStorage.getItem("nav_onboarding_v1");if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=p;}}catch(e){}
+/* backfill keys added after a client's state was first saved (legacy state safety) */
+for(var _k in FRESH){if(!(_k in S))S[_k]=JSON.parse(JSON.stringify(FRESH[_k]));}
+if(!Array.isArray(S.senders)||!S.senders.length)S.senders=JSON.parse(JSON.stringify(FRESH.senders));
+if(!S.redirects||typeof S.redirects!=="object")S.redirects={};
 function save(){try{localStorage.setItem("nav_onboarding_v1",JSON.stringify(S));}catch(e){}}
 
-function LDATE(){return S.slotMoves?"Thu Sep 18":"Mon Sep 15";}
+var _DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fmtD(d){return _DOW[d.getDay()]+" "+_MON[d.getMonth()]+" "+d.getDate();}
+function rollWeekday(d){var w=d.getDay();if(w===6)d.setDate(d.getDate()+2);else if(w===0)d.setDate(d.getDate()+1);return d;}
+/* Estimated launch = today + 14 days, rolled forward off any weekend. Never a Sat/Sun. */
+function launchBase(){var d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()+14);return rollWeekday(d);}
+function estLaunch(){return fmtD(launchBase());}
+/* Booking Monday's call costs 3 days; keep it weekday-safe too. */
+function LDATE(){if(!S.slotMoves)return estLaunch();var d=launchBase();d.setDate(d.getDate()+3);return fmtD(rollWeekday(d));}
 function warmDayNum(){return S.done.infrastructure?[1,4,6,9,12,14][S.stage]:0;}
 function noteCount(){var n=0;for(var k in S.notes){if(S.notes[k]&&String(S.notes[k]).trim())n++;}return n;}
 function cardsIn(st){return CARDS.filter(function(c){return c.stage===st;});}
@@ -445,33 +547,132 @@ function infraRows(idx){
  if(idx===1)return row(DOMAINS[0],"3 inboxes planned",'<b class="ok">Bought ✓</b><span class="when">today · mailboxes queued</span>')
   +row(DOMAINS[1],"3 inboxes planned",'<b class="live">Buying now</b><span class="when">from Porkbun</span>')
   +row(DOMAINS[2],"3 inboxes planned",'<b class="dim">Waiting its turn</b><span class="when">tomorrow — spaced on purpose</span>');
- if(idx===5)return DOMAINS.map(function(d){return row(d,'3 inboxes <span class="tick">✓</span>','<b class="ok">Ready ✓</b><span class="when">Fri 12 Sep</span>');}).join("");
+ if(idx===5)return DOMAINS.map(function(d){return row(d,'3 inboxes <span class="tick">✓</span>','<b class="ok">Ready ✓</b><span class="when">'+estLaunch()+'</span>');}).join("");
  var wd=warmDayNum();
- return DOMAINS.map(function(d){return row(d,'3 inboxes <span class="tick">✓</span>','<b>Warming</b><span class="when">· day '+wd+' of 14 · ready Fri 12 Sep</span>');}).join("");
+ return DOMAINS.map(function(d){return row(d,'3 inboxes <span class="tick">✓</span>','<b>Warming</b><span class="when">· day '+wd+' of 14 · ready '+estLaunch()+'</span>');}).join("");
 }
+/* ===== the 4-page infra wizard (pre-approval) ===== */
+function wizSteps(n){
+ var lbl=["ADDRESSES EXPLAINED","WHO SENDS","YOUR DOMAINS","CONFIRM"][n-1];
+ var b="";for(var i=1;i<=4;i++)b+='<i class="'+(i<=n?"on":"")+'"></i>';
+ return '<div class="wsteps">'+b+'<span>STEP '+n+' OF 4 · '+lbl+'</span></div>';
+}
+function wizFoot(prevRoute,nextRoute,nextLabel,disabled){
+ return '<div class="ob-foot2">'
+  +(prevRoute?'<button class="btn-ghost" data-go="'+prevRoute+'">← Back</button>':'')
+  +'<button class="btn-go" data-go="'+nextRoute+'"'+(disabled?" disabled":"")+'>'+nextLabel+'</button></div>';
+}
+/* small inline diagrams (theme colours only) */
+/* mini flow diagrams — rounded-square nodes + dotted connectors (Apple-bento style) */
+function flowCopies(){return '<div class="flowdiag"><span class="fnode ink">your<br>site</span><span class="fdash"></span>'
+ +'<span class="fstack"><span class="fnode on">hq</span><span class="fnode on">try</span><span class="fnode on">team</span></span></div>';}
+function flowUnder(){return '<div class="flowdiag" style="justify-content:center"><span class="fnode ink">1<br>domain</span><span class="fdash"></span>'
+ +'<span class="fstack"><span class="fnode on">inbox</span><span class="fnode on">inbox</span><span class="fnode on">inbox</span></span></div>';}
+function flowUnify(){return '<div class="flowdiag"><span class="fstack"><span class="fnode">·</span><span class="fnode">·</span><span class="fnode">·</span></span>'
+ +'<span class="fdash"></span><span class="fnode on" style="width:44px;height:44px;border-radius:13px;font-size:9px">one</span></div>';}
+function infraIntro(){
+ return wizSteps(1)
+ +'<div class="headline">How your sending gets <span class="date">set up</span>.</div>'
+ +'<div class="subline">Two minutes on what we buy, why your real address stays safe, and how we run it. Then three quick screens and you’re done.</div>'
+ +'<div style="margin-top:26px"><div class="ob-vid"><div class="play">▶</div><div class="t">Email addresses, explained — Bjion, Navreo</div><div class="s">2 MIN</div></div>'
+ +'<p class="ob-note" style="margin-top:12px">Watch this. Already know how cold-email infrastructure is built? Skip straight ahead.</p></div>'
+ +'<div class="bentowrap"><div class="bento">'
+  +'<div class="bcell"><span class="bk">01</span><h3>Near-copies of your domain</h3><p>We buy look-alike domains at scale — like acmecorp-hq.com — and own them outright.</p><div class="art">'+flowCopies()+'</div></div>'
+  +'<div class="bcell"><span class="bk">02</span><h3>Mailboxes under each one</h3><p>Real inboxes sit under those domains — three to a domain — each a proper sending address.</p><div class="art">'+flowUnder()+'</div></div>'
+  +'<div class="bcell"><span class="bk">03</span><h3>Bridged into one</h3><p>We unify every inbox so your outreach sends as if from a single address — but the volume is shared across many, so no one inbox is ever overloaded. That even spread is exactly what inbox providers trust.</p><div class="art">'+flowUnify()+'</div></div>'
+  +'<div class="bcell dark b4"><span class="bk">THE SAFETY NET</span><div class="fiftyrow"><div><h3>We buy 50% more mailboxes than you pay for.</h3><p>Three spare inboxes on top of your six, on standby and included at no extra cost. If any address ever drifts toward spam, a spare takes over the same day — your sending never stops.</p></div><div class="bignum">+50%</div></div><div class="sparebar"><i></i><i></i><i></i><i></i><i></i><i></i><i class="sp"></i><i class="sp"></i><i class="sp"></i></div><div class="sparelab"><span>6 SENDING</span><span>3 SPARE · ALWAYS READY</span></div></div>'
+  +'<div class="bcell b2"><span class="bk">BOUGHT FROM</span><h3>Three providers</h3><p>Mixing providers is part of what keeps you invisible.</p><div class="logorow"><div class="logocol"><div class="logoslot"><span>LOGO</span></div><div class="cap">Google</div></div><div class="logocol"><div class="logoslot"><span>LOGO</span></div><div class="cap">Microsoft</div></div><div class="logocol"><div class="logoslot"><span>LOGO</span></div><div class="cap">SMTP</div></div></div></div>'
+  +'<div class="bcell b6"><span class="bk">THE POINT</span><h3>Your real domain never sends a single cold email.</h3><p>acmecorp.com stays clean and untouched — only the near-copies do the outreach, so your real address can never get into trouble.</p></div>'
+ +'</div></div>'
+ +wizFoot(null,"infra-senders","Got it — who’s sending?");
+}
+function initials(nm){var p=(nm||"").trim().split(/\s+/);return ((p[0]||"?")[0]+(p[1]?p[1][0]:"")).toUpperCase();}
+function infraSenders(){
+ var rows=S.senders.map(function(sd,i){
+  return '<div class="srow"><span class="av">'+initials(sd.name)+'</span>'
+   +'<input class="nm" data-sfield="name:'+i+'" value="'+(sd.name||"").replace(/"/g,"&quot;")+'" placeholder="Full name" aria-label="Sender name">'
+   +'<input data-sfield="title:'+i+'" value="'+(sd.title||"").replace(/"/g,"&quot;")+'" placeholder="Job title" aria-label="Sender title">'
+   +(S.senders.length>1?'<button class="srm" data-srm="'+i+'" aria-label="Remove sender">✕</button>':'')+'</div>';
+ }).join("");
+ var split=Math.round(100/S.senders.length);
+ var splitbar='<div class="splitbar">'+S.senders.map(function(sd){return '<span>'+(sd.name?sd.name.split(" ")[0]:"—")+' '+split+'%</span>';}).join("")+'</div>';
+ var sigName=S.senders[0]&&S.senders[0].name?S.senders[0].name:"Sarah Chen";
+ var sigTitle=S.senders[0]&&S.senders[0].title?S.senders[0].title:"VP Sales";
+ return wizSteps(2)
+ +'<div class="headline">Who’s <span class="date">sending</span>?</div>'
+ +'<div class="subline">These names and titles go on every email and in the signature. Add whoever you’re happy to have as a sender.</div>'
+ +'<div class="ob-body" style="display:grid;gap:9px">'+rows
+  +'<div class="ob-inprow"><input class="ob-inp" id="newSender" placeholder="Add another sender…" aria-label="Add sender name"><button class="btn-ghost" data-saddr>Add</button></div>'
+ +'</div>'
+ +'<div class="warncard" style="background:var(--bg-sunken);border-color:var(--line);color:var(--ink-2)"><b>We split sending equally across every name.</b>Each sender carries the same share — '+split+'% each right now. We can’t weight it toward one person; even spread is what keeps all the addresses healthy.</div>'
+ +splitbar
+ +'<div class="sectionlbl">Your signature</div>'
+ +'<div class="dcard" style="margin-top:0;padding:16px 18px"><div class="sigprev">'
+  +'<p style="font-weight:600;color:var(--ink)">'+sigName+'</p><p style="color:var(--ink-3);font-size:13.5px">'+sigTitle+' · '+(S.sigCompany||"Your company")+'</p>'
+  +'<p class="sigaddr">'+(S.sigAddr.trim()?S.sigAddr.replace(/</g,"&lt;"):"Your postal address — required in every cold email by law (CAN-SPAM). Add it below.")+(S.sigPhone.trim()?" · "+S.sigPhone.replace(/</g,"&lt;"):"")+'</p>'
+ +'</div></div>'
+ +'<div style="margin-top:14px;display:grid;gap:12px">'
+  +'<div><p class="inplab">Company name (as it should read)</p><input class="ob-inp" style="width:100%" data-sig="sigCompany" value="'+S.sigCompany.replace(/"/g,"&quot;")+'" placeholder="Acme Corp"></div>'
+  +'<div><p class="inplab">Postal address for the footer <span style="color:var(--brown-400);font-weight:400;text-transform:none;letter-spacing:0">— legally required</span></p><input class="ob-inp" style="width:100%" data-sig="sigAddr" value="'+S.sigAddr.replace(/"/g,"&quot;")+'" placeholder="123 Market St, Suite 400, San Francisco, CA 94103"></div>'
+  +'<div><p class="inplab">Phone <span style="color:var(--brown-400);font-weight:400;text-transform:none;letter-spacing:0">— optional</span></p><input class="ob-inp" style="width:100%" data-sig="sigPhone" value="'+S.sigPhone.replace(/"/g,"&quot;")+'" placeholder="+1 415 555 0134"></div>'
+ +'</div>'
+ +'<div class="ob-foot2"><button class="btn-ghost" data-go="infrastructure">← Back</button>'
+ +'<button class="btn-go" data-svalidate>Looks right — next</button></div>';
+}
+function redirectFor(d){return (S.redirects[d]&&S.redirects[d].trim())?S.redirects[d].trim():"acmecorp.com";}
+function infraDomains(){
+ var rows=DOMAINS.map(function(d,i){
+  var to=redirectFor(d);
+  return '<div class="dcard" style="margin-top:'+(i?"10px":"0")+';padding:14px 18px">'
+   +'<div class="drow" style="padding:0 0 10px"><span class="name mono">'+d+'</span>'
+    +'<span class="status"><b class="ok">Picked for you ✓</b></span></div>'
+   +'<p class="inplab" style="margin-top:2px">Where it should point visitors</p>'
+   +'<input class="ob-inp" style="width:100%" data-redir="'+d+'" value="'+to.replace(/"/g,"&quot;")+'" placeholder="acmecorp.com">'
+   +'<div class="trkline"><span class="small muted">We open the link as:</span><code>https://'+to.replace(/^https?:\/\//,"")+'/?ref=navreo</code></div>'
+  +'</div>';
+ }).join("");
+ return wizSteps(3)
+ +'<div class="headline">Your <span class="date">domains</span> — already chosen.</div>'
+ +'<div class="subline">Which near-copy we use genuinely doesn’t matter — nobody reads the sending domain (the bit after the @), and they’re all warmed the same way. We’ve picked three. Just skim.</div>'
+ +'<div class="ob-body">'+rows+'</div>'
+ +'<div class="warncard" style="background:var(--bg-sunken);border-color:var(--line);color:var(--ink-2)"><b>The one thing worth setting: where a curious click lands.</b>If someone clicks your domain, we forward them to your real site. We add a small <code style="font-family:var(--font-mono);font-size:12px">?ref=navreo</code> tag so any visits and meetings trace back to this campaign in your reporting.</div>'
+ +wizFoot("infra-senders","infra-confirm","That’s right — review");
+}
+function infraConfirm(){
+ var split=Math.round(100/S.senders.length);
+ var senderList=S.senders.map(function(sd){return sd.name;}).join(" · ");
+ return '<div class="estrow"><div class="estchip"><span class="lb">ESTIMATED LAUNCH OF YOUR CAMPAIGNS</span><b>'+estLaunch()+'</b></div></div>'
+ +wizSteps(4)
+ +'<div class="headline">Ready to <span class="date">start the clock</span>?</div>'
+ +'<div class="subline">Say go and we begin buying. Here’s exactly what happens next.</div>'
+ +'<div class="ob-body dcard" style="padding:4px 18px 8px">'
+  +'<div class="drow"><span class="name">Senders</span><span class="status"><b>'+senderList+'</b><span class="when">'+split+'% each · even split</span></span></div>'
+  +'<div class="drow"><span class="name">Domains</span><span class="status"><b>'+DOMAINS.length+' near-copies</b><span class="when">redirect → '+redirectFor(DOMAINS[0])+'</span></span></div>'
+  +'<div class="drow"><span class="name">Mailboxes</span><span class="status"><b>6 sending + 3 spare</b><span class="when">9 total · Google · Microsoft · SMTP</span></span></div>'
+ +'</div>'
+ +'<p class="ob-note" style="margin-top:10px">We buy, own and run every domain and mailbox for you — nothing to manage on your side. The 3 spare mailboxes are included, at no extra cost.</p>'
+ +'<div class="panel2"><div class="sectionlbl" style="margin-top:0">What we do the moment you approve</div>'
+  +'<div class="chain">'
+   +'<div class="clink now"><span class="d"></span><span>We purchase and configure your domains over the first few days, one batch at a time</span><span class="o">DAYS 1–3</span></div>'
+   +'<div class="clink"><span class="d"></span><span>Set up + buy the mailboxes across Google, Microsoft and SMTP</span><span class="o">DAYS 2–4</span></div>'
+   +'<div class="clink"><span class="d"></span><span>Warm-up: we gradually send low volumes of routine email for about two weeks, building a healthy sending history before your campaigns begin</span><span class="o">~2 WEEKS</span></div>'
+   +'<div class="clink"><span class="d"></span><span>Your campaigns go live</span><span class="o">'+estLaunch().toUpperCase()+'</span></div>'
+  +'</div></div>'
+ +'<div class="warncard"><b>One thing to know before you say go.</b>Changing your senders or domains after this restarts the two-week warm-up from scratch — and pushes your launch date back. Happy with the names and the redirect above? Then you’re good.</div>'
+ +'<div class="ob-foot2"><button class="btn-ghost" data-go="infra-domains">← Back</button>'
+  +'<button class="btn-go" data-infra-go>Approve — starts your 2-week clock</button></div>';
+}
+
+
 function infraPage(){
  var idx=infraStageIdx();
- if(idx===0){ /* awaiting the client's go-ahead */
-  return '<div class="headline">Your sending addresses, ready for <span class="date">your go-ahead</span>.</div>'
-  +'<div class="subline">We never send from acmecorp.com. These three are near-copies we bought and own — so your real address can never get in trouble.</div>'
-  +trackerHTML(0)
-  +'<div class="dcard">'+infraRows(0)+'</div>'
-  +'<div class="panel2">'
-   +'<div class="sectionlbl">Who’s sending</div>'
-   +'<div class="prow2"><span>Sarah Chen — <b>your</b> VP Sales</span><span class="okc">AGREED TO BE SENDER ✓</span></div>'
-   +'<div class="prow2"><span>Mike Torres — <b>your</b> Head of Growth</span><span class="okc">AGREED TO BE SENDER ✓</span></div>'
-   +'<div class="hintline">9 inboxes on 3 domains ≈ your 5,000 emails a month — we sort the inbox mix for you. When people reply, our AI drafts the answer in your words — a person presses send, every time.</div>'
-  +'</div>'
-  +'<div style="margin-top:26px"><div class="ob-vid"><div class="play">▶</div><div class="t">Email addresses, explained — Bjion, Navreo</div><div class="s">2 MIN · WHAT WE BUY, WHY IT’S SAFE, HOW WE RUN IT</div></div></div>'
-  +'<div class="ob-foot2"><button class="btn-go" data-infra-go>Use these — starts your 2-week clock</button>'
-  +'<button class="linkbtn" data-back2>Different names? Tell us on your call</button></div>';
- }
+ if(idx===0)return infraIntro();  /* pre-approval → the 4-page wizard starts here */
  var h,s;
  if(idx===1){h='Buying your 3 domains <span class="date">quietly over 2 days</span>.';
   s='Spread out and from different places — on purpose. Nothing needed from you.';}
  else if(idx===5){h='All 3 domains are ready — <span class="date">9 inboxes</span>, good to go.';
   s='Sending as Sarah + Mike · visitors land on acmecorp.com · watched every day.';}
- else {h='Your inboxes are warming — ready <span class="date">Fri 12 Sep</span>.';
+ else {h='Your inboxes are warming — ready <span class="date">'+estLaunch()+'</span>.';
   s='Warming = sending friendly practice emails so inbox providers trust you. Nothing needed from you.';}
  return '<div class="headline">'+h+'</div><div class="subline">'+s+'</div>'
  +trackerHTML(idx)
@@ -487,6 +688,9 @@ function infraPage(){
 function pageWrap(inner){return '<div class="col">'+inner+'</div>';}
 var PAGES={
  infrastructure:function(){return infraPage();},
+ "infra-senders":function(){return S.done.infrastructure?infraPage():infraSenders();},
+ "infra-domains":function(){return S.done.infrastructure?infraPage():infraDomains();},
+ "infra-confirm":function(){return S.done.infrastructure?infraPage():infraConfirm();},
  offers:function(){
   var picked=Object.keys(S.offers).filter(function(k){return S.offers[k];}).length+S.own.length;
   return '<div class="headline">Pick the offers you’d <span class="date">feel good running</span>.</div>'
@@ -723,7 +927,32 @@ function bindAll(){
  qa("[data-pop]").forEach(function(b){b.addEventListener("click",function(){
   openPop(b.getAttribute("data-pop")==="chain"?chainHTML():journeyHTML());});});
  var el=app.querySelector("[data-infra-go]");
- if(el)el.addEventListener("click",function(){complete("infrastructure","Done — your 2-week clock is running ⏱");});
+ if(el)el.addEventListener("click",function(){complete("infrastructure","Approved — your 2-week clock is running. Launch "+estLaunch());});
+ /* wizard: sender rows, signature + redirect fields */
+ qa("[data-sfield]").forEach(function(inp){
+  var kv=inp.getAttribute("data-sfield").split(":"),f=kv[0],i=+kv[1];
+  inp.addEventListener("input",function(){if(S.senders[i]){S.senders[i][f]=inp.value;save();}});
+  inp.addEventListener("change",render);});
+ qa("[data-sig]").forEach(function(inp){
+  var f=inp.getAttribute("data-sig");
+  inp.addEventListener("input",function(){S[f]=inp.value;save();});
+  inp.addEventListener("change",render);});
+ qa("[data-redir]").forEach(function(inp){
+  var d=inp.getAttribute("data-redir");
+  inp.addEventListener("input",function(){S.redirects[d]=inp.value;save();});
+  inp.addEventListener("change",render);});
+ var sadd=app.querySelector("[data-saddr]");
+ if(sadd)sadd.addEventListener("click",function(){var i=document.getElementById("newSender");
+  if(i&&i.value.trim()){S.senders.push({name:i.value.trim(),title:""});save();render();}});
+ qa("[data-srm]").forEach(function(b){b.addEventListener("click",function(){
+  S.senders.splice(+b.getAttribute("data-srm"),1);save();render();});});
+ var sv=app.querySelector("[data-svalidate]");
+ if(sv)sv.addEventListener("click",function(){
+  var bad=S.senders.filter(function(sd){return !sd.name.trim()||!sd.title.trim();}).length>0;
+  if(bad||!S.sigCompany.trim()){toast("Add a name and title for every sender, plus your company name");return;}
+  if(!S.sigAddr.trim()){toast("A postal address is required in every cold email by law — add yours");
+   var a=app.querySelector('[data-sig="sigAddr"]');if(a)a.focus();return;}
+  go("infra-domains");});
  qa("[data-done]").forEach(function(b){if(b.disabled)return;b.addEventListener("click",function(){
   var id=b.getAttribute("data-done");
   complete(id,({home:"Saved — it’s pinned in Slack too",offers:"Saved — bring them to your call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
