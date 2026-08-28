@@ -1572,12 +1572,22 @@ function mergeCasesSnapshot(data, opts) {
   const freshList = (data && data.cases) || [];
   const freshById = {};
   freshList.forEach((c) => { freshById[String(c.id)] = c; });
-  const inRound = new Set((ROUND_IDS || []).map(String));
+  // Instant-open rounds (owner ruling 2026-08-28): round cards the trainer
+  // has NOT reached yet may be swapped for fresher redrafts - only the card
+  // currently ON SCREEN is untouchable. currentUnanswered()[idx] is the
+  // displayed card in stream view; everything else refreshes freely so the
+  // brain pass lands behind the reading instead of holding the open.
+  let displayedId = null;
+  if (view === "stream") {
+    const un = currentUnanswered();
+    if (un[idx]) displayedId = String(un[idx].id);
+    else if (un.length) displayedId = String(un[un.length - 1].id);
+  }
   CASES = CASES.map((c) => {
     const f = freshById[String(c.id)];
     if (!f) return c;
     const replaceable = opts.replaceUnanswered && !isAnswered(c.id)
-      && (view !== "stream" || !inRound.has(String(c.id)));
+      && String(c.id) !== displayedId;
     return replaceable ? f : c;
   });
   const have = new Set(CASES.map((c) => String(c.id)));
@@ -1611,7 +1621,17 @@ function startShortRoundPoll() {
   stopShortRoundPoll();
   const deadline = Date.now() + 90000;
   shortRoundPollHandle = setInterval(async () => {
-    if (!ROUND_IDS || ROUND_IDS.length >= ROUND_SIZE || Date.now() > deadline) {
+    // Keep polling while the round is short OR any unanswered round card is
+    // still pre-teaching (instant-open 2026-08-28: swaps land behind the
+    // reading); stop once the round is full AND every unreached card is
+    // fresh (or the deadline bounds it).
+    const roundStale = (ROUND_IDS || []).some((id) => {
+      if (isAnswered(id)) return false;
+      const c = CASES.find((x) => String(x.id) === String(id));
+      return c && !caseFresh(c);
+    });
+    if (!ROUND_IDS || Date.now() > deadline
+        || (ROUND_IDS.length >= ROUND_SIZE && !roundStale)) {
       stopShortRoundPoll();
       if (view === "shortwait") { view = "done"; render(); }
       return;
@@ -2148,78 +2168,19 @@ async function startNextRoundOrGenerate() {
         .catch(() => { /* background refresh only */ });
       return;
     }
-    // Pool is deep but the upcoming drafts predate the newest teaching
-    // (owner bug 2026-08-26: "it feels like my answers aren't being
-    // listened to" - instant rounds were serving pre-brain-pass drafts).
-    // Hold HONESTLY and briefly: tell the trainer their teaching is being
-    // folded in, poll for the redrafted cards, and open the moment a full
-    // fresh round exists. Bounded: after ~45s open with freshest-first
-    // (openRound orders fresh cards to the front) - never an endless
-    // circle, never an uncommunicated dead button.
+    // INSTANT OPEN (owner ruling 2026-08-28: "ease the load - shovel work
+    // to the background"). The old hold waited up to 10s for redrafted
+    // cards; now the round opens IMMEDIATELY from whatever the pool holds,
+    // freshest cards first, and the short-round poll keeps swapping fresher
+    // redrafts into the cards the trainer has not reached yet (the visible
+    // card is never touched - see mergeCasesSnapshot + the round_ids the
+    // answer POST sends). The brain pass runs entirely behind the reading.
     if (localSpare.length >= ROUND_SIZE) {
-      roundOpening = true;
-      const el = document.getElementById("trainApp");
-      if (el) {
-        const host = el.querySelector("#roundHoldMsg") ? null : el;
-        if (host) {
-          const btnRow = el.querySelector("#doneGenerateBtn, #shareNextRoundBtn");
-          const msg = document.createElement("div");
-          msg.id = "roundHoldMsg";
-          msg.className = "round-updating";
-          msg.innerHTML = `<span class="spin"></span><span>Folding in what you just taught - the next round starts in a moment…</span>`;
-          if (btnRow && btnRow.parentNode) btnRow.parentNode.insertBefore(msg, btnRow.nextSibling);
-          else host.appendChild(msg);
-        }
-      }
-      // 10s ceiling (owner ruling 2026-08-27: "a max of 10 seconds"): with
-      // answers streamed into the brain while the trainer typed, the redraft
-      // pipeline has a head start - open with the freshest cards by 10s no
-      // matter what, and let the short-round poll swap fresher drafts in
-      // behind the trainer's reading.
-      const deadline = Date.now() + 10000;
-      const tick = async () => {
-        if (!roundOpening) return; // a rerender/answer superseded this hold
-        // Deadline FIRST and crash-proof (owner stall 2026-08-27): any
-        // unexpected throw below must never kill the chain - the catch at
-        // the bottom re-schedules, and this check guarantees the open.
-        if (Date.now() > deadline) { roundOpening = false; openRound(); return; }
-        try {
-          const snap = await fetchJson(`/api/setter/training?${trainingQS()}`);
-          if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true });
-        } catch { /* transient - the deadline below still guarantees an open */ }
-        const fresh = CASES.filter((c) => !isAnswered(c.id)).filter(caseFresh);
-        // Staggered open (owner ask 2026-08-26): ONE fresh card is enough
-        // to start - the trainer reads scenario 1 while the brain pass
-        // finishes the rest, and startShortRoundPoll grows the round to
-        // ROUND_SIZE behind their reading. The round is built from FRESH
-        // cards only (a stale filler card would show pre-teaching drafts -
-        // the exact "not listening" bug this hold exists to prevent); the
-        // deadline open below stays as the freshest-first fallback.
-        if (fresh.length >= ROUND_SIZE || Date.now() > deadline) {
-          roundOpening = false;
-          openRound();
-          return;
-        }
-        if (fresh.length >= 1) {
-          roundOpening = false;
-          stopPrefetchPoll();
-          stopTransitionPoll();
-          const freshUn = fresh.slice(0, ROUND_SIZE);
-          const fids = new Set(freshUn.map((c) => String(c.id)));
-          CASES = CASES.filter((c) => fids.has(String(c.id)))
-            .concat(CASES.filter((c) => !fids.has(String(c.id))));
-          ROUND_IDS = freshUn.map((c) => c.id);
-          try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
-          idx = 0;
-          view = "stream";
-          render();
-          startShortRoundPoll();
-          return;
-        }
-        setTimeout(safeTick, 2500);
-      };
-      const safeTick = () => { tick().catch(() => { if (roundOpening) setTimeout(safeTick, 2500); }); };
-      setTimeout(safeTick, 1500);
+      openRound();
+      startShortRoundPoll();
+      fetchJson(`/api/setter/training?${trainingQS()}`)
+        .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); })
+        .catch(() => { /* background refresh only */ });
       return;
     }
     // Not enough locally: give the click INSTANT feedback, then check the
@@ -2731,9 +2692,12 @@ function submitAndAdvance(c) {
   };
   if (SHARE_MODE) {
     answerBody.share = SHARE_TOKEN;
-    // The server must know which cards are under my eyes right now - the
-    // pool-redraft pass refreshes everything EXCEPT these (fastloop).
-    if (ROUND_IDS && ROUND_IDS.length) answerBody.round_ids = ROUND_IDS;
+    // The server must know which card is under my eyes right now - the
+    // pool-redraft pass refreshes everything EXCEPT this. Instant-open
+    // 2026-08-28: only the DISPLAYED card is protected (was the whole
+    // round), so the round's unreached cards get redrafted with the newest
+    // teaching while the trainer reads - the swap lands via the polls.
+    if (ROUND_IDS && ROUND_IDS.length) answerBody.round_ids = [c.id];
     if (p.verdict === "needs_work" && p.edited_body) answerBody.edited_body = p.edited_body;
   }
   // Snapshot of exactly what the trainer picked, so a failure restores this
