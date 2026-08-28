@@ -14490,6 +14490,46 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                 return
 
         scenarios = list(staged_scenarios)
+        # FIRST-ROUNDS CURRICULUM (owner ask 2026-08-28): a fresh training doc
+        # opens with the SIMPLEST, most common real-world replies before any
+        # invented variety - mined from the central replies corpus (1,000
+        # positive-category replies, 2026-08-28): more-info 137, bare
+        # interested 124, book-a-call 119, pricing 98, referral 72,
+        # guarantee/proof 40, lead-proposes-time 18, who-are-you 4,
+        # circle-back 8. Each carries a staged_key so later batches never
+        # repeat one that already exists. Only fires while NOTHING has been
+        # answered yet - after that, variety machinery takes over.
+        if is_share_mode and not (doc.get("answers") or {}):
+            _seen_keys = {str(c.get("staged_key") or "") for c in existing_cases}
+            _CURRICULUM = [
+                ("curriculum-01-more-info", "Information Request", "Can you send me some more information?"),
+                ("curriculum-02-interested", "Interested", "Sounds interesting."),
+                ("curriculum-03-pricing", "Information Request", "How much does it cost?"),
+                ("curriculum-04-book-call", "Meeting Request", "Happy to have a quick call - send me some times."),
+                ("curriculum-05-guarantee", "Information Request",
+                 "Do you offer any money-back guarantee? What results have you gotten for companies like ours?"),
+                ("curriculum-06-own-time", "Meeting Request",
+                 "Let's talk. I'm free Tuesday at 14:00 or Thursday morning - which works for you?"),
+                ("curriculum-07-referral", "Interested",
+                 "This one's not mine - best to speak with my colleague Sarah (cc'd), she owns this area."),
+                ("curriculum-08-who-are-you", "Information Request",
+                 "Who are you exactly, and how did you get my email? Is this automated?"),
+                ("curriculum-09-circle-back", "Interested",
+                 "Looks interesting, but we're heads-down until next quarter - can you circle back then?"),
+            ]
+            _CUR_LEADS = [("Alex", "Fernway Group"), ("Priya", "Coastline Labs"), ("Tom", "Brightpath"),
+                          ("Elena", "Northgate Co"), ("Marcus", "Verdant Partners"), ("Sofia", "Cobalt Works"),
+                          ("James", "Halewood"), ("Nina", "Arclight Media"), ("Ravi", "Stonebridge")]
+            _cur = []
+            for _ci, (_k, _cat, _body) in enumerate(_CURRICULUM):
+                if _k in _seen_keys or len(_cur) >= shortfall:
+                    continue
+                _fn, _co = _CUR_LEADS[_ci % len(_CUR_LEADS)]
+                _cur.append({"category": _cat, "lead_first_name": _fn, "lead_company": _co,
+                             "subject": "", "body": _body, "staged_key": _k})
+            if _cur:
+                scenarios = scenarios + _cur
+                shortfall = max(0, shortfall - len(_cur))
         synthetic_trigger = None
         if shortfall > 0:
             # A pre-fetched, unscoped-by-used tone sample both feeds the
