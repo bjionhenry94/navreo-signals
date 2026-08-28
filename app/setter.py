@@ -14499,15 +14499,6 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # circle-back 8. Each carries a staged_key so later batches never
         # repeat one that already exists. Only fires while NOTHING has been
         # answered yet - after that, variety machinery takes over.
-        if _LOG:
-            try:
-                _LOG("/api/setter/training/generate:curriculum_gate",
-                     {"agent_id": agent_id, "share": bool(is_share_mode),
-                      "n_answers": len(doc.get("answers") or {}),
-                      "shortfall": shortfall, "n_existing": len(existing_cases),
-                      "n_staged": len(staged_scenarios)}, actor="system")
-            except Exception:  # noqa: BLE001
-                pass
         if is_share_mode and not (doc.get("answers") or {}):
             _seen_keys = {str(c.get("staged_key") or "") for c in existing_cases}
             _CURRICULUM = [
@@ -14529,13 +14520,23 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
             _CUR_LEADS = [("Alex", "Fernway Group"), ("Priya", "Coastline Labs"), ("Tom", "Brightpath"),
                           ("Elena", "Northgate Co"), ("Marcus", "Verdant Partners"), ("Sofia", "Cobalt Works"),
                           ("James", "Halewood"), ("Nina", "Arclight Media"), ("Ravi", "Stonebridge")]
+            # Each curriculum scenario must carry its own email 1 - with no
+            # real sends AND no outreach attached, the case builder's
+            # no-us-side guard silently DROPS the scenario (found live
+            # 2026-08-28: every curriculum item vanished this way). Same
+            # mechanism as invention: real board copy from training_outreach,
+            # tokens resolved per lead, rotating so the angles vary.
+            _cur_pool = _training_outreach_pool(agent)
             _cur = []
             for _ci, (_k, _cat, _body) in enumerate(_CURRICULUM):
                 if _k in _seen_keys or len(_cur) >= shortfall:
                     continue
                 _fn, _co = _CUR_LEADS[_ci % len(_CUR_LEADS)]
+                _o = _cur_pool[_ci % len(_cur_pool)] if _cur_pool else None
                 _cur.append({"category": _cat, "lead_first_name": _fn, "lead_company": _co,
-                             "subject": "", "body": _body, "staged_key": _k})
+                             "subject": "", "body": _body, "staged_key": _k,
+                             "outreach_subject": _resolve_outreach_tokens((_o or {}).get("subject") or "", _fn, _co).strip(),
+                             "outreach_body": _resolve_outreach_tokens((_o or {}).get("body") or "", _fn, _co)})
             if _cur:
                 scenarios = scenarios + _cur
                 shortfall = max(0, shortfall - len(_cur))
