@@ -881,13 +881,17 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // so a double-fired sweep is one strike. 3+ parks = retire candidate.
   function parkPrompt(rows) {
     var list = rows.map(function (r) {
-      return "- " + r.domain + " (parked " + r.parks + "x, last " + (r.last_parked || "?") +
-        (r.resting_now ? ", resting now" : ", live") + (r.boxes ? ", " + r.boxes + " mailboxes" : "") + ")";
+      return "- " + r.domain + " (" + (r.cycles || 0) + " real park cycle(s), " + (r.orders || r.parks) +
+        " park orders, last " + (r.last_parked || "?") +
+        (r.resting_now ? ", resting now" : ", live") +
+        (r.rest_not_holding ? ", REST NOT HOLDING" : "") +
+        (r.boxes ? ", " + r.boxes + " mailboxes" : "") + ")";
     }).join("\n");
-    return "These sending domains keep getting parked into warm-up by the deliverability engine — " +
-      "each has been parked on the listed number of separate days in the last 6 weeks (see the " +
-      "Repeat parks tab in the Inbox & Domain Manager). A repeat offender that fails after every " +
-      "7-day rest is dead weight: every cycle burns a rest window plus restore sends.\n\n" +
+    return "These sending domains keep failing their reply-rate floor — see the Repeat parks tab in " +
+      "the Inbox & Domain Manager. 'Real park cycles' = parks that verifiably zeroed live boxes; " +
+      "'park orders' = days the engine ordered a park (a large gap between the two was the " +
+      "park↔restore ping-pong, fixed 2026-08-28). A domain that keeps earning parks after " +
+      "every 7-day rest is dead weight: every cycle burns a rest window plus restore sends.\n\n" +
       "For each domain below, check its trailing-30d reply rate and decide: RETIRE it (park it and " +
       "dismiss it from auto-restore so it stops cycling, and detach its mailboxes from campaigns) " +
       "or give it one last cycle if there is a concrete reason it might recover. Queue replacement " +
@@ -903,9 +907,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var dh = dhRows() || []; var rrByDom = {};
     dh.forEach(function (d) { if (d.domain) rrByDom[d.domain] = d; });
     var restDue = (S.bundle && S.bundle.restDue) || {};
-    var retire = 0;
+    var retire = 0, pingpong = 0;
     var body = rows.slice(0, MGR_CAP).map(function (r) {
-      var bad = r.parks >= 3; if (bad) retire++;
+      var cyc = r.cycles || 0, ord = r.orders || r.parks || 0;
+      var bad = cyc >= 3; if (bad) retire++;
+      if (r.rest_not_holding) pingpong++;
       var d = rrByDom[r.domain];
       var rr = (d && d.reply_rate != null)
         ? d.reply_rate.toFixed(2) + '% <span class="t-mut">(' + comma(d.sent || 0) + ' sent)</span>'
@@ -913,20 +919,26 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var status = r.resting_now
         ? pill("n", "resting now") + (restDue[r.domain] ? ' ' + dueChip(restDue[r.domain]) : '')
         : pill("g", "live — sending");
+      var verdict = bad ? pill("r", "retire candidate") : cyc >= 2 ? pill("a", "watch") : pill("n", "monitor");
+      if (r.rest_not_holding) verdict += ' ' + pill("r", "rest not holding");
       return '<tr><td class="mono">' + esc(r.domain) +
         (r.workspace && r.workspace !== "navreo" ? ' <span class="pill n">' + esc(r.workspace) + '</span>' : '') + '</td>' +
-        '<td class="num" style="font-weight:700">' + r.parks + '×</td>' +
+        '<td class="num" style="font-weight:700">' + cyc + '×</td>' +
+        '<td class="num">' + ord + '</td>' +
         '<td class="num">' + esc(r.last_parked || "—") + '</td>' +
         '<td class="num">' + rr + '</td>' +
         '<td class="num">' + (r.boxes || '—') + '</td>' +
         '<td>' + status + '</td>' +
-        '<td>' + (bad ? pill("r", "retire candidate") : pill("a", "watch")) + '</td></tr>';
+        '<td>' + verdict + '</td></tr>';
     }).join("");
     var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + " domains. " : "") +
-      rows.length + " domain(s) parked " + minp + "+ times in the last " + days + " days — each park costs a 7-day rest before the domain can send again. " +
-      "A domain at 3+ parks keeps failing after every rest: retire or replace it instead of letting it cycle. " +
+      rows.length + " domain(s) with " + minp + "+ park orders in the last " + days + " days. " +
+      "<b>Rest cycles</b> = parks that verifiably zeroed live boxes (a real 7-day rest each). <b>Park orders</b> = days a park was ordered — " +
+      "orders far above cycles was the park↔restore ping-pong (rest never held), fixed 28 Aug: enforcement now re-parks any resting domain found live, so that gap should drain. " +
+      (pingpong ? pingpong + " domain(s) still flagged “rest not holding”. " : "") +
+      "A domain at 3+ real cycles keeps failing after every rest: retire or replace it. " +
       (retire ? '<button class="btn sm primary" data-act="copy-park-prompt-all">Copy a retire prompt for the ' + retire + ' candidate(s)</button> — paste it into Claude Code to work through them.' : '');
-    return tableWrap('<th>Domain</th><th class="num">Parks (' + days + 'd)</th><th class="num">Last parked</th><th class="num">Reply rate (30d)</th><th class="num">Mailboxes</th><th>Status</th><th>Verdict</th>', body, null, foot);
+    return tableWrap('<th>Domain</th><th class="num">Rest cycles</th><th class="num">Park orders (' + days + 'd)</th><th class="num">Last parked</th><th class="num">Reply rate (30d)</th><th class="num">Mailboxes</th><th>Status</th><th>Verdict</th>', body, null, foot);
   }
   // ---- Not warming (old flow "notwarming"): Domain / mailbox·Batch·Warmup·Action(Re-enable)
   function mgrWarmupOff() {
@@ -1143,9 +1155,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var b = e.target.closest("[data-act]"); if (!b) return;
     var act = b.getAttribute("data-act");
     if (act === "copy-park-prompt-all") {
-      // Retire candidates (3+ parks) first; fall back to every flagged domain.
+      // Retire candidates (3+ real cycles) first; fall back to every flagged domain.
       var pcAll = parkChurnListC() || [];
-      var pcRows = pcAll.filter(function (r) { return r.parks >= 3; });
+      var pcRows = pcAll.filter(function (r) { return (r.cycles || 0) >= 3; });
       if (!pcRows.length) pcRows = pcAll;
       if (!pcRows.length) return;
       var pcOld = b.textContent;

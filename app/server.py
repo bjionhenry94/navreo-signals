@@ -7738,26 +7738,42 @@ def _warmup_job_worker(job: dict, op: str, domains: list):
             # keeps an established rest clock) so due-back dates exist at once.
             from datetime import datetime, timezone
             try:
-                # Client-workspace boxes first: the audit backend can't park
-                # them (it only sees Navreo's Smartlead), so without this the
-                # mirror-zeroing below would CLAIM a hold that never reached
-                # Smartlead. Zero their real caps with the owning workspace's
-                # key; failures count so the job can't report a phantom hold.
-                cli_held, cli_errs = 0, 0
+                # Direct Smartlead true-up, EVERY workspace (the pause-side twin
+                # of the resume true-up above). Client boxes: the audit backend
+                # can't park them (it only sees Navreo's Smartlead). Navreo
+                # boxes: the backend's inventory runs far behind the fleet, so
+                # its warmup-pause routinely zeroes NOTHING ("paused": 0) while
+                # the boxes keep sending — the park never lands, the nightly
+                # sync trues the mirror back to live, the ghost drain wipes the
+                # rest clock, and the floors engine re-orders the same park the
+                # next day (the Aug-2026 park↔restore ping-pong: 10 park orders
+                # in 15 days, zero rest served). Zero every still-live box
+                # directly with the owning workspace's key; failures count so
+                # the job can't report a phantom hold.
+                cli_held, direct_held, cli_errs = 0, 0, 0
                 for i in range(0, len(doms), 40):
-                    for r in sb("GET", "mailboxes?domain=in.(%s)&workspace=neq.navreo"
+                    for r in sb("GET", "mailboxes?domain=in.(%s)"
                                        "&message_per_day=gt.0&select=smartlead_id,workspace"
                                        % ",".join(doms[i:i + 40])) or []:
+                        ws0 = r.get("workspace") or "navreo"
                         try:
                             _smartlead_json("POST", f"/email-accounts/{r['smartlead_id']}",
                                             {"max_email_per_day": 0},
-                                            workspace=r.get("workspace"))
-                            cli_held += 1
+                                            workspace=ws0)
+                            if ws0 == "navreo":
+                                direct_held += 1
+                            else:
+                                cli_held += 1
                         except Exception:  # noqa: BLE001 — counted, surfaced below
                             cli_errs += 1
                         time.sleep(0.35)  # shared 200req/min Smartlead budget
                 if cli_held:
                     counts["client_paused"] = cli_held
+                if direct_held:
+                    # Boxes the backend's pause missed and we zeroed ourselves —
+                    # nonzero here means the park only landed because of this
+                    # true-up (and park-churn counts it as a REAL park).
+                    counts["direct_capped"] = direct_held
                 if cli_errs:
                     counts["client_pause_errors"] = cli_errs
                 for i in range(0, len(doms), 40):
@@ -15977,6 +15993,70 @@ def _deliv_bundle_restore():
         print(f"[deliv] WARNING bundle restore failed: {e}", file=sys.stderr)
 
 
+_LEDGER_DEFEND_MEMO = {"key": None, "ts": 0.0}
+
+
+def _ledger_delete_due_only(doms, have=None, reason=""):
+    """Delete resting-ledger rows for `doms` ONLY where the 7-day rest has
+    actually been served (first_rested_at past the clock). A row that is NOT
+    yet due but whose domain has left the resting census is not a restore we
+    honour — it is the signature of the park↔restore ping-pong (an audit-side
+    restore, or a park that never landed in Smartlead): deleting it is what
+    wiped rest clocks daily through Aug 2026. Those rows are DEFENDED — kept,
+    surfaced with their real due-back date, and re-parked by rest_enforce().
+    Dismissed rows (retired from auto-restore) are never deleted here.
+    Returns {"deleted": [...], "defended": {domain: due_epoch_ms}}."""
+    from datetime import datetime
+    doms = [str(d).lower() for d in (doms or []) if d]
+    if not doms:
+        return {"deleted": [], "defended": {}}
+    if have is None:
+        have = {}
+        for i in range(0, len(doms), 60):
+            for r in sb("GET", "deliverability_resting_ledger"
+                               "?select=domain,first_rested_at,dismissed"
+                               "&domain=in.(%s)" % ",".join(doms[i:i + 60])) or []:
+                have[str(r.get("domain") or "").lower()] = r
+    now_ms = int(time.time() * 1000)
+    deletable, defended = [], {}
+    for d in doms:
+        row = have.get(d)
+        if not row:
+            continue
+        due_ms = None
+        try:
+            due_ms = int(datetime.fromisoformat(
+                str(row.get("first_rested_at")).replace("Z", "+00:00")
+            ).timestamp() * 1000) + _DELIV_REST_DAYS_MS
+        except Exception:  # noqa: BLE001 — unparseable clock: treat as due (old behavior)
+            pass
+        if row.get("dismissed"):
+            continue  # retired-from-restore rows are owned by restore-dismiss
+        if due_ms is None or now_ms >= due_ms:
+            deletable.append(d)
+        else:
+            defended[d] = due_ms
+    for i in range(0, len(deletable), 80):
+        sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
+                     % ",".join(deletable[i:i + 80]))
+    if defended:
+        # One log line when the defended set changes (not per sweep — the
+        # bundle refreshes often), so the tug-of-war is visible in the panel.
+        key = ",".join(sorted(defended))
+        if key != _LEDGER_DEFEND_MEMO["key"] or time.time() - _LEDGER_DEFEND_MEMO["ts"] > 6 * 3600:
+            _LEDGER_DEFEND_MEMO.update(key=key, ts=time.time())
+            try:
+                log_activity("/api/deliverability/_bundle",
+                             payload={"reason": reason or "left resting census",
+                                      "domains": sorted(defended)[:40],
+                                      "count": len(defended)},
+                             actor="deliverability", action="rest_clock_defended",
+                             entity="domain")
+            except Exception:  # noqa: BLE001 — logging must never break the sweep
+                pass
+    return {"deleted": deletable, "defended": defended}
+
+
 def _deliv_resting_ledger_sync(rested_doms, allow_delete=True):
     """Authoritative due-back dates. The audit backend RE-STAMPS its
     restedAt/restingDue values on every sweep (verified live 2026-07-11:
@@ -15998,11 +16078,13 @@ def _deliv_resting_ledger_sync(rested_doms, allow_delete=True):
            [{"domain": d, "first_rested_at": now_iso, "approx": False, "last_seen_at": now_iso}
             for d in new],
            prefer="resolution=ignore-duplicates,return=minimal")
+    defended = {}
+    deleted = []
     if allow_delete:
         gone = _safe_domains(sorted(d for d in have if d not in rested_doms))
-        for i in range(0, len(gone), 80):
-            sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)" % ",".join(gone[i:i + 80]))
-    if new or (allow_delete and gone):
+        res = _ledger_delete_due_only(gone, have=have, reason="left resting census")
+        deleted, defended = res["deleted"], res["defended"]
+    if new or deleted:
         _restore_plan_invalidate()  # ledger changed — restore-plan must re-read
     due = {}
     now_ms = int(time.time() * 1000)
@@ -16015,6 +16097,11 @@ def _deliv_resting_ledger_sync(rested_doms, allow_delete=True):
             except Exception:  # noqa: BLE001
                 pass
         due[d] = now_ms + _DELIV_REST_DAYS_MS  # first seen this sweep
+    for d, due_ms in defended.items():
+        # Defended rows: the census lost the domain mid-rest (ping-pong), but
+        # the clock stands — keep it in restDue so the Resting tab still shows
+        # it with its true due-back and the cap engines keep skipping it.
+        due.setdefault(d, due_ms)
     return due
 
 
@@ -16907,10 +16994,16 @@ def _deliv_bundle_run_bg_inner():
             out["maildosoDomains"] = sorted(mdoms)
             gdoms = _safe_domains(sorted(ghosts))
             if gdoms and not _deliv_mock_on():
-                for gi in range(0, len(gdoms), 80):
-                    sb("DELETE", "deliverability_resting_ledger?domain=in.(%s)"
-                                 % ",".join(gdoms[gi:gi + 80]))
-                _restore_plan_invalidate()
+                # Due-gated (2026-08-28): a ghost mid-rest is a park that never
+                # landed or an audit-side restore — deleting its row here is
+                # what reset rest clocks daily. Only served rests are dropped;
+                # defended ghosts keep their due-back and get re-parked by
+                # rest_enforce().
+                gres = _ledger_delete_due_only(gdoms, reason="ghost census (all boxes live)")
+                if gres["deleted"]:
+                    _restore_plan_invalidate()
+                for gd, gdue in gres["defended"].items():
+                    out["restDue"].setdefault(gd, gdue)
     except Exception as e:  # noqa: BLE001
         out["errors"]["restDue"] = str(e)[:200]
     # Instantly truth for the Maildoso fleet (owner request 2026-07-25): those
@@ -17745,6 +17838,102 @@ PARK_CHURN_DAYS = 42       # trailing window (owner spec: "last 6 weeks")
 PARK_CHURN_MIN = 2         # flag at 2+ parks; the UI escalates 3+ to "retire"
 
 
+def rest_enforce(mode: str = "preview") -> dict:
+    """A rest, once ordered, must be SERVED (owner: 'we need to fix this',
+    2026-08-28). The park↔restore ping-pong: the audit backend's warmup-pause
+    routinely no-ops on navreo boxes and its own engine restores parked
+    domains off-schedule, so a domain the floors engine parked could be back
+    sending within hours — 10 park orders in 15 days with zero rest served.
+    The pause path now zeroes caps directly and the ledger sync defends
+    not-yet-due clocks; this is the third leg: any box found LIVE on a domain
+    whose rest clock has not come due gets re-zeroed, workspace-aware.
+
+    Runs daily right after the cap crons (which run after the 04:30 mailbox
+    sync, so the mirror it reads is last night's Smartlead truth). Rows
+    younger than 30 minutes are skipped — a pause job may still be zeroing
+    them. Dismissed rows are skipped (restore-dismiss owns those). mode=
+    "preview" returns the plan and writes nothing."""
+    from datetime import datetime
+    rows = sb_get_all("deliverability_resting_ledger"
+                      "?select=domain,first_rested_at,dismissed&dismissed=is.false"
+                      "&order=domain.asc") or []
+    now_ms = int(time.time() * 1000)
+    not_due = {}
+    for r in rows:
+        d = str(r.get("domain") or "").lower()
+        try:
+            start_ms = int(datetime.fromisoformat(
+                str(r.get("first_rested_at")).replace("Z", "+00:00")).timestamp() * 1000)
+        except Exception:  # noqa: BLE001 — no readable clock, nothing to enforce against
+            continue
+        if now_ms < start_ms + _DELIV_REST_DAYS_MS and now_ms - start_ms > 30 * 60000:
+            not_due[d] = start_ms + _DELIV_REST_DAYS_MS
+    live = []
+    doms = sorted(not_due)
+    for i in range(0, len(doms), 40):
+        live.extend(sb_get_all(
+            "mailboxes?select=smartlead_id,email,domain,workspace,message_per_day"
+            "&message_per_day=gt.0&order=smartlead_id.asc"
+            "&domain=in.(%s)" % ",".join(doms[i:i + 40])) or [])
+    REST_ENFORCE_BOX_CAP = 400  # bound one run's Smartlead writes; the daily cadence drains the rest
+    capped_out = live[:REST_ENFORCE_BOX_CAP]
+    by_dom: dict = {}
+    for b in capped_out:
+        by_dom.setdefault(str(b.get("domain") or "").lower(), []).append(b)
+    out = {"ok": True, "mode": mode, "restingNotDue": len(not_due),
+           "liveDomains": len(by_dom), "liveBoxes": len(live),
+           "boxesThisRun": len(capped_out),
+           "plan": [{"domain": d, "boxes": len(bs),
+                     "due_back": not_due.get(d)} for d, bs in sorted(by_dom.items())]}
+    if mode != "apply" or not capped_out:
+        return out
+    job = _new_job("rest_enforce", "Rest enforcement: re-parking "
+                   f"{len(capped_out)} live box(es) on {len(by_dom)} resting domain(s)", None)
+    with JOBS_LOCK:
+        job["counts"] = {"op": "rest_enforce", "domains": len(by_dom),
+                         "boxes": len(capped_out),
+                         "domains_list": sorted(by_dom)[:12]}
+        job["progress"] = {"done": 0, "total": len(capped_out)}
+    _job_started(job)
+    zeroed, failed = [], []
+    try:
+        for i, b in enumerate(capped_out):
+            try:
+                _smartlead_json("POST", f"/email-accounts/{b['smartlead_id']}",
+                                {"max_email_per_day": 0},
+                                workspace=b.get("workspace") or "navreo")
+                zeroed.append(str(b["smartlead_id"]))
+            except Exception as ex:  # noqa: BLE001 — one bad box must not stop the sweep
+                failed.append({"email": b.get("email"), "error": str(ex)[:120]})
+            with JOBS_LOCK:
+                job["progress"]["done"] = i + 1
+            time.sleep(0.35)  # shared 200req/min Smartlead budget
+        for i in range(0, len(zeroed), 60):
+            try:
+                sb("PATCH", "mailboxes?smartlead_id=in.(%s)" % ",".join(zeroed[i:i + 60]),
+                   {"message_per_day": 0})
+            except Exception:  # noqa: BLE001 — nightly sync self-corrects
+                pass
+    except Exception as e:  # noqa: BLE001 — the job row must never orphan as "running"
+        with JOBS_LOCK:
+            job["counts"].update(zeroed=len(zeroed), enforce_failed=len(failed))
+        _job_finished(job, "failed", str(e)[:300])
+        raise
+    out.update(zeroed=len(zeroed), failed=failed)
+    with JOBS_LOCK:
+        job["counts"].update(zeroed=len(zeroed), enforce_failed=len(failed))
+    _job_finished(job, "failed" if failed and not zeroed else "done",
+                  failed[0]["error"] if failed and not zeroed else None)
+    try:
+        log_activity("/api/cron/rest-enforce",
+                     payload={"domains": sorted(by_dom)[:40], "domain_count": len(by_dom),
+                              "zeroed": len(zeroed), "failed": len(failed)},
+                     actor="deliverability", action="rest_enforced", entity="domain")
+    except Exception:  # noqa: BLE001 — logging must never fail the sweep
+        pass
+    return out
+
+
 def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
                    force: bool = False) -> tuple[dict, int]:
     """{ok, days, min_parks, rows:[{domain, parks, first_parked, last_parked,
@@ -17767,21 +17956,42 @@ def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
         if hit:  # transient log hiccup — stale beats a broken tab
             return hit["data"], 200
         return {"ok": False, "error": "activity-log read failed"}, 502
-    park_days: dict = {}
+    # Two counts per domain (owner's arithmetic check, 2026-08-28: "10 parks
+    # × 7 days can't fit in 42"): `orders` = distinct days ANY park order was
+    # issued; `cycles` = distinct days a park VERIFIABLY landed on live boxes
+    # — a warmup_pause whose job actually zeroed something (paused /
+    # client_paused / direct_capped > 0) or a cap-engine park (which zeroes
+    # caps itself, and only ever fires on non-resting domains). A big
+    # orders-minus-cycles gap is the ping-pong signature: the same dead
+    # domain ordered parked day after day while its rest never held.
+    # History honesty: before the pause true-up shipped (2026-08-28), a park
+    # could land at Smartlead without any of those counters (`paused: 0`
+    # no-ops), so old cycles read LOW — the resting-now floor below keeps a
+    # genuinely parked domain from reading zero.
+    order_days: dict = {}
+    landed_days: dict = {}
     for ev in events:
         p = ev.get("payload") or {}
         if not isinstance(p, dict):
             continue
-        doms = (p.get("domains_list") if ev.get("action") == "warmup_pause"
-                else p.get("parked")) or []
+        if ev.get("action") == "warmup_pause":
+            doms = p.get("domains_list") or []
+            landed = (int(p.get("paused") or 0) + int(p.get("client_paused") or 0)
+                      + int(p.get("direct_capped") or 0)) > 0
+        else:
+            doms = p.get("parked") or []
+            landed = True
         if not isinstance(doms, list):
             continue
         day = str(ev.get("ts") or "")[:10]
         for d in doms:
             d = str(d).strip().lower()
-            if d:
-                park_days.setdefault(d, set()).add(day)
-    flagged = sorted(d for d, ds in park_days.items() if len(ds) >= min_parks)
+            if not d:
+                continue
+            order_days.setdefault(d, set()).add(day)
+            if landed:
+                landed_days.setdefault(d, set()).add(day)
+    flagged = sorted(d for d, ds in order_days.items() if len(ds) >= min_parks)
     ledger = {str(r.get("domain") or "").lower()
               for r in (sb_get_all("deliverability_resting_ledger?select=domain"
                                    "&dismissed=is.false&order=domain.asc") or [])}
@@ -17795,14 +18005,22 @@ def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
             ws.setdefault(d, b.get("workspace") or "navreo")
     rows = []
     for d in flagged:
-        ds = sorted(park_days[d])
-        rows.append({"domain": d, "parks": len(ds),
+        ds = sorted(order_days[d])
+        resting = d in ledger
+        cycles = len(landed_days.get(d) or ())
+        if resting and cycles == 0:
+            cycles = 1  # it IS parked — at least one park landed, however it got there
+        orders = len(ds)
+        rows.append({"domain": d, "orders": orders, "cycles": cycles,
+                     "parks": orders,  # legacy alias — clients before the cycles split
+                     "rest_not_holding": (orders - cycles) >= 3,
                      "first_parked": ds[0], "last_parked": ds[-1],
-                     "resting_now": d in ledger,
+                     "resting_now": resting,
                      "boxes": boxes.get(d, 0),
                      "workspace": ws.get(d, "navreo")})
     rows.sort(key=lambda r: r["last_parked"], reverse=True)   # ties: newest first
-    rows.sort(key=lambda r: r["parks"], reverse=True)         # stable — worst first
+    rows.sort(key=lambda r: r["orders"], reverse=True)        # stable
+    rows.sort(key=lambda r: r["cycles"], reverse=True)        # true cycles first
     out = {"ok": True, "days": days, "min_parks": min_parks, "rows": rows,
            "generated_at": datetime.now(timezone.utc).isoformat()}
     _PARK_CHURN_CACHE[key] = {"data": out, "ts": time.time()}
@@ -23116,6 +23334,30 @@ class Handler(SimpleHTTPRequestHandler):
             force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
             body, status = park_churn_get(days=days, force=force)
             return self._json(body, status)
+        if path == "/api/cron/rest-enforce":
+            # Manual/preview entry for rest enforcement (the daily apply rides
+            # the outlook-reply-caps cron). Default preview: a plain GET must
+            # never rewrite caps by surprise — pass ?mode=apply to write.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            if (q.get("mode") or ["preview"])[0] != "apply":
+                try:
+                    return self._json(rest_enforce("preview"), 200)
+                except Exception as e:  # noqa: BLE001
+                    return self._json({"ok": False, "error": str(e)[:300]}, 500)
+
+            def _rest_enforce_bg():
+                try:
+                    r = rest_enforce("apply")
+                    log_activity("/api/cron/rest-enforce",
+                                 payload={"zeroed": r.get("zeroed"),
+                                          "domains": r.get("liveDomains")},
+                                 actor="cron", action="rest-enforce", entity="deliverability")
+                except Exception as e:  # noqa: BLE001 — a failed run must be visible
+                    log_activity("/api/cron/rest-enforce", payload={"error": str(e)[:200]},
+                                 actor="cron", action="rest-enforce", entity="deliverability")
+            threading.Thread(target=_rest_enforce_bg, daemon=True).start()
+            return self._json({"ok": True, "started": True}, 202)
         if path == "/api/capacity-invariant":
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
@@ -23642,6 +23884,23 @@ class Handler(SimpleHTTPRequestHandler):
                         log_activity("/api/cron/maildoso-reply-caps", payload={"error": str(e)[:200],
                                      "via": "outlook-cron-piggyback"},
                                      actor="cron", action="reply-caps", entity="deliverability")
+                    # Rest enforcement rides the same daily trigger, AFTER the cap
+                    # engines: any box found live on a not-yet-due resting domain
+                    # is re-zeroed so an ordered rest is actually served (the
+                    # park↔restore ping-pong fix, 2026-08-28). Separate try block
+                    # — its failure must never skip the bundle refresh below.
+                    try:
+                        re_ = rest_enforce("apply")
+                        if re_.get("boxesThisRun"):
+                            log_activity("/api/cron/rest-enforce",
+                                         payload={"zeroed": re_.get("zeroed"),
+                                                  "domains": re_.get("liveDomains"),
+                                                  "via": "outlook-cron-piggyback"},
+                                         actor="cron", action="rest-enforce", entity="deliverability")
+                    except Exception as e:  # noqa: BLE001 — visible, never blocks the refresh
+                        log_activity("/api/cron/rest-enforce", payload={"error": str(e)[:200],
+                                     "via": "outlook-cron-piggyback"},
+                                     actor="cron", action="rest-enforce", entity="deliverability")
                     _deliv_bundle_start(force=True)  # badges reflect the new caps now
                 threading.Thread(target=_outlook_caps_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
