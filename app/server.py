@@ -18686,9 +18686,18 @@ _WHO_LOCK = threading.Lock()
 _WHO_TTL_S = 600
 
 
-def _who_replies_compute(client: str, days: int) -> dict:
+def _who_replies_compute(client: str, days: int,
+                         start: str | None = None, end: str | None = None) -> dict:
     days = max(7, min(30, int(days or 30)))
+    # `since` stays defined for the window-scoped subseq read further down; only
+    # the interested-reply filter narrows to the exact range for the report.
     since = (_dtmod.datetime.utcnow() - _dtmod.timedelta(days=days)).isoformat()
+    if start and end:
+        # exact-range flavour (the client report): the interested leads that
+        # replied inside [start,end], so the card matches the rest of the report
+        _flt = f"&replied_at=gte.{start}&replied_at=lt.{end}T23:59:59"
+    else:
+        _flt = f"&replied_at=gte.{since}"
     score = {str(r.get("smartlead_campaign_id")): r
              for r in (sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name") or [])}
 
@@ -18698,7 +18707,7 @@ def _who_replies_compute(client: str, days: int) -> dict:
 
     pos = ",".join(_AH_POSITIVE_CATS)
     reps = sb_get_all(f"replies?select=email,smartlead_campaign_id,workspace"
-                      f"&category=in.({urllib.parse.quote(pos)})&replied_at=gte.{since}") or []
+                      f"&category=in.({urllib.parse.quote(pos)}){_flt}") or []
     emails, seen = [], set()
     for r in reps:
         em = (r.get("email") or "").strip().lower()
@@ -18855,8 +18864,9 @@ def _who_replies_compute(client: str, days: int) -> dict:
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
 
 
-def who_replies_get(client: str, days: int) -> tuple[dict, int]:
-    key = f"{client}|{days}"
+def who_replies_get(client: str, days: int,
+                    start: str | None = None, end: str | None = None) -> tuple[dict, int]:
+    key = f"{client}|{days}|{start or ''}|{end or ''}"
     with _WHO_LOCK:
         ent = _WHO_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _WHO_TTL_S:
@@ -18876,7 +18886,7 @@ def who_replies_get(client: str, days: int) -> tuple[dict, int]:
             if not stale_subseq:
                 return ent["data"], 200
     try:
-        data = _who_replies_compute(client, days)
+        data = _who_replies_compute(client, days, start, end)
     except Exception as e:  # noqa: BLE001
         return {"error": "who_unavailable", "message": str(e)[:200]}, 200
     with _WHO_LOCK:
@@ -18955,6 +18965,16 @@ _REPORT_REPLIED_CACHE: dict = {}
 _REPORT_REPLIED_LOCK = threading.Lock()
 _REPORT_REPLIED_TTL_S = 600
 
+# Range-scoped report stats (client-report-share, range fix 2026-08-28): the
+# report's numbers pinned to its OWN [start,end] instead of a today-ending
+# precomputed window. A historical range never changes, so it caches for hours;
+# a range that still touches today re-reads every 10 min.
+_REPORT_RANGE_CACHE: dict = {}
+_REPORT_RANGE_LOCK = threading.Lock()
+_REPORT_RANGE_TTL_LIVE_S = 600
+_REPORT_RANGE_TTL_HIST_S = 6 * 3600
+_REPORT_RANGE_SENT_CAP = 24   # max per-campaign analytics-by-date calls per report
+
 
 def _report_positive_gate(rows: list) -> list:
     """Client-eyes quality gate: ONE gpt-5-mini call reads every candidate
@@ -18993,24 +19013,55 @@ def _report_positive_gate(rows: list) -> list:
 
 
 def _campaign_launches(camp_ids: list, camp_names: dict,
-                       start_iso: str, end_iso: str) -> list:
-    """Campaigns that STARTED SENDING inside [start,end]: earliest
-    contact_history.first_contacted_at per campaign (aggregates are disabled
-    on this PostgREST, so one limit-1 probe per campaign — bounded to the
-    window's own campaigns and cached with the replied rows)."""
-    out = []
-    for cid in camp_ids[:40]:
+                       start_iso: str, end_iso: str) -> dict:
+    """What CHANGED in the campaigns inside [start,end], for the "What happened
+    this week?" feed — two flavours off contact_history.first_contacted_at, one
+    limit-1 probe + one count per campaign (aggregates are disabled on this
+    PostgREST, so no group-by; bounded to the window's own campaigns and cached
+    with the replied rows):
+
+      • launch    — the campaign's EARLIEST-ever first-contact falls in the
+                    range (it started sending this week);
+      • additions — an EXISTING campaign (earliest-ever before the range) that
+                    first-contacted N new prospects inside the range.
+
+    Returns {"launches":[{campaign,date}], "additions":[{campaign,date,count}]}."""
+    launches, additions = [], []
+    for cid in camp_ids[:60]:
+        # cheap first: did this campaign first-contact ANY new prospect in the
+        # range? Most campaigns only send follow-ups in a given week (count 0)
+        # and cost just this one lightweight count, no row read.
+        n = sb_count(f"contact_history?smartlead_campaign_id=eq.{cid}"
+                     f"&first_contacted_at=gte.{start_iso}"
+                     f"&first_contacted_at=lt.{end_iso}T23:59:59")
+        if not n or n <= 0:
+            continue
+        # something new happened — earliest-EVER first-contact tells launch vs add
         try:
             r = sb("GET", f"contact_history?smartlead_campaign_id=eq.{cid}"
                           "&select=first_contacted_at&first_contacted_at=not.is.null"
                           "&order=first_contacted_at.asc&limit=1")
         except Exception:  # noqa: BLE001
             r = None
-        first = (r[0].get("first_contacted_at") if isinstance(r, list) and r else "") or ""
-        d = str(first)[:10]
-        if d and start_iso <= d <= end_iso:
-            out.append({"campaign": camp_names.get(str(cid)) or "", "date": d})
-    return out
+        d0 = str((r[0].get("first_contacted_at") if isinstance(r, list) and r else "") or "")[:10]
+        nm = camp_names.get(str(cid)) or ""
+        if d0 and start_iso <= d0 <= end_iso:
+            # the campaign's very first contact is in the range → it launched here
+            launches.append({"campaign": nm, "date": d0, "count": int(n)})
+        else:
+            # existing campaign that took on new prospects inside the range
+            day = start_iso
+            try:
+                rr = sb("GET", f"contact_history?smartlead_campaign_id=eq.{cid}"
+                               f"&select=first_contacted_at&first_contacted_at=gte.{start_iso}"
+                               f"&first_contacted_at=lt.{end_iso}T23:59:59"
+                               "&order=first_contacted_at.asc&limit=1")
+                if isinstance(rr, list) and rr:
+                    day = str(rr[0].get("first_contacted_at"))[:10]
+            except Exception:  # noqa: BLE001
+                pass
+            additions.append({"campaign": nm, "date": day, "count": int(n)})
+    return {"launches": launches, "additions": additions}
 
 
 def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
@@ -19020,11 +19071,12 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
     report range, plus the campaigns that launched (started sending) in it.
     Cheap PostgREST reads, 10-min cached per client|range; reply text is
     cleaned server-side so raw HTML never reaches a client."""
-    key = f"v4|{client}|{start_iso}|{end_iso}"   # v4: LLM positive gate on the feed
+    key = f"v5|{client}|{start_iso}|{end_iso}"   # v5: + prospects-added events
     with _REPORT_REPLIED_LOCK:
         ent = _REPORT_REPLIED_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _REPORT_REPLIED_TTL_S:
-            return {"rows": ent["rows"], "launches": ent["launches"]}
+            return {"rows": ent["rows"], "launches": ent["launches"],
+                    "additions": ent.get("additions") or []}
     pos = ",".join(urllib.parse.quote(c) for c in _AH_POSITIVE_CATS)
     ids = ",".join(urllib.parse.quote(f'"{i}"') for i in camp_ids)
     raw = sb_get_all(
@@ -19114,12 +19166,174 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
             "reply": reply[:1500],
         })
     rows = _report_positive_gate(rows)
-    launches = _campaign_launches(launch_ids, camp_names, start_iso, end_iso)
+    activity = _campaign_launches(launch_ids, camp_names, start_iso, end_iso)
+    launches, additions = activity["launches"], activity["additions"]
     with _REPORT_REPLIED_LOCK:
-        _REPORT_REPLIED_CACHE[key] = {"rows": rows, "launches": launches, "ts": time.time()}
+        _REPORT_REPLIED_CACHE[key] = {"rows": rows, "launches": launches,
+                                      "additions": additions, "ts": time.time()}
         if len(_REPORT_REPLIED_CACHE) > 200:
             _REPORT_REPLIED_CACHE.pop(next(iter(_REPORT_REPLIED_CACHE)))
-    return {"rows": rows, "launches": launches}
+    return {"rows": rows, "launches": launches, "additions": additions}
+
+
+def _report_range_stats(client: str, start_iso: str, end_iso: str,
+                        cw: dict, score: dict) -> dict:
+    """Everything the report scopes to its OWN [start,end] range rather than a
+    today-ending precomputed window (the fix for "the stats need to be specific
+    to that time range" + "sent isn't showing" — Bjion 2026-08-28):
+
+      • the exact daily sent/replied/bounced line + range totals — from the
+        client's own client-windows series when it's trusted (zero new calls),
+        else ONE scoped Smartlead day-wise-overall-stats call
+        (campaign_ids-filtered so a shared-workspace client gets its REAL line,
+        never the fleet's), so every client's day-by-day bars + top numbers are
+        drawn the same way;
+      • per-campaign positives / meetings over the exact range (two light
+        replies reads, same dedupe rules as the analytics hub);
+      • per-campaign sent over the exact range for the campaigns that actually
+        produced a positive/meeting (bounded analytics-by-date calls, capped),
+        so "per positive"/"per meeting" are honest for THIS range.
+
+    Cached per client|range; a historical range is immutable so it holds for
+    hours. Every leg degrades to empty on failure — the report just hides the
+    card it can't fill, never shows another window's numbers under this one."""
+    from datetime import date as _date, timedelta as _td
+    ck = f"v1|{client}|{start_iso}|{end_iso}"
+    ttl = _REPORT_RANGE_TTL_HIST_S if end_iso < _date.today().isoformat() else _REPORT_RANGE_TTL_LIVE_S
+    with _REPORT_RANGE_LOCK:
+        ent = _REPORT_RANGE_CACHE.get(ck)
+        if ent and (time.time() - ent["ts"]) < ttl:
+            return ent["data"]
+    try:
+        s_d = _date.fromisoformat(start_iso[:10])
+        e_d = _date.fromisoformat(end_iso[:10])
+    except ValueError:
+        return {"days": [], "daily": {}, "totals": {}, "campaigns": [], "campaign_ids": []}
+    rdays = [(s_d + _td(days=i)).isoformat() for i in range((e_d - s_d).days + 1)]
+
+    # ── the client's campaigns (label + workspace + status), from the cached
+    #    scorecard — one shared workspace ('navreo') holds several clients, told
+    #    apart by this same label, so we scope Smartlead reads by exact id.
+    camps_all = ((score or {}).get("campaigns")) or {}
+    mine = [(str(cid), c) for cid, c in camps_all.items()
+            if (c.get("client") or "") == client
+            and str(c.get("status") or "").upper() != "DRAFTED"]
+    ids = [cid for cid, _ in mine]
+    names = {cid: (c.get("name") or "") for cid, c in mine}
+    status = {cid: (c.get("status") or "") for cid, c in mine}
+    ws = "navreo"
+    for _cid, c in mine:
+        ws = (c.get("workspace") or "navreo"); break
+
+    # ── daily line + range totals ──────────────────────────────────────────
+    daily = {"sent": [0] * len(rdays), "replied": [0] * len(rdays), "bounced": [0] * len(rdays)}
+    src = "none"
+    ser = ((cw.get("series") or {}).get(client)) or {}
+    cwd = cw.get("days") or []
+    win30 = ((cw.get("windows") or {}).get("30") or {}).get(client) or {}
+    trusted = bool(ser.get("sent"))
+    if trusted and win30.get("sent"):
+        trusted = sum(v or 0 for v in ser["sent"]) >= 0.8 * win30["sent"]
+    if trusted and cwd:
+        # slice the client's own trusted daily series onto the range days
+        pos = {d: i for i, d in enumerate(cwd)}
+        for j, d in enumerate(rdays):
+            i = pos.get(d)
+            if i is not None:
+                for k in ("sent", "replied", "bounced"):
+                    arr = ser.get(k) or []
+                    daily[k][j] = arr[i] if i < len(arr) else 0
+        src = "series"
+    elif ids:
+        # untrusted / zero series (shared-workspace clients live here): fetch the
+        # EXACT range line in one scoped day-wise call. Shared clients scope by
+        # id (many clients share the navreo key); an own-workspace client whose
+        # series was gated reads its whole workspace with its own key.
+        try:
+            key = ws_key(ws)
+            if key:
+                daily = _daywise_series(key, rdays, start_iso, end_iso,
+                                        campaign_ids=(ids if ws == "navreo" else None))
+                src = "daywise"
+        except Exception as e:  # noqa: BLE001 — degrade to zeros, the card hides
+            print(f"[report-range] daywise {client} failed: {e}", file=sys.stderr)
+    totals = {k: sum(v or 0 for v in daily.get(k) or []) for k in ("sent", "replied", "bounced")}
+
+    # ── per-campaign positives + meetings over the EXACT range ──────────────
+    id_set = set(ids)
+    pos_by: dict = {}
+    mtg_by: dict = {}
+    try:
+        _pos = urllib.parse.quote(",".join(_AH_POSITIVE_CATS))
+        reps = sb_get_all(
+            "replies?select=smartlead_campaign_id,email,category,replied_at,src:raw->>source"
+            f"&category=in.({_pos})&replied_at=gte.{start_iso}"
+            f"&replied_at=lt.{end_iso}T23:59:59&order=id") or []
+        pos_seen: set = set()
+        cal_events: set = set()
+        cal_emails: set = set()
+        legacy: set = set()
+        for r in reps:
+            cid = str(r.get("smartlead_campaign_id"))
+            if cid not in id_set:
+                continue
+            em = (r.get("email") or "").strip().lower()
+            k = (cid, em)
+            if k not in pos_seen:
+                pos_seen.add(k)
+                pos_by[cid] = pos_by.get(cid, 0) + 1
+            if r.get("category") == "Call Booked":
+                day = str(r.get("replied_at") or "")[:10]
+                if r.get("src") == "calendly":
+                    cal_emails.add(em)
+                    cal_events.add((cid, em, day))
+                else:
+                    legacy.add((cid, em))
+        # calendly counts one per booking DAY (re-books count); legacy leads
+        # count once per campaign — but never double a lead who also has a
+        # calendly booking (identical rule to analytics_hub_v1 / the sweep).
+        for (cid, em, _day) in cal_events:
+            mtg_by[cid] = mtg_by.get(cid, 0) + 1
+        for (cid, em) in legacy:
+            if em in cal_emails:
+                continue
+            mtg_by[cid] = mtg_by.get(cid, 0) + 1
+    except Exception as e:  # noqa: BLE001 — pos/mtg are additive, card falls back
+        print(f"[report-range] pos/mtg {client} failed: {e}", file=sys.stderr)
+
+    # ── per-campaign sent over the range, for the winners only (bounded) ────
+    winners = [cid for cid in ids if pos_by.get(cid) or mtg_by.get(cid)]
+    # rank the fetch order by pos+mtg so the cap keeps the strongest campaigns
+    winners.sort(key=lambda c: (mtg_by.get(c, 0), pos_by.get(c, 0)), reverse=True)
+    sent_by: dict = {}
+    rep_by: dict = {}
+    for cid in winners[:_REPORT_RANGE_SENT_CAP]:
+        try:
+            d = _smartlead_json("GET", f"/campaigns/{cid}/analytics-by-date"
+                                       f"?start_date={start_iso}&end_date={end_iso}",
+                                timeout=30, attempts=3)
+            if isinstance(d, dict):
+                sent_by[cid] = int(float(d.get("sent_count") or 0))
+                rep_by[cid] = int(float(d.get("reply_count") or 0))
+        except Exception:  # noqa: BLE001 — a missing sent renders "–", never a lie
+            pass
+        time.sleep(0.12)  # stay under the shared 200/min Smartlead cap
+
+    out_camps = []
+    for cid in winners:
+        out_camps.append({
+            "id": cid, "name": names.get(cid) or ("Campaign " + cid),
+            "status": status.get(cid), "sent": sent_by.get(cid),
+            "replied": rep_by.get(cid), "pos": pos_by.get(cid, 0),
+            "mtg": mtg_by.get(cid, 0)})
+
+    data = {"days": rdays, "daily": daily, "totals": totals, "daily_source": src,
+            "campaigns": out_camps, "campaign_ids": ids}
+    with _REPORT_RANGE_LOCK:
+        _REPORT_RANGE_CACHE[ck] = {"data": data, "ts": time.time()}
+        if len(_REPORT_RANGE_CACHE) > 200:
+            _REPORT_RANGE_CACHE.pop(next(iter(_REPORT_RANGE_CACHE)))
+    return data
 
 
 def mint_report_share(client: str, start: str, end: str, days: int = 90) -> str:
@@ -19218,34 +19432,28 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
     axis = hub.get("days") or cw.get("days") or []
     if not axis:
         return {"error": "data still building"}, 503
-    cwd = cw.get("days") or []
-    cutoff = str(cw.get("asof") or "")[:10] or None
-    ser = (cw.get("series") or {}).get(client) or {}
     hser = (hub.get("series") or {}).get(client) or {}
     win = ((cw.get("windows") or {}).get(str(n_win)) or {}).get(client) or {}
-    win30 = ((cw.get("windows") or {}).get("30") or {}).get(client) or {}
-    # same trust gate the page applies: a series whose own 30d sum is
-    # materially short of the verified window total never plots
-    trusted = bool(ser.get("sent"))
-    if trusted and win30.get("sent"):
-        trusted = sum(v or 0 for v in ser["sent"]) >= 0.8 * win30["sent"]
-    sent = _report_align(ser.get("sent"), cwd, axis, cutoff, 0) if trusted else None
-    estimated = False
-    if sent is None and client not in (cw.get("ws_labels") or {}):
-        # shared-Navreo-workspace client: split the workspace's daily sent by
-        # this client's share of the window total (window total stays exact,
-        # only the daily SHAPE is estimated — same split the page draws)
-        ws = (cw.get("series") or {}).get("__navreo_ws") or {}
-        if ws.get("sent") and win.get("sent"):
-            ws_win = sum(v or 0 for v in ws["sent"][-n_win:])
-            if ws_win > 0:
-                share = win["sent"] / float(ws_win)
-                sent = _report_align([round((v or 0) * share) for v in ws["sent"]],
-                                     cwd, axis, cutoff, 0)
-                estimated = True
-    replies = (_report_align(ser.get("replied"), cwd, axis, cutoff, 0)
-               if trusted and ser.get("replied") else (hser.get("replies") or None))
-    bounced = _report_align(ser.get("bounced"), cwd, axis, cutoff, 0) if trusted else None
+    # ── everything the report shows is now pinned to the token's OWN range,
+    #    not a today-ending precomputed window (Bjion 2026-08-28). The daily
+    #    line, the range totals and the per-campaign numbers are assembled by
+    #    _report_range_stats; the trusted client-series slice / scoped day-wise
+    #    fetch live in there. ─────────────────────────────────────────────────
+    _scorecard_seed_from_snapshot()
+    score = _inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get())
+    rs = _report_range_stats(client, s_d.isoformat(), e_d.isoformat(), cw, score)
+    rdays = rs.get("days") or []
+    rmap = {d: i for i, d in enumerate(rdays)}
+    rdaily = rs.get("daily") or {}
+
+    def _axis(key):
+        src = rdaily.get(key) or []
+        return [(src[rmap[d]] if (d in rmap and rmap[d] < len(src)) else 0) for d in axis]
+
+    sent = _axis("sent")
+    replies = _axis("replied")
+    bounced = _axis("bounced")
+    estimated = False   # the daily line is now exact for every client (no split)
 
     def _pct(numer, denom, min_sent=100):
         if not numer or not denom:
@@ -19256,12 +19464,8 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
             ok = (s_v or 0) >= min_sent and r_v is not None
             out.append(round(r_v * 1000.0 / s_v) / 10 if ok else None)
         return out
-    camps = [{"id": r.get("id"), "name": r.get("name"), "sent": r.get("sent"),
-              "replied": r.get("replied"), "pos": r.get("pos"), "mtg": r.get("mtg")}
-             for r in ((cw.get("campaigns") or {}).get(str(n_win)) or [])
-             if r.get("client") == client]
-    _scorecard_seed_from_snapshot()
-    score = _inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get())
+    # range-scoped campaign rows (winners this range, with range sent/pos/mtg)
+    camps = rs.get("campaigns") or []
     sc = {}
     camp_ids = {str(r["id"]) for r in camps}
     for cid, c in (((score or {}).get("campaigns")) or {}).items():
@@ -19280,34 +19484,51 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
     if show_demo_clients() and client == "Acme":
         who = _demo_who_replies(n_win)
     else:
-        who, _ws = who_replies_get(client, n_win)
+        # who's-replying scoped to the EXACT range, so it matches the rest
+        who, _ws = who_replies_get(client, n_win, s_d.isoformat(), e_d.isoformat())
     if isinstance(who, dict) and not who.get("error"):
         who = {k: who.get(k) for k in ("n", "named", "buckets", "sizes", "size_named",
                                        "combos", "combo_named", "size_order", "asof")}
     else:
         who = None
-    replied = {"rows": [], "launches": []}
+    replied = {"rows": [], "launches": [], "additions": []}
     if sc:
         try:
+            # launch/addition detection is capped, so feed it the campaigns most
+            # likely to have moved this range first: ACTIVE ones, then biggest.
+            # A campaign that never sent can't have added prospects — skip it.
+            ordered = sorted((cid for cid in sc if (sc[cid].get("sent") or 0) > 0),
+                             key=lambda cid: (
+                0 if str(sc[cid].get("status") or "").upper() == "ACTIVE" else 1,
+                -(sc[cid].get("sent") or 0)))
             replied = _report_replied_rows(
                 client, list(sc.keys()),
                 {cid: (c.get("name") or "") for cid, c in sc.items()},
                 s_d.isoformat(), e_d.isoformat(),
-                [r["id"] for r in camps])
+                ordered)
         except Exception:  # noqa: BLE001 - the lane hides itself; never sink the report
-            replied = {"rows": [], "launches": []}
+            replied = {"rows": [], "launches": [], "additions": []}
     return {"ok": True, "client": client, "start": s_d.isoformat(), "end": e_d.isoformat(),
-            "window_days": n_win, "days": axis,
+            "window_days": n_win, "range_days": len(rdays), "days": axis,
             "series": {"sent": sent, "replies": replies,
                        "interested": hser.get("interested") or None,
                        "meetings": hser.get("meetings") or None,
                        "rate": _pct(replies, sent), "bounces": _pct(bounced, sent)},
             "sent_estimated": estimated,
+            # exact totals over the token's range — the top numbers + rates
+            "range": {"sent": rs.get("totals", {}).get("sent"),
+                      "replied": rs.get("totals", {}).get("replied"),
+                      "bounced": rs.get("totals", {}).get("bounced")},
+            # kept for back-compat; superseded by "range" (a today-ending window
+            # no longer matches a historical report range)
             "window": {"sent": win.get("sent"), "replied": win.get("replied"),
                        "bounced": win.get("bounced")},
-            "campaigns": camps, "campaigns_scope": "window" if camps else "lifetime",
+            # always range-scoped: a range with no winning campaign hides the
+            # card (empty-widget rule) rather than borrowing all-time numbers
+            "campaigns": camps, "campaigns_scope": "range",
             "scorecard": sc, "offer": offer, "who": who,
             "who_replied": replied["rows"], "launches": replied["launches"],
+            "additions": replied.get("additions") or [],
             "asof": {"cw": cw.get("asof"), "hub": hub.get("asof")}}, 200
 
 
