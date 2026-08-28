@@ -17723,6 +17723,92 @@ def warmup_capacity_get() -> tuple[dict, int]:
     return out, 200
 
 
+# ── Repeat parks (park churn) ────────────────────────────────────────────────
+# The 2026-08-28 capacity study found the real waste in the rest conveyor is a
+# small tail of domains that keep earning a park: parked, rested 7 days,
+# restored, parked again — some 10+ cycles in six weeks. Each cycle burns a
+# rest window plus restore sends on a domain the market has already judged.
+# This read surfaces that tail so the owner can retire domains instead of
+# endlessly resurrecting them.
+#
+# Park events come from app_activity_log: `warmup_pause` rows (the warm-up-job
+# path every parking flow uses — the deliverability service's floor/health
+# sweeps, the manager's own Warm-up button) carry payload.domains_list, and
+# `reply-caps` rows (the in-tool cap engines) carry payload.parked. The COUNT
+# is distinct park DAYS per domain, not raw events — sweeps can double-fire
+# the same pause within a minute, and "parked twice on Tuesday" is one strike,
+# not two. Old `warmup-pause` (hyphen) rows have empty payloads — no domains
+# to read, so they can't be counted.
+_PARK_CHURN_CACHE: dict = {}
+_PARK_CHURN_TTL_S = 600
+PARK_CHURN_DAYS = 42       # trailing window (owner spec: "last 6 weeks")
+PARK_CHURN_MIN = 2         # flag at 2+ parks; the UI escalates 3+ to "retire"
+
+
+def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
+                   force: bool = False) -> tuple[dict, int]:
+    """{ok, days, min_parks, rows:[{domain, parks, first_parked, last_parked,
+    resting_now, boxes, workspace}], generated_at}. rows sorted worst-first.
+    10-min cached — the log scan is cheap but the manager badge polls it."""
+    from datetime import datetime, timezone, timedelta
+    days = max(7, min(120, int(days or PARK_CHURN_DAYS)))
+    min_parks = max(1, int(min_parks or PARK_CHURN_MIN))
+    key = (days, min_parks)
+    hit = _PARK_CHURN_CACHE.get(key)
+    if hit and not force and time.time() - hit["ts"] < _PARK_CHURN_TTL_S:
+        return hit["data"], 200
+    # Date-only bound: a full ISO timestamp carries "+00:00", whose "+" decodes
+    # to a space in the query string and 400s the PostgREST read.
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    events = sb_get_all("app_activity_log?select=ts,action,payload"
+                        f"&ts=gte.{since}&action=in.(warmup_pause,reply-caps)"
+                        "&order=id.asc")
+    if not isinstance(events, list):
+        if hit:  # transient log hiccup — stale beats a broken tab
+            return hit["data"], 200
+        return {"ok": False, "error": "activity-log read failed"}, 502
+    park_days: dict = {}
+    for ev in events:
+        p = ev.get("payload") or {}
+        if not isinstance(p, dict):
+            continue
+        doms = (p.get("domains_list") if ev.get("action") == "warmup_pause"
+                else p.get("parked")) or []
+        if not isinstance(doms, list):
+            continue
+        day = str(ev.get("ts") or "")[:10]
+        for d in doms:
+            d = str(d).strip().lower()
+            if d:
+                park_days.setdefault(d, set()).add(day)
+    flagged = sorted(d for d, ds in park_days.items() if len(ds) >= min_parks)
+    ledger = {str(r.get("domain") or "").lower()
+              for r in (sb_get_all("deliverability_resting_ledger?select=domain"
+                                   "&dismissed=is.false&order=domain.asc") or [])}
+    boxes: dict = {}
+    ws: dict = {}
+    for i in range(0, len(flagged), 40):
+        for b in (sb_get_all("mailboxes?select=domain,workspace&order=smartlead_id.asc"
+                             "&domain=in.(%s)" % ",".join(flagged[i:i + 40])) or []):
+            d = str(b.get("domain") or "").lower()
+            boxes[d] = boxes.get(d, 0) + 1
+            ws.setdefault(d, b.get("workspace") or "navreo")
+    rows = []
+    for d in flagged:
+        ds = sorted(park_days[d])
+        rows.append({"domain": d, "parks": len(ds),
+                     "first_parked": ds[0], "last_parked": ds[-1],
+                     "resting_now": d in ledger,
+                     "boxes": boxes.get(d, 0),
+                     "workspace": ws.get(d, "navreo")})
+    rows.sort(key=lambda r: r["last_parked"], reverse=True)   # ties: newest first
+    rows.sort(key=lambda r: r["parks"], reverse=True)         # stable — worst first
+    out = {"ok": True, "days": days, "min_parks": min_parks, "rows": rows,
+           "generated_at": datetime.now(timezone.utc).isoformat()}
+    _PARK_CHURN_CACHE[key] = {"data": out, "ts": time.time()}
+    return out, 200
+
+
 def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
     days = max(7, min(90, days))
     with _FLEET_CAP_LOCK:
@@ -23018,6 +23104,17 @@ class Handler(SimpleHTTPRequestHandler):
             if "refresh=1" in urllib.parse.urlparse(self.path).query:
                 _WARMUP_CAP_CACHE.clear()
             body, status = warmup_capacity_get()
+            return self._json(body, status)
+        if path == "/api/park-churn":
+            # Repeat-park offenders for the manager's "Repeat parks" tab.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                days = int((q.get("days") or [str(PARK_CHURN_DAYS)])[0])
+            except ValueError:
+                days = PARK_CHURN_DAYS
+            force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
+            body, status = park_churn_get(days=days, force=force)
             return self._json(body, status)
         if path == "/api/capacity-invariant":
             from urllib.parse import parse_qs, urlparse
