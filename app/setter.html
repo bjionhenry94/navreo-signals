@@ -1749,12 +1749,25 @@ function clientForRow(row) {
     if (n && cname.includes(n.toLowerCase())) return n;
   }
   const parsed = clientFromCampaignName(effName);
+  // A subsequence reply ("Interested Reply" / "Meeting Request") carries no
+  // client in its campaign name, so the prefix parse gives "Other". But the
+  // agent handling the reply IS per-client (agents are named for their client),
+  // so it names the row when the campaign can't — a TouchPoint reply that landed
+  // in the shared "Interested Reply" subsequence files under TouchPoint, not the
+  // Navreo default (owner ask 2026-08-28).
+  const agent = row.agent_id && AGENTS.find((a) => String(a.id) === String(row.agent_id));
+  const agentName = (agent && agent.name) ? String(agent.name).trim() : "";
   // Owner rule 2026-08-09: "the client name is usually always in the campaign
   // name, if not denoted by the workspace it comes from" — when the name gives
-  // nothing, the row's WORKSPACE names it. "Other" survives only as the
-  // never-reached terminal fallback.
-  if (parsed === "Other") return workspaceLabels[ws] || "Navreo";
-  return parsed;
+  // nothing, the agent, then the WORKSPACE, names it. "Other" survives only as
+  // the never-reached terminal fallback.
+  if (parsed === "Other") return agentName || workspaceLabels[ws] || "Navreo";
+  // Re-case a campaign-name-derived label to its canonical agent/brand spelling
+  // so the prefix variants ("touchpoint" / "Touchpoint") and the agent's own
+  // "TouchPoint" collapse into ONE client bucket instead of three.
+  const canon = AGENTS.find((a) => a.name
+      && String(a.name).trim().toLowerCase() === parsed.toLowerCase());
+  return canon ? String(canon.name).trim() : parsed;
 }
 /* Stable per-client colour: hash the client label to a hue so every row/header
    of the same client wears the same coloured pill, and different clients read
