@@ -14510,10 +14510,10 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                  "Do you offer any money-back guarantee? What results have you gotten for companies like ours?"),
                 ("curriculum-06-own-time", "Meeting Request",
                  "Let's talk. I'm free Tuesday at 14:00 or Thursday morning - which works for you?"),
-                ("curriculum-07-referral", "Interested",
-                 "This one's not mine - best to speak with my colleague Sarah (cc'd), she owns this area."),
-                ("curriculum-08-who-are-you", "Information Request",
-                 "Who are you exactly, and how did you get my email? Is this automated?"),
+                # Owner trim 2026-08-28: referral, send-to-this-email, and
+                # who-are-you/AI dropped from the curriculum - variety
+                # machinery can still invent them later, they just don't
+                # front-load the first rounds.
                 ("curriculum-09-circle-back", "Interested",
                  "Looks interesting, but we're heads-down until next quarter - can you circle back then?"),
             ]
