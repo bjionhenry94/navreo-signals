@@ -14499,6 +14499,15 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # circle-back 8. Each carries a staged_key so later batches never
         # repeat one that already exists. Only fires while NOTHING has been
         # answered yet - after that, variety machinery takes over.
+        if _LOG:
+            try:
+                _LOG("/api/setter/training/generate:curriculum_gate",
+                     {"agent_id": agent_id, "share": bool(is_share_mode),
+                      "n_answers": len(doc.get("answers") or {}),
+                      "shortfall": shortfall, "n_existing": len(existing_cases),
+                      "n_staged": len(staged_scenarios)}, actor="system")
+            except Exception:  # noqa: BLE001
+                pass
         if is_share_mode and not (doc.get("answers") or {}):
             _seen_keys = {str(c.get("staged_key") or "") for c in existing_cases}
             _CURRICULUM = [
