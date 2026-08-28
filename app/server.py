@@ -19031,9 +19031,13 @@ def _campaign_launches(camp_ids: list, camp_names: dict,
         # cheap first: did this campaign first-contact ANY new prospect in the
         # range? Most campaigns only send follow-ups in a given week (count 0)
         # and cost just this one lightweight count, no row read.
-        n = sb_count(f"contact_history?smartlead_campaign_id=eq.{cid}"
-                     f"&first_contacted_at=gte.{start_iso}"
-                     f"&first_contacted_at=lt.{end_iso}T23:59:59")
+        _cq = (f"contact_history?smartlead_campaign_id=eq.{cid}"
+               f"&first_contacted_at=gte.{start_iso}"
+               f"&first_contacted_at=lt.{end_iso}T23:59:59")
+        n = sb_count(_cq)
+        if n is None:
+            n = sb_count(_cq)   # sb_count doesn't self-retry; one transient blip
+                                # must not silently drop a launch/addition event
         if not n or n <= 0:
             continue
         # something new happened — earliest-EVER first-contact tells launch vs add
