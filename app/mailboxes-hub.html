@@ -244,18 +244,21 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     for (var i = 0; i < t.length; i++) s += Number(t[i]) || 0;
     return s;
   }
-  // Which day the 24H snapshot reads: the most recent COMPLETE day of fleet
-  // sending. The current calendar day (series' last index) is skipped — it's an
-  // in-progress, still-ramping bucket (verified 2026-08-28: a Friday mid-morning
-  // read 420 sent vs a normal ~31k day), so defaulting to it would render the
-  // heat map nearly empty. Idle days (weekends / paused fleet) are skipped too so
-  // the snapshot is always a real, populated 24 hours — "an instant snapshot from
-  // 24 hours before" (owner 2026-08-28). Returns -1 when the series holds nothing.
-  function snapDayIndex(ser) {
-    var all = ser && ser["__all"] && ser["__all"].sent;
-    if (!Array.isArray(all) || !all.length) return -1;
-    for (var i = all.length - 2; i >= 0; i--) { if ((Number(all[i]) || 0) > 0) return i; }
-    return all.length >= 2 ? all.length - 2 : 0;   // all-idle: still show yesterday, not today
+  // Which day the 24H snapshot reads: the most recent WEEKDAY strictly before
+  // today. Today is always skipped (a partial, still-ramping bucket — verified
+  // 2026-08-28 a Friday mid-morning read 420 sent vs a normal ~31k day). Weekends
+  // are skipped on the CALENDAR, so Saturday, Sunday and Monday all resolve to
+  // Friday (owner 2026-08-28) — deterministic, independent of whether that weekday
+  // happened to send. Takes the day-wise `days` array (days[-1] = today); returns
+  // -1 if it's empty.
+  function snapDayIndex(days) {
+    if (!Array.isArray(days) || !days.length) return -1;
+    for (var i = days.length - 2; i >= 0; i--) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(days[i] || "")); if (!m) continue;
+      var wd = new Date(+m[1], +m[2] - 1, +m[3]).getDay();   // 0=Sun … 6=Sat, local
+      if (wd !== 0 && wd !== 6) return i;                     // first weekday before today
+    }
+    return days.length >= 2 ? days.length - 2 : 0;   // all-weekend series: yesterday
   }
   // "2026-08-27" → "27 Aug" for the scope label, so the snapshot day is explicit.
   var _MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -279,7 +282,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     if (cw.windows && cw.windows[win]) return cw.windows[win];
     var ser = cw.series; if (!ser) return null;
     var out = {}, hasClient = false;
-    var idx = win === "1" ? snapDayIndex(ser) : -1;
+    var idx = win === "1" ? snapDayIndex(cw.days) : -1;
     if (win === "1" && idx < 0) return null;
     Object.keys(ser).forEach(function (name) {
       if (name === "__navreo_ws") return;   // raw workspace line, never a client
@@ -304,7 +307,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // 24H reads ONE day (the snapshot day) — capacity-used must read the same
     // day as reply/bounce, else a healthy snapshot sits beside a 0% "actively
     // sending" pulled from today's still-empty bucket.
-    var snapIdx = win === "1" ? snapDayIndex(cw.series) : -1;
+    var snapIdx = win === "1" ? snapDayIndex(cw.days) : -1;
     var rows = names.map(function (name) {
       var e = w[name] || {};
       var reply = pct(e.replied, e.sent), bounce = pct(e.bounced, e.sent);
@@ -980,8 +983,8 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var txt = "last " + S.win + " days";
     if (S.win === 1) {
       txt = "last 24 hours";
-      var ser = S.cw && S.cw.series, days = S.cw && S.cw.days;
-      if (ser && days) { var i = snapDayIndex(ser); if (i >= 0 && days[i]) txt += " · " + fmtDay(days[i]); }
+      var days = S.cw && S.cw.days;
+      if (days) { var i = snapDayIndex(days); if (i >= 0 && days[i]) txt += " · " + fmtDay(days[i]); }
     }
     s.innerHTML = "<b>Whole fleet</b> · " + txt;
   }
