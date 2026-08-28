@@ -509,6 +509,9 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
   .ofr-arrow { transform:rotate(90deg); }
   .ofr-trip { grid-template-columns:1fr; }
 }
+/* full-bleed embed of the infra bento (isolated iframe → no CSS collisions) */
+.ibframe{width:100vw;position:relative;left:50%;margin-left:-50vw;margin-top:26px;display:flex;justify-content:center;}
+.ibframe iframe{width:min(960px,94vw);border:0;display:block;background:transparent;}
 </style>
 </head>
 <body>
@@ -707,14 +710,7 @@ function infraIntro(){
  +'<div class="subline">Two minutes on what we buy, why your real address stays safe, and how we run it. Then three quick screens and you’re done.</div>'
  +'<div style="margin-top:26px"><div class="ob-vid"><div class="play">▶</div><div class="t">Email addresses, explained — Bjion, Navreo</div><div class="s">2 MIN</div></div>'
  +'<p class="ob-note" style="margin-top:12px">Watch this. Already know how cold-email infrastructure is built? Skip straight ahead.</p></div>'
- +'<div class="bentowrap"><div class="bento">'
-  +'<div class="bcell"><span class="bk">01</span><h3>Near-copies of your domain</h3><p>We buy look-alike domains at scale — like acmecorp-hq.com — and own them outright.</p><div class="art">'+flowCopies()+'</div></div>'
-  +'<div class="bcell"><span class="bk">02</span><h3>Mailboxes under each one</h3><p>Real inboxes sit under those domains — three to a domain — each a proper sending address.</p><div class="art">'+flowUnder()+'</div></div>'
-  +'<div class="bcell"><span class="bk">03</span><h3>Bridged into one</h3><p>We unify every inbox so your outreach sends as if from a single address — but the volume is shared across many, so no one inbox is ever overloaded. That even spread is exactly what inbox providers trust.</p><div class="art">'+flowUnify()+'</div></div>'
-  +'<div class="bcell dark b4"><span class="bk">THE SAFETY NET</span><div class="fiftyrow"><div><h3>We buy 50% more mailboxes than you pay for.</h3><p>Three spare inboxes on top of your six, on standby and included at no extra cost. If any address ever drifts toward spam, a spare takes over the same day — your sending never stops.</p></div><div class="bignum">+50%</div></div><div class="sparebar"><i></i><i></i><i></i><i></i><i></i><i></i><i class="sp"></i><i class="sp"></i><i class="sp"></i></div><div class="sparelab"><span>6 SENDING</span><span>3 SPARE · ALWAYS READY</span></div></div>'
-  +'<div class="bcell b2"><span class="bk">BOUGHT FROM</span><h3>Three providers</h3><p>Mixing providers is part of what keeps you invisible.</p><div class="logorow"><div class="logocol"><div class="logoslot"><span>LOGO</span></div><div class="cap">Google</div></div><div class="logocol"><div class="logoslot"><span>LOGO</span></div><div class="cap">Microsoft</div></div><div class="logocol"><div class="logoslot"><span>LOGO</span></div><div class="cap">SMTP</div></div></div></div>'
-  +'<div class="bcell b6"><span class="bk">THE POINT</span><h3>Your real domain never sends a single cold email.</h3><p>acmecorp.com stays clean and untouched — only the near-copies do the outreach, so your real address can never get into trouble.</p></div>'
- +'</div></div>'
+ +'<div class="ibframe"><iframe src="infra-bento.html" title="How your email sending is set up" scrolling="no" loading="lazy" style="height:1400px"></iframe></div>'
  +wizFoot(null,"infra-senders","Got it — who’s sending?");
 }
 function initials(nm){var p=(nm||"").trim().split(/\s+/);return ((p[0]||"?")[0]+(p[1]?p[1][0]:"")).toUpperCase();}
@@ -1223,6 +1219,7 @@ document.getElementById("demoBtn").addEventListener("click",function(){
 });
 document.getElementById("resetBtn").addEventListener("click",resetAll);
 window.addEventListener("hashchange",render);
+window.addEventListener("message",function(e){try{if(e&&e.data&&e.data.ibHeight){var f=document.querySelector(".ibframe iframe");if(f)f.style.height=(e.data.ibHeight+2)+"px";}}catch(_){}});
 render();
 })();
 </script>

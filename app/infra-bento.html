@@ -1,0 +1,271 @@
+<!--
+  INFRA BENTO · FINAL — the composed two-card story (+ safety net), all in the
+  chosen premium aesthetic.
+  01 (wide, top): Vault + Deck — your real domain sealed in the dark vault; the
+     look-alikes we buy as the tactile sending deck.
+  02 (portrait, bottom-left): Soft Glow Flow — mailboxes under each domain flow
+     down into one combined inbox.
+  03 (bottom-right): the safety net (+50% spare).
+  Self-contained, mock data, local only — not deployed.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Infra Bento — Final</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-700:#A83100;--orange-100:#FFE4D6;--send:#33D17F;--under:#FF4D4D;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;--brown-400:#A89684;
+  --bg:#FFFFFF;--bg-sunken:#F7F7F6;--card:#FFFFFF;--line:#ECECEA;--line-2:#DDDDDA;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:var(--font-sans);background:transparent;color:var(--ink);line-height:1.45;letter-spacing:-.015em;-webkit-font-smoothing:antialiased;}
+.wrap{max-width:1040px;margin:0 auto;padding:2px 4px 6px;}
+.top{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:20px;}
+.brand{font-family:var(--font-display);font-weight:700;font-size:16px;}
+.brand em{font-style:normal;color:var(--orange);}
+.tag{font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--ink-3);text-transform:uppercase;border:1px solid var(--line);border-radius:999px;padding:6px 12px;}
+.h1{font-family:var(--font-display);font-weight:700;font-size:30px;letter-spacing:-.02em;line-height:1.1;}
+.h1 .o{color:var(--orange);}
+.lede{font-size:14px;color:var(--ink-3);margin-top:10px;max-width:60ch;}
+/* bento grid */
+.bento{margin-top:22px;background:var(--bg-sunken);border:1px solid var(--line);border-radius:24px;padding:16px;display:grid;grid-template-columns:repeat(12,1fr);gap:16px;align-items:stretch;}
+.cell{background:#fff;border:1px solid var(--line);border-radius:18px;padding:22px;display:flex;flex-direction:column;gap:16px;min-width:0;box-shadow:0 1px 2px rgba(20,17,14,.04),0 10px 26px -20px rgba(20,17,14,.22);}
+.wide{grid-column:span 12;}
+.left{grid-column:span 6;}
+.right{grid-column:span 6;}
+.chead{display:flex;align-items:center;gap:11px;}
+.num{font-family:var(--font-mono);font-size:11px;font-weight:700;color:#fff;background:var(--ink);border-radius:6px;padding:3px 8px;letter-spacing:.03em;flex:none;}
+.k{font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.11em;color:var(--brown-400);text-transform:uppercase;}
+.cell h3{font-size:16px;font-weight:700;letter-spacing:-.01em;line-height:1.22;}
+.ct{font-family:var(--font-sans);font-size:18px;font-weight:700;letter-spacing:-.015em;line-height:1.22;color:var(--ink);}
+
+/* ── 01 · vault + deck ── */
+.stage{display:grid;grid-template-columns:0.92fr 1.08fr;gap:26px;align-items:stretch;}
+.vault{position:relative;border-radius:22px;padding:30px 28px;overflow:hidden;color:#fff;background:radial-gradient(120% 90% at 50% 8%,#312822 0%,#1c1712 45%,#14110E 100%);border:1px solid rgba(255,255,255,.08);box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 34px 66px -40px rgba(20,17,14,.85);display:flex;flex-direction:column;}
+.vault::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(135deg,rgba(255,255,255,.05) 0 1px,transparent 1px 9px);opacity:.5;pointer-events:none;}
+.vault::after{content:"";position:absolute;left:50%;top:18px;width:210px;height:140px;transform:translateX(-50%);border-radius:50%;background:radial-gradient(circle,rgba(255,77,0,.28),transparent 70%);filter:blur(6px);pointer-events:none;}
+.vlabel{position:relative;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--brown-300);}
+.vlock{position:relative;margin:22px auto 18px;width:64px;height:64px;border-radius:18px;display:grid;place-items:center;background:linear-gradient(180deg,#241d18,#171310);border:1px solid rgba(255,77,0,.4);box-shadow:0 0 0 6px rgba(255,77,0,.08),0 16px 30px -16px #000;}
+.vlock svg{width:28px;height:28px;}
+.vname{position:relative;text-align:center;font-family:var(--font-display);font-weight:700;font-size:30px;letter-spacing:-.02em;}
+.vsub{position:relative;text-align:center;font-size:12.5px;color:var(--brown-300);margin-top:8px;max-width:24ch;align-self:center;line-height:1.5;}
+.vseal{position:relative;margin:20px auto 0;display:inline-flex;align-items:center;gap:8px;background:rgba(255,255,255,.06);border:1px solid rgba(255,255,255,.1);border-radius:999px;padding:8px 14px;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.06em;color:#fff;}
+.vseal .d{width:7px;height:7px;border-radius:50%;background:var(--orange);box-shadow:0 0 8px 1px rgba(255,77,0,.8);}
+.work{display:flex;flex-direction:column;justify-content:center;}
+.wlabel{font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--orange-700);}
+.deck{position:relative;height:196px;margin-top:18px;}
+.dcard{position:absolute;height:92px;border-radius:18px;padding:16px 20px;color:#fff;overflow:hidden;background:linear-gradient(180deg,#FF6A2B 0%,var(--orange) 100%);box-shadow:0 -1px 0 rgba(255,255,255,.3) inset,0 16px 30px -18px rgba(255,77,0,.85);}
+.dcard.d1{top:0;left:26px;right:26px;z-index:1;filter:saturate(.92) brightness(.97);}
+.dcard.d2{top:40px;left:13px;right:13px;z-index:2;filter:saturate(.96) brightness(.99);}
+.dcard.d3{top:80px;left:0;right:0;height:106px;z-index:3;}
+.drow{display:flex;align-items:center;justify-content:space-between;gap:12px;}
+.drow .dom{font-weight:600;font-size:17px;letter-spacing:-.01em;}
+.drow .dom b{font-weight:700;}
+.drow .snd{display:inline-flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.07em;color:rgba(255,255,255,.95);text-transform:uppercase;}
+.drow .snd i{width:8px;height:8px;border-radius:50%;background:#fff;box-shadow:0 0 0 0 rgba(255,255,255,.7);animation:pulse 2.4s ease-out infinite;}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(255,255,255,.55)}70%{box-shadow:0 0 0 8px rgba(255,255,255,0)}100%{box-shadow:0 0 0 0 rgba(255,255,255,0)}}
+.outcome{margin-top:24px;display:flex;align-items:baseline;gap:12px;}
+.outcome .arw{font-family:var(--font-mono);color:var(--orange);font-size:15px;font-weight:700;}
+.outcome p{font-size:14px;color:var(--ink-2);line-height:1.5;}
+.outcome b{color:var(--ink);}
+
+/* ── 02 · soft glow flow (portrait) ── */
+.scene{display:flex;justify-content:center;}
+.scene svg{display:block;width:100%;max-width:460px;height:auto;}
+.dh{font-family:var(--font-sans);font-size:13px;font-weight:600;fill:#fff;letter-spacing:-.01em;}
+.mlab{font-family:var(--font-mono);font-size:8px;font-weight:600;fill:var(--ink-2);}
+.mlab .mut{fill:var(--brown-400);}
+.olab{font-family:var(--font-sans);font-size:16px;font-weight:700;fill:#fff;}
+.plab{font-family:var(--font-mono);font-size:9.5px;font-weight:700;letter-spacing:.09em;fill:var(--orange-700);}
+
+/* ── 03 · mailbox roulette ── */
+.right{justify-content:flex-start;}
+.machine{position:relative;overflow:hidden;border-radius:16px;padding:16px;color:#fff;display:flex;flex-direction:column;flex:1;
+  background:radial-gradient(120% 120% at 50% -10%,#33291f 0%,#1c1712 46%,#12100d 100%);border:1px solid rgba(255,255,255,.08);box-shadow:0 1px 0 rgba(255,255,255,.06) inset;}
+.machine::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(135deg,rgba(255,255,255,.04) 0 1px,transparent 1px 10px);opacity:.6;pointer-events:none;}
+.mhead{position:relative;display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px;}
+.mtitle{font-family:var(--font-mono);font-size:9.5px;font-weight:700;letter-spacing:.13em;color:var(--brown-300);text-transform:uppercase;}
+.mlive{display:inline-flex;align-items:center;gap:8px;font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:.08em;color:#fff;}
+.mlive i{width:7px;height:7px;border-radius:50%;background:var(--orange);box-shadow:0 0 10px 1px rgba(255,77,0,.9);animation:blink 1.6s ease-in-out infinite;}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:.35}}
+.slots{position:relative;display:grid;grid-template-columns:repeat(2,1fr);gap:10px;flex:1;grid-auto-rows:1fr;}
+.slot{position:relative;overflow:hidden;border-radius:12px;padding:11px 13px;display:flex;flex-direction:column;justify-content:center;gap:7px;min-height:62px;
+  background:linear-gradient(180deg,#221b16,#191410);border:1px solid rgba(255,255,255,.08);transition:box-shadow .3s,border-color .3s,opacity .3s,transform .3s;}
+.slot .idx{position:absolute;top:7px;right:10px;font-family:var(--font-mono);font-size:8px;font-weight:700;color:var(--brown-400);opacity:.7;}
+.slot .email{font-family:var(--font-mono);font-size:10.5px;font-weight:600;color:#fff;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;transition:filter .12s,opacity .12s;}
+.slot .st{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:8px;font-weight:700;letter-spacing:.06em;color:var(--send);text-transform:uppercase;}
+.slot .st i{width:6px;height:6px;border-radius:50%;background:var(--send);box-shadow:0 0 0 0 rgba(51,209,127,.6);animation:pulseG 2.6s ease-out infinite;}
+@keyframes pulseG{0%{box-shadow:0 0 0 0 rgba(51,209,127,.5)}70%{box-shadow:0 0 0 6px rgba(51,209,127,0)}100%{box-shadow:0 0 0 0 rgba(51,209,127,0)}}
+.slot.pull{border-color:var(--under);background:linear-gradient(180deg,#2a1614,#1c1210);box-shadow:0 0 0 1px rgba(255,77,77,.45) inset,0 0 20px -4px rgba(255,77,77,.55);}
+.slot.pull .email{opacity:.92;}
+.slot.pull .st{color:var(--under);}
+.slot.pull .st i{background:var(--under);box-shadow:0 0 9px 0 rgba(255,77,77,.85);animation:blink 1s ease-in-out infinite;}
+.slot.spin .email{filter:blur(1.4px);opacity:.85;}
+.slot.spin .st{color:var(--brown-300);}
+.slot.spin .st i{background:var(--brown-300);box-shadow:none;animation:none;}
+.slot.land{border-color:var(--send);box-shadow:0 0 0 1px var(--send) inset,0 0 22px -2px rgba(51,209,127,.55);}
+.slot.land .email{animation:pop .5s ease-out;}
+@keyframes pop{0%{transform:translateY(3px);opacity:.4}100%{transform:translateY(0);opacity:1}}
+@media(max-width:760px){.stage{grid-template-columns:1fr;}.left,.right{grid-column:span 12;}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="bento">
+
+    <!-- 01 · VAULT + DECK -->
+    <div class="cell wide">
+      <div class="chead"><span class="num">01</span><span class="ct">Your real domain never sends — the copies do.</span></div>
+      <div class="stage">
+        <div class="vault">
+          <div class="vlabel">Yours · sealed</div>
+          <div class="vlock"><svg viewBox="0 0 24 24" fill="none"><rect x="4" y="10.5" width="16" height="10.5" rx="3" fill="#fff"/><path d="M7.5 10.5V7.5a4.5 4.5 0 0 1 9 0v3" stroke="#fff" stroke-width="2.3"/><circle cx="12" cy="15.4" r="1.6" fill="var(--orange)"/></svg></div>
+          <div class="vname">acme.com</div>
+          <div class="vsub">Your real domain never sends a single cold email.</div>
+          <span class="vseal"><span class="d"></span>NEVER SENDS</span>
+        </div>
+        <div class="work">
+          <div class="wlabel">Ours · we buy these and send from them</div>
+          <div class="deck">
+            <div class="dcard d1"><div class="drow"><span class="dom"><b>acme</b>group.com</span><span class="snd"><i></i>Sending</span></div></div>
+            <div class="dcard d2"><div class="drow"><span class="dom"><b>acme</b>uk.com</span><span class="snd"><i></i>Sending</span></div></div>
+            <div class="dcard d3"><div class="drow"><span class="dom">try<b>acme</b>uk.com</span><span class="snd"><i></i>Sending</span></div></div>
+          </div>
+          <div class="outcome"><span class="arw">↳</span><p><b>What we set up for you</b> — and send every one of your emails from.</p></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 02 · SOFT GLOW FLOW (portrait) -->
+    <div class="cell left">
+      <div class="chead"><span class="num">02</span><span class="ct">And their mailboxes roll up into one inbox.</span></div>
+      <div class="scene">
+        <svg viewBox="0 0 480 624" role="img" aria-label="Three look-alike domains across the top, each with its three mailboxes stacked underneath, all flowing down on smooth curves into one combined inbox that sends to your prospects.">
+          <defs>
+            <linearGradient id="og" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FF6A2B"/><stop offset="1" stop-color="#FF4D00"/></linearGradient>
+            <radialGradient id="warm" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#FFD9C6" stop-opacity=".5"/><stop offset="100%" stop-color="#FFD9C6" stop-opacity="0"/></radialGradient>
+            <filter id="soft" x="-60%" y="-60%" width="220%" height="220%"><feGaussianBlur stdDeviation="16"/></filter>
+            <filter id="glow" x="-40%" y="-60%" width="180%" height="240%"><feDropShadow dx="0" dy="9" stdDeviation="11" flood-color="#FF4D00" flood-opacity="0.4"/></filter>
+          </defs>
+          <ellipse cx="240" cy="440" rx="220" ry="150" fill="url(#warm)" filter="url(#soft)"/>
+          <g fill="none" stroke="#FFD3BE" stroke-width="6" stroke-linecap="round">
+            <path d="M82 156 C 82 300, 240 292, 240 404"/>
+            <path d="M240 156 L240 404"/>
+            <path d="M398 156 C 398 300, 240 292, 240 404"/>
+          </g>
+          <rect x="8" y="22" width="148" height="34" rx="11" fill="#14110E"/>
+          <text class="dh" x="82" y="44" text-anchor="middle"><tspan font-weight="700">acme</tspan>group.com</text>
+          <path d="M82 56 V64" stroke="#E7D8C8" stroke-width="1.5" stroke-dasharray="2 3"/>
+          <rect x="8" y="64"  width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="82" y="81"  text-anchor="middle">john<tspan class="mut">@acmegroup.com</tspan></text>
+          <rect x="8" y="94"  width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="82" y="111" text-anchor="middle">john.d<tspan class="mut">@acmegroup.com</tspan></text>
+          <rect x="8" y="124" width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="82" y="141" text-anchor="middle">john.doe<tspan class="mut">@acmegroup.com</tspan></text>
+          <rect x="166" y="22" width="148" height="34" rx="11" fill="#14110E"/>
+          <text class="dh" x="240" y="44" text-anchor="middle"><tspan font-weight="700">acme</tspan>uk.com</text>
+          <path d="M240 56 V64" stroke="#E7D8C8" stroke-width="1.5" stroke-dasharray="2 3"/>
+          <rect x="166" y="64"  width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="240" y="81"  text-anchor="middle">john<tspan class="mut">@acmeuk.com</tspan></text>
+          <rect x="166" y="94"  width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="240" y="111" text-anchor="middle">john.d<tspan class="mut">@acmeuk.com</tspan></text>
+          <rect x="166" y="124" width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="240" y="141" text-anchor="middle">john.doe<tspan class="mut">@acmeuk.com</tspan></text>
+          <rect x="324" y="22" width="148" height="34" rx="11" fill="#14110E"/>
+          <text class="dh" x="398" y="44" text-anchor="middle">try<tspan font-weight="700">acme</tspan>uk.com</text>
+          <path d="M398 56 V64" stroke="#E7D8C8" stroke-width="1.5" stroke-dasharray="2 3"/>
+          <rect x="324" y="64"  width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="398" y="81"  text-anchor="middle">john<tspan class="mut">@tryacmeuk.com</tspan></text>
+          <rect x="324" y="94"  width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="398" y="111" text-anchor="middle">john.d<tspan class="mut">@tryacmeuk.com</tspan></text>
+          <rect x="324" y="124" width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="398" y="141" text-anchor="middle">john.doe<tspan class="mut">@tryacmeuk.com</tspan></text>
+          <g filter="url(#glow)"><rect x="148" y="404" width="184" height="88" rx="24" fill="url(#og)"/></g>
+          <g transform="translate(240,436)"><path d="M-13 -6l13 9 13 -9" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><rect x="-13" y="-8" width="26" height="20" rx="4" stroke="#fff" stroke-width="2" fill="none"/></g>
+          <text class="olab" x="240" y="476" text-anchor="middle">One combined inbox</text>
+          <path d="M240 492 L240 558" fill="none" stroke="#FF4D00" stroke-width="3" stroke-linecap="round"/>
+          <path d="M233 551 L247 551 L240 566 Z" fill="#FF4D00"/>
+          <text class="plab" x="240" y="594" text-anchor="middle">TO PROSPECTS</text>
+        </svg>
+      </div>
+    </div>
+
+    <!-- 03 · SAFETY NET -->
+    <div class="cell right">
+      <div class="chead"><span class="num">03</span><span class="ct">Plus we buy 50% more than you use, so you always have backups if things go wrong.</span></div>
+      <div class="machine" aria-label="A board of eight live sending addresses; underperformers are automatically pulled from the campaign and replaced by spares.">
+        <div class="mhead">
+          <span class="mtitle">Live sending · auto-swap</span>
+          <span class="mlive"><i></i>WATCHING 24/7</span>
+        </div>
+        <div class="slots" id="slots"></div>
+      </div>
+    </div>
+
+  </div>
+</div>
+<script>
+(function(){
+  var POOL = [
+    'john@acmegroup.com','john.d@acmegroup.com','john.doe@acmegroup.com',
+    'john@acmeuk.com','john.d@acmeuk.com','john.doe@acmeuk.com',
+    'john@tryacmeuk.com','john.d@tryacmeuk.com','john.doe@tryacmeuk.com',
+    'j.doe@acmegroup.com','johnd@acmeuk.com','doe.j@tryacmeuk.com',
+    'j.doe@acmeuk.com','john.d@tryacmeuk.com','johndoe@acmegroup.com'
+  ];
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  var host = document.getElementById('slots');
+  if(!host) return;
+  var slots = [];
+  for(var i=0;i<8;i++){
+    var s = document.createElement('div');
+    s.className = 'slot';
+    s.innerHTML = '<span class="idx">'+(i+1<10?'0':'')+(i+1)+'</span><span class="email"></span><span class="st"><i></i><span class="lbl">SENDING</span></span>';
+    setEmail(s, POOL[i]);
+    host.appendChild(s); slots.push(s);
+  }
+  function rnd(n){ return (Math.random()*n)|0; }
+  function setEmail(s,e){ s.dataset.email=e; s.querySelector('.email').textContent=e; }
+  function setLbl(s,t){ s.querySelector('.lbl').textContent=t; }
+  function shown(){ var o={}; slots.forEach(function(s){o[s.dataset.email]=1;}); return o; }
+  function pickFresh(){ var sh=shown(); var a=POOL.filter(function(e){return !sh[e];}); return a.length? a[rnd(a.length)] : POOL[rnd(POOL.length)]; }
+  function swap(){
+    var s = slots[rnd(slots.length)];
+    if(s.dataset.busy){ return schedule(); }
+    s.dataset.busy = '1';
+    var target = pickFresh();
+    s.classList.add('pull'); setLbl(s,'UNDERPERFORMING');
+    setTimeout(function(){
+      setLbl(s,'PULLED');
+      setTimeout(function(){
+        s.classList.remove('pull'); s.classList.add('spin'); setLbl(s,'SWAPPING');
+        if(reduce){ land(); return; }
+        var i=0, ticks=16, em=s.querySelector('.email');
+        (function tick(){
+          if(i<ticks){ em.textContent = POOL[rnd(POOL.length)]; i++; setTimeout(tick, 38 + i*i*1.05); }
+          else land();
+        })();
+      }, 500);
+    }, 1900);
+    function land(){
+      setEmail(s,target); s.classList.remove('spin'); s.classList.add('land'); setLbl(s,'SENDING');
+      setTimeout(function(){ s.classList.remove('land'); delete s.dataset.busy; }, 1100);
+    }
+    schedule();
+  }
+  function schedule(){ setTimeout(swap, 1500 + Math.random()*2100); }
+  schedule();
+})();
+</script>
+<script>
+/* auto-resize: tell the parent page our height so the iframe fits with no scrollbar */
+(function(){
+  function postH(){ try{ parent.postMessage({ ibHeight: Math.ceil(document.documentElement.getBoundingClientRect().height) }, '*'); }catch(e){} }
+  window.addEventListener('load', function(){ postH(); setTimeout(postH,300); setTimeout(postH,1200); });
+  window.addEventListener('resize', postH);
+  if(document.fonts && document.fonts.ready){ document.fonts.ready.then(postH); }
+})();
+</script>
+</body>
+</html>
