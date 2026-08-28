@@ -117,38 +117,99 @@ body{font-family:var(--font-sans);background:transparent;color:var(--ink);line-h
 .slot.land .email{animation:pop .5s ease-out;}
 @keyframes pop{0%{transform:translateY(3px);opacity:.4}100%{transform:translateY(0);opacity:1}}
 @media(max-width:760px){.stage{grid-template-columns:1fr;}.left,.right{grid-column:span 12;}}
+
+/* ── 01 · the problem ── */
+.prob{display:grid;grid-template-columns:1.02fr .98fr;gap:26px;align-items:center;}
+.pscene{position:relative;border-radius:22px;padding:26px 28px;overflow:hidden;color:#fff;background:radial-gradient(120% 90% at 50% 8%,#312822 0%,#1c1712 45%,#14110E 100%);border:1px solid rgba(255,255,255,.08);box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 34px 66px -40px rgba(20,17,14,.85);}
+.pscene::before{content:"";position:absolute;inset:0;background:repeating-linear-gradient(135deg,rgba(255,255,255,.05) 0 1px,transparent 1px 9px);opacity:.5;pointer-events:none;}
+.plabel{position:relative;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--brown-300);}
+.paddr{position:relative;margin-top:12px;font-family:var(--font-display);font-weight:700;font-size:26px;letter-spacing:-.02em;}
+.pmeter{position:relative;margin-top:20px;height:12px;border-radius:999px;background:rgba(255,255,255,.08);overflow:hidden;}
+.pmeter i{display:block;height:100%;width:90%;background:linear-gradient(90deg,var(--send) 0%,#FFB020 52%,var(--under) 100%);}
+.pmrow{position:relative;display:flex;justify-content:space-between;margin-top:9px;font-family:var(--font-mono);font-size:9px;font-weight:700;letter-spacing:.06em;color:var(--brown-300);text-transform:uppercase;}
+.penv{position:relative;margin-top:20px;display:flex;gap:8px;}
+.penv span{flex:1;height:32px;border-radius:9px;display:grid;place-items:center;font-family:var(--font-mono);font-size:8.5px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;border:1px solid rgba(255,255,255,.1);}
+.penv .ok{color:var(--send);background:rgba(51,209,127,.12);border-color:rgba(51,209,127,.3);}
+.penv .bad{color:var(--under);background:rgba(255,77,77,.14);border-color:rgba(255,77,77,.42);}
+.outcome.bad .arw{color:var(--under);}
+@media(max-width:760px){.prob{grid-template-columns:1fr;}}
+
+/* ── 03 · warm-up ── */
+.warm{display:flex;flex-direction:column;gap:14px;}
+.wcap{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--brown-400);}
+.wramp{display:flex;align-items:flex-end;gap:12px;height:132px;padding:16px 18px;border-radius:18px;background:var(--bg-sunken);border:1px solid var(--line);}
+.wbar{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:8px;height:100%;}
+.wbar i{display:block;width:100%;border-radius:8px 8px 4px 4px;background:linear-gradient(180deg,#FF6A2B,var(--orange));box-shadow:0 10px 22px -14px rgba(255,77,0,.8);}
+.wbar span{font-family:var(--font-mono);font-size:10px;font-weight:700;color:var(--ink-3);}
 </style>
 </head>
 <body>
 <div class="wrap">
   <div class="bento">
 
-    <!-- 01 · VAULT + DECK -->
+    <!-- 01 · THE PROBLEM -->
     <div class="cell wide">
-      <div class="chead"><span class="num">01</span><span class="ct">Your real domain never sends — the copies do.</span></div>
+      <div class="chead"><span class="num">01</span><span class="ct">Blast cold emails from your own address and it gets blocked.</span></div>
+      <div class="prob">
+        <div class="pscene">
+          <div class="plabel">The problem</div>
+          <div class="paddr">you@acme.com</div>
+          <div class="pmeter"><i></i></div>
+          <div class="pmrow"><span>A few emails · fine</span><span>Too many · flagged</span></div>
+          <div class="penv">
+            <span class="ok">Delivered</span>
+            <span class="ok">Delivered</span>
+            <span class="bad">Spam</span>
+            <span class="bad">Spam</span>
+            <span class="bad">Blocked</span>
+          </div>
+        </div>
+        <div class="outcome bad"><span class="arw">↳</span><p><b>Send thousands of cold emails from your own address and inbox providers get suspicious.</b> They start dumping your mail in spam, or block it. Then even your real emails stop landing.</p></div>
+      </div>
+    </div>
+
+    <!-- 02 · VAULT + DECK -->
+    <div class="cell wide">
+      <div class="chead"><span class="num">02</span><span class="ct">That is why your real address never sends. Look-alikes do it for you.</span></div>
       <div class="stage">
         <div class="vault">
-          <div class="vlabel">Yours · sealed</div>
+          <div class="vlabel">Your real one · locked away</div>
           <div class="vlock"><svg viewBox="0 0 24 24" fill="none"><rect x="4" y="10.5" width="16" height="10.5" rx="3" fill="#fff"/><path d="M7.5 10.5V7.5a4.5 4.5 0 0 1 9 0v3" stroke="#fff" stroke-width="2.3"/><circle cx="12" cy="15.4" r="1.6" fill="var(--orange)"/></svg></div>
           <div class="vname">acme.com</div>
-          <div class="vsub">Your real domain never sends a single cold email.</div>
+          <div class="vsub">Your real address never sends a single message. It stays clean.</div>
           <span class="vseal"><span class="d"></span>NEVER SENDS</span>
         </div>
         <div class="work">
-          <div class="wlabel">Ours · we buy these and send from them</div>
+          <div class="wlabel">We make these · and send from them</div>
           <div class="deck">
             <div class="dcard d1"><div class="drow"><span class="dom"><b>acme</b>group.com</span><span class="snd"><i></i>Sending</span></div></div>
             <div class="dcard d2"><div class="drow"><span class="dom"><b>acme</b>uk.com</span><span class="snd"><i></i>Sending</span></div></div>
             <div class="dcard d3"><div class="drow"><span class="dom">try<b>acme</b>uk.com</span><span class="snd"><i></i>Sending</span></div></div>
           </div>
-          <div class="outcome"><span class="arw">↳</span><p><b>What we set up for you</b> — and send every one of your emails from.</p></div>
+          <div class="outcome"><span class="arw">↳</span><p><b>We build these for you.</b> All your mail goes out from them, never from you.</p></div>
         </div>
       </div>
     </div>
 
-    <!-- 02 · SOFT GLOW FLOW (portrait) -->
+    <!-- 03 · WARM-UP -->
+    <div class="cell wide">
+      <div class="chead"><span class="num">03</span><span class="ct">Each look-alike warms up slowly first, so inbox providers trust it.</span></div>
+      <div class="warm">
+        <div class="wcap"><span>Cold start · day 1</span><span>Trusted · full speed</span></div>
+        <div class="wramp">
+          <div class="wbar"><i style="height:14%"></i><span>5</span></div>
+          <div class="wbar"><i style="height:30%"></i><span>15</span></div>
+          <div class="wbar"><i style="height:48%"></i><span>25</span></div>
+          <div class="wbar"><i style="height:74%"></i><span>40</span></div>
+          <div class="wbar"><i style="height:100%"></i><span>50</span></div>
+        </div>
+        <div class="outcome"><span class="arw">↳</span><p><b>Each new address sends just a few friendly emails a day at first,</b> then slowly more. That is how inbox providers learn to trust it. About two weeks, and nothing needed from you.</p></div>
+      </div>
+    </div>
+
+    <!-- 04 · SOFT GLOW FLOW (portrait) -->
     <div class="cell left">
-      <div class="chead"><span class="num">02</span><span class="ct">And their mailboxes roll up into one inbox.</span></div>
+      <div class="chead"><span class="num">04</span><span class="ct">Every reply still comes back to you, in one inbox.</span></div>
       <div class="scene">
         <svg viewBox="0 0 480 624" role="img" aria-label="Three look-alike domains across the top, each with its three mailboxes stacked underneath, all flowing down on smooth curves into one combined inbox that sends to your prospects.">
           <defs>
@@ -183,20 +244,20 @@ body{font-family:var(--font-sans);background:transparent;color:var(--ink);line-h
           <rect x="324" y="124" width="148" height="26" rx="8" fill="#fff" stroke="#F0E4D9"/><text class="mlab" x="398" y="141" text-anchor="middle">john.doe<tspan class="mut">@tryacmeuk.com</tspan></text>
           <g filter="url(#glow)"><rect x="148" y="404" width="184" height="88" rx="24" fill="url(#og)"/></g>
           <g transform="translate(240,436)"><path d="M-13 -6l13 9 13 -9" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/><rect x="-13" y="-8" width="26" height="20" rx="4" stroke="#fff" stroke-width="2" fill="none"/></g>
-          <text class="olab" x="240" y="476" text-anchor="middle">One combined inbox</text>
+          <text class="olab" x="240" y="476" text-anchor="middle">One inbox for every reply</text>
           <path d="M240 492 L240 558" fill="none" stroke="#FF4D00" stroke-width="3" stroke-linecap="round"/>
           <path d="M233 551 L247 551 L240 566 Z" fill="#FF4D00"/>
-          <text class="plab" x="240" y="594" text-anchor="middle">TO PROSPECTS</text>
+          <text class="plab" x="240" y="594" text-anchor="middle">OUT TO CUSTOMERS</text>
         </svg>
       </div>
     </div>
 
-    <!-- 03 · SAFETY NET -->
+    <!-- 05 · SAFETY NET -->
     <div class="cell right">
-      <div class="chead"><span class="num">03</span><span class="ct">Plus we buy 50% more than you use, so you always have backups if things go wrong.</span></div>
+      <div class="chead"><span class="num">05</span><span class="ct">And we buy 50% extra for backups, so the sending never stops.</span></div>
       <div class="machine" aria-label="A board of eight live sending addresses; underperformers are automatically pulled from the campaign and replaced by spares.">
         <div class="mhead">
-          <span class="mtitle">Live sending · auto-swap</span>
+          <span class="mtitle">Sending now · auto-replace</span>
           <span class="mlive"><i></i>WATCHING 24/7</span>
         </div>
         <div class="slots" id="slots"></div>
