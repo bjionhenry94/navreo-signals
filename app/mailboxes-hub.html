@@ -123,11 +123,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       <section class="mbx-sec" id="sec-heat">
       <div class="sec-h">
         <h3>Fleet heat map</h3>
-        <span class="scope" id="hub-heat-scope" aria-live="polite"><b>Whole fleet</b> · last 30 days</span>
+        <span class="scope" id="hub-heat-scope" aria-live="polite"><b>Whole fleet</b> · last 24 hours</span>
         <div class="sec-ctrl">
           <span class="ctrl-lab">Range</span>
           <div class="hub-seg" id="hub-range" role="radiogroup" aria-label="Heat map date range">
-            <button data-win="7" type="button" role="radio" aria-checked="true" class="on">7d</button><button data-win="14" type="button" role="radio" aria-checked="false">14d</button><button data-win="30" type="button" role="radio" aria-checked="false">30d</button>
+            <button data-win="1" type="button" role="radio" aria-checked="true" class="on">24H</button><button data-win="7" type="button" role="radio" aria-checked="false">7d</button><button data-win="14" type="button" role="radio" aria-checked="false">14d</button><button data-win="30" type="button" role="radio" aria-checked="false">30d</button>
           </div>
           <button id="hub-refresh" type="button" class="hub-refresh" title="Recalculate now" aria-label="Recalculate the heat map now">&#10227;</button>
           <span class="ctrl-scope">↑ changes this heat map only</span>
@@ -185,7 +185,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
 
   /* ---------- state ---------- */
   var LS = "mbxhub.client";
-  // S.win = the HEAT MAP range only (7/14/30). The Inbox & Domain manager is
+  // S.win = the HEAT MAP range only (1/7/14/30, where 1 = the 24H snapshot). The Inbox & Domain manager is
   // deliberately NOT range-scoped — it always shows the full MGR_WIN window so
   // the two filters stay cleanly separated (range->heat map, client->manager).
   var MGR_WIN = 30;
@@ -195,7 +195,10 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // 30d view — which reads sent_30d directly = Smartlead's own 30d counter — is
   // trustworthy. The picker is removed until daily_sent_count capture is fixed.
   var TAG_WIN = 30;
-  var S = { client: "All", win: 7, deliv: null, cw: null, tags: null, labels: {}, vol: {} };
+  // win: heat-map range. Default 1 = the last-24h snapshot (real-time, owner
+  // 2026-08-28). 24H reads the most recent day of the day-wise series client-
+  // side (see winData) — the sample fallback is never the default view.
+  var S = { client: "All", win: 1, deliv: null, cw: null, tags: null, labels: {}, vol: {} };
   try { var v = localStorage.getItem(LS); if (v) S.client = v; } catch (e) {}
 
   /* ---------- helpers ---------- */
@@ -234,14 +237,74 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // The analytics/client-windows layer injects a demo client "Acme" (hardcoded
   // _DEMO_ACME_WINDOW_30D) — never a real client; keep it out of chips + heat.
   function isDemoClient(name) { return /^acme$/i.test(String(name || "").trim()); }
+  // Sum the last k elements of a day-wise series array (k = window days).
+  function tailSum(a, k) {
+    if (!Array.isArray(a) || !a.length) return 0;
+    var t = a.slice(-k), s = 0;
+    for (var i = 0; i < t.length; i++) s += Number(t[i]) || 0;
+    return s;
+  }
+  // Which day the 24H snapshot reads: the most recent COMPLETE day of fleet
+  // sending. The current calendar day (series' last index) is skipped — it's an
+  // in-progress, still-ramping bucket (verified 2026-08-28: a Friday mid-morning
+  // read 420 sent vs a normal ~31k day), so defaulting to it would render the
+  // heat map nearly empty. Idle days (weekends / paused fleet) are skipped too so
+  // the snapshot is always a real, populated 24 hours — "an instant snapshot from
+  // 24 hours before" (owner 2026-08-28). Returns -1 when the series holds nothing.
+  function snapDayIndex(ser) {
+    var all = ser && ser["__all"] && ser["__all"].sent;
+    if (!Array.isArray(all) || !all.length) return -1;
+    for (var i = all.length - 2; i >= 0; i--) { if ((Number(all[i]) || 0) > 0) return i; }
+    return all.length >= 2 ? all.length - 2 : 0;   // all-idle: still show yesterday, not today
+  }
+  // "2026-08-27" → "27 Aug" for the scope label, so the snapshot day is explicit.
+  var _MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function fmtDay(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); if (!m) return "";
+    return String(+m[3]) + " " + (_MON[(+m[2]) - 1] || "");
+  }
+  // The heat-map window entry { client:{sent,replied,bounced}, __all:{…} } for a
+  // range. 7/14/30 come straight from the backend sweep (Smartlead-reconciled,
+  // archived-campaign complete). 24H (win 1) is derived HERE from the SAME day-
+  // wise series the capacity column already reads — one day's slice at
+  // snapDayIndex, which IS Smartlead's own day-wise number for that date, so it
+  // verifies against the platform to the digit at zero extra API cost. Deriving
+  // on the FE also means the real-time DEFAULT never falls through to the
+  // REP_CLIENTS sample while a fresh blob (which carries no "1" key) propagates.
+  // Any other window absent from windows{} degrades to a k-day series sum, so
+  // this stays forward-safe.
+  function winData(win) {
+    win = String(win);
+    var cw = S.cw; if (!cw) return null;
+    if (cw.windows && cw.windows[win]) return cw.windows[win];
+    var ser = cw.series; if (!ser) return null;
+    var out = {}, hasClient = false;
+    var idx = win === "1" ? snapDayIndex(ser) : -1;
+    if (win === "1" && idx < 0) return null;
+    Object.keys(ser).forEach(function (name) {
+      if (name === "__navreo_ws") return;   // raw workspace line, never a client
+      var s = ser[name] || {};
+      var one = function (a) { return (Array.isArray(a) && idx < a.length) ? (Number(a[idx]) || 0) : 0; };
+      out[name] = win === "1"
+        ? { sent: one(s.sent), replied: one(s.replied), bounced: one(s.bounced) }
+        : { sent: tailSum(s.sent, Number(win) || 1), replied: tailSum(s.replied, Number(win) || 1), bounced: tailSum(s.bounced, Number(win) || 1) };
+      if (name !== "__all") hasClient = true;
+    });
+    return hasClient ? out : null;         // __all alone isn't a fleet worth drawing
+  }
   function clientRows() {
     var cw = S.cw, win = String(S.win);
-    if (!cw || !cw.windows || !cw.windows[win]) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
-    var w = cw.windows[win], labels = cw.labels || cw.ws_labels || {};
+    var w = winData(win);
+    if (!w) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
+    var labels = cw.labels || cw.ws_labels || {};
     var names = Object.keys(w).filter(function (k) { return k !== "__all" && k !== "__navreo_ws" && k.indexOf("__") !== 0 && !isDemoClient(k); });
     if (!names.length) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
     USING_REP.heat = false;
     var winN = Number(win) || 30;
+    // 24H reads ONE day (the snapshot day) — capacity-used must read the same
+    // day as reply/bounce, else a healthy snapshot sits beside a 0% "actively
+    // sending" pulled from today's still-empty bucket.
+    var snapIdx = win === "1" ? snapDayIndex(cw.series) : -1;
     var rows = names.map(function (name) {
       var e = w[name] || {};
       var reply = pct(e.replied, e.sent), bounce = pct(e.bounced, e.sent);
@@ -257,10 +320,16 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var lc = String(name).toLowerCase();
       var wsKey = (lc === "asteri" || lc === "krg" || lc === "grout") ? lc : null;
       var sSer = (S.cw && S.cw.series && S.cw.series[name]) || null;
-      var capUsed = (window.NavreoCapacity && sSer && sSer.sent && S.cw.days && S.cap)
+      // For 24H, truncate the series to END at the snapshot day, then take that
+      // one day — so utilisation reflects the snapshot, not the current partial.
+      var capSent = sSer && sSer.sent, capDays = S.cw && S.cw.days, capN = winN;
+      if (snapIdx >= 0 && Array.isArray(capSent) && Array.isArray(capDays)) {
+        capSent = capSent.slice(0, snapIdx + 1); capDays = capDays.slice(0, snapIdx + 1); capN = 1;
+      }
+      var capUsed = (window.NavreoCapacity && capSent && capSent.length && capDays && S.cap)
         ? NavreoCapacity.usedPct({
-            sent: sSer.sent, sentDays: S.cw.days, cap: S.cap,
-            name: name, wsKey: wsKey, days: winN, hideWeekends: false })
+            sent: capSent, sentDays: capDays, cap: S.cap,
+            name: name, wsKey: wsKey, days: capN, hideWeekends: false })
         : null;
       return {
         name: prettyClient(name, labels), dom: null, inbox: pw ? pw.total : null,
@@ -412,7 +481,8 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // per-client renderer draws it unchanged (with an isAll flag for styling).
   function allClientsRow(rows) {
     var win = String(S.win);
-    var all = S.cw && S.cw.windows && S.cw.windows[win] && S.cw.windows[win]["__all"];
+    var wd = winData(win);
+    var all = wd && wd["__all"];
     var reply = (all && all.sent) ? pct(all.replied, all.sent) : null;
     var bounce = (all && all.sent) ? pct(all.bounced, all.sent) : null;
     // Warm-up % = Σ(warm) / (Σ(warm) + Σ(available)) over clients where BOTH are
@@ -906,7 +976,14 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // Scope captions keep each filter's reach legible without interacting. They are
   // aria-live so a screen reader hears the new scope the instant a filter changes.
   function renderHeatScope() {
-    var s = el("hub-heat-scope"); if (s) s.innerHTML = "<b>Whole fleet</b> · last " + S.win + " days";
+    var s = el("hub-heat-scope"); if (!s) return;
+    var txt = "last " + S.win + " days";
+    if (S.win === 1) {
+      txt = "last 24 hours";
+      var ser = S.cw && S.cw.series, days = S.cw && S.cw.days;
+      if (ser && days) { var i = snapDayIndex(ser); if (i >= 0 && days[i]) txt += " · " + fmtDay(days[i]); }
+    }
+    s.innerHTML = "<b>Whole fleet</b> · " + txt;
   }
   function renderMgrScope() {
     var s = el("hub-mgr-scope"); if (!s) return;
