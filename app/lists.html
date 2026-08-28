@@ -2203,7 +2203,7 @@ document.getElementById("downloadBtn").addEventListener("click", async () => {
 });
 
 document.getElementById("shareBtn").addEventListener("click", async () => {
-  const url = `https://navreo-signals.onrender.com/app/lists.html#${grid.id}`;
+  const url = `${location.origin}/app/lists.html#${grid.id}`;
   const btn = document.getElementById("shareBtn");
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {

@@ -874,7 +874,7 @@ function panelHTML(x){
     +`<div class="checks">`+cks.map(c=>`<div class="chk${c[2]?' done':''}"><span class="ck">${c[2]?'✓':''}</span><div><div class="cl">${c[0]}</div><div class="cn">${esc(c[1])}</div></div><span class="chk-state${c[2]?' is-done':''}">${c[2]?'Done':'Ran before launch'}</span></div>`).join('')+`</div>`;
 }
 
-function carryPrompt(sid){return `Open my Navreo strategy board from a previous session and carry on with it.\n\nIdeas ID: ${sid}\nBoard: https://navreo-signals.onrender.com/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;}
+function carryPrompt(sid){return `Open my Navreo strategy board from a previous session and carry on with it.\n\nIdeas ID: ${sid}\nBoard: ${location.origin}/app/strategy.html#/r/${sid}\nRun file: ~/.claude/skills/lilly-strategy/sessions/ (the run.json whose run_id is ${sid})\n\nUse /lilly-strategy. This is an EXISTING session board: keep publishing to run_id ${sid} (never mint a new one), open the board in the Claude Browser, and pick up where it left off.`;}
 function renderSidebar(){
   if(document.body.classList.contains('solo')){side.innerHTML='';return;}
   const cards=IDEAS.map((x,i)=>{const service=(x.service||'').replace('->','→');

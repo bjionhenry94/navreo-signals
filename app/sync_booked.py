@@ -65,6 +65,9 @@ import server  # noqa: E402 — reuse KEYS / http_json / sb conventions
 NOTION_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 SL_BASE = "https://server.smartlead.ai/api/v1"
+# Public base for the setter links we drop into Notion. Custom-domain aware:
+# reads SIGNALS_BASE_URL (app.navreo.ai), falls back to onrender.com.
+SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL", "https://navreo-signals.onrender.com").rstrip("/")
 CONFIG_PATH = Path(__file__).resolve().parent / "booked_sync_clients.json"
 DRY = os.environ.get("BOOKED_SYNC_DRY", "") == "1"
 # Campaign statuses that can never send again — everything else gets the pause
@@ -181,7 +184,7 @@ def template_blocks(email: str, meta: dict) -> list[dict]:
                                         f"action=INBOX&leadMap={meta['lead_map_id']}"),
             _rt("  — the live thread in Smartlead")]}})
     children.append({"type": "bulleted_list_item", "bulleted_list_item": {"rich_text": [
-        _rt("Setter", link="https://navreo-signals.onrender.com/app/setter.html#/r/"
+        _rt("Setter", link=SIGNALS_BASE + "/app/setter.html#/r/"
                            + urllib.parse.quote(email, safe="")),
         _rt("  — the conversation in our reply tool")]}})
     return children

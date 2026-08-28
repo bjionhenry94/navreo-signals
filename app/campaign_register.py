@@ -41,12 +41,17 @@ never sends email.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import sys
 import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server  # noqa: E402
+
+# Public base for the campaign links we hand back. Custom-domain aware: reads
+# SIGNALS_BASE_URL (app.navreo.ai), falls back to onrender.com.
+SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL", "https://navreo-signals.onrender.com").rstrip("/")
 
 # What actually feeds a campaign. The first four are SIGNALS — something happened
 # out there and the source goes back daily for the next lead; the tool arms a live
@@ -184,7 +189,7 @@ def register(smartlead_campaign_id, name, client="navreo", *, mechanism="fixed_l
               prefer="resolution=merge-duplicates,return=minimal")
 
     return {"campaign": sid, "draft": draft_id, "source": src_id,
-            "campaign_url": f"https://navreo-signals.onrender.com/app/campaigns.html#/c/{sid}"}
+            "campaign_url": f"{SIGNALS_BASE}/app/campaigns.html#/c/{sid}"}
 
 
 def is_registered(smartlead_campaign_id) -> bool:

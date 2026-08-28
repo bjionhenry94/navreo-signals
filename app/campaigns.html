@@ -3756,7 +3756,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       "(mcp__ccd_session_mgmt__set_session_title) with exactly this, character for character - " +
       "do not summarize, rephrase, or drop the number: " + _titleLine + "\n\n" +
       "STEP 1 - then open my optimisation cockpit for this campaign so I can watch while you work: " +
-      "open https://navreo-signals.onrender.com/app/optimise.html?c=" + c.id + " in the browser - it shows " +
+      "open " + location.origin + "/app/optimise.html?c=" + c.id + " in the browser - it shows " +
       "this optimisation pinned on top of the full campaign, where I mark it done.\n\n" +
       "Smartlead campaign " + c.id + " (" + c.name + "): " + p.act +
       " Context: " + (p.bold || "") + " Stage everything for my approval. Do not launch, upload, or save anything to Smartlead without me.";

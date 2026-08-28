@@ -22272,12 +22272,27 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_HEAD(self):
         path = self.path.split("?")[0]
+        if path in ("/", "", "/index.html"):
+            self.send_response(302)
+            self.send_header("Location", "/app/campaigns.html")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path in _AUTH_PUBLIC_GET or path.startswith(_AUTH_PUBLIC_GET_PREFIX) \
                 or self._authed_email():
             return super().do_HEAD()
         self.send_response(401)
         self.send_header("Content-Length", "0")
         self.end_headers()
+
+    def list_directory(self, path):
+        # Never autoindex. Without this, an authenticated GET of any directory
+        # (/, /app/, /backups/) returns SimpleHTTPRequestHandler's listing,
+        # exposing repo internals (.git, .venv, backups) to any logged-in user.
+        # Directories that hold an index.html still serve it (send_head resolves
+        # that before falling here); everything else now 404s.
+        self.send_error(404, "Not Found")
+        return None
 
 
     # ── upload-gate reviews (lilly-upload-gate) — runs live in qa_gate_runs ──
@@ -22416,6 +22431,17 @@ class Handler(SimpleHTTPRequestHandler):
         path = self.path.split("?")[0]
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
             return self._json({"ok": True})
+        if path in ("/", "", "/index.html"):
+            # Bare domain → the app home. Redirect BEFORE the auth gate so a
+            # logged-out hit logs in and returns to campaigns. Without this, an
+            # authenticated GET / falls through to SimpleHTTPRequestHandler's
+            # directory listing of the repo root (app.navreo.ai cutover 2026-08-28).
+            self.send_response(302)
+            self.send_header("Location", "/app/campaigns.html")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
         if path == "/api/auth/me":  # who am I (login page uses it to skip itself)
             em = self._authed_email()
             return self._json({"email": em,
