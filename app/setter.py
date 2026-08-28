@@ -1503,6 +1503,18 @@ def lint_draft(html: str, ctx: dict):
         resource_urls = instruction_urls - {_norm_url(booking)}
         if resource_urls and not (set(draft_urls) & resource_urls):
             return False, "The draft offers a resource but links only the booking link."
+    # CALL-ALREADY-REQUESTED (owner HARD RULE 2026-08-28: a lead who asked
+    # "can you propose a short setup call?" was answered with "Would you be
+    # open to a call on..." - re-pitching a call they already asked for
+    # "should never happen"). When the lead requested the call, the draft
+    # must propose times DIRECTLY, never re-ask openness.
+    if ctx.get("lead_requested_call") and re.search(
+            r"would you be (open|up) for? ?(to)? ?a (quick |short |brief )?(call|chat)"
+            r"|would you be open to a call|open to a quick call|interested in a call",
+            _TAG_RE.sub(" ", text), re.I):
+        return False, ("The lead already asked for the call - never re-ask whether they'd "
+                       "be open to one. Propose the two times directly (e.g. 'Does Monday at "
+                       "10:00 or Monday at 12:00 work for you?') and confirm who should join.")
     # ANSWER-PRICING-FIRST (owner report 2026-08-27: a bare "What's your
     # price?" got an assessment preamble as paragraph one - "tone deaf, that
     # first paragraph is irrelevant". The answer-first prompt rule keeps
@@ -1737,6 +1749,7 @@ CLASSIFY_SCHEMA = {
         "all_intents": {"type": "array", "items": {"type": "string", "enum": INTENTS}},
         "simple_ask": {"type": "boolean"},
         "lead_proposed_time": {"type": "boolean"},
+        "lead_requested_call": {"type": "boolean"},
         "confidence": {"type": "number"},
         "red_flags": {"type": "array", "items": {"type": "string"}},
         "timezone_guess": {"type": ["string", "null"]},
@@ -1745,7 +1758,7 @@ CLASSIFY_SCHEMA = {
         "wants": {"type": "string"},
         "rationale": {"type": "string"},
     },
-    "required": ["primary_intent", "all_intents", "simple_ask", "lead_proposed_time",
+    "required": ["primary_intent", "all_intents", "simple_ask", "lead_proposed_time", "lead_requested_call",
                 "confidence", "red_flags",
                 "timezone_guess", "tz_confidence", "live_lead", "wants", "rationale"],
 }
@@ -1771,6 +1784,7 @@ Two further rules:
 - IGNORE the sender's own email signature when working out the ask: their phone numbers, their own booking/calendar links, social handles, follower counts, taglines, and legal footers are not part of the request. Never treat a link in THEIR signature as them asking us to schedule.
 - A bare one-word or near-bare affirmation ("Yes", "OK", "sure") ALWAYS answers the LAST message we sent (last_outbound), never the original outreach - in an ongoing conversation the original offer was answered turns ago. It is a simple send_resource ask ONLY when last_outbound makes the referent unmistakable - e.g. we asked "want me to send the breakdown?" and they said "Yes". If last_outbound proposed a call time or says an invite was sent, the affirmation is the lead CONFIRMING that meeting: primary_intent=scheduling, simple_ask=false, and nothing should be re-sent or re-pitched. If last_outbound is missing or its ask is not unmistakable, set simple_ask=false.
 
+lead_requested_call: true when the lead's latest reply asks for the call or treats it as agreed - they ask you to propose times or a setup call ("can you propose a short setup call?", "send me some times", "let's book a call", "what's the next step - a call?"), say yes to a call you offered, or ask to schedule in any form. It is TRUE regardless of whether they named their own time (a bare "let's book a call" counts). It is FALSE when they merely show interest without mentioning a call, and FALSE when they decline or defer the call.
 lead_proposed_time: true when the lead has put forward their OWN time, day, or window for the call, whether specific ("are you free Thursday at 3?", "the 24th at 2pm works", "tomorrow afternoon?") or vague ("mornings are best", "sometime later this week", "early next week", "after 2pm your time"). This is a preference we must answer AGAINST - accept it if we can, counter if we cannot - never ignore. Set simple_ask=false whenever it is true, because our two fixed slots may not match what they asked for. It is FALSE when they gave no timing preference at all (a bare "sure, let's talk", "send me some options", "happy to book whenever") and FALSE when they are only confirming a time WE already proposed (that is a confirmation, not a new proposal). Offering their OWN availability and asking us to choose from it ("I'm free Tuesday morning or Thursday after 3, which works for you?", "mornings or Friday, your pick") is TRUE - those are THEIR windows we must answer against, not an open request for our options.
 live_lead: true when a reply that is otherwise a negative still contains a real opening someone should act on - a named replacement contact or referral ("Nick left, contact wim@..."), an explicit later-date opening ("not a priority right now, try me in Q3", "maybe later"), or a request to follow up at some point. Plain "no", plain opt-outs, plain out-of-office autoreplies with generic reception redirects are live_lead=false.
 
@@ -1892,6 +1906,7 @@ Rules:
 - RESOURCE ANCHOR TEXT IS MALLEABLE (owner rule 2026-08-20, every SDR): there is NO fixed resource-anchor phrase. Write the anchor fresh each time - natural, first-person, and tied to what the resource actually is and what the lead asked ("Here's a short breakdown of where the spend is leaking.", "This is the case study I mentioned.", "Here's an overview of how we work."). Do NOT default to "Here's the breakdown I prepared." - the example email above shows structure, not a phrase to copy, and repeating one stock anchor across replies reads robotic. Never claim you personally prepared something when the agent's instructions say the asset is general (e.g. a website overview).
 - THE TWO-TIMES CALL ASK FORMAT (owner rules 2026-08-20, every SDR). ONLY when you have actual times to name, ask in exactly this shape: "Would you be open to a call on {day, date at time TZ} or {day2, date2 at time2 TZ} where {value-led positioning of the call}?". The opener is fixed: never any other opener for the two-times ask ("Would you be free for a call on", "Are you available for a call on", "How about" are all wrong). The "where ..." clause is REQUIRED: one short clause positioning the call around what the LEAD will receive from it, so the call feels like getting something valuable, never like a sales call. Write it fresh for THIS lead, tied to what they asked or what the call would actually cover, and vary it between drafts - good shapes: "where I could share the other campaign ideas I had?", "where we could run through all of this?", "where I could share how we'd adapt the learnings from the case study to your business?". There is still NO stock clause: NEVER write "where I could share how I would implement our strategy for you" or any canned variant repeated across replies - a clause about what we would do to the lead is a pitch; a clause about what they will receive is value. The fallback stays "If those times aren't suitable, feel free to see my availability here and book in directly." with the link on "see my availability here".
 - LEAD-PROPOSED TIME (owner rule 2026-08-21, every SDR, OVERRIDES the two-fresh-times default even when live slots exist). When the lead puts forward their OWN time, day, or window - specific ("are you free Thursday at 3?", "the 24th at 2pm works") OR vague ("mornings are best", "a 30 min call later this week? Morning PST would work", "early next week", "after 2pm") - you must answer THAT proposal, not open with the generic "Would you be open to a call on {t1} or {t2}" shape, which reads as not having read their email. Your first job is to say plainly whether you can make what they asked for. Exactly two shapes: when the slots you were given fall inside what they asked for, ACCEPT plainly - "Yes, I'm free on {matching slot} or {second matching slot}, I'll share an invite now." (keep each time's own slot link when links exist; one matching slot means offer that one). When none of the given slots fit their window, COUNTER honestly and OPEN by naming their proposed time as the thing you cannot make: "Unfortunately I can't make {their proposed time, in their words}, but I can do {slot 1} or {slot 2} - would either of those work?". The counter MUST start by acknowledging their time does not work; you must NEVER open a counter with the generic "Would you be open to a call on ..." shape, which reads as ignoring that they already named a time. Never pretend to a fit that isn't there, never ignore their stated window, and never invent a time outside the slots you were given. A lead who proposes a time (or directly asks to set up a call) is ALREADY SOLD ON THE CALL: the ENTIRE reply is the scheduling answer - greeting, the accept-or-counter line, at most one short closing line, sign-off. Do NOT add product explanation, assessment detail, setup or access requirements, resource pitches, or any paragraph they did not ask for - all of that belongs in the call itself, and padding the reply with it reads as not listening (owner rule, repeated many times: "when someone directly asks for a call, you just tell them a time - you don't give them additional information").
+- CALL-ALREADY-REQUESTED (owner HARD RULE 2026-08-28, every SDR). When lead_requested_call is true - the lead asked for the call, asked you to propose times, asked for a setup call, or said yes to one - the call is AGREED. NEVER write "Would you be open to a call...", "would you be up for a quick chat", or any phrasing that re-asks whether they want the call they just asked for: that reads as not listening. Propose the two times DIRECTLY as the scheduling sentence ("Does Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST work for you?" - with the same per-slot links/plain-text rules as the two-times default), keep any answer to their other questions first per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, and confirm who should join when they named attendees (their CFO, their security team). Everything else about the two-times machinery (slots verbatim, fallback ladder, constraints, LEAD-PROPOSED TIME) applies unchanged - only the openness re-ask is banned.
 - ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST (owner rule 2026-08-27, every SDR). The FIRST paragraph after the greeting answers the specific thing the lead's latest message asked - their access question, their timeline question, their security question, their pricing question, their "do you apply fixes or just recommend" question - in their terms. NEVER open with a stock offer, product, or process preamble ("[the deliverable] comes from our [offer/assessment/audit], which we set up on a call") before the answer: opening with anything but the answer reads as dodging the question, and repeating the same explanation sentence across replies reads as a bot. Where the reply genuinely needs to explain how the offer works, weave it in as ONE short clause AFTER the answer, never as its own opening paragraph. When the lead asked several questions, answer each briefly in the order they asked. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
 - SELF-SERVE ASSET REQUEST (owner rule 2026-08-22, every SDR, live-confirmed, OVERRIDES the two-fresh-times default). When the lead asks for your BOOKING LINK or your PHONE NUMBER - especially when they say they will book or call themselves ("what's your booking link? I'll book direct", "what's your number? I'll give you a call") - ANSWER WITH JUST THAT ASSET and STOP. For a booking-link ask, give the booking_link value and nothing else about scheduling; do NOT also propose two call times. For a phone-number ask, give the phone number EXACTLY as the instructions state it; if the instructions contain NO phone number, you must NOT invent one - a fabricated number (for example "+44 7700 900123") is a serious error - instead write the literal placeholder [PHONE NUMBER] where the number would go ("My number is [PHONE NUMBER].") exactly as with [BOOKING LINK]: the owner fills it in during training, and manufacture no digits. Either way do NOT append the two-times "Would you be open to a call on ..." paragraph: the lead has chosen to self-serve, so a fresh call pitch talks straight past them.
 - ANSWER THE LEAD'S ACTUAL QUESTION FIRST (owner rule 2026-08-22, every SDR, live-confirmed). Before anything else, the draft must make a genuine ATTEMPT at the specific thing the lead asked. If they asked for case studies, ENGAGE the case studies - say plainly they are early-stage and give the actual anonymised outcomes or proof the instructions hold - never reply with a generic website overview and a call pitch as if they had asked "what do you do". The recipient must FEEL their question was heard and attempted, even when part of it must be deferred to a call. A reply that skips the actual question and jumps to "here is an overview, would you be open to a call" is wrong even when it is polite. Only after you have truly engaged their question may a call be offered, and only when call_ask allows it.
@@ -1997,6 +2012,7 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "reply_body": clean_body(reply.get("body") or "")[:3000],
         "wants": classification.get("wants") or "",
         "primary_intent": classification.get("primary_intent") or "",
+            "lead_requested_call": bool(classification.get("lead_requested_call")),
         "all_intents": classification.get("all_intents") or [],
         # The single brain: pricing, resource links, and when-to-send-which
         # rules all live in the instructions text (see the DRAFT_SYSTEM rule
@@ -5582,6 +5598,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             "lead_proposed_time": bool(classification.get("lead_proposed_time")),
             "reply_body": body_text,
             "primary_intent": classification.get("primary_intent") or "",
+            "lead_requested_call": bool(classification.get("lead_requested_call")),
         }
         lint_ok, lint_reason = lint_draft(draft_body, ctx_lint)
 
@@ -12497,6 +12514,7 @@ def _redraft_sync(payload):
                 "thread_text": f"{body_text} {thread_text}",
                 "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                 "primary_intent": classification.get("primary_intent") or "",
+            "lead_requested_call": bool(classification.get("lead_requested_call")),
             })
         first_touch = True
         if not row.get("is_test") and _SB:
@@ -13724,6 +13742,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                 "lead_proposed_time": bool(cls.get("lead_proposed_time")),
                 "reply_body": body,
                 "primary_intent": cls.get("primary_intent") or "",
+                "lead_requested_call": bool(cls.get("lead_requested_call")),
             }
             # One lint-feedback redraft (owner report 2026-08-27, "countless
             # times"): a training draft that fails lint used to ship to the
@@ -15243,6 +15262,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     "booking_link": _booking_link(agent_snapshot), "thread_text": body,
                     "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                     "primary_intent": cls.get("primary_intent") or "",
+                "lead_requested_call": bool(cls.get("lead_requested_call")),
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
@@ -15372,6 +15392,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     "booking_link": _booking_link(agent_snapshot), "thread_text": body,
                     "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                     "primary_intent": cls.get("primary_intent") or "",
+                "lead_requested_call": bool(cls.get("lead_requested_call")),
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
