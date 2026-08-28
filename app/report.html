@@ -144,12 +144,15 @@
 .ah .tl .meta a,.ah .tl .meta span{font-size:11.5px;font-weight:600;color:var(--ink-2);background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:4px 11px;text-decoration:none;white-space:nowrap}
 .ah .tl .meta a:hover{background:var(--ink);border-color:var(--ink);color:#fff}
 .ah .tl .launch{display:flex;align-items:center;gap:10px;padding:8px 16px;margin-bottom:8px;border:1px dashed var(--line-2);border-radius:12px;background:var(--bg)}
-.ah .tl .launch .ln{font-size:12.5px;font-weight:600;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-/* type icons — green tick = new positive reply, blue rocket = campaign launch */
+.ah .tl .launch .ln{font-size:12.5px;font-weight:600;color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.ah .tl .launch .ln b{color:var(--ink)}
+/* type icons — green tick = new positive reply, blue rocket = campaign launch,
+   amber people = new prospects added to an existing campaign */
 .ah .tl .tico{width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;flex:none}
 .ah .tl .tico svg{width:14px;height:14px}
 .ah .tl .tico.ok{background:var(--green-bg);color:var(--green)}
 .ah .tl .tico.rk{background:#E3EEF9;color:#1971C2}
+.ah .tl .tico.add{background:#FBEFE0;color:#B5730E}
 /* expanded reply: the email they got first, then what they said */
 .ah .tl .xk{font-size:9.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:5px}
 .ah .tl .sent{border-left:3px solid var(--line-2);padding:2px 0 2px 12px;margin-bottom:14px}
@@ -317,7 +320,9 @@ function seriesFor(k) { return (R && R.series && R.series[k]) || null; }
 function slice(a) { return a.slice(I0, I1 + 1); }
 function sliceDays() { return slice(R.days); }
 function rangeLabel() { return dlabel(R.start) + " – " + dlabel(R.end); }
-function winLabel() { return "last " + R.window_days + " days"; }
+/* every card now covers the token's EXACT range (not a today-ending window),
+   so the scope suffix everywhere is that range */
+function winLabel() { return rangeLabel(); }
 function sumSlice(k) {
   var s = seriesFor(k);
   if (!s) return null;
@@ -333,34 +338,23 @@ function chartKeep(windowDays) {
   return keep;
 }
 
-/* ── hero legend chips ── */
+/* ── hero legend chips = the top-dashboard numbers ──
+   Sent / Replies / Bounce-rate / Reply-rate come from the EXACT range totals
+   the server computed (R.range); Interested / Meetings sum the daily line over
+   the same range. Every chip shows a real number for every client now. ── */
+function rangeTot(k) {
+  var rg = R.range || {};
+  if (k === "sent")    return rg.sent != null ? rg.sent : sumSlice("sent");
+  if (k === "replies") return rg.replied != null ? rg.replied : sumSlice("replies");
+  if (k === "bounces") return (rg.sent && rg.bounced != null) ? Math.round(rg.bounced / rg.sent * 1000) / 10 : null;
+  if (k === "rate")    return (rg.sent && rg.replied != null) ? Math.round(rg.replied / rg.sent * 1000) / 10 : null;
+  return sumSlice(k);   // interested, meetings — exact from the daily line
+}
 function renderLegend() {
-  var sentTot = sumSlice("sent");
-  var repTot = sumSlice("replies");
   $("rp-lchips").innerHTML = ORDER.map(function (k) {
     var hasLine = seriesFor(k) != null;
-    var val = null;
-    if (k === "rate") {
-      val = (sentTot && repTot != null) ? (Math.round(repTot / sentTot * 1000) / 10) + "%" : "–";
-    } else if (k === "bounces") {
-      var w = R.window || {};
-      val = (w.sent && w.bounced != null) ? (Math.round(w.bounced / w.sent * 1000) / 10) + "%" : "–";
-      if (!hasLine && val !== "–") {
-        return '<span class="lchip tot"><i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] +
-          ' <b class="num">' + val + '</b><span class="totpill">' + winLabel() + "</span></span>";
-      }
-    } else {
-      val = hasLine ? fmtN(sumSlice(k)) : null;
-      if (val == null && k === "sent" && R.window && R.window.sent != null) {
-        return '<span class="lchip tot"><i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] +
-          ' <b class="num">' + fmtN(R.window.sent) + '</b><span class="totpill">' + winLabel() + "</span></span>";
-      }
-      if (val == null && k === "replies" && R.window && R.window.replied != null) {
-        return '<span class="lchip tot"><i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] +
-          ' <b class="num">' + fmtN(R.window.replied) + '</b><span class="totpill">' + winLabel() + "</span></span>";
-      }
-      if (val == null) val = "–";
-    }
+    var t = rangeTot(k);
+    var val = (t == null) ? "–" : (RAXIS[k] ? t + "%" : fmtN(t));
     var off = !hasLine;
     return '<button class="lchip' + (state.on[k] && !off ? " on" : (off ? " off" : "")) +
       '" data-s="' + k + '" aria-pressed="' + (state.on[k] && !off) + '">' +
@@ -467,16 +461,12 @@ function renderTrend() {
     s += '<text x="' + (e.x + 8).toFixed(1) + '" y="' + (pos[ii] + 3.5).toFixed(1) + '" font-size="10.5" font-weight="600" fill="' + COL[e.k] + '">' + NAME[e.k] + "</text>";
   });
   $("trend-svg").innerHTML = s;
-  var sentTot = sumSlice("sent");
-  if (sentTot == null && R.window) sentTot = R.window.sent;
   var sub = (state.on.sent && sentFull ? "Faint bars are emails sent each day; lines are counts per day"
                                        : "Every line is a count per day");
-  if (R.window && R.window.sent && R.window.bounced != null) {
-    sub += " — about " + Math.max(1, Math.round(R.window.bounced / R.window.sent * 1000) / 10) + " in 100 bounce.";
+  var rg = R.range || {};
+  if (rg.sent && rg.bounced != null) {
+    sub += " — about " + Math.max(1, Math.round(rg.bounced / rg.sent * 1000) / 10) + " in 100 bounce.";
   } else sub += ".";
-  if (state.on.sent && sentFull && R.sent_estimated) {
-    sub += " " + escq(R.client) + " shares the Navreo fleet, so its daily bars are an estimated split of the fleet's daily sending (window totals are exact).";
-  }
   if (state.hideWeekends) sub += " Weekends hidden.";
   $("trend-sub").textContent = sub;
   $("trend-take").textContent = takeLine();
@@ -484,7 +474,7 @@ function renderTrend() {
 }
 function takeLine() {
   var rep = seriesFor("replies"), mtg = seriesFor("meetings");
-  var rWin = rep ? sumSlice("replies") : (R.window && R.window.replied);
+  var rWin = rep ? sumSlice("replies") : ((R.range && R.range.replied) || null);
   var mWin = mtg ? sumSlice("meetings") : null;
   if (rWin == null || rWin < 10) return "Small numbers in this view — read the counts, not the trend.";
   var lab = rangeLabel() + ": ";
@@ -563,25 +553,21 @@ function trendMove(ev) {
 /* ── campaigns, best to worst — same ranking law as the analytics hub
    (meetings first, then positives, then reply rate) ── */
 function renderRank() {
-  var windowed = R.campaigns_scope === "window";
-  var N = R.window_days;
-  var minSent = windowed ? Math.max(100, N * 15) : 500;
+  var windowed = R.campaigns_scope === "range";
   setStamp("rank-stamp", R.asof && R.asof.cw, 6);
   var sc = R.scorecard || {};
   var rows;
   if (windowed) {
-    rows = (R.campaigns || []).filter(function (r) { return (r.sent || 0) >= minSent; }).map(function (r) {
+    // the server already returns exactly the campaigns that produced a
+    // positive/meeting in THIS range, with range-scoped sent/pos/mtg; sent can
+    // be null (unfetched) — that renders "–" for the cost, never a fake 0.
+    rows = (R.campaigns || []).map(function (r) {
       var c = sc[String(r.id)];
       return { id: r.id, name: r.name || (c && c.name) || ("Campaign " + r.id),
-               sent: r.sent || 0, replied: r.replied || 0,
-               /* window-scoped positives/meetings ONLY — never fall back to the
-                  scorecard's LIFETIME c.positives/c.meetings under a "last N days"
-                  label (that mixed a window `sent` with lifetime results and
-                  understated per-positive/per-meeting). Unknown-for-window stays
-                  null → renders "–", not a borrowed lifetime count. */
+               sent: r.sent != null ? r.sent : null, replied: r.replied || 0,
                pos: r.pos != null ? r.pos : null,
                mtg: r.mtg != null ? r.mtg : null,
-               active: !!(c && String(c.status || "").toUpperCase() === "ACTIVE") };
+               active: String((r.status != null ? r.status : (c && c.status)) || "").toUpperCase() === "ACTIVE" };
     });
   } else {
     rows = Object.keys(sc).map(function (id) {
@@ -589,10 +575,10 @@ function renderRank() {
       return { id: id, name: c.name || ("Campaign " + id), sent: c.sent || 0, replied: c.replied || 0,
                pos: c.positives || 0, mtg: c.meetings || 0,
                active: String(c.status || "").toUpperCase() === "ACTIVE" };
-    }).filter(function (c) { return c.sent >= minSent; });
+    }).filter(function (c) { return c.sent >= 500; });
   }
   rows.sort(function (a, b) {
-    return (b.mtg - a.mtg) || (b.pos - a.pos) ||
+    return ((b.mtg || 0) - (a.mtg || 0)) || ((b.pos || 0) - (a.pos || 0)) ||
            ((b.sent ? b.replied / b.sent : 0) - (a.sent ? a.replied / a.sent : 0));
   });
   var top = rows.slice(0, 8);
@@ -600,8 +586,8 @@ function renderRank() {
   if (!top.length) return false;   // empty widgets never render (Bjion 2026-08-16)
   var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
   top.forEach(function (c, i) {
-    var perPos = c.pos > 0 ? Math.round(c.sent / c.pos) : null;
-    var perMtg = c.mtg > 0 ? Math.round(c.sent / c.mtg) : null;
+    var perPos = (c.pos > 0 && c.sent != null) ? Math.round(c.sent / c.pos) : null;
+    var perMtg = (c.mtg > 0 && c.sent != null) ? Math.round(c.sent / c.mtg) : null;
     s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
       '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
       (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
@@ -613,7 +599,7 @@ function renderRank() {
   });
   $("rank-rows").innerHTML = s;
   var pick = top.filter(function (c) { return c.mtg > 0 || c.pos > 0; })[0];
-  $("rank-take").textContent = pick ? "“" + escq(pick.name.length > 64 ? pick.name.slice(0, 62) + "…" : pick.name) + "” is working best right now." : "";
+  $("rank-take").textContent = pick ? "“" + escq(pick.name.length > 64 ? pick.name.slice(0, 62) + "…" : pick.name) + "” worked best over this range." : "";
   return true;
 }
 
@@ -630,10 +616,13 @@ function renderOffer() {
   var windowable = !!(baseList.length &&
                       baseList.some(function (o) { return o[8] && o[8].length; }) &&
                       Object.keys(byId).length);
+  // a range report never shows all-time offer pricing: with no range campaign
+  // data to re-price against, the card hides rather than borrowing lifetime.
+  if (R.campaigns_scope === "range" && !windowable) return false;
   var offerList = baseList, windowed = false;
   if (windowable) {
-    var N = R.window_days;
-    var minSentO = Math.max(500, Math.round(2000 * N / 30));
+    var N = R.range_days || R.window_days;
+    var minSentO = Math.max(300, Math.round(2000 * N / 30));
     var rows2 = [];
     baseList.forEach(function (o) {
       var ids = o[8] || [];
@@ -667,7 +656,7 @@ function renderOffer() {
   box.innerHTML = s;
   if (windowed && offers.length && offers[0][4] != null) {
     $("offer-take").textContent = "The " + String(offers[0][0]).toLowerCase() +
-      " ask is the cheapest way to a positive reply right now.";
+      " ask was the cheapest way to a positive reply over this range.";
     $("offer-take-row").style.display = "";
   } else $("offer-take-row").style.display = "none";
   return true;
@@ -774,21 +763,26 @@ function personName(r) {
     .map(function (w) { return w[0].toUpperCase() + w.slice(1); }).join(" ");
 }
 function renderReplied() {
-  // one feed: positive replies + campaign launches, newest day first
-  // (replies before launches inside a day — the yeses are the headline)
+  // one feed, newest day first: positive replies (the headline), then the
+  // campaigns that launched that day, then existing campaigns that took on new
+  // prospects. Sort order inside a day keeps the yeses on top.
+  var ORD = { reply: 0, launch: 1, addition: 2 };
   var events = (R.who_replied || []).map(function (r) { return { t: "reply", d: r.date, r: r }; })
-    .concat((R.launches || []).map(function (l) { return { t: "launch", d: l.date, l: l }; }));
+    .concat((R.launches || []).map(function (l) { return { t: "launch", d: l.date, l: l }; }))
+    .concat((R.additions || []).map(function (a) { return { t: "addition", d: a.date, a: a }; }));
   if (!events.length) return false;
   events.sort(function (a, b) {
     if (a.d !== b.d) return a.d < b.d ? 1 : -1;
-    return (a.t === "launch") - (b.t === "launch");
+    return ORD[a.t] - ORD[b.t];
   });
-  var nR = (R.who_replied || []).length, nL = (R.launches || []).length;
+  var nR = (R.who_replied || []).length, nL = (R.launches || []).length,
+      nA = (R.additions || []).length,
+      addTot = (R.additions || []).reduce(function (s, a) { return s + (a.count || 0); }, 0);
   $("rep-kick").textContent =
-    (nR ? nR + " positive " + (nR === 1 ? "reply" : "replies") : "") +
-    (nR && nL ? " · " : "") +
-    (nL ? nL + (nL === 1 ? " campaign launched" : " campaigns launched") : "") +
-    " · newest first";
+    [nR ? nR + " positive " + (nR === 1 ? "reply" : "replies") : "",
+     nL ? nL + (nL === 1 ? " campaign launched" : " campaigns launched") : "",
+     nA ? fmtN(addTot) + " new prospect" + (addTot === 1 ? "" : "s") + " added" : ""]
+      .filter(Boolean).join(" · ") + " · newest first";
   var h = "", lastDay = "", k = 0;
   events.forEach(function (ev) {
     if (ev.d !== lastDay) {
@@ -798,9 +792,20 @@ function renderReplied() {
     }
     var TICK = '<span class="tico ok"><svg viewBox="0 0 24 24" fill="none"><path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>';
     var ROCKET = '<span class="tico rk"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.09 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.09-1.62 0-5 0-5"/></svg></span>';
+    var PEOPLE = '<span class="tico add"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6M22 11h-6"/></svg></span>';
     if (ev.t === "launch") {
+      var lc = ev.l.count || 0;
       h += '<div class="launch">' + ROCKET + '<span class="ln">“' +
-        escq(ev.l.campaign) + "” started sending</span></div>";
+        escq(ev.l.campaign) + "” launched" +
+        (lc ? " to <b>" + fmtN(lc) + "</b> new prospect" + (lc === 1 ? "" : "s") : "") +
+        "</span></div>";
+      return;
+    }
+    if (ev.t === "addition") {
+      var cnt = ev.a.count || 0;
+      h += '<div class="launch">' + PEOPLE + '<span class="ln"><b>' + fmtN(cnt) +
+        "</b> new prospect" + (cnt === 1 ? "" : "s") + " added to “" +
+        escq(ev.a.campaign) + "”</span></div>";
       return;
     }
     var r = ev.r;
