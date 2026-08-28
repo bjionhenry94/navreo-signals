@@ -27,6 +27,14 @@ envVarGroups:
         sync: false
       - key: NOTION_API_KEY
         sync: false
+      # Canonical public base URL the tool builds links off (setter reply links,
+      # notification/Slack links, campaign + strategy-board share links). Render
+      # custom domain; navreo-signals.onrender.com stays live as a fallback.
+      # Cutover 2026-08-28. Deploy this value only AFTER app.navreo.ai resolves
+      # and its TLS cert is green — until this var is set the code falls back to
+      # onrender.com, so shipping the code ahead of the DNS is harmless.
+      - key: SIGNALS_BASE_URL
+        value: https://app.navreo.ai
 
 services:
   # The web app + /api. Render injects $PORT; server.py binds 0.0.0.0.

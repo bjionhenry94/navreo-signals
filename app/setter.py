@@ -7570,7 +7570,7 @@ def run_poll() -> dict:
 
 # ── live intake: Smartlead EMAIL_REPLY webhook ──────────────────────────────
 
-DEFAULT_BASE_URL = "https://navreo-signals.onrender.com"
+DEFAULT_BASE_URL = os.environ.get("SIGNALS_BASE_URL", "https://navreo-signals.onrender.com").rstrip("/")
 
 
 def _cron_token() -> str:
