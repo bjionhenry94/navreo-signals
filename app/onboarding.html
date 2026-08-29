@@ -999,15 +999,14 @@ function offCard(o,idx){var star=!!o.star;var editable=(o.src!=="drafted");
  return '<div class="ofr-ownwrap">'+card+'<div class="ofr-owntools"><button data-ownedit="'+idx+'">Edit wording</button><button data-owndel="'+idx+'">Remove</button></div></div>';}
 function offersIntro(){return '<div class="ofr-kick">What makes a good offer</div>'
  +'<div class="headline">An offer they’d feel <span class="date">silly ignoring</span>.</div>'
- +'<div class="subline">A 2-minute watch, then a few ideas to think about. Nothing to fill in — we shape the winner together on your call.</div>'
+ +'<div class="subline">A 2-minute watch, then a few ideas to star. Nothing to fill in.</div>'
  +'<div class="ob-body">'
  +'<button class="ofr-vid" data-loom aria-label="Play the 2-minute walkthrough"><span class="play">'+OSVG.play+'</span><span class="cap">What makes a good offer — Bjion, Navreo</span><span class="dur">2:14</span></button>'
  +'<div class="ofr-flip"><div class="ofr-side svc"><div class="lab">A service</div><div class="txt">“I design websites.”</div></div><div class="ofr-arrow">→</div><div class="ofr-side off"><div class="lab">An offer</div><div class="txt">“I’ll build your website — pay only when you’re happy.”</div></div></div>'
  +'<div class="ofr-trip"><div class="ofr-leg"><span class="ic">'+OSVG.shield+'</span><span class="h">Feels safe</span><span class="s">Low cost, low effort, quick — easy to say yes</span></div><div class="ofr-leg"><span class="ic">'+OSVG.bolt+'</span><span class="h">Easy to deliver</span><span class="s">Templated &amp; repeatable, so it works at scale</span></div><div class="ofr-leg"><span class="ic">'+OSVG.gem+'</span><span class="h">Feels valuable</span><span class="s">Solves a real pain and looks impressive</span></div></div>'
  +'<div class="ofr-tripnote">Like a tripod — <b>all three legs</b>, or it tips over.</div>'
  +'</div>'
- +'<div class="ofr-reassure">Nothing here is set in stone, and you don’t need the answers now — this just gives us a head start before your call.</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="2">In a rush? Skip straight to the ideas →</button></div>';}
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="2">Skip to the ideas →</button></div>';}
 function offersProof(){var grid=CASES.map(function(c){
  return '<div class="ofr-cs"><div class="ofr-cshead"><span class="ofr-badge '+oesc(c.mech)+'">'+oesc(OMECH[c.mech])+'</span><span class="ofr-csind">'+oesc(c.ind)+'</span></div>'
   +'<div class="ofr-csrow"><span class="ofr-cstag">Service</span><span class="ofr-cssvc">'+oesc(c.svc)+'</span></div>'
@@ -1016,28 +1015,24 @@ function offersProof(){var grid=CASES.map(function(c){
  return '<div class="ofr-skipbar"><button class="lk" data-offstep="0">← Watch the intro</button><button class="ofr-skip" data-offstep="2">Skip to the ideas →</button></div>'
  +'<div class="ofr-kick">Proof</div>'
  +'<div class="headline">The same move, <span class="date">every industry</span>.</div>'
- +'<div class="subline">Seven quick before-and-afters — a service turned into an offer, and what it did. Real campaigns, names changed. <b>Skim or skip</b> — yours gets built on the call.</div>'
+ +'<div class="subline">Seven before-and-afters from real campaigns. <b>Skim or skip.</b></div>'
  +'<div class="ob-body"><div class="ofr-csgrid">'+grid+'</div></div>'
- +'<div class="ofr-proofnote">Each number is real interested-reply or booked-meeting volume from a live campaign — the full context (list size, dates) comes on your call.</div>'+'<div class="ofr-reassure">Different industries, same three-legged offer — that’s the play we run for you.</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-offstep="2">See the ideas we drafted you →</button><span class="ob-t clock">just food for thought</span></div>';}
+ +'<div class="ofr-proofnote">Real reply and booking numbers from live campaigns.</div>'
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="2">See the ideas we drafted you →</button><span class="ob-t clock">~1 min</span></div>';}
 function offersExamples(){ensureIdeas();var n=offCount();
  var cards=S.ideas.map(function(o,idx){return offCard(o,idx);}).join("");
  return '<button class="linkbtn" data-offstep="1">← See the case studies</button>'
  +'<div class="headline">Ideas to <span class="date">think about</span>.</div>'
- +'<div class="subline">Just food for thought — nothing to fill in, nothing to lock in. Tap the ⭐ on any you like the look of to build a shortlist. We pick the real winner together on your call.</div>'
+ +'<div class="subline">Star any you like — none is fine. We pick the winner on your call.</div>'
  +'<div class="ob-body">'
- +'<div class="ofr-audrow"><label class="ofr-audlab" for="offAud">Who’s this for? <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink-3)">(optional)</span></label><input class="ob-inp" id="offAud" value="'+oatt(S.offerAudience||"")+'" placeholder="e.g. mid-size 3PLs — ops leaders"></div>'
- +'<div class="ofr-pickhelp">Star <b>none</b>, star <b>five</b> — totally up to you. This just gives you a head start.</div>'
  +'<div class="ofr-cards">'+cards+'</div>'
- +'<div class="ofr-add"><div class="ofr-addlab">Got your own idea, or want a fresh one?</div>'
-  +'<div class="ob-inprow"><input class="ob-inp" id="ownOffer" placeholder="Describe an offer you have in mind…"><button class="btn-ghost" data-ownadd>Add mine</button></div>'
-  +'<button class="ofr-gen" data-offgen>Out of ideas? Generate a fresh one for me →</button></div>'
+ +'<div class="ofr-add">'
+  +'<div class="ob-inprow"><input class="ob-inp" id="ownOffer" placeholder="Describe an offer you have in mind…"><button class="btn-ghost" data-ownadd>Mine</button><button class="btn-ghost" data-offgen>Generate</button></div></div>'
  +'<div class="ofr-shortbar">'+(n
-   ?('<span class="ofr-shortn"><b>'+n+'</b> on your shortlist</span><button class="btn-ghost" data-offcopy>📋 Copy shortlist</button>')
-   :('<span class="ofr-shortn muted">Nothing shortlisted yet — that’s completely fine</span>'))+'</div>'
- +'<div class="ofr-reassure">Nothing here is set in stone, and you don’t need any answers today — this just gives you (and us) a head start before your call.</div>'
+   ?('<span class="ofr-shortn"><b>'+n+'</b> shortlisted</span><button class="btn-ghost" data-offcopy>Copy</button>')
+   :('<span class="ofr-shortn muted">Nothing starred yet — that’s fine</span>'))+'</div>'
  +'</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-done="offers">'+(n?'Done — save my shortlist':'All done for now')+'</button><span class="ob-t clock">optional</span></div>';}
+ +'<div class="ob-foot2"><button class="btn-go" data-done="offers">'+(n?'Done':'All done for now')+'</button><span class="ob-t clock">optional</span></div>';}
 function planRow(id,b,s){var r=S.reacts[id]||"";
  return '<div class="drow"><span style="min-width:0"><span class="name">'+b+'</span><span class="mbcount" style="display:block;margin:2px 0 0">'+s+'</span></span>'
  +'<span class="status"><button class="prow2 mini '+(r==="up"?"":"")+'" data-react="'+id+':up" style="border-radius:8px'+(r==="up"?";border-color:var(--orange);background:var(--orange-100)":"")+'">👍</button> '
@@ -1082,7 +1077,7 @@ function heroView(){
  if(S.stage===0){
   var c=nextCard();if(!c)return "";
   var subs={infrastructure:"Do this first — it starts the 2-week clock that sets your launch date. Your real address never gets touched.",
-   offers:"A 2-minute watch on what makes a good offer, then a few ideas to mull over — shortlist any you like.",
+   offers:"What makes a good offer, plus a few ideas to star for your call.",
    slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
    home:"One page where everything lives. Worth a star.",
    block:"Clients, live deals, competitors — tell us who’s off-limits."};
@@ -1220,15 +1215,13 @@ function bindAll(){
  if(qreset)qreset.addEventListener("click",function(){S.q=0;save();render();});
  qa("[data-offstep]").forEach(function(b){b.addEventListener("click",function(){S.offerStep=+b.getAttribute("data-offstep");save();render();window.scrollTo(0,0);});});
  qa("[data-loom]").forEach(function(b){b.addEventListener("click",function(){toast("The 2-min walkthrough plays here in your live hub ▶");});});
- var offAud=document.getElementById("offAud");
- if(offAud)offAud.addEventListener("input",function(){S.offerAudience=offAud.value;save();});
- qa("[data-star]").forEach(function(b){b.addEventListener("click",function(){ensureIdeas();var ix=+b.getAttribute("data-star");if(S.ideas[ix]){S.ideas[ix].star=!S.ideas[ix].star;save();render();toast(S.ideas[ix].star?"Added to your shortlist ⭐":"Removed from your shortlist");}});});
+ qa("[data-star]").forEach(function(b){b.addEventListener("click",function(){ensureIdeas();var ix=+b.getAttribute("data-star");if(S.ideas[ix]){S.ideas[ix].star=!S.ideas[ix].star;save();render();toast(S.ideas[ix].star?"Starred ⭐":"Unstarred");}});});
  var ocopy=app.querySelector("[data-offcopy]");
- if(ocopy)ocopy.addEventListener("click",function(){var txt=shortlistText();var done=function(){toast("Shortlist copied — paste it anywhere for your call 📋");};var fail=function(){try{var ta=document.createElement("textarea");ta.value=txt;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.focus();ta.select();var ok=document.execCommand("copy");document.body.removeChild(ta);ok?done():toast("Couldn’t copy automatically — select the shortlist to copy it");}catch(e){toast("Couldn’t copy automatically — select the shortlist to copy it");}};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done,fail);}else{fail();}});
+ if(ocopy)ocopy.addEventListener("click",function(){var txt=shortlistText();var done=function(){toast("Copied 📋");};var fail=function(){try{var ta=document.createElement("textarea");ta.value=txt;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.focus();ta.select();var ok=document.execCommand("copy");document.body.removeChild(ta);ok?done():toast("Couldn’t copy automatically — select the shortlist to copy it");}catch(e){toast("Couldn’t copy automatically — select the shortlist to copy it");}};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done,fail);}else{fail();}});
  var oadd=app.querySelector("[data-ownadd]");
- if(oadd)oadd.addEventListener("click",function(){var i=document.getElementById("ownOffer");if(!i||!i.value.trim())return;var raw=i.value.trim();oadd.disabled=true;oadd.textContent="Tidying…";setTimeout(function(){ensureIdeas();var o=tidyOffer(raw);S.ideas.push({id:nid(),mech:o.mech,name:o.name,line:o.line,raw:o.raw,src:"yours",star:true});save();render();toast("Tidied into an offer and shortlisted — edit the wording any time ✎");},820);});
+ if(oadd)oadd.addEventListener("click",function(){var i=document.getElementById("ownOffer");if(!i||!i.value.trim())return;var raw=i.value.trim();oadd.disabled=true;oadd.textContent="Tidying…";setTimeout(function(){ensureIdeas();var o=tidyOffer(raw);S.ideas.push({id:nid(),mech:o.mech,name:o.name,line:o.line,raw:o.raw,src:"yours",star:true});save();render();toast("Added and starred ✓");},820);});
  var ogen=app.querySelector("[data-offgen]");
- if(ogen)ogen.addEventListener("click",function(){ensureIdeas();if(typeof S.genN!=="number")S.genN=0;var g=GENPOOL[S.genN%GENPOOL.length];S.genN++;S.ideas.push({id:nid(),mech:g.mech,name:g.name,line:g.line,src:"generated",star:false});save();render();toast("Fresh idea generated — star it if you like it, or generate another ✎");});
+ if(ogen)ogen.addEventListener("click",function(){ensureIdeas();if(typeof S.genN!=="number")S.genN=0;var g=GENPOOL[S.genN%GENPOOL.length];S.genN++;S.ideas.push({id:nid(),mech:g.mech,name:g.name,line:g.line,src:"generated",star:false});save();render();toast("Fresh idea added");});
  var oinp=document.getElementById("ownOffer");
  if(oinp)oinp.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();var b2=app.querySelector("[data-ownadd]");if(b2)b2.click();}});
  qa("[data-ownedit]").forEach(function(b){b.addEventListener("click",function(){S.editOwn=+b.getAttribute("data-ownedit");render();var t=document.getElementById("ownEdit");if(t)t.focus();});});
