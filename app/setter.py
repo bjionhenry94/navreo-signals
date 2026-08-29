@@ -15193,12 +15193,28 @@ def _redraft_training_pool(agent_id: str) -> int:
         answers = dict(doc.get("answers") or {})
         covers_at = _training_covers_at(doc)
         cases = list(doc.get("cases") or [])
-        # Fail-safe: a client that has NEVER sent round_ids (stale page,
-        # third-party caller) gets the old merge-only contract - we cannot
-        # know which cards are under its eyes, so we redraft none of them.
+        # A mid-round client sends its round_ids with every answer, so a None
+        # here means one of two things. If NO card has been rated yet
+        # (`answers` empty), no card is under the trainer's eyes: this is the
+        # pristine state right after the offer interview is submitted, before
+        # round 1 has opened. Redraft the head of the unanswered pool so the
+        # very FIRST round reflects the interview answers (fastloop fix
+        # 2026-08-29: the interview facts merged into the brain, but every
+        # pre-built pool card stayed stale, so round 1 ignored - and even
+        # contradicted - what the owner had just typed; the old branch redrew
+        # none here yet still advanced brain_covers_at, so the freshness gate
+        # opened round 1 on pre-interview drafts). If cards HAVE been rated, a
+        # missing round_ids is a stale page / third-party caller: keep the
+        # conservative merge-only contract and redraft none, since we cannot
+        # know which card is under its eyes.
         in_round_raw = doc.get("client_round_ids")
         if in_round_raw is None:
-            pool = []
+            if answers:
+                pool = []
+            else:
+                pool = [c for c in cases
+                        if not _is_case_answered(c.get("id"), answers)]
+                pool = pool[:TRAINING_REDRAFT_HORIZON]
         else:
             in_round = {str(x) for x in (in_round_raw or [])}
             pool = [c for c in cases
@@ -16398,6 +16414,24 @@ def route_training_interview(payload):
                     return 400, {"error": "No answers matched the current questions."}
                 target["answers"] = stored
                 target["answered_at"] = at
+                # Wire a booking URL straight into the agent's booking_link
+                # FIELD (fastloop fix 2026-08-29). The booking-link interview
+                # question tells the owner to "replace the current [BOOKING
+                # LINK]", but their answer previously only merged into the
+                # manual - and the drafter fills the [BOOKING LINK] placeholder
+                # from the booking_link field (_booking_link), never the manual
+                # - so a lead asking "what's your booking link?" still got the
+                # bare placeholder back. Capture the URL now and persist it to
+                # the field below (before the retrain reads the agent snapshot).
+                booking_url_ans = ""
+                for _qid, _ans in raw.items():
+                    _a = str(_ans or "").strip()
+                    _qt = by_id.get(str(_qid), "").lower()
+                    if "booking" in _qt and _a:
+                        _m = _URL_RE.findall(_a)
+                        if _m:
+                            booking_url_ans = _m[0].rstrip(".,;:!?)]}\"'")
+                            break
                 # ONE combined merge for the whole questionnaire - five
                 # separate gpt-5-mini merges would burn 5x the latency for the
                 # same manual (the digest already carries each Q&A verbatim in
@@ -16409,6 +16443,15 @@ def route_training_interview(payload):
                 doc["pending_merges"] = pending
                 doc["interviews"] = interviews[-12:]
                 _save_training(agent_id, doc)
+            # Persist the booking link onto the agent BEFORE kicking the retrain
+            # so the redraft's agent snapshot (and every future draft) fills the
+            # [BOOKING LINK] placeholder from the field. Partial save merges onto
+            # the stored doc, so nothing else on the agent is touched.
+            if booking_url_ans and booking_url_ans != str((_load_agent(agent_id) or {}).get("booking_link") or "").strip():
+                try:
+                    _save_agent({"id": agent_id, "booking_link": booking_url_ans})
+                except Exception:  # noqa: BLE001 - never fail the answer save on this
+                    pass
             if has_cases:
                 retrain = _kick_off_training_retrain(agent_id, redraft="pool" if share_token else True)
             else:
