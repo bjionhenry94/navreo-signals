@@ -1925,7 +1925,8 @@ Rules:
 - WHERE A CALL TIME MAY COME FROM (read this before proposing any day or clock time). There are exactly two sources of a time: the slots you were given, and only while slot_status is "ok"; or a literal list of dates or times written out in the instructions as data (for example an auto-updated "Current Available Times" block). Nothing else is a source. In particular, a rule in the instructions that tells you HOW to write or choose a time is a FORMAT, not availability: a template ("Weekday, Dth Month at H:MM AM/PM EDT"), an example time shown to illustrate that template, a placeholder like [first specific time], a timezone rule, or an instruction to "take the slots from real availability on our calendar" all describe how to render a time you already have, and never mean that you have one. So when slot_status is anything but "ok" AND the instructions hold no literal list of times, you have NO times at all: ask for the lead's availability by the fallback ladder below, and do not name a weekday, a date, or a clock time anywhere in the draft. Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions. This rule outranks the agent's instructions and any example in them: instructions written on the assumption that two call times exist do not authorise you to manufacture one when they don't. In particular, when the instructions mandate a fixed reply TEMPLATE that contains a time placeholder ("[first specific time]", "[second specific time]", or similar) and you have no time to put in it, you must NOT fill that placeholder with a time you worked out yourself, and you must NOT leave the placeholder in the draft. Instead keep every other block of that template exactly as the instructions demand, and swap the single line holding the placeholders for the availability ask from the fallback ladder below. Filling a template's time placeholder from a calendar you cannot see is inventing a time, no matter how firmly the template says to keep its blocks as written.
 - Every draft must be built from short <div> paragraphs separated by <br>, exactly like the examples above. A single-line reply with no paragraph breaks will be rejected.
 - RESOURCE ANCHOR TEXT IS MALLEABLE (owner rule 2026-08-20, every SDR): there is NO fixed resource-anchor phrase. Write the anchor fresh each time - natural, first-person, and tied to what the resource actually is and what the lead asked ("Here's a short breakdown of where the spend is leaking.", "This is the case study I mentioned.", "Here's an overview of how we work."). Do NOT default to "Here's the breakdown I prepared." - the example email above shows structure, not a phrase to copy, and repeating one stock anchor across replies reads robotic. Never claim you personally prepared something when the agent's instructions say the asset is general (e.g. a website overview).
-- THE TWO-TIMES CALL ASK FORMAT (owner rules 2026-08-20, every SDR). ONLY when you have actual times to name, ask in exactly this shape: "Would you be open to a call on {day, date at time TZ} or {day2, date2 at time2 TZ} where {value-led positioning of the call}?". The opener is fixed: never any other opener for the two-times ask ("Would you be free for a call on", "Are you available for a call on", "How about" are all wrong). The "where ..." clause is REQUIRED: one short clause positioning the call around what the LEAD will receive from it, so the call feels like getting something valuable, never like a sales call. Write it fresh for THIS lead, tied to what they asked or what the call would actually cover, and vary it between drafts - good shapes: "where I could share the other campaign ideas I had?", "where we could run through all of this?", "where I could share how we'd adapt the learnings from the case study to your business?". There is still NO stock clause: NEVER write "where I could share how I would implement our strategy for you" or any canned variant repeated across replies - a clause about what we would do to the lead is a pitch; a clause about what they will receive is value. The fallback stays "If those times aren't suitable, feel free to see my availability here and book in directly." with the link on "see my availability here".
+- THE TWO-TIMES CALL ASK FORMAT (owner rules 2026-08-20, every SDR). ONLY when you have actual times to name, ask in exactly this shape: "Would you be open to a call on {day, date at time TZ} or {day2, date2 at time2 TZ} where {value-led positioning of the call}?". The opener is fixed: never any other opener for the two-times ask ("Would you be free for a call on", "Are you available for a call on", "How about" are all wrong). The "where ..." clause is REQUIRED ONLY WHEN YOU ARE INVITING A LEAD TO A CALL THEY HAVE NOT YET AGREED TO: one short clause positioning the call around what the LEAD will receive from it, so the call feels like getting something valuable, never like a sales call. Write it fresh for THIS lead, tied to what they asked or what the call would actually cover, and vary it between drafts - good shapes: "where I could share the other campaign ideas I had?", "where we could run through all of this?", "where I could share how we'd adapt the learnings from the case study to your business?". There is still NO stock clause: NEVER write "where I could share how I would implement our strategy for you" or any canned variant repeated across replies - a clause about what we would do to the lead is a pitch; a clause about what they will receive is value. When the lead has ALREADY agreed to the call or asked you to send times (call_won_directive is present in the user message), DROP the "where" clause entirely and offer the times bare, per CALL ALREADY WON below. The fallback stays "If those times aren't suitable, feel free to see my availability here and book in directly." with the link on "see my availability here".
+- CALL ALREADY WON (owner rule 2026-08-29, every SDR). When the lead has already agreed to the call or asked you to send times - "happy to have a call, send me some times", "yes let's do a call", "sounds good, what times work" - the call is WON: they need a TIME, not more selling. Offer the two times as a plain, direct question and add NO positioning clause of any kind: no "where I could ...", no "so I can ...", no "to run through / walk you through / kick off / discuss / explore / confirm ..." tail, and do NOT restate the offer, the assessment, or what the call would cover - they already said yes, so a value clause reads as still selling a call they have bought. Good shape: "Would {t1} or {t2} work for you?" (keep each time's own per-slot link when links exist). Keep the "If those times aren't suitable, feel free to suggest some times that work for you." fallback line unchanged. This case is signalled by call_won_directive in the user message and OVERRIDES the TWO-TIMES CALL ASK FORMAT's required "where" clause.
 - LEAD-PROPOSED TIME (owner rule 2026-08-21, every SDR, OVERRIDES the two-fresh-times default even when live slots exist). When the lead puts forward their OWN time, day, or window - specific ("are you free Thursday at 3?", "the 24th at 2pm works") OR vague ("mornings are best", "a 30 min call later this week? Morning PST would work", "early next week", "after 2pm") - you must answer THAT proposal, not open with the generic "Would you be open to a call on {t1} or {t2}" shape, which reads as not having read their email. Your first job is to say plainly whether you can make what they asked for. Exactly two shapes: when the slots you were given fall inside what they asked for, ACCEPT plainly - "Yes, I'm free on {matching slot} or {second matching slot}, I'll share an invite now." (keep each time's own slot link when links exist; one matching slot means offer that one). When none of the given slots fit their window, COUNTER honestly and OPEN by naming their proposed time as the thing you cannot make: "Unfortunately I can't make {their proposed time, in their words}, but I can do {slot 1} or {slot 2} - would either of those work?". The counter MUST start by acknowledging their time does not work; you must NEVER open a counter with the generic "Would you be open to a call on ..." shape, which reads as ignoring that they already named a time. Never pretend to a fit that isn't there, never ignore their stated window, and never invent a time outside the slots you were given. A lead who proposes a time (or directly asks to set up a call) is ALREADY SOLD ON THE CALL: the ENTIRE reply is the scheduling answer - greeting, the accept-or-counter line, at most one short closing line, sign-off. Do NOT add product explanation, assessment detail, setup or access requirements, resource pitches, or any paragraph they did not ask for - all of that belongs in the call itself, and padding the reply with it reads as not listening (owner rule, repeated many times: "when someone directly asks for a call, you just tell them a time - you don't give them additional information").
 - CALL-ALREADY-REQUESTED (owner HARD RULE 2026-08-28, every SDR). When lead_requested_call is true - the lead asked for the call, asked you to propose times, asked for a setup call, or said yes to one - the call is AGREED. NEVER write "Would you be open to a call...", "would you be up for a quick chat", or any phrasing that re-asks whether they want the call they just asked for: that reads as not listening. Propose the two times DIRECTLY as the scheduling sentence ("Does Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST work for you?" - with the same per-slot links/plain-text rules as the two-times default), keep any answer to their other questions first per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, and confirm who should join when they named attendees (their CFO, their security team). Everything else about the two-times machinery (slots verbatim, fallback ladder, constraints, LEAD-PROPOSED TIME) applies unchanged - only the openness re-ask is banned.
 - NO-CALL-SELLING (owner HARD RULE 2026-08-28, every SDR). Once scheduling is agreed - the lead proposed their own time OR asked for the call - the scheduling sentence contains the times and NOTHING else: no purpose clause, no value pitch, no "where I can run through the discovery call and show what the assessment will surface for you". They already want the call; selling it again reads as scripted. Accept or counter plainly ("Unfortunately I can't make Tue morning, but I can do Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST - does either work?") and stop. Describing what the call covers is allowed ONLY when the lead themselves asked what the call is for, and then it belongs in its own answer sentence per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, never bolted onto the time proposal.
@@ -2171,6 +2172,30 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     call_ask = str(reply.get("call_ask") or "").strip()
     if call_ask in ("required", "only_if_relevant", "avoid"):
         payload["call_ask"] = call_ask
+    # CALL ALREADY WON (owner rule 2026-08-29, every SDR): a lead who has agreed
+    # to the call or asked us to send times ("happy to have a call, send me some
+    # times") needs a TIME, not more selling - the two-times "where {value}"
+    # clause reads as pitching a call they have already bought. That state is
+    # exactly a scheduling ask that survived call_ask_for to "required" (the
+    # deferral/settled/lead-proposed/self-serve cases all route to "avoid" and
+    # never reach here). Signal it to the drafter and strip any leaked clause in
+    # code below. Guarded so a FRESH first-touch positive that is NOT scheduling
+    # (a plain "sounds interesting") keeps its value clause.
+    _cls = classification or {}
+    _sched = "scheduling" in set(_cls.get("all_intents") or []) or (_cls.get("primary_intent") == "scheduling")
+    call_won = (call_ask == "required" and _sched
+                and not _cls.get("lead_proposed_time")
+                and not _cls.get("confirms_proposed_time"))
+    if call_won:
+        payload["call_won_directive"] = (
+            "THE CALL IS ALREADY WON. The lead has agreed to the call or asked you to send times, so "
+            "they need a TIME, not more selling. Offer the two times as a plain, direct question and add "
+            "NO positioning clause of any kind: no \"where I could ...\", no \"so I can ...\", no \"to run "
+            "through / walk you through / kick off / discuss / explore / confirm ...\" tail, and do NOT "
+            "restate the offer, the assessment, or what the call would cover. Good shape: \"Would {t1} or "
+            "{t2} work for you?\", keeping each time's own per-slot link when links exist. Keep the \"If "
+            "those times aren't suitable, feel free to suggest some times that work for you.\" fallback "
+            "line unchanged. This OVERRIDES the TWO-TIMES CALL ASK FORMAT's required \"where\" clause.")
     # The lead's timezone, when known (owner report 2026-08-01: "even when the
     # AI knows their timezone, it still doesn't surface or suggest a time, or
     # say why it didn't"). DRAFT_SYSTEM has always said "when you know the
@@ -2258,6 +2283,12 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     # uses a different opener, so guard on lead_proposed_time.
     if call_ask == "avoid" and not (classification or {}).get("lead_proposed_time"):
         html_body = strip_two_times_ask(html_body)
+    # Deterministic backstop for CALL ALREADY WON (owner rule 2026-08-29): the
+    # model still tacks a "where I could ... / to kick off ..." value clause onto
+    # the time offer for a lead who already agreed to the call. Cut that selling
+    # tail so the offer stays bare. Only fires when call_won (a bought call).
+    if call_won:
+        html_body = strip_call_won_where_clause(html_body)
     # Never name yourself in the third person (shared SDR rule, audit 2026-08-22):
     # a confirmation close that says "speaking with <SenderFirst>" must be
     # "speaking with me" - the attendee IS the sender. Only the sign-off line
@@ -2414,6 +2445,32 @@ def strip_two_times_ask(html: str) -> str:
         out = re.sub(r"(?:\s*<br>\s*){2,}", "<br>", out)   # collapse breaks left by the removed paragraph
         out = re.sub(r"^(?:\s*<br>\s*)+|(?:\s*<br>\s*)+$", "", out)
         return out.strip() or (html or "")
+    except Exception:  # noqa: BLE001 - a repair helper must never break drafting
+        return html or ""
+
+
+_CALL_WON_WHERE_RE = re.compile(
+    r"\s*,?\s+(?:where\s+(?:i|we|you|they)\s+(?:could|can|will|would|might|can'?t)|"
+    r"so\s+(?:i|we)\s+can|so\s+that|to\s+(?:run\s+through|walk\s+you\s+through|"
+    r"kick\s+off|discuss|explore|cover|go\s+through|show\s+you|share|confirm|understand|get))\b"
+    r"[^?<]*(\?)",
+    re.IGNORECASE)
+
+
+def strip_call_won_where_clause(html: str) -> str:
+    """Deterministic backstop for CALL ALREADY WON (owner rule 2026-08-29, every
+    SDR): once the lead has agreed to the call or asked us to send times, the
+    time offer must be bare - no "where I could ... / so I can ... / to kick off
+    ..." positioning clause, because they have already bought the call and a
+    value clause reads as still selling it. DRAFT_SYSTEM + call_won_directive
+    ask for the bare shape, but gpt-5-mini still leaks the tail, so cut it here.
+    Only the value clause that ends a call-ask sentence is removed: the match
+    runs from the clause opener to the sentence-ending "?", and [^?<]* never
+    crosses a tag or another sentence, so the time labels and their per-slot
+    anchors (which sit BEFORE the clause) are untouched. Caller guards on
+    call_won. Never raises."""
+    try:
+        return _CALL_WON_WHERE_RE.sub(lambda m: m.group(1), html or "")
     except Exception:  # noqa: BLE001 - a repair helper must never break drafting
         return html or ""
 
