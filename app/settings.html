@@ -66,13 +66,26 @@ table.ws tr:last-child td { border-bottom: none; }
   <nav class="submenu">
     <h2>Settings</h2>
     <div class="items">
-      <a href="settings.html" class="active">Workspaces</a>
+      <a href="settings.html" class="active">Clients</a>
       <a href="infrastructure.html">Email Infrastructure</a>
       <a href="lists.html">All prospect lists</a>
     </div>
   </nav>
   <main class="main">
-    <div class="page-head"><h1>Settings</h1></div>
+    <div class="page-head"><h1>Clients</h1></div>
+
+    <section class="section" id="ob-section">
+      <h2>Onboarding submissions</h2>
+      <p class="sub">Every client working through the onboarding hub, saved live
+      to Navreo as they go. Check in on progress, spot anyone stalled, and open a
+      submission to see exactly what they've filled in. Nothing here is lost if a
+      client closes their tab — their progress is on the server.</p>
+      <div class="ob-actions" style="display:flex;gap:10px;align-items:center;margin:2px 0 12px">
+        <button class="btn sm" id="ob-refresh">Refresh</button>
+        <span class="hint" id="ob-count"></span>
+      </div>
+      <div id="ob-table"><div class="loading">Loading onboarding clients…</div></div>
+    </section>
 
     <section class="section" id="ws-section">
       <h2>Client workspaces</h2>
@@ -116,6 +129,17 @@ table.ws tr:last-child td { border-bottom: none; }
     <div class="row">
       <button class="btn sm" id="rm-cancel">Cancel</button>
       <button class="btn danger sm" id="rm-go" disabled>Delete everything</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay hidden" id="ob-overlay">
+  <div class="modal" style="max-width:640px;text-align:left">
+    <h3 id="ob-title">Onboarding submission</h3>
+    <div id="ob-detail" style="max-height:60vh;overflow:auto"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn sm" id="ob-close">Close</button>
+      <a class="btn primary sm" id="ob-open" href="#" target="_blank" rel="noopener">Open onboarding as this client</a>
     </div>
   </div>
 </div>
@@ -284,8 +308,94 @@ demoSwitch.addEventListener("change", async () => {
   }
 });
 
+// ── Onboarding submissions (CSM Clients view) ───────────────────────────────
+let OB_ROWS = [];
+function obEsc(s){ return (typeof esc==="function") ? esc(String(s??"")) :
+  String(s??"").replace(/[&<>"]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+function obAgo(iso){
+  if(!iso) return "–";
+  const t = Date.parse(iso); if(!t) return "–";
+  const s = Math.max(0,(Date.now()-t)/1000);
+  if(s<60) return "just now";
+  if(s<3600) return Math.floor(s/60)+"m ago";
+  if(s<86400) return Math.floor(s/3600)+"h ago";
+  return Math.floor(s/86400)+"d ago";
+}
+const OB_STAGES = ["Set-up","First call","Plan","Emails","Ready","Launch"];
+async function obLoad(){
+  const box = document.getElementById("ob-table");
+  try{
+    const r = await fetch("/api/onboarding/submissions",{cache:"no-store"});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    OB_ROWS = (await r.json()).submissions || [];
+  }catch(e){
+    box.innerHTML = `<div class="empty">Could not load onboarding clients (${obEsc(String(e))}). Refresh to retry.</div>`;
+    return;
+  }
+  document.getElementById("ob-count").textContent =
+    OB_ROWS.length ? `${OB_ROWS.length} client${OB_ROWS.length>1?"s":""} onboarding` : "";
+  if(!OB_ROWS.length){
+    box.innerHTML = `<div class="empty">No onboarding clients yet. They'll appear here the moment anyone starts the onboarding hub.</div>`;
+    return;
+  }
+  const rows = OB_ROWS.map((c,i)=>{
+    const submitted = c.status==="submitted";
+    const pill = submitted
+      ? `<span class="pill on">Submitted</span>`
+      : `<span class="pill off">In progress</span>`;
+    const stage = OB_STAGES[Math.min(Math.max(c.stage||0,0),5)] || "–";
+    return `<tr>
+      <td><div class="ws-name">${obEsc(c.name)}</div><div class="ws-slug">${obEsc(c.id)}</div></td>
+      <td>${obEsc(stage)} · ${c.progress||0}%</td>
+      <td>${pill}</td>
+      <td>${obEsc(obAgo(c.updated_at))}</td>
+      <td style="text-align:right"><button class="btn sm ob-view" data-i="${i}">View</button></td>
+    </tr>`;
+  }).join("");
+  box.innerHTML = `<table class="ws">
+    <thead><tr><th>Client</th><th>Progress</th><th>Status</th><th>Last saved</th><th></th></tr></thead>
+    <tbody>${rows}</tbody></table>`;
+  box.querySelectorAll("button.ob-view").forEach(b=>
+    b.addEventListener("click",()=>obOpen(OB_ROWS[+b.dataset.i])));
+}
+async function obOpen(row){
+  const ov = document.getElementById("ob-overlay");
+  document.getElementById("ob-title").textContent = row.name || "Onboarding submission";
+  document.getElementById("ob-open").href = "onboarding.html?client="+encodeURIComponent(row.id);
+  const box = document.getElementById("ob-detail");
+  box.innerHTML = `<div class="loading">Loading…</div>`;
+  ov.classList.remove("hidden");
+  let doc = {};
+  try{
+    const r = await fetch("/api/onboarding/draft?id="+encodeURIComponent(row.id),{cache:"no-store"});
+    const j = await r.json();
+    doc = (j && j.draft && j.draft.doc) || {};
+  }catch(e){ /* fall back to summary only */ }
+  const stage = OB_STAGES[Math.min(Math.max(doc.stage||row.stage||0,0),5)] || "–";
+  const senders = (doc.senders||[]).map(s=>`${obEsc(s.name||"—")}${s.title?" · "+obEsc(s.title):""}`).join("<br>") || "—";
+  const offerList = (doc.own||[]).map(o=>obEsc((o&&o.line)||(o&&o.name)||o)).filter(Boolean);
+  const picked = Object.keys(doc.offers||{}).filter(k=>doc.offers[k]);
+  const offers = offerList.concat(picked.map(obEsc)).join(", ") || "—";
+  const notes = Object.values(doc.notes||{}).filter(Boolean).map(obEsc).join("<br>") || "—";
+  const field = (label,val)=>`<div style="margin:10px 0"><div style="font-size:12px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em">${label}</div><div style="color:var(--ink)">${val}</div></div>`;
+  box.innerHTML =
+    field("Status", row.status==="submitted"?"Submitted":"In progress")
+    + field("Stage", `${obEsc(stage)} — ${row.progress||0}% complete`)
+    + field("Audience", obEsc(doc.offerAudience||"—"))
+    + field("Senders", senders)
+    + field("Offers", offers)
+    + field("Redirect / domains", obEsc(doc.redirect||Object.keys(doc.domainPicks||{}).join(", ")||"—"))
+    + field("Notes on emails", notes)
+    + field("Last saved", obEsc(obAgo(row.updated_at)) + (row.created_at?` · started ${obEsc(obAgo(row.created_at))}`:""));
+}
+function obCloseDetail(){ document.getElementById("ob-overlay").classList.add("hidden"); }
+document.getElementById("ob-close").addEventListener("click", obCloseDetail);
+document.getElementById("ob-overlay").addEventListener("click", e=>{ if(e.target===e.currentTarget) obCloseDetail(); });
+document.getElementById("ob-refresh").addEventListener("click", obLoad);
+
 load();
 loadDemo();
+obLoad();
 </script>
 </body>
 </html>

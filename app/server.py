@@ -27,6 +27,7 @@ import ssl
 import sys
 import time
 import urllib.request
+import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -2371,6 +2372,134 @@ def read_json_list(path: Path, strict: bool = False) -> list:
         r = _pg_docs("clients", only_doc=True, strict=strict)
         return r if r is not None else _file_list(path)
     return _file_list(path)
+
+
+# ---------------------------------------------------------------------------
+# Onboarding drafts — server-side autosave for app/onboarding.html
+# ---------------------------------------------------------------------------
+# The onboarding hub used to keep progress in the browser's localStorage only,
+# so clearing the browser / switching device lost everything. We now mirror
+# every save server-side, keyed by a per-client id, so an in-progress onboarding
+# survives a closed tab or a new machine and a CSM sees it in Settings ▸ Clients.
+# Storage follows the repo's id/jsonb-doc convention (campaign_drafts / sources /
+# clients). The whole record — name, stage, status, timestamps AND the raw hub
+# state — lives inside `doc`, so no extra columns are needed. Belt-and-braces:
+# Supabase when reachable, else a local JSON file, so a save has to fail in three
+# places (Supabase, server file, browser localStorage) at once to lose anything.
+ONBOARDING_DRAFTS_FILE = APP_DIR / "data" / "onboarding_drafts.json"
+
+
+def _ob_sb_on() -> bool:
+    return bool(KEYS.get("SUPABASE_URL") and KEYS.get("SUPABASE_SERVICE_ROLE_KEY"))
+
+
+def _ob_now() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _ob_file_read() -> dict:
+    try:
+        if ONBOARDING_DRAFTS_FILE.exists():
+            d = json.loads(ONBOARDING_DRAFTS_FILE.read_text())
+            return d if isinstance(d, dict) else {}
+    except (ValueError, OSError):
+        pass
+    return {}
+
+
+def _ob_file_write(d: dict) -> None:
+    ONBOARDING_DRAFTS_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ONBOARDING_DRAFTS_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(d, indent=1))
+    os.replace(tmp, ONBOARDING_DRAFTS_FILE)
+
+
+def _ob_id_ok(cid: str) -> bool:
+    return bool(cid) and len(cid) <= 128 and re.fullmatch(r"[A-Za-z0-9._:-]+", cid) is not None
+
+
+def _ob_record(cid: str) -> dict | None:
+    if _ob_sb_on():
+        rows = sb("GET", f"onboarding_drafts?id=eq.{urllib.parse.quote(cid, safe='')}&select=doc")
+        if isinstance(rows, list):
+            return rows[0]["doc"] if rows and isinstance(rows[0], dict) and rows[0].get("doc") else None
+    return _ob_file_read().get(cid)
+
+
+def onboarding_draft_upsert(p: dict):
+    """Create or update one client's onboarding record. Idempotent by id."""
+    cid = str(p.get("id") or "").strip()
+    if not _ob_id_ok(cid):
+        return 400, {"ok": False, "message": "a valid client id is required"}
+    doc = p.get("doc")
+    if not isinstance(doc, dict):
+        return 400, {"ok": False, "message": "doc must be an object"}
+    now = _ob_now()
+    prev = _ob_record(cid) or {}
+    name = (str(p.get("name") or "")).strip() or (str(doc.get("clientName") or "")).strip() \
+        or (str(doc.get("sigCompany") or "")).strip() or prev.get("name") or "Untitled client"
+    status = (str(p.get("status") or "")).strip() or prev.get("status") or "draft"
+    try:
+        stage = int(p.get("stage") if p.get("stage") is not None else doc.get("stage", 0))
+    except (TypeError, ValueError):
+        stage = 0
+    rec = {
+        "id": cid, "name": name, "stage": stage, "status": status,
+        "created_at": prev.get("created_at") or now, "updated_at": now, "doc": doc,
+    }
+    if status == "submitted" and not prev.get("submitted_at"):
+        rec["submitted_at"] = now
+    elif prev.get("submitted_at"):
+        rec["submitted_at"] = prev["submitted_at"]
+
+    wrote = "file"
+    if _ob_sb_on():
+        ok = sb("POST", "onboarding_drafts?on_conflict=id",
+                [{"id": cid, "doc": rec}],
+                prefer="resolution=merge-duplicates,return=minimal")
+        if ok is not None:
+            wrote = "supabase"
+        else:
+            d = _ob_file_read(); d[cid] = rec; _ob_file_write(d)
+            wrote = "file-fallback"
+    else:
+        d = _ob_file_read(); d[cid] = rec; _ob_file_write(d)
+    return 200, {"ok": True, "id": cid, "updated_at": now,
+                 "created_at": rec["created_at"], "store": wrote}
+
+
+def onboarding_draft_get(cid: str):
+    cid = str(cid or "").strip()
+    if not _ob_id_ok(cid):
+        return 400, {"ok": False, "message": "a valid client id is required"}
+    return 200, {"ok": True, "draft": _ob_record(cid)}
+
+
+def _ob_summary(rec: dict) -> dict:
+    doc = rec.get("doc") if isinstance(rec.get("doc"), dict) else {}
+    stage = rec.get("stage", doc.get("stage", 0)) or 0
+    pct = 100 if rec.get("status") == "submitted" else round(min(max(stage, 0), 5) / 5 * 100)
+    return {
+        "id": rec.get("id"), "name": rec.get("name") or "Untitled client",
+        "stage": stage, "status": rec.get("status") or "draft", "progress": pct,
+        "created_at": rec.get("created_at"), "updated_at": rec.get("updated_at"),
+        "submitted_at": rec.get("submitted_at"),
+        "senders": len(doc.get("senders") or []), "company": doc.get("sigCompany") or "",
+    }
+
+
+def onboarding_drafts_list():
+    """Every onboarding client, newest-touched first — the CSM Clients view."""
+    recs = []
+    if _ob_sb_on():
+        rows = sb("GET", "onboarding_drafts?select=doc&order=updated_at.desc")
+        recs = [r["doc"] for r in rows if isinstance(r, dict) and isinstance(r.get("doc"), dict)] \
+            if isinstance(rows, list) else list(_ob_file_read().values())
+    else:
+        recs = list(_ob_file_read().values())
+    recs = [r for r in recs if isinstance(r, dict) and r.get("id")]
+    recs.sort(key=lambda r: r.get("updated_at") or "", reverse=True)
+    return 200, {"ok": True, "submissions": [_ob_summary(r) for r in recs], "count": len(recs)}
 
 
 # ── endpoint-level read caches (G1) ───────────────────────────────────────
@@ -23030,6 +23159,17 @@ class Handler(SimpleHTTPRequestHandler):
             # Settings page: connected Smartlead workspaces (keys masked to
             # last 4 — the raw key never leaves the server).
             return self._json(api_workspaces_list())
+        if path == "/api/onboarding/submissions":
+            # CSM "Clients" view: every onboarding client + progress/status.
+            status, body = onboarding_drafts_list()
+            return self._json(body, status)
+        if path == "/api/onboarding/draft":
+            # Resume an in-progress onboarding: the hub fetches its own record
+            # on load so a new tab/device picks up where the client left off.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            status, body = onboarding_draft_get((q.get("id") or [""])[0])
+            return self._json(body, status)
         if path == "/api/campaigns-unified":
             # ONE row per outbound campaign account-wide (Smartlead + HeyReach
             # + unlinked drafts). Homepage list source. SWR-cached ~10min.
@@ -23717,6 +23857,19 @@ class Handler(SimpleHTTPRequestHandler):
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
             body, status = cockpit_set_assignment(p, self._authed_email())
+            return self._json(body, status)
+        if path == "/api/onboarding/draft":
+            # Onboarding hub autosave: the client's whole in-progress state,
+            # upserted by client id on every change (debounced client-side, and
+            # flushed via sendBeacon on tab close). Idempotent — safe to retry.
+            length = int(self.headers.get("Content-Length") or 0)
+            if length > 524288:
+                return self._json({"ok": False, "message": "payload too large"}, 413)
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            status, body = onboarding_draft_upsert(p)
             return self._json(body, status)
         if path in ("/api/workspaces", "/api/workspaces/delete"):
             # client-workspaces-hub: add (key validated live, then stored) /

@@ -533,6 +533,7 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 <div class="ob-scrim" id="scrim"></div>
 <div class="ob-toast" id="toast"></div>
 <div class="ob-demo">
+  <span id="obSave" data-st="idle" title="Your progress saves automatically to Navreo — you can safely close this and come back" style="font-size:11px;color:#8a8378;margin-right:8px;align-self:center"></span>
   <button id="demoBtn" title="Demo only — clients never see this">▸ preview · demo only</button>
   <button id="resetBtn" title="Reset the demo">↺</button>
 </div>
@@ -589,7 +590,19 @@ var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,
  senders:[{name:"Sarah Chen",title:"VP Sales"},{name:"Mike Torres",title:"Head of Growth"}],
  redirect:"",domainPicks:{}};
 var S=JSON.parse(JSON.stringify(FRESH));
-try{var raw=localStorage.getItem("nav_onboarding_v1");if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=p;}}catch(e){}
+
+/* ---- client identity + server-side autosave (surfaced in Settings ▸ Clients).
+   Progress saves to this browser AND to Navreo's server on every change, so a
+   closed tab or a new device never loses an in-progress onboarding. Open
+   ?client=<id> to resume one, ?new=1 for a fresh client (optionally &name=). */
+var OB_Q=(function(){var o={};location.search.replace(/^\?/,"").split("&").forEach(function(kv){if(!kv)return;var i=kv.indexOf("=");var k=decodeURIComponent(i<0?kv:kv.slice(0,i));o[k]=i<0?"":decodeURIComponent(kv.slice(i+1).replace(/\+/g," "));});return o;})();
+function obUuid(){try{if(window.crypto&&crypto.randomUUID)return crypto.randomUUID();}catch(e){}return "ob-"+Date.now().toString(36)+Math.random().toString(36).slice(2,10);}
+var OB_FORCE_NEW=(OB_Q["new"]==="1"||OB_Q["new"]==="true");
+var OB_CID=(OB_Q.client||"").trim();
+var OB_SCOPED=(!!OB_CID||OB_FORCE_NEW);
+if(OB_FORCE_NEW&&!OB_CID)OB_CID=obUuid();
+var LS_KEY=OB_SCOPED?("nav_onboarding_v1:"+OB_CID):"nav_onboarding_v1";
+if(!OB_FORCE_NEW){try{var raw=localStorage.getItem(LS_KEY);if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=p;}}catch(e){}}
 /* offers-section state migration: own[] may hold legacy strings; normalise to offer objects + default new fields. */
 if(!Array.isArray(S.own))S.own=[];
 S.own=S.own.map(function(o){return (o&&typeof o==="object")?o:{name:String(o),line:String(o),mech:"lead_magnet",raw:String(o),pick:true};});
@@ -601,7 +614,43 @@ for(var _k in FRESH){if(!(_k in S))S[_k]=JSON.parse(JSON.stringify(FRESH[_k]));}
 if(!Array.isArray(S.senders)||!S.senders.length)S.senders=JSON.parse(JSON.stringify(FRESH.senders));
 if(!S.domainPicks||typeof S.domainPicks!=="object")S.domainPicks={};
 if(typeof S.redirect!=="string")S.redirect="";
-function save(){try{localStorage.setItem("nav_onboarding_v1",JSON.stringify(S));}catch(e){}}
+if(!S.clientId)S.clientId=OB_CID||obUuid();
+OB_CID=S.clientId;
+if(OB_FORCE_NEW){if(OB_Q.name)S.clientName=OB_Q.name;if(OB_Q.company&&!S.clientName)S.clientName=OB_Q.company;}
+
+var _obTimer=null,_obLast="";
+function obSetStatus(st){var el=document.getElementById("obSave");if(!el)return;
+ var m={saving:"Saving…",saved:"Saved ✓",error:"Saved on this device — retrying…"};
+ el.textContent=m[st]||"";el.setAttribute("data-st",st);el.style.color=(st==="saved")?"#3f9e5a":(st==="error")?"#c2683a":"#8a8378";}
+function obPayload(){return {id:S.clientId,name:(S.clientName||S.offerAudience||""),stage:S.stage,status:(S.stage>=5?"submitted":"draft"),doc:S};}
+function obSync(){var body;try{body=JSON.stringify(obPayload());}catch(e){return;}
+ if(body===_obLast){obSetStatus("saved");return;}
+ obSetStatus("saving");
+ fetch("/api/onboarding/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:body})
+  .then(function(r){if(!r.ok)throw r.status;return r.json();})
+  .then(function(){_obLast=body;obSetStatus("saved");})
+  .catch(function(){obSetStatus("error");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,4000);});}
+function scheduleSync(){obSetStatus("saving");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,700);}
+function obFlush(){try{var body=JSON.stringify(obPayload());if(body===_obLast)return;
+ if(navigator.sendBeacon&&navigator.sendBeacon("/api/onboarding/draft",new Blob([body],{type:"application/json"}))){_obLast=body;return;}}catch(e){}
+ obSync();}
+window.addEventListener("pagehide",obFlush);
+document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden")obFlush();});
+
+function save(){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}scheduleSync();}
+
+/* On load, pull any server-side progress for this client and adopt it when the
+   browser copy is pristine or behind — so a fresh device resumes cleanly. */
+function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
+ fetch("/api/onboarding/draft?id="+encodeURIComponent(S.clientId),{cache:"no-store"})
+  .then(function(r){return r.ok?r.json():null;})
+  .then(function(j){if(!j||!j.draft||!j.draft.doc)return;var sv=j.draft.doc;
+   var pristine=(S.stage===0&&Object.keys(S.done||{}).length===0);
+   if((sv.stage||0)>(S.stage||0)||pristine){
+    for(var k in FRESH){if(!(k in sv))sv[k]=JSON.parse(JSON.stringify(FRESH[k]));}
+    sv.clientId=S.clientId;S=sv;try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}
+    if(typeof render==="function")render();obSetStatus("saved");}
+  }).catch(function(){});}
 
 var _DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function fmtD(d){return _DOW[d.getDay()]+" "+_MON[d.getMonth()]+" "+d.getDate();}
@@ -641,7 +690,7 @@ function demoSkip(){
  else if(S.stage===4){S.stage=5;S.trained=12;S.mikeOk=true;toast("Everything’s ready. Launching "+(S.slotMoves?"Thursday":"Monday"));}
  save();go();render();
 }
-function resetAll(){S=JSON.parse(JSON.stringify(FRESH));save();go();render();toast("Demo reset");}
+function resetAll(){var _cid=S.clientId,_cn=S.clientName;S=JSON.parse(JSON.stringify(FRESH));S.clientId=_cid||obUuid();if(_cn)S.clientName=_cn;save();go();render();toast("Demo reset");}
 
 /* ---------- overlays (chain + journey) ---------- */
 var scrim=document.getElementById("scrim");
@@ -1265,6 +1314,7 @@ document.getElementById("resetBtn").addEventListener("click",resetAll);
 window.addEventListener("hashchange",render);
 window.addEventListener("message",function(e){try{if(e&&e.data&&e.data.ibHeight){var f=document.querySelector(".ibframe iframe");if(f)f.style.height=(e.data.ibHeight+2)+"px";}}catch(_){}});
 render();
+obRestore();
 })();
 </script>
 </body>
