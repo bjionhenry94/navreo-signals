@@ -1173,6 +1173,26 @@ CTX_ALL_GOOD = {"red_flag_hits": [], "category": None, "first_touch": True, "slo
                 "autopilot_enabled": True}
 
 
+def test_capture_booking_link_from_feedback():
+    # A trainer rewrite carrying a scheduling URL wires an EMPTY booking link
+    # (owner rule 2026-08-29); a wired agent is never overwritten; a non-
+    # scheduling URL captures nothing.
+    a = setter._save_agent({"name": "LinkCapture", "enabled": True, "booking_link": ""})
+    url = setter.capture_booking_link_from_feedback(
+        a["id"], "<div>Hi Jordan,</div><br><div>My booking link is calendly.com/test</div>")
+    check("booking-link capture: bare calendly.com wires https URL",
+          url == "https://calendly.com/test", url)
+    check("booking-link capture: persisted on the agent",
+          setter._booking_link(setter._load_agent(a["id"])) == "https://calendly.com/test", None)
+    again = setter.capture_booking_link_from_feedback(a["id"], "book me at https://cal.com/other")
+    check("booking-link capture: wired agent never overwritten", again == "",
+          setter._booking_link(setter._load_agent(a["id"])))
+    b = setter._save_agent({"name": "LinkCapture2", "enabled": True, "booking_link": ""})
+    none = setter.capture_booking_link_from_feedback(b["id"], "see https://example.com/page and greenshift.app")
+    check("booking-link capture: non-scheduling URL ignored", none == "" and
+          setter._booking_link(setter._load_agent(b["id"])) == "", none)
+
+
 def test_decide_matrix():
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, CTX_ALL_GOOD)
     check("decide: autopilot + simple + conf .95 -> auto_send", d == "auto_send", r)
