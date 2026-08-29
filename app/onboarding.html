@@ -467,8 +467,22 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 .ofr-badge.pay_per_result { background:#fdf2e3; color:#a05c12; }
 .ofr-badge.guarantee_refund { background:#f5e9f7; color:#7d3a8f; }
 .ofr-card .yours { font-size:10px; font-weight:700; letter-spacing:.05em; text-transform:uppercase; color:var(--amber); }
-.ofr-card .ofr-pick { margin-left:auto; font-size:10.5px; font-weight:700; color:var(--green); opacity:0; }
+.ofr-card .ofr-pick { margin-left:auto; display:inline-flex; align-items:center; gap:4px; font-size:10.5px; font-weight:700; color:var(--green); opacity:0; }
+.ofr-card .ofr-pick svg { width:12px; height:12px; }
 .ofr-card.picked .ofr-pick { opacity:1; }
+.ofr-card { padding-right:44px; }
+.ofr-starbtn { position:absolute; top:12px; right:13px; width:26px; height:26px; display:grid; place-items:center;
+  border-radius:50%; color:var(--line-2); background:var(--bg-sunken); }
+.ofr-starbtn svg { width:15px; height:15px; }
+.ofr-card:hover .ofr-starbtn { color:var(--amber); }
+.ofr-card.picked .ofr-starbtn { color:#fff; background:var(--green); }
+.ofr-card .yours.idea { color:var(--orange-700); }
+.ofr-shortbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
+  margin-top:18px; padding:13px 16px; border:1px solid var(--line); border-radius:12px; background:var(--cream-50); }
+.ofr-shortn { font-size:13.5px; color:var(--ink-2); }
+.ofr-shortn b { color:var(--ink); }
+.ofr-shortn.muted { color:var(--ink-3); }
+.ofr-shortbar .btn-ghost { white-space:nowrap; }
 .ofr-ownwrap { display:grid; gap:7px; }
 .ofr-owntools { display:flex; gap:8px; }
 .ofr-owntools button { font:inherit; font-size:12.5px; border:1px solid var(--line-2); background:#fff;
@@ -530,7 +544,7 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 var STAGES=["Set up","First call","The plan","Your emails","Final prep","Live"];
 var CARDS=[
  {id:"infrastructure",stage:0,title:"Your email addresses",time:"3 min",clock:true},
- {id:"offers",stage:0,title:"Pick your offers",time:"5 min",badge:"for your call"},
+ {id:"offers",stage:0,title:"Think about your offers",time:"5 min",badge:"for your call"},
  {id:"slack",stage:0,title:"Join us on Slack",time:"2 min"},
  {id:"home",stage:0,title:"Your home base",time:"1 min"},
  {id:"block",stage:0,title:"Who we should never email",time:"2 min"},
@@ -571,7 +585,7 @@ var SCENS=[
 ];
 
 var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
- notes:{},offers:{},own:[],quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,tw:false,mine:{},
+ notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,tw:false,mine:{},
  senders:[{name:"Sarah Chen",title:"VP Sales"},{name:"Mike Torres",title:"Head of Growth"}],
  redirect:"",domainPicks:{}};
 var S=JSON.parse(JSON.stringify(FRESH));
@@ -921,6 +935,13 @@ var OFFERS_EG=[
   line:"If we don’t book you 10 qualified meetings in 90 days, we refund the difference.",
   why:"Safe + Valuable: a bold, concrete promise — the number does the convincing."}
 ];
+/* pool used by "Generate a fresh one for me" (prototype stand-in for live generation) */
+var GENPOOL=[
+ {mech:"lead_magnet",name:"Free 15-minute teardown",line:"A free 15-minute teardown of one thing they could fix this week — theirs to keep either way."},
+ {mech:"pay_per_result",name:"Only pay per booked call",line:"You only pay for qualified calls that actually land on the calendar — nothing for the ones that don’t."},
+ {mech:"guarantee_refund",name:"Booked in 60 days — or money back",line:"If we don’t book the agreed calls in 60 days, we refund the difference."},
+ {mech:"pay_after_result",name:"Pay once it’s working",line:"We run it for 30 days — you only pay once it’s actually booking meetings."}
+];
 /* Case studies for the proof slide — anonymised service→offer transformations
    across varied industries. Volume + variety is the point: it builds trust. */
 var CASES=[
@@ -934,7 +955,26 @@ var CASES=[
 ];
 function oesc(s){var d=document.createElement("div");d.textContent=s==null?"":s;return d.innerHTML;}
 function oatt(s){return oesc(s).replace(/"/g,"&quot;");}
-function offCount(){var n=0;["o1","o2","o3","o4"].forEach(function(k){if(S.offers[k])n++;});(S.own||[]).forEach(function(o){if(o&&o.pick!==false)n++;});return n;}
+function nid(){S.ideaSeq=(S.ideaSeq||0)+1;return "i"+S.ideaSeq;}
+/* Unified idea list — seeded once from the drafted examples (OFFERS_EG) and any
+   legacy picks/own items, so an offer is just something to STAR onto a shortlist.
+   Nothing is required; an empty shortlist is a perfectly valid state. */
+function ensureIdeas(){
+ if(Array.isArray(S.ideas))return;
+ var list=[];
+ OFFERS_EG.forEach(function(o){list.push({id:o.id,mech:o.mech,name:o.name,line:o.line,why:o.why,rec:o.rec,src:"drafted",star:!!(S.offers&&S.offers[o.id])});});
+ (S.own||[]).forEach(function(o){if(!o)return;var line=o.line||o.raw||"";if(!line)return;list.push({id:nid(),mech:o.mech||"lead_magnet",name:o.name||offShort(line),line:line,raw:o.raw,src:o.src==="generated"?"generated":"yours",star:(o.pick!==false)});});
+ S.ideas=list;
+}
+function offCount(){return (S.ideas||[]).filter(function(o){return o.star;}).length;}
+/* Plain-text shortlist the client can paste into notes / an email before the call. */
+function shortlistText(){
+ var picks=(S.ideas||[]).filter(function(o){return o.star;});
+ var co="";try{co=(new URLSearchParams(location.search)).get("company")||"";}catch(e){}
+ var head="My offer shortlist"+(co?(" — "+co):"")+"\n(drafted with Navreo onboarding)\n";
+ if(!picks.length)return head+"\nNothing shortlisted yet.";
+ return head+"\n"+picks.map(function(o,i){return (i+1)+". "+o.name+"\n   "+o.line;}).join("\n\n");
+}
 function offShort(s){var w=String(s).split(" ").slice(0,5);while(w.length>2&&/^(that|the|a|an|of|to|for|and|with|their|your|our|on|in|so)$/i.test(w[w.length-1]))w.pop();return w.join(" ");}
 function offMk(mech,t){var core=t.replace(/^(?:we'?ve|we have|we|i'?ve|i have|i|our team)\s+(?:built|make|made|created?|offer|do|run|provide|have|use|give|sell)\s+/i,"").replace(/^(?:a|an|the)\s+/i,"").replace(/^free\s+/i,"");var cap=core.charAt(0).toUpperCase()+core.slice(1);
  if(mech==="lead_magnet")return {mech:mech,name:"Free "+offShort(core),line:"A free "+core+" — genuinely useful, and yours to keep either way.",raw:t,pick:true};
@@ -949,16 +989,17 @@ function tidyOffer(raw){var t=raw.trim().replace(/\s+/g," ").replace(/[.\s]+$/,"
  var svc=t.match(/^(?:we|i|our team)\s+(?:do|design|build|make|create|provide|offer|run|handle|specialise in|specialize in|help with)\s+(.+)$/i);
  if(svc)return {mech:"pay_after_result",name:"Pay only when you’re happy",line:"We’ll "+svc[1].toLowerCase()+" — and you only pay once you’re happy with the result.",raw:t,pick:true};
  return offMk("lead_magnet",t);}
-function offCard(o,key,isOwn,idx){var picked=isOwn?(o.pick!==false):!!S.offers[key];
- var head='<div class="top"><span class="ofr-badge '+oesc(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+(isOwn?'<span class="yours">Yours</span>':'')+'<span class="ofr-pick">PICKED '+OSVG.check+'</span></div>';
+function offCard(o,idx){var star=!!o.star;var editable=(o.src!=="drafted");
+ var tag=o.src==="yours"?'<span class="yours">Yours</span>':(o.src==="generated"?'<span class="yours idea">Fresh idea</span>':'');
+ var head='<div class="top"><span class="ofr-badge '+oesc(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+tag+'<span class="ofr-pick">'+OSVG.star+' SHORTLISTED</span></div>';
  var body='<div class="nm">'+oesc(o.name)+'</div><div class="ln">'+oesc(o.line)+'</div>';
- var card='<button class="ofr-card'+(picked?' picked':'')+'" data-pick="'+(isOwn?('own:'+idx):oatt(key))+'">'+head+body+'</button>';
- if(!isOwn)return card;
+ var card='<button class="ofr-card'+(star?' picked':'')+'" data-star="'+idx+'" aria-pressed="'+(star?'true':'false')+'"><span class="ofr-starbtn" aria-hidden="true">'+OSVG.star+'</span>'+head+body+'</button>';
+ if(!editable)return card;
  if(S.editOwn===idx)return '<div class="ofr-ownwrap"><textarea class="ob-dnc" id="ownEdit" style="min-height:68px">'+oesc(o.line)+'</textarea><div class="ofr-owntools"><button data-ownsave="'+idx+'">Save wording</button><button data-owncancel>Cancel</button></div></div>';
  return '<div class="ofr-ownwrap">'+card+'<div class="ofr-owntools"><button data-ownedit="'+idx+'">Edit wording</button><button data-owndel="'+idx+'">Remove</button></div></div>';}
 function offersIntro(){return '<div class="ofr-kick">What makes a good offer</div>'
  +'<div class="headline">An offer they’d feel <span class="date">silly ignoring</span>.</div>'
- +'<div class="subline">A 2-minute watch, then a few we’ve drafted for you. We pick the winner together on your call.</div>'
+ +'<div class="subline">A 2-minute watch, then a few ideas to think about. Nothing to fill in — we shape the winner together on your call.</div>'
  +'<div class="ob-body">'
  +'<button class="ofr-vid" data-loom aria-label="Play the 2-minute walkthrough"><span class="play">'+OSVG.play+'</span><span class="cap">What makes a good offer — Bjion, Navreo</span><span class="dur">2:14</span></button>'
  +'<div class="ofr-flip"><div class="ofr-side svc"><div class="lab">A service</div><div class="txt">“I design websites.”</div></div><div class="ofr-arrow">→</div><div class="ofr-side off"><div class="lab">An offer</div><div class="txt">“I’ll build your website — pay only when you’re happy.”</div></div></div>'
@@ -966,31 +1007,37 @@ function offersIntro(){return '<div class="ofr-kick">What makes a good offer</di
  +'<div class="ofr-tripnote">Like a tripod — <b>all three legs</b>, or it tips over.</div>'
  +'</div>'
  +'<div class="ofr-reassure">Nothing here is set in stone, and you don’t need the answers now — this just gives us a head start before your call.</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="2">In a rush? Skip straight to picking →</button></div>';}
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="2">In a rush? Skip straight to the ideas →</button></div>';}
 function offersProof(){var grid=CASES.map(function(c){
  return '<div class="ofr-cs"><div class="ofr-cshead"><span class="ofr-badge '+oesc(c.mech)+'">'+oesc(OMECH[c.mech])+'</span><span class="ofr-csind">'+oesc(c.ind)+'</span></div>'
   +'<div class="ofr-csrow"><span class="ofr-cstag">Service</span><span class="ofr-cssvc">'+oesc(c.svc)+'</span></div>'
   +'<div class="ofr-csrow"><span class="ofr-cstag off">Offer</span><span class="ofr-csoff">'+oesc(c.off)+'</span></div>'
   +'<div class="ofr-csres">'+OSVG.star+' '+oesc(c.res)+'</div></div>';}).join("");
- return '<div class="ofr-skipbar"><button class="lk" data-offstep="0">← Watch the intro</button><button class="ofr-skip" data-offstep="2">Skip to your offers →</button></div>'
+ return '<div class="ofr-skipbar"><button class="lk" data-offstep="0">← Watch the intro</button><button class="ofr-skip" data-offstep="2">Skip to the ideas →</button></div>'
  +'<div class="ofr-kick">Proof</div>'
  +'<div class="headline">The same move, <span class="date">every industry</span>.</div>'
  +'<div class="subline">Seven quick before-and-afters — a service turned into an offer, and what it did. Real campaigns, names changed. <b>Skim or skip</b> — yours gets built on the call.</div>'
  +'<div class="ob-body"><div class="ofr-csgrid">'+grid+'</div></div>'
  +'<div class="ofr-proofnote">Each number is real interested-reply or booked-meeting volume from a live campaign — the full context (list size, dates) comes on your call.</div>'+'<div class="ofr-reassure">Different industries, same three-legged offer — that’s the play we run for you.</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-offstep="2">See the offers we drafted you →</button><span class="ob-t clock">bring these to your call</span></div>';}
-function offersExamples(){var n=offCount();
- var cards=OFFERS_EG.map(function(o){return offCard(o,o.id,false);}).join("");
- var own=(S.own||[]).map(function(o,idx){return offCard(o,null,true,idx);}).join("");
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="2">See the ideas we drafted you →</button><span class="ob-t clock">just food for thought</span></div>';}
+function offersExamples(){ensureIdeas();var n=offCount();
+ var cards=S.ideas.map(function(o,idx){return offCard(o,idx);}).join("");
  return '<button class="linkbtn" data-offstep="1">← See the case studies</button>'
- +'<div class="headline">Offers we’d <span class="date">start you with</span>.</div>'
- +'<div class="subline">Pick the ones that feel right — we shape the winner together on your call.</div>'
+ +'<div class="headline">Ideas to <span class="date">think about</span>.</div>'
+ +'<div class="subline">Just food for thought — nothing to fill in, nothing to lock in. Tap the ⭐ on any you like the look of to build a shortlist. We pick the real winner together on your call.</div>'
  +'<div class="ob-body">'
- +'<div class="ofr-audrow"><label class="ofr-audlab" for="offAud">Who’s this for?</label><input class="ob-inp" id="offAud" value="'+oatt(S.offerAudience||"")+'" placeholder="e.g. mid-size 3PLs — ops leaders (optional)"></div>'
- +'<div class="ofr-cards">'+cards+own+'</div>'
- +'<div class="ofr-add"><div class="ofr-addlab">Got one of your own? Add it — we’ll tidy it up.</div><div class="ob-inprow"><input class="ob-inp" id="ownOffer" placeholder="e.g. “we built an ROI calculator”, or an offer you already run…"><button class="btn-ghost" data-ownadd>Add</button></div></div>'
+ +'<div class="ofr-audrow"><label class="ofr-audlab" for="offAud">Who’s this for? <span style="font-weight:400;text-transform:none;letter-spacing:0;color:var(--ink-3)">(optional)</span></label><input class="ob-inp" id="offAud" value="'+oatt(S.offerAudience||"")+'" placeholder="e.g. mid-size 3PLs — ops leaders"></div>'
+ +'<div class="ofr-pickhelp">Star <b>none</b>, star <b>five</b> — totally up to you. This just gives you a head start.</div>'
+ +'<div class="ofr-cards">'+cards+'</div>'
+ +'<div class="ofr-add"><div class="ofr-addlab">Got your own idea, or want a fresh one?</div>'
+  +'<div class="ob-inprow"><input class="ob-inp" id="ownOffer" placeholder="Describe an offer you have in mind…"><button class="btn-ghost" data-ownadd>Add mine</button></div>'
+  +'<button class="ofr-gen" data-offgen>Out of ideas? Generate a fresh one for me →</button></div>'
+ +'<div class="ofr-shortbar">'+(n
+   ?('<span class="ofr-shortn"><b>'+n+'</b> on your shortlist</span><button class="btn-ghost" data-offcopy>📋 Copy shortlist</button>')
+   :('<span class="ofr-shortn muted">Nothing shortlisted yet — that’s completely fine</span>'))+'</div>'
+ +'<div class="ofr-reassure">Nothing here is set in stone, and you don’t need any answers today — this just gives you (and us) a head start before your call.</div>'
  +'</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-done="offers" '+(n?"":"disabled")+'>'+(n?("Save my picks ("+n+")"):"Pick at least one to save")+'</button><span class="ob-t clock">bring these to your call</span></div>';}
+ +'<div class="ob-foot2"><button class="btn-go" data-done="offers">'+(n?'Done — save my shortlist':'All done for now')+'</button><span class="ob-t clock">optional</span></div>';}
 function planRow(id,b,s){var r=S.reacts[id]||"";
  return '<div class="drow"><span style="min-width:0"><span class="name">'+b+'</span><span class="mbcount" style="display:block;margin:2px 0 0">'+s+'</span></span>'
  +'<span class="status"><button class="prow2 mini '+(r==="up"?"":"")+'" data-react="'+id+':up" style="border-radius:8px'+(r==="up"?";border-color:var(--orange);background:var(--orange-100)":"")+'">👍</button> '
@@ -1035,11 +1082,11 @@ function heroView(){
  if(S.stage===0){
   var c=nextCard();if(!c)return "";
   var subs={infrastructure:"Do this first — it starts the 2-week clock that sets your launch date. Your real address never gets touched.",
-   offers:"A 2-minute watch on what makes a good offer, then pick a few we’ve drafted.",
+   offers:"A 2-minute watch on what makes a good offer, then a few ideas to mull over — shortlist any you like.",
    slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
    home:"One page where everything lives. Worth a star.",
    block:"Clients, live deals, competitors — tell us who’s off-limits."};
-  var ctas={infrastructure:"See them",offers:"Have a look",slack:"Open my invite",home:"Have a look",block:"Tell us"};
+  var ctas={infrastructure:"See them",offers:"Have a think",slack:"Open my invite",home:"Have a look",block:"Tell us"};
   return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>'+c.title+'</h1><p class="ob-sub">'+subs[c.id]+'</p>'
    +'<div class="ob-row"><button class="btn-go" data-go="'+c.id+'">'+ctas[c.id]+'</button><span class="ob-t">'+c.time+'</span>'+(c.clock?'<span class="ob-t clock">⏱ starts your 2-week clock</span>':"")+'</div></div>';
  }
@@ -1157,7 +1204,7 @@ function bindAll(){
   go("infra-domains");});
  qa("[data-done]").forEach(function(b){if(b.disabled)return;b.addEventListener("click",function(){
   var id=b.getAttribute("data-done");
-  complete(id,({home:"Saved — it’s pinned in Slack too",offers:"Saved — bring them to your call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
+  complete(id,({home:"Saved — it’s pinned in Slack too",offers:"Nice — your shortlist is ready for the call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
  var el2=app.querySelector("[data-done2]");
  if(el2)el2.addEventListener("click",function(){complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
  var sl=app.querySelector("[data-slack]");
@@ -1175,15 +1222,19 @@ function bindAll(){
  qa("[data-loom]").forEach(function(b){b.addEventListener("click",function(){toast("The 2-min walkthrough plays here in your live hub ▶");});});
  var offAud=document.getElementById("offAud");
  if(offAud)offAud.addEventListener("input",function(){S.offerAudience=offAud.value;save();});
- qa("[data-pick]").forEach(function(b){b.addEventListener("click",function(){var k=b.getAttribute("data-pick");if(k.indexOf("own:")===0){var ix=+k.slice(4);if(S.own[ix]){var cur=S.own[ix].pick!==false;S.own[ix].pick=!cur;}}else{S.offers[k]=!S.offers[k];}save();render();});});
+ qa("[data-star]").forEach(function(b){b.addEventListener("click",function(){ensureIdeas();var ix=+b.getAttribute("data-star");if(S.ideas[ix]){S.ideas[ix].star=!S.ideas[ix].star;save();render();toast(S.ideas[ix].star?"Added to your shortlist ⭐":"Removed from your shortlist");}});});
+ var ocopy=app.querySelector("[data-offcopy]");
+ if(ocopy)ocopy.addEventListener("click",function(){var txt=shortlistText();var done=function(){toast("Shortlist copied — paste it anywhere for your call 📋");};var fail=function(){try{var ta=document.createElement("textarea");ta.value=txt;ta.style.position="fixed";ta.style.opacity="0";document.body.appendChild(ta);ta.focus();ta.select();var ok=document.execCommand("copy");document.body.removeChild(ta);ok?done():toast("Couldn’t copy automatically — select the shortlist to copy it");}catch(e){toast("Couldn’t copy automatically — select the shortlist to copy it");}};if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(txt).then(done,fail);}else{fail();}});
  var oadd=app.querySelector("[data-ownadd]");
- if(oadd)oadd.addEventListener("click",function(){var i=document.getElementById("ownOffer");if(!i||!i.value.trim())return;var raw=i.value.trim();oadd.disabled=true;oadd.textContent="Tidying…";setTimeout(function(){S.own.push(tidyOffer(raw));save();render();toast("Tidied into an offer — edit the wording any time ✎");},820);});
+ if(oadd)oadd.addEventListener("click",function(){var i=document.getElementById("ownOffer");if(!i||!i.value.trim())return;var raw=i.value.trim();oadd.disabled=true;oadd.textContent="Tidying…";setTimeout(function(){ensureIdeas();var o=tidyOffer(raw);S.ideas.push({id:nid(),mech:o.mech,name:o.name,line:o.line,raw:o.raw,src:"yours",star:true});save();render();toast("Tidied into an offer and shortlisted — edit the wording any time ✎");},820);});
+ var ogen=app.querySelector("[data-offgen]");
+ if(ogen)ogen.addEventListener("click",function(){ensureIdeas();if(typeof S.genN!=="number")S.genN=0;var g=GENPOOL[S.genN%GENPOOL.length];S.genN++;S.ideas.push({id:nid(),mech:g.mech,name:g.name,line:g.line,src:"generated",star:false});save();render();toast("Fresh idea generated — star it if you like it, or generate another ✎");});
  var oinp=document.getElementById("ownOffer");
  if(oinp)oinp.addEventListener("keydown",function(e){if(e.key==="Enter"){e.preventDefault();var b2=app.querySelector("[data-ownadd]");if(b2)b2.click();}});
  qa("[data-ownedit]").forEach(function(b){b.addEventListener("click",function(){S.editOwn=+b.getAttribute("data-ownedit");render();var t=document.getElementById("ownEdit");if(t)t.focus();});});
- qa("[data-ownsave]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-ownsave");var t=document.getElementById("ownEdit");if(t&&S.own[ix])S.own[ix].line=(t.value.trim()||S.own[ix].line);S.editOwn=undefined;save();render();toast("Wording saved ✓");});});
+ qa("[data-ownsave]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-ownsave");var t=document.getElementById("ownEdit");if(t&&S.ideas[ix])S.ideas[ix].line=(t.value.trim()||S.ideas[ix].line);S.editOwn=undefined;save();render();toast("Wording saved ✓");});});
  qa("[data-owncancel]").forEach(function(b){b.addEventListener("click",function(){S.editOwn=undefined;render();});});
- qa("[data-owndel]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-owndel");S.own.splice(ix,1);save();render();});});
+ qa("[data-owndel]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-owndel");if(S.ideas[ix])S.ideas.splice(ix,1);save();render();});});
  qa("[data-react]").forEach(function(b){b.addEventListener("click",function(){var kv=b.getAttribute("data-react").split(":");S.reacts[kv[0]]=(S.reacts[kv[0]]===kv[1]?"":kv[1]);save();render();toast("Noted — Jordan sees this before your plan call");});});
  var en=app.querySelector("[data-enext]");
  if(en&&!en.disabled)en.addEventListener("click",function(){S.eIdx++;S.eRead=Math.max(S.eRead,S.eIdx+1);save();render();});
