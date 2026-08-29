@@ -16379,9 +16379,14 @@ def route_training_interview(payload):
             if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
                 # Idempotent: an unanswered set is re-served, never re-generated
                 # (a refresh mid-questionnaire must not burn tokens or shuffle
-                # the questions under the client).
-                return 200, {"questions": latest["questions"], "ready": True,
-                             "asked_at": latest.get("asked_at") or ""}
+                # the questions under the client). Banned shapes are filtered
+                # at serve time too: a question generated before a ban (or a
+                # prompt leak) must never reach the client (owner rule
+                # 2026-08-29). An all-banned set falls through to regenerate.
+                served = _drop_banned_interview_questions(latest["questions"])
+                if served:
+                    return 200, {"questions": served, "ready": True,
+                                 "asked_at": latest.get("asked_at") or ""}
             # PEEK (owner ruling 2026-08-25, CSM gate): a read-only probe that
             # NEVER runs the model. The first-launch page uses it so the CSM
             # sees either instant questions or a static "still being built"
@@ -16599,6 +16604,34 @@ def _prewarm_training_interview(agent_id: str):
         pass
 
 
+# Banned interview shapes (owner rule 2026-08-29, live-confirmed leak): the
+# prompt ban alone doesn't hold on gpt-5-mini, and a banned question generated
+# BEFORE the ban can still sit stored in a training doc - so filter at both
+# generation and serve time. A question that asks the owner to pick call
+# times/slots/days/timezones is banned (times come from the calendar and the
+# fallback ladder, never a client-typed default); asking for the booking LINK
+# or the meeting LENGTH in minutes stays allowed (neither carries
+# times/slots/timezone vocabulary).
+_IV_BANNED_RE = re.compile(
+    r"call\s*-?\s*times?|time\s+slots?|\bslots?\b|time\s*zones?|timezones?",
+    re.IGNORECASE)
+
+
+def _drop_banned_interview_questions(qs):
+    """Filter a question list (plain strings OR {id, q} dicts) down to the
+    ones that don't match a banned shape. Never raises."""
+    try:
+        out = []
+        for q in (qs or []):
+            text = q.get("q") if isinstance(q, dict) else q
+            if _IV_BANNED_RE.search(str(text or "")):
+                continue
+            out.append(q)
+        return out
+    except Exception:  # noqa: BLE001 - a filter must never break the interview
+        return list(qs or [])
+
+
 def _generate_interview_questions(agent: dict, doc: dict) -> list:
     """One gpt-5-mini call -> 0 to 5 fresh question strings (EMPTY when the
     offer is already fully covered, so the interview ends instead of repeating).
@@ -16655,6 +16688,7 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
             # Deterministic topic-dedup vs every prior interview (the prompt's
             # anti-repeat leaks, live-confirmed 2026-08-22). Fewer/empty is fine.
             out = _dedupe_interview_questions(out, [p["q"] for p in prior])
+            out = _drop_banned_interview_questions(out)
             # A call that returns nothing NEW means the offer is already covered:
             # END the interview (empty), never pad with the static set.
             return out[:5]
