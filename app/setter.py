@@ -362,6 +362,43 @@ def _booking_link(agent: dict) -> str:
 
 _URL_RE = re.compile(r'https?://[^\s"\'<>]+', re.IGNORECASE)
 
+# Scheduling-host URLs a trainer may paste to WIRE the booking link through
+# feedback (owner report 2026-08-29: a share-mode trainer rewrote a reply to
+# "My booking link is calendly.com/test" and nothing saved it - lesson_from_edit
+# correctly rejects a pasted link as per-lead knowledge, but the BOOKING link
+# is a durable agent asset, not per-lead knowledge). Scheme optional: trainers
+# type bare "calendly.com/me" more often than the full URL.
+_SCHED_LINK_RE = re.compile(
+    r'(?:https?://)?(?:www\.)?('
+    r'calendly\.com|cal\.com|savvycal\.com|tidycal\.com|youcanbook\.me|'
+    r'calendar\.app\.google|meetings\.hubspot\.com|appt\.link|zcal\.co|'
+    r'usemotion\.com|calendar\.google\.com/appointments'
+    r')(/[^\s"\'<>),;]*)', re.IGNORECASE)
+
+
+def capture_booking_link_from_feedback(agent_id: str, *texts) -> str:
+    """Deterministic booking-link capture (owner rule 2026-08-29): when a
+    trainer's rewrite or note contains a scheduling-host URL and the agent has
+    NO booking link wired, wire it - normalised to https://, stored on
+    agent.booking_link, so the very next draft carries a real link instead of
+    the [BOOKING LINK] placeholder. Only fires on an EMPTY booking link (a
+    wired agent's link is managed in settings, and a lead's own scheduling
+    link quoted in a thread must never overwrite it). Returns the captured
+    URL, or "". Never raises."""
+    try:
+        agent = _load_agent(agent_id)
+        if not agent or _booking_link(agent):
+            return ""
+        for t in texts:
+            m = _SCHED_LINK_RE.search(_TAG_RE.sub(" ", str(t or "")))
+            if m:
+                url = f"https://{m.group(1)}{m.group(2) or ''}".rstrip("/.,;")
+                _save_agent({"id": agent_id, "booking_link": url})
+                return url
+        return ""
+    except Exception:  # noqa: BLE001 - capture is best-effort, never blocks the answer save
+        return ""
+
 
 def _norm_url(url: str) -> str:
     """Lowercase, trailing-slash/punctuation-stripped form of a URL, so the
@@ -16148,6 +16185,11 @@ def route_training_answer(payload):
                                        "edited": edited_body, "gist": inbound_gist,
                                        "source": f"training-edit:{case_id}", "at": at})
                 doc["pending_merges"] = pending_merges
+            # Booking-link capture (owner rule 2026-08-29): a scheduling URL in
+            # the rewrite or note wires the agent's booking link when none is
+            # set - deterministic, so it works even though lesson_from_edit
+            # rightly refuses to learn a pasted link as a writing lesson.
+            captured_booking = capture_booking_link_from_feedback(agent_id, edited_body, note)
 
             readiness = compute_readiness(doc)
             history = list(doc.get("readiness_history") or [])
@@ -16184,7 +16226,10 @@ def route_training_answer(payload):
         # just saved; an edit is pending until the merge worker distils it
         # (the chip upgrades from instruction_edits, matched by source).
         learned = None
-        if edit_is_real:
+        if captured_booking:
+            learned = {"kind": "note", "pending": False,
+                       "text": f"Booking link saved: {captured_booking} - every draft can now link it."}
+        elif edit_is_real:
             learned = {"kind": "edit", "text": "", "pending": True,
                        "source": f"training-edit:{case_id}"}
         elif note and scope == "remember":
