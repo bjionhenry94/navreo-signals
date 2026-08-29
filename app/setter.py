@@ -16641,16 +16641,24 @@ def _prebuild_training_pool(agent_id: str):
             doc = _load_training(agent_id)
             have = len(doc.get("cases") or [])
             if have >= TRAINING_BANK_MAX:
-                return
+                break
             if not lock.acquire(blocking=True, timeout=180):
-                return
+                break
             try:
                 need = min(TRAINING_BATCH_MAX, TRAINING_BANK_MAX - have)
                 _training_generate_worker(agent_id, agent, camp, need, is_share_mode=True)
             finally:
                 lock.release()
             if len(_load_training(agent_id).get("cases") or []) <= have:
-                return  # pool stopped growing (no more unique scenarios) - stop
+                break  # pool stopped growing (no more unique scenarios) - stop
+        # Drain any retrain/generate flag queued WHILE this prebuild held the
+        # gen lock (fastloop fix 2026-08-29). This worker is called directly
+        # (not via _training_generate_threadmain), so nothing else runs the
+        # tail sweep - an offer-interview answered during the 3-5 min bank
+        # build would flag a pool retrain that then orphaned, leaving round 1
+        # on pre-interview drafts. The sweep runs the queued redraft now that
+        # the lock is free, exactly like every threadmain's own tail.
+        _sweep_orphaned_training_flags(agent_id)
     except Exception:  # noqa: BLE001 - background pre-build never raises
         pass
 
