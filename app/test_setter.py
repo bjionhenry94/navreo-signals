@@ -1203,6 +1203,15 @@ def test_decide_matrix():
     d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "first_touch": False})
     check("decide: second reply, simple + allowed ask -> auto_send (multi-turn autonomy)", d == "auto_send", r)
 
+    # [NEED YOUR INPUT] gap flag (owner rule 2026-08-29): a draft that flagged a
+    # fact it doesn't have must NEVER auto-send, whatever else passes.
+    d, r = setter.decide(_cls("send_resource"), AGENT_AUTO, {**CTX_ALL_GOOD, "has_input_placeholder": True})
+    check("decide: [NEED YOUR INPUT] gap flag -> review (never auto-send)", d == "review" and "NEED YOUR INPUT" in r, r)
+    check("has_input_placeholder detects the token (spacing/case tolerant)",
+          setter.has_input_placeholder("<div>pricing is [ Need Your Input ] for now</div>")
+          and not setter.has_input_placeholder("<div>all good, no gaps here</div>"),
+          None)
+
     # Calendly fallback, owner ruling 2026-07-14: no free slots / Calendly not
     # connected no longer holds the reply - the drafter proposes no times at
     # all (the fallback availability-ask instead), so timezone/slot risk is

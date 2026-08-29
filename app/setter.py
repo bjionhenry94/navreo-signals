@@ -1636,6 +1636,22 @@ _INTENT_REASON = {
 }
 
 
+# [NEED YOUR INPUT] gap flag (owner rule 2026-08-29): the drafter writes this
+# literal token where it lacks a specific fact rather than inventing one. Any
+# draft carrying it is deliberately unfinished and must be held for a human to
+# fill (decide() gate 8b). Tolerant of spacing/case so a stray "[ need your
+# input ]" still trips the hold.
+_INPUT_PLACEHOLDER_RE = re.compile(r"\[\s*need\s+your\s+input\s*\]", re.IGNORECASE)
+
+
+def has_input_placeholder(html: str) -> bool:
+    """True when a draft carries the [NEED YOUR INPUT] gap flag. Never raises."""
+    try:
+        return bool(_INPUT_PLACEHOLDER_RE.search(html or ""))
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def decide(classification: dict, agent: dict, ctx: dict):
     """The gate. Returns (decision, plain_english_reason).
     decision in {"auto_send", "review", "no_action"}.
@@ -1749,6 +1765,16 @@ def decide(classification: dict, agent: dict, ctx: dict):
         return "review", "Held for review: the reply is long and detailed, better for a human."
     if not ctx.get("lint_ok", False):
         return "review", ctx.get("lint_reason") or "Held for review: the draft didn't pass its checks."
+
+    # 8b. [NEED YOUR INPUT] gap flag (owner rule 2026-08-29, every SDR): the
+    # drafter marks a specific fact it does not have with [NEED YOUR INPUT]
+    # rather than inventing one. Such a draft is deliberately unfinished - a
+    # human must supply the fact - so it can NEVER auto-send, whatever mode the
+    # agent is in. Held here (after lint, before the mode switch) so the row
+    # carries this precise reason.
+    if ctx.get("has_input_placeholder"):
+        return "review", ("Held for review: the draft flagged [NEED YOUR INPUT] where it needs a "
+                          "fact only you can supply - fill it in before sending.")
 
     # 9. mode + the global master switch, checked LAST on purpose: a held row
     # then carries its most informative reason, and in review mode (switch
@@ -1951,6 +1977,10 @@ Rules:
 - BEFORE writing anything, decide the greeting name: FIRST look at the end of their reply for a signed name ("Thanks, Cole" / "Kelly, Head of Partnerships" means greet "Hi Cole" / "Hi Kelly") - how the lead signed their LATEST message is ground truth and OUTRANKS lead_first_name whenever the two differ (signed "Stan Takahashi" with lead_first_name "Kathy" means greet "Hi Stan"); otherwise use lead_first_name if it is a real personal name (it is "" when we don't have one, "there" is a placeholder, and a company name or a word chopped off one - "Organic" from "Organic Beauty Transformation" - is never a personal name); otherwise LOOK AT THE GREETING LINE OF original_outreach, which opens "Hi <first name>," and names this same lead; only if no name exists in any of those three places use "Hi there". Always greet with the FIRST name alone - never a full name ("Hi Janos", never "Hi Janos Stegena") and never a quoted nickname from a signature block. NEVER greet the lead with SenderFirst - that is OUR name, used only in the sign-off. When the draft genuinely addresses two or more people (for example the lead just introduced a colleague), join the names with "and" - "Hi John and James" - never a comma list like "Hi John, James,".
 - If they ask for "the video" and the agent's fixed resource is NOT a video, never present the resource link as if it were the video. Acknowledge the video ask specifically and honestly; the human reviewer will attach the right asset.
 - If a question's answer is NOT in the instructions or the resource, do not improvise one - but never dodge the question either. FIRST answer it with everything you truly have: any fact the LEAD themselves stated in this thread (their team size, their CRM, their stack, their constraints) must be named and used ("For a 12-person team running your own LinkedIn outbound..."; "Since you run everything through HubSpot..."), and anything the instructions DO answer must be answered plainly. Only THEN, for the specific part you genuinely cannot answer, make that named gap the reason for the call ("exactly how it would sit alongside HubSpot is what I'd walk you through on a quick call") - unless a stated channel or timing constraint applies (see constraint_directive), which always wins over this - never a bare "That's exactly what I'd walk you through on a quick call" that ignores the lead's own stated facts; that reads as not having read their email. Engaging their facts NEVER licenses asserting a mechanism: if the instructions don't state how something works (an integration, a data mapping, a process, a guarantee), do not describe it as if it exists ("we would map our outbound data into your CRM" is an invented claim unless the instructions say so) - name their fact, put the HOW behind the call. One carve-out (owner rule 2026-08-16): a question about PROCESS - "what would the first month look like?", "what happens after we start?" - may be answered with a natural plain-English description of how an engagement typically runs, even when the instructions don't spell it out; hard facts (prices, numbers, dates, guarantees, integrations) stay instruction-only. Answer ONLY what they asked: never bolt on an unasked section, and never write "you asked for X" / "here is the X you asked for" about something their message did not ask for. Guessing at policies, capabilities, or processes is still worse than not answering.
+- NEVER STATE A SPECIFIC FACT YOU DON'T HAVE - FLAG IT WITH [NEED YOUR INPUT] (owner rule 2026-08-29, every SDR). You draft for many accounts and a human on the sender's team fills gaps before anything sends, so accuracy beats completeness: you must NEVER invent, guess, estimate, infer, or borrow a specific fact that is not in the instructions, the resource, this thread, or a fact the LEAD stated. Specific facts include a price, figure, percentage, fee, or discount; a timeframe, turnaround, or start date; a named customer, case study, or a concrete result or metric ("cut spend 34%", "in 6 weeks"); how THIS product specifically integrates with, connects to, or is delivered into a named tool; a guarantee, SLA, refund, or contract term; a security, compliance, certification, or data-residency detail; a headcount, funding figure, office location, or date. When the lead needs such a fact and you genuinely do not have it, DRAFT THE MESSAGE ANYWAY and write the literal token [NEED YOUR INPUT] exactly where that fact belongs, keeping the rest of the sentence natural and complete, e.g. "Most teams like yours see [NEED YOUR INPUT] in the first [NEED YOUR INPUT]." or "Yes, we integrate with Salesforce, [NEED YOUR INPUT]." The token tells the sender's team precisely what to supply. Use it ONLY for the specific missing fact, never for a whole reply, and NEVER when you already have the fact (use the fact). Write the token EXACTLY as [NEED YOUR INPUT] - never a variant, never {{...}}, never a parenthetical note.
+- NEVER ASSERT YES OR NO TO A COMMITMENT, POLICY, OR SPECIFIC CAPABILITY YOU WEREN'T TOLD. A question about a guarantee or SLA ("do you guarantee X meetings?"), a commercial policy (refunds, contract length, exclusivity), or a specific integration/capability ("do you push leads into our Salesforce automatically?") asks for a fact that varies per client and per contract - you do NOT know it unless the instructions state it. Do NOT answer "yes" AND do NOT answer "no" (a wrong "no, we don't guarantee that" is as damaging as a made-up "yes"): write the honest shell with the gap flagged, e.g. "On a meetings guarantee, [NEED YOUR INPUT]." or "Yes, we can get booked meetings into Salesforce, [NEED YOUR INPUT] on exactly how we'd sync it." Never describe a mechanism, integration, or process as if it exists when the instructions don't state it (that includes asserting one does NOT exist).
+- LOGICAL AND COMMON-SENSE ANSWERS ARE NOT MISSING FACTS (guards the rules above from over-firing). When the answer is table-stakes competence inherent to what this agent plainly does, just ANSWER it - that is not a client-specific fact, so do NOT reach for [NEED YOUR INPUT]. A lead-gen / cold-email SDR asked "do you keep an eye on deliverability?" answers "Yes" (any competent cold-email operator monitors deliverability); "do you personalise the emails?" / "is this cold outreach?" get a plain confident answer. The dividing line: inherent competence in delivering the service = ANSWER; a commercial commitment, a number, a named result, a price, a term, or a specific tool integration = a client-specific fact only the team can confirm = [NEED YOUR INPUT], never a guess either way. When genuinely unsure which side a question falls on, lean to [NEED YOUR INPUT] - a flagged gap the team fills is always safe; a confident guess that turns out wrong is the exact failure this prevents.
+- [NEED YOUR INPUT] REPLACES the habit of always punting a factual gap to a call: prefer a mostly-written draft carrying the token over "I'll confirm and come back". It does NOT override the constraint, pricing-model, self-serve-asset, or answer-the-question-first rules - where those genuinely apply follow them; the token is for a specific fact you lack, not a way to dodge answering or to skip a logical answer you could give.
 - If SenderFirst is empty, end with no sign-off line at all.
 - When slots are supplied and slot_status is "ok" AND call_ask is "required" or absent, include the two call-time paragraph, with each day/time as an anchor whose href is that slot's own link, exactly as in the RESOURCE + CALL example, followed by the "If those times aren't suitable" booking-link paragraph. When the slots you were given carry NO link (an empty link field - this sender has no booking system wired up), write that same two-call-times paragraph with each time as PLAIN TEXT - no anchors, no invented or guessed URLs - and write the follow-up paragraph as plain text with the literal placeholder [BOOKING LINK] where the link would go ("If those times aren't suitable, my booking link is [BOOKING LINK]."). The same placeholder rule applies whenever the lead directly asks for the booking link and the booking_link you were given is empty: answer with the literal text [BOOKING LINK] - the owner fills it in during training - and NEVER paste a slot URL, a URL fragment, or any invented address as the booking link. This is the default ONLY for a call-ready reply. It is OFF whenever call_ask is "avoid" or "only_if_relevant" (add NO two-times paragraph at all in those cases, the sole exception being a lead who PROPOSED their own time, per the LEAD-PROPOSED TIME rule). And it NEVER comes before answering the lead's actual question: always answer what they asked - a resource, their booking link, your phone number, case studies, or a specific question - on its own terms FIRST per the SELF-SERVE ASSET and ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST rules, and add the two-times only when call_ask is "required"/absent and the answer itself genuinely invites a call. Three things, and only these three, override the two-times default even when call_ask is "required". FIRST, a stated constraint: the lead's stated timing or channel constraint (see the constraint rule below) suppresses call times and booking links entirely - it always wins. SECOND, call_ask: when call_ask is "avoid" the lead is already sorted for a call (a time is agreed, they have booked, or they have just told you when they are free) or has asked something that a fresh call pitch would talk straight past - answer THAT message on its own terms and do not open with a generic two-fresh-times ask. The ONE case where you still name times under "avoid" is a lead who PROPOSED their own time or window: follow the LEAD-PROPOSED TIME rule below, which accepts a slot that fits their ask or counters with your slots when none fit - that is answering their proposal, not a fresh pitch; when call_ask is "only_if_relevant" a call has already been offered earlier in this thread and their latest message is not about scheduling, so lead with the actual answer and only reach for times if the answer genuinely needs a call; when call_ask is "required" or absent, the default above stands. Never re-propose times a lead has already turned down or already accepted. THIRD, reviewer_feedback about WHICH times to offer ("offer different times", "offer next week"): the slots you have been given have ALREADY been re-picked from the real calendar to match that request, so propose exactly the slots in front of you and do not apologise for or refer to the times a previous draft proposed. You still never invent a time: if the feedback asks for times the calendar cannot supply, say so in feedback_note and use the fallback ladder instead of making one up. Use every slot link you were given, verbatim, and never drop a slot in favour of the booking link alone. Conversely, never propose call times from live slots when slot_status is anything but "ok". When call times are NOT available (slot_status is anything but "ok"), follow this fallback ladder, in order, and never skip a step that applies: ONE-A, if the instructions contain a CONCRETE list of available times or time ranges (for example an auto-updated "Current Available Times" block), meaning real dates or times written out as data and never a formatting template, an example time, or a rule about where times come from, pick exactly TWO different times from that list (two different days when possible) and propose them in the same phrasing as the normal two-call-times ask, as plain text (no per-slot deep links exist here). current_datetime_utc tells you when NOW is: never propose a listed time that is already in the past or later today - only listed times from tomorrow (in the lead's timezone) onwards count. When the list contains two or more future times you MUST propose exactly two, never just one; only when it holds a single future time may you propose one, and when it holds none treat the instructions as giving only the calendar link (step ONE-B). Obey any timezone rule the instructions state: when you know the lead's timezone, convert each proposed time into it and label it with that timezone - converting means changing the clock time itself, never just swapping the timezone label; when you don't, send the times exactly as listed with the timezone label the instructions use. Then hyperlink the scheduling/calendar link the instructions give in its own short follow-up paragraph ("grab a slot here"). ONE-B, if the instructions state only a general availability window or just a scheduling/calendar link, propose a meeting using exactly what the instructions say, their own words for the window, and hyperlink the calendar link the instructions give, as its own paragraph. TWO, only when the instructions say nothing at all about availability, ask exactly this, as its own paragraph: "When would be a good time for us to talk? Here is <a href="BOOKING_LINK">my availability</a>." using the real booking_link value you were given as the href - unless booking_link is empty, in which case write instead, as plain text with no anchor: "When would be a good time for us to talk? My booking link is [BOOKING LINK]." (the owner fills the placeholder in during training). Never invent a time, day, or window that isn't in the slots you were given or literally stated in the instructions - and never copy an example's availability wording from this prompt (the windows and times in the examples above are placeholders, not facts). Never mention that a calendar, tool, or booking system failed or wasn't available - the lead should never sense anything went wrong.
 - NO BACKUP BOOKING LINK. When booking_link is empty, there is NO standalone backup booking link, so you must NOT output a "see my availability here" paragraph, a "my availability" booking-link paragraph, or ANY standalone booking/scheduling link anywhere in the draft. The two call-time paragraph (each time its own per-slot link) is unchanged when live slots exist. Wherever the examples show the "If those times aren't suitable, feel free to see my availability here and book in directly" booking-link fallback paragraph, write instead this plain-text paragraph with NO link: "If those times aren't suitable, feel free to suggest some times that work for you." And when there are no call times at all, ask for the lead's availability with that same plain-text sentence, never a booking or calendar link. This overrides the RESOURCE + CALL example's fallback line and every fallback-ladder step that would otherwise carry BOOKING_LINK.
@@ -2162,6 +2192,42 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         "actively trying to schedule sooner or on a different day ('how about next week?', "
         "'Friday works') - propose times as normal, honouring their preference; and "
         "reviewer_feedback that explicitly asks for times, which always wins.")
+    # Accuracy / [NEED YOUR INPUT] (owner rule 2026-08-29, every SDR): the
+    # drafter must never state a specific fact it wasn't given, and must never
+    # assert yes/no to a commitment or capability it wasn't told. A human on the
+    # sender's team fills gaps before sending, so a flagged [NEED YOUR INPUT]
+    # gap is always safe and a confident guess is the failure. Sits in the user
+    # message beside the instructions it must beat (same mechanics as the
+    # directives above), so it overrides the drafter's default habit of
+    # deflecting every gap vaguely to a call. Deliberately paired with the
+    # logical-answer guard so table-stakes questions still get a plain answer.
+    payload["accuracy_directive"] = (
+        "ACCURACY OVER COMPLETENESS. Before asserting anything, check it is grounded in instructions, "
+        "the resource, this thread, or a fact the lead stated. You must NEVER invent, estimate, or guess "
+        "a specific fact you were not given - a price/fee/number, a percentage or named result, a "
+        "timeframe or date, a specific tool integration or how it works, a guarantee/SLA/refund/contract "
+        "term, a security/compliance/data-residency detail, a headcount or location - and you must NEVER "
+        "assert yes OR no to a commitment, policy, or specific capability you were not told (a wrong "
+        "\"no, we don't guarantee that\" is as harmful as a made-up \"yes\"). When the lead needs such a "
+        "fact and you do not have it, DRAFT THE REPLY ANYWAY and write the literal token [NEED YOUR "
+        "INPUT] exactly where that fact belongs, keeping the rest of the sentence natural - this is "
+        "STRONGLY PREFERRED over a vague \"I'll confirm on a call\", because it hands the team the exact "
+        "gap to fill and still moves the reply forward. Use the token ONLY for the specific missing fact, "
+        "never for a whole reply. DO NOT over-use it: when the answer is table-stakes competence inherent "
+        "to what this agent plainly does (a cold-email agency asked 'do you watch deliverability?' -> "
+        "'Yes'), answer it plainly - the token is for client-specific facts a colleague would confirm, "
+        "not for sensible category-level answers. Write it EXACTLY as [NEED YOUR INPUT], never a variant. "
+        "WORKED EXAMPLES (instructions say nothing on the point): "
+        "(a) 'Do you guarantee a minimum number of meetings?' -> \"On a meetings guarantee, [NEED YOUR "
+        "INPUT].\" NOT \"No, we don't guarantee that\" and NOT \"Yes, we guarantee X\" - you were not told "
+        "the policy, so asserting either is a guess. "
+        "(b) 'What results do you get? Any numbers?' -> \"Clients like you typically see [NEED YOUR "
+        "INPUT].\" NOT an invented percentage and NOT only \"I'll cover results on a call\". "
+        "(c) 'Do you push leads into our Salesforce automatically?' -> \"Yes, we can get booked meetings "
+        "into Salesforce, [NEED YOUR INPUT] on exactly how we'd sync it.\" NOT a described mechanism you "
+        "were not given. "
+        "(d) 'Do you watch deliverability?' -> \"Yes, we monitor it closely...\" (table-stakes, answer "
+        "plainly, NO token).")
     # How hard to push for a call on THIS turn - see the call_ask rule in
     # DRAFT_SYSTEM. Owner report 2026-07-25: "when someone replies beyond the
     # first message, sometimes the drafted response ... just tries to continue
@@ -4284,6 +4350,7 @@ It IS a lesson only when the edit shows a durable PREFERENCE about how replies s
 It is NOT a lesson when the edit is:
 - Any WHAT edit, per the deciding test above.
 - A per-lead fact: a person's name, a company name, a job title, a specific date, a specific time, a timezone, a price for this one deal, a link pasted for this one lead.
+- A reviewer FILLING IN or replacing a [NEED YOUR INPUT] gap flag with a real fact (a number, result, integration detail, term): that is a WHAT edit supplying knowledge for this one conversation, NEVER a lesson - and it must never become a rule to "stop using [NEED YOUR INPUT]" or to state that fact by default. The [NEED YOUR INPUT] token is a deliberate house mechanism for flagging a missing fact; a reviewer resolving one instance is not a preference about writing.
 - Anything true only of this conversation ("they're away until August", "they already have the deck").
 - Formatting, whitespace, HTML, punctuation, or typo repair with no preference behind it.
 - A change so small or so specific that you cannot restate it without naming something from this particular reply.
@@ -5692,6 +5759,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
         "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body_text or ""))),
         "first_outbound_present": bool((first_outbound or "").strip()),
         "needs_availability_ask": needs_availability_ask,
+        "has_input_placeholder": has_input_placeholder(draft_body),
     }
     decision, reason = decide(classification, agent, ctx)
     row["decision"], row["decision_reason"] = decision, reason
@@ -12615,6 +12683,7 @@ def _redraft_sync(payload):
             "same_day_ask": bool(_SAME_DAY_RE.search(_strip_quoted(body_text))),
             "first_outbound_present": bool((row.get("first_outbound") or "").strip()),
             "needs_availability_ask": needs_availability_ask,
+            "has_input_placeholder": has_input_placeholder(draft_html),
         })
         # A redraft NEVER sends (owner ruling 2026-07-16): the human asked for
         # this draft mid-review, so the send stays theirs via Approve.
