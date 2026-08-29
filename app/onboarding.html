@@ -873,7 +873,7 @@ var PAGES={
  "infra-senders":function(){return S.done.infrastructure?infraPage():infraSenders();},
  "infra-domains":function(){return S.done.infrastructure?infraPage():infraDomains();},
  "infra-confirm":function(){return S.done.infrastructure?infraPage():infraConfirm();},
- offers:function(){ return S.offerStep>=2?offersExamples():(S.offerStep===1?offersProof():offersIntro()); },
+ offers:function(){ return S.offerStep>=1?offersShowcase():offersIntro(); },
  slack:function(){
   if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
    +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
@@ -1048,14 +1048,22 @@ function offCard(o,idx){var star=!!o.star;var editable=(o.src!=="drafted");
  return '<div class="ofr-ownwrap">'+card+'<div class="ofr-owntools"><button data-ownedit="'+idx+'">Edit wording</button><button data-owndel="'+idx+'">Remove</button></div></div>';}
 function offersIntro(){return '<div class="ofr-kick">What makes a good offer</div>'
  +'<div class="headline">An offer they’d feel <span class="date">silly ignoring</span>.</div>'
- +'<div class="subline">A 2-minute watch, then a few ideas to star. Nothing to fill in.</div>'
+ +'<div class="subline">A 2-minute watch, then real examples. Nothing to fill in.</div>'
  +'<div class="ob-body">'
  +'<button class="ofr-vid" data-loom aria-label="Play the 2-minute walkthrough"><span class="play">'+OSVG.play+'</span><span class="cap">What makes a good offer — Bjion, Navreo</span><span class="dur">2:14</span></button>'
  +'<div class="ofr-flip"><div class="ofr-side svc"><div class="lab">A service</div><div class="txt">“I design websites.”</div></div><div class="ofr-arrow">→</div><div class="ofr-side off"><div class="lab">An offer</div><div class="txt">“I’ll build your website — pay only when you’re happy.”</div></div></div>'
  +'<div class="ofr-trip"><div class="ofr-leg"><span class="ic">'+OSVG.shield+'</span><span class="h">Feels safe</span><span class="s">Low cost, low effort, quick — easy to say yes</span></div><div class="ofr-leg"><span class="ic">'+OSVG.bolt+'</span><span class="h">Easy to deliver</span><span class="s">Templated &amp; repeatable, so it works at scale</span></div><div class="ofr-leg"><span class="ic">'+OSVG.gem+'</span><span class="h">Feels valuable</span><span class="s">Solves a real pain and looks impressive</span></div></div>'
  +'<div class="ofr-tripnote">Like a tripod — <b>all three legs</b>, or it tips over.</div>'
  +'</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="2">Skip to the ideas →</button></div>';}
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="1">Skip to the examples →</button></div>';}
+// Showcase = the "extremely visual" bento of proven-results case studies, embedded
+// as an isolated iframe (app/offers-bento.html). View-only: clients SEE examples,
+// they do not pick. Done button completes the step.
+function offersShowcase(){return '<button class="linkbtn" data-offstep="0">← Back to the intro</button>'
+ +'<div class="headline">Offers that <span class="date">worked</span>.</div>'
+ +'<div class="subline">A few we’ve run for businesses like yours — for ideas, not homework. Yours takes shape together on your call.</div>'
+ +'<div class="ob-body"><iframe id="offersFrame" src="offers-bento.html" title="Offer examples" scrolling="no" style="width:100%;border:0;height:1600px;display:block"></iframe></div>'
+ +'<div class="ob-foot2"><button class="btn-go" data-done="offers">Bring these to my call →</button><span class="ob-t clock">nothing to fill in</span></div>';}
 function offersProof(){var grid=CASES.map(function(c){
  return '<div class="ofr-cs"><div class="ofr-cshead"><span class="ofr-badge '+oesc(c.mech)+'">'+oesc(OMECH[c.mech])+'</span><span class="ofr-csind">'+oesc(c.ind)+'</span></div>'
   +'<div class="ofr-csrow"><span class="ofr-cstag">Service</span><span class="ofr-cssvc">'+oesc(c.svc)+'</span></div>'
@@ -1126,7 +1134,7 @@ function heroView(){
  if(S.stage===0){
   var c=nextCard();if(!c)return "";
   var subs={infrastructure:"Do this first — it starts the 2-week clock that sets your launch date. Your real address never gets touched.",
-   offers:"What makes a good offer, plus a few ideas to star for your call.",
+   offers:"What makes a good offer, plus real examples to bring to your call.",
    slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
    home:"One page where everything lives. Worth a star.",
    block:"Clients, live deals, competitors — tell us who’s off-limits."};
@@ -1248,7 +1256,7 @@ function bindAll(){
   go("infra-domains");});
  qa("[data-done]").forEach(function(b){if(b.disabled)return;b.addEventListener("click",function(){
   var id=b.getAttribute("data-done");
-  complete(id,({home:"Saved — it’s pinned in Slack too",offers:"Nice — your shortlist is ready for the call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
+  complete(id,({home:"Saved — it’s pinned in Slack too",offers:"Great — bring the ones you liked to your call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
  var el2=app.querySelector("[data-done2]");
  if(el2)el2.addEventListener("click",function(){complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
  var sl=app.querySelector("[data-slack]");
@@ -1313,6 +1321,7 @@ document.getElementById("demoBtn").addEventListener("click",function(){
 document.getElementById("resetBtn").addEventListener("click",resetAll);
 window.addEventListener("hashchange",render);
 window.addEventListener("message",function(e){try{if(e&&e.data&&e.data.ibHeight){var f=document.querySelector(".ibframe iframe");if(f)f.style.height=(e.data.ibHeight+2)+"px";}}catch(_){}});
+window.addEventListener("message",function(e){try{if(e&&e.data&&typeof e.data.obHeight==="number"){var f=document.getElementById("offersFrame");if(f)f.style.height=(e.data.obHeight+2)+"px";}}catch(_){}});
 render();
 obRestore();
 })();
