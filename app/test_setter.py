@@ -1173,6 +1173,23 @@ CTX_ALL_GOOD = {"red_flag_hits": [], "category": None, "first_touch": True, "slo
                 "autopilot_enabled": True}
 
 
+def test_drop_banned_interview_questions():
+    # Owner rule 2026-08-29: call-times/slots/timezone questions never reach a
+    # client - filtered at generation AND serve time; booking-link and
+    # meeting-length questions stay.
+    banned = ('When a lead asks for a booking link but none is wired up, which two default '
+              'call times should the inbox manager propose? Give two slots with timezone.')
+    kept = ['What link should people use to book a call with you?',
+            'When a lead asks to book the discovery call, what default meeting length (in minutes) should the inbox manager use?']
+    out = setter._drop_banned_interview_questions(kept + [banned])
+    check("interview filter: call-times/slots/timezone question dropped, others kept",
+          out == kept, out)
+    dicts = [{"id": "q-1", "q": banned}, {"id": "q-2", "q": kept[0]}]
+    out2 = setter._drop_banned_interview_questions(dicts)
+    check("interview filter: dict-shaped stored questions filtered too",
+          [q["id"] for q in out2] == ["q-2"], out2)
+
+
 def test_capture_booking_link_from_feedback():
     # A trainer rewrite carrying a scheduling URL wires an EMPTY booking link
     # (owner rule 2026-08-29); a wired agent is never overwritten; a non-
