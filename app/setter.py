@@ -4394,6 +4394,39 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                 new_text = re.sub(r"\n{3,}", "\n\n", new_text).strip()
                 remaining = [x for x in remaining if x not in _cut]
                 how += "+excised"
+        # NUMERIC VALUE SUPERSEDE (owner gauntlet 2026-08-30): merges build
+        # worked-example blocks that embed values ("...land within 3 business
+        # days..."), and when the owner later reteaches the value ("now 4
+        # business days") the conflicts sweep can't excise every embedded
+        # copy (some sit in URL-bearing example blocks the excision rightly
+        # skips). So: for every number-with-unit the correction states, sweep
+        # the manual for the SAME unit with a DIFFERENT number and rewrite it
+        # to the new value - deterministic, URL-safe (units never appear
+        # inside URLs). Covers the realistic retaught facts: days, weeks,
+        # hours, prices per month.
+        _UNIT_RE = r"(business days?|working days?|days?|weeks?|hours?|minutes?)"
+        for _m in re.finditer(r"(\d[\d,]*)\s+" + _UNIT_RE, note, re.I):
+            _newn, _unit = _m.group(1), _m.group(2)
+            _unit_pat = _re_unit = _unit.rstrip("s") if _unit.lower().endswith("s") else _unit
+            _pat = re.compile(r"\d[\d,]*(\s+)(" + re.escape(_re_unit) + r"s?)\b", re.I)
+            def _sub(mm, _n=_newn):
+                return _n + mm.group(1) + mm.group(2)
+            _new2 = _pat.sub(_sub, new_text)
+            if _new2 != new_text:
+                new_text = _new2
+                if "+valueswept" not in how:
+                    how += "+valueswept"
+        # Currency amounts only supersede amounts in the SAME stated context
+        # (e.g. "per month") - a blanket £-sweep would rewrite unrelated
+        # figures like the ICP's "£50,000 monthly cloud spend".
+        for _m in re.finditer(r"([£$€])\s?(\d[\d,]*)\s*(per month|a month|monthly|/mo\b|per year|a year|annually)", note, re.I):
+            _cur, _newn, _ctx = _m.group(1), _m.group(2), _m.group(3)
+            _pat = re.compile(re.escape(_cur) + r"\s?\d[\d,]*(\s*)(" + re.escape(_ctx) + r")", re.I)
+            _new2 = _pat.sub(lambda mm, _c=_cur, _n=_newn: _c + _n + mm.group(1) + mm.group(2), new_text)
+            if _new2 != new_text:
+                new_text = _new2
+                if "+valueswept" not in how:
+                    how += "+valueswept"
 
     edits = list(agent.get("instruction_edits") or [])
     edit_entry = {"note": note, "rule": rule, "at": at, "source": source or "manual", "how": how}
