@@ -13020,6 +13020,23 @@ _TRAINING_DOC_LOCKS: dict = {}
 _TRAINING_DOC_LOCKS_GUARD = threading.Lock()
 
 
+_TRAINING_MERGE_LOCKS = {}
+_TRAINING_MERGE_LOCKS_GUARD = threading.Lock()
+
+
+def _get_training_merge_lock(agent_id: str):
+    """Per-agent lock serializing background instruction-merge drains (the
+    decoupled merge worker) so two drains never interleave their agent-doc
+    load->save windows. Distinct from the doc lock on purpose: merges run
+    model calls and must never hold up answer saves."""
+    with _TRAINING_MERGE_LOCKS_GUARD:
+        lock = _TRAINING_MERGE_LOCKS.get(agent_id)
+        if lock is None:
+            lock = threading.Lock()
+            _TRAINING_MERGE_LOCKS[agent_id] = lock
+        return lock
+
+
 def _get_training_doc_lock(agent_id: str) -> threading.Lock:
     with _TRAINING_DOC_LOCKS_GUARD:
         lock = _TRAINING_DOC_LOCKS.get(agent_id)
@@ -16148,18 +16165,40 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                     except Exception:  # noqa: BLE001 - chaining is best-effort
                         pass
 
-            for entry in _drain_pending_merges(agent_id):
-                merge_agent = _load_agent(agent_id)
-                if not merge_agent:
-                    break
-                if (entry or {}).get("kind") == "edit":
-                    _merge_training_edit_entry(merge_agent, entry)
-                    continue
-                note = str((entry or {}).get("note") or "").strip()
-                if not note:
-                    continue
-                merge_correction_into_instructions(
-                    merge_agent, note, source=(entry or {}).get("source") or "training")
+            def _run_merge_drain():
+                for entry in _drain_pending_merges(agent_id):
+                    merge_agent = _load_agent(agent_id)
+                    if not merge_agent:
+                        break
+                    if (entry or {}).get("kind") == "edit":
+                        _merge_training_edit_entry(merge_agent, entry)
+                        continue
+                    note = str((entry or {}).get("note") or "").strip()
+                    if not note:
+                        continue
+                    merge_correction_into_instructions(
+                        merge_agent, note, source=(entry or {}).get("source") or "training")
+
+            if redraft == "pool":
+                # DECOUPLED MERGES (owner serve-path gauntlet 2026-08-30): the
+                # share-mode loop used to run the sweep THEN the full merge
+                # drain inline - and with a teach on nearly every card, the
+                # gpt-5-mini merges (5-15s each, plus conflict find/cleanup)
+                # dominated the loop, so pool sweeps ran minutes apart and
+                # deep cards were SERVED 10+ minutes stale. Merges now run in
+                # their own serialized worker (per-agent lock, so concurrent
+                # instruction load->saves can never clobber each other) while
+                # the sweep loop chains back-to-back; the digest carries every
+                # teaching verbatim into redrafts long before its merge lands,
+                # so nothing is lost by not waiting.
+                _mlock = _get_training_merge_lock(agent_id)
+                def _merge_bg():
+                    with _mlock:
+                        _run_merge_drain()
+                threading.Thread(target=_merge_bg, daemon=True,
+                                 name=f"setter-merge-{agent_id}").start()
+            else:
+                _run_merge_drain()
 
             if redraft is True:
                 # Owner trainer (Feature B, 2026-07-14): re-run every remaining
