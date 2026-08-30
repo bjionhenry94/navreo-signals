@@ -4374,6 +4374,26 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
             recheck = _find_instruction_conflicts(new_text, note)
             if recheck is not None:
                 remaining = list(recheck)
+        # DETERMINISTIC EXCISION (owner gauntlet 2026-08-30): the LLM cleanup
+        # was failing on the append path on EVERY entry (audit trail: each
+        # appended edit shows conflicts_remaining == conflicts_found), so
+        # contradictions piled up for weeks and the drafter picked sides at
+        # random ("2 to 5 days" beside a taught "3 business days"). The
+        # finder returns VERBATIM quotes, so cut the old passages textually:
+        # no model, no failure mode. A passage carrying a URL is left alone
+        # (never risk dropping a real link); everything else the owner's
+        # newest teaching contradicts is simply removed.
+        if remaining:
+            _cut = []
+            for _p in list(remaining):
+                if _p and _p in new_text and not _extract_urls(_p):
+                    new_text = new_text.replace(_p, " ", 1)
+                    _cut.append(_p)
+            if _cut:
+                new_text = re.sub(r"[ \t]{2,}", " ", new_text)
+                new_text = re.sub(r"\n{3,}", "\n\n", new_text).strip()
+                remaining = [x for x in remaining if x not in _cut]
+                how += "+excised"
 
     edits = list(agent.get("instruction_edits") or [])
     edit_entry = {"note": note, "rule": rule, "at": at, "source": source or "manual", "how": how}
