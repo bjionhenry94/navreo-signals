@@ -15242,11 +15242,26 @@ def _merge_training_edit_entry(agent: dict, entry: dict):
             if not edited_text:
                 return
             gist = str(entry.get("gist") or "").strip()
+            # WHAT THE OWNER ACTUALLY CHANGED travels verbatim (owner method
+            # 2026-08-30: they teach by tweaking a line of the draft, usually
+            # near the end - a blind [:600] prefix of the rewrite CUT THE
+            # TWEAK OFF, so the taught fact never reached the merge). A
+            # line-level diff captures exactly the added/changed lines; the
+            # concrete-value backstop in merge_correction_into_instructions
+            # then guarantees any value in them survives into the manual.
+            _orig_lines = {l.strip() for l in _draft_text(original).splitlines() if l.strip()}
+            _added = [l.strip() for l in edited_text.splitlines()
+                      if l.strip() and l.strip() not in _orig_lines]
+            _added_block = " / ".join(_added)[:800]
             rule = (f"For a reply like '{gist}', the owner rewrote our draft. Learn the tone and "
                     f"content of their version and write replies to similar messages the same "
                     f"way. Any concrete fact in their version (a price, timeframe, certification, "
                     f"name, link, or role) is the owner's stated truth - update the manual's "
-                    f"matching section to it: '{edited_text[:600]}'")
+                    f"matching section to it.")
+            if _added_block:
+                rule += (f" These are the exact lines the owner ADDED or CHANGED - treat every "
+                         f"fact in them as the newest truth: '{_added_block}'")
+            rule += f" Their full version, for tone: '{edited_text[:600]}'"
         merge_correction_into_instructions(agent, rule, source=entry.get("source") or "training-edit")
     except Exception:  # noqa: BLE001 - one bad edit must never sink the drain
         pass
