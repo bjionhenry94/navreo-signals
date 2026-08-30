@@ -16203,12 +16203,23 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                                     continue
                                 futs.append(pool.submit(_retrain_one_training_case, case, train_agent, eff, avail,
                                                        slot_status0, now, digest))
+                            _stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
                             for fut in concurrent.futures.as_completed(futs):
                                 try:
                                     fut.result()
                                     updated += 1
                                 except Exception:  # noqa: BLE001 - one bad case must never sink the pass
                                     pass
+                            # Stamp redrafted_at on the owner-path redraft too
+                            # (2026-08-30): only the pool sweep stamped it, so
+                            # a full owner redraft rewrote content while the
+                            # freshness accounting (caseFresh, the sweep-until-
+                            # fresh chain guard, staleness audits) still called
+                            # every card stale.
+                            for cid in unanswered_ids:
+                                case = cases_by_id.get(cid)
+                                if isinstance(case, dict):
+                                    case["redrafted_at"] = _stamp
 
             # Lost-update protection: reload the doc fresh right before the
             # final save. Only `cases` (when we redrafted) and `generating` are
