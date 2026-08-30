@@ -4171,6 +4171,8 @@ MERGE_INSTRUCTIONS_SYSTEM = """You maintain an AI appointment setter's instructi
 Rules:
 - Make the SMALLEST edit that makes future replies obey the correction. Do not rewrite paragraphs that are not affected.
 - Keep every existing link, price, and rule in the manual unless the correction explicitly overrides one of them.
+- THE OWNER'S NEWEST TEACHING ALWAYS WINS (owner ruling 2026-08-30): when the correction states a fact or rule that CONTRADICTS something already in the manual (an old price, an old doctrine like "we do not quote figures", an old timeframe, an old process), the correction is the owner's newest word and overrides - rewrite or delete the old passage so the whole manual agrees with the correction. Never let an older passage survive in a form that would make the setter disobey the correction.
+- CONCRETE VALUES ARE SACRED: when the correction contains a concrete value (a price or number, a timeframe, a certification, a person's name, a link, a role name), that exact value MUST appear in the updated manual, integrated into the section where it belongs. Never drop the value and keep only the behavioural gist.
 - Never invent a new link, price, or rule that the correction did not state.
 - META-FEEDBACK IS NEVER REPLY COPY (live incident 2026-08-21): when the correction is the owner's complaint about a draft's BEHAVIOUR ("You didn't answer the question.", "too vague", "this ignored what they said") rather than a fact or a rule, integrate the behavioural rule it implies (answer the lead's question directly and specifically) - NEVER store the complaint's words as something to say to leads. A manual that tells the setter to literally reply "You didn't answer the question" to a lead is always wrong.
 - A terse correction is the owner's shorthand, not finished copy: "Yes" to a question about guarantees, or "Ours is better." about competitors, records the STANCE (we say yes to NDAs; we position ourselves as stronger than watch-only tools) - integrate the stance in the manual's own plain voice, never enshrine the shorthand as a canned sentence the setter must send verbatim. Only wording the owner explicitly marks as what to say ("reply with:", a quoted model answer, a rewritten draft) is kept verbatim.
@@ -4302,7 +4304,20 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                 old_urls = set(_extract_urls(old))
                 cand_urls = set(_extract_urls(candidate))
                 max_len = max(20000, int(len(old) * 1.5))
-                if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len:
+                # CONCRETE-VALUE GUARANTEE (owner report 2026-08-30: a taught
+                # "pricing starts at £1,450" merge kept the old no-figures
+                # doctrine and dropped the number - the teaching silently
+                # vanished). Every concrete value the correction states
+                # (multi-digit numbers/prices, URLs) must survive into the
+                # merged manual; if the model dropped any, reject the merge
+                # and take the always-safe verbatim append below, which by
+                # construction preserves the whole note. 100% guarantee that
+                # a taught value reaches the brain, merged or appended.
+                _note_vals = set(re.findall(r"\d[\d,]{2,}", note)) | set(_extract_urls(note))
+                _cand_flat = candidate.replace(",", "")
+                _vals_ok = all(
+                    (v.replace(",", "") in _cand_flat) for v in _note_vals)
+                if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len and _vals_ok:
                     new_text = candidate
                     how = "merged"
                     general_rule = str(data.get("general_rule") or "").strip()
@@ -15229,7 +15244,9 @@ def _merge_training_edit_entry(agent: dict, entry: dict):
             gist = str(entry.get("gist") or "").strip()
             rule = (f"For a reply like '{gist}', the owner rewrote our draft. Learn the tone and "
                     f"content of their version and write replies to similar messages the same "
-                    f"way: '{edited_text[:600]}'")
+                    f"way. Any concrete fact in their version (a price, timeframe, certification, "
+                    f"name, link, or role) is the owner's stated truth - update the manual's "
+                    f"matching section to it: '{edited_text[:600]}'")
         merge_correction_into_instructions(agent, rule, source=entry.get("source") or "training-edit")
     except Exception:  # noqa: BLE001 - one bad edit must never sink the drain
         pass
