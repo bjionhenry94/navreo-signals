@@ -16952,7 +16952,29 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
             out = _drop_banned_interview_questions(out)
             # A call that returns nothing NEW means the offer is already covered:
             # END the interview (empty), never pad with the static set.
-            return out[:5]
+            out = out[:5]
+            # PINNED WIRING QUESTIONS (owner report 2026-08-31: a fresh
+            # agent's first intake happened not to ask for the booking link,
+            # so the first booking-ask scenario showed the [BOOKING LINK]
+            # placeholder and read as "it didn't learn"). On the FIRST
+            # interview of an agent whose booking_link field is empty, the
+            # booking-link question is guaranteed - it leads the set so the
+            # agent is wired before the first scenario is ever rated. Same
+            # for a missing phone number, second.
+            _first_iv = not any((i or {}).get("answers") for i in (doc.get("interviews") or []) if isinstance(i, dict))
+            if _first_iv:
+                _pins = []
+                if not str(agent.get("booking_link") or "").strip() and not any("booking" in q.lower() for q in out):
+                    _pins.append("When a lead asks to schedule or asks for your booking link, which exact "
+                                 "booking link should the inbox manager send? Paste the URL (or reply 'none yet').")
+                _lowmanual = _agent_instructions(agent).lower()
+                if "phone" not in _lowmanual.replace("[phone number]", "") and not any("phone" in q.lower() for q in out):
+                    _pins.append("If a lead asks for a phone number to call, what number should the inbox "
+                                 "manager give? (or reply 'we work by email').")
+                if _pins:
+                    out = _pins + [q for q in out if q not in _pins]
+                    out = out[:5]
+            return out
     except Exception:  # noqa: BLE001 - fall through only on a genuine failure
         pass
     # Genuine failure (no key / HTTP / JSON error): seed a FIRST interview from
