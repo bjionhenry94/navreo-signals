@@ -20137,20 +20137,26 @@ OUTLOOK_CAP_MIN_SENDS = 100
 OUTLOOK_CAP_PARK_MIN_SENDS = 500
 
                               # ── Maildoso (SMTP) ────────────────────────────
-# Owner ruling 2026-08-23: the Maildoso fleet (account_type=SMTP, ~600 boxes)
-# gets its own reply-rate cap engine under this same roof. Its own tiers, set by
-# the owner: >=1.0% -> 20/day, 0.5-1.0% -> 15/day, park below 0.5%. Note the
-# park threshold is 0.5% (not 0.7% like Google/Outlook) — a deliberately more
-# forgiving floor for a pool that warms externally on Instantly. This engine
-# only ever writes max_email_per_day (the campaign send cap); it NEVER touches
-# warm-up settings, which stay owned by Instantly.
-MAILDOSO_CAP_TIERS = (        # (min reply rate %, cap/day) — first match wins, descending
+# Owner ruling 2026-08-30 (SUPERSEDES the 2026-08-23 reply-rate tiering below):
+# the Maildoso fleet (account_type=SMTP, ~600 boxes) is taken OUT of the daily
+# reply-rate cap movement entirely and held at a FLAT 15/day. Reply rate no
+# longer moves a Maildoso box up (to 20) or parks it down (to 0) — every
+# non-resting Maildoso box is set to a fixed 15. Resting is still honoured: a
+# domain on the resting ledger is skipped here and its rest cap (0) stands, and
+# the separate rest_enforce pass keeps re-zeroing any resting box that drifts
+# live. This engine still only ever writes max_email_per_day (the campaign send
+# cap); it NEVER touches warm-up settings, which stay owned by Instantly.
+#
+# The old tier constants are retired but kept named for provenance — nothing
+# reads them now that the MAILDOSO profile carries `fixed_cap`.
+MAILDOSO_FIXED_CAP = 15       # flat send cap for every non-resting Maildoso box
+MAILDOSO_CAP_TIERS = (        # RETIRED 2026-08-30 — kept for provenance only
     (1.0, 20),
-    (0.5, 15),                # carries down to the 0.5% park boundary
+    (0.5, 15),
 )
-MAILDOSO_CAP_PAUSE = 0        # below 0.5%: park the domain into warm-up
-MAILDOSO_CAP_MIN_SENDS = 300  # floor before ANY move fires (like Google's)
-MAILDOSO_CAP_PARK_MIN_SENDS = 500  # fair-chance park floor, domain level
+MAILDOSO_CAP_PAUSE = 0        # RETIRED — no reply-rate parking; resting cap owns 0
+MAILDOSO_CAP_MIN_SENDS = 300  # RETIRED — fixed cap applies regardless of sends
+MAILDOSO_CAP_PARK_MIN_SENDS = 500  # RETIRED with the park verdict
 # SMTP is broader than Maildoso (Boomerang etc. can also be SMTP), so this
 # profile post-filters to boxes whose smtp_host names Maildoso — nothing else
 # in the SMTP class is touched.
@@ -20173,10 +20179,14 @@ CAP_PROFILES = {
     "OUTLOOK": {"account_type": "OUTLOOK", "tiers": OUTLOOK_CAP_TIERS,
                 "pause": OUTLOOK_CAP_PAUSE, "min_sends": OUTLOOK_CAP_MIN_SENDS,
                 "park_min_sends": OUTLOOK_CAP_PARK_MIN_SENDS},
+    # Maildoso is a FIXED-CAP profile (owner ruling 2026-08-30): `fixed_cap`
+    # holds every non-resting box at 15 and takes it out of reply-rate tiering.
+    # tiers/min_sends/park stay listed but are inert while fixed_cap is set.
     "MAILDOSO": {"account_type": "SMTP", "tiers": MAILDOSO_CAP_TIERS,
                  "pause": MAILDOSO_CAP_PAUSE, "min_sends": MAILDOSO_CAP_MIN_SENDS,
                  "park_min_sends": MAILDOSO_CAP_PARK_MIN_SENDS,
-                 "host_contains": MAILDOSO_HOST_CONTAINS},
+                 "host_contains": MAILDOSO_HOST_CONTAINS,
+                 "fixed_cap": MAILDOSO_FIXED_CAP},
 }
 
 
@@ -20272,6 +20282,7 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
         e["replies"] += int(s.get("replies_30d") or 0)
         e["boxes"].append(b)
 
+    fixed_cap = prof.get("fixed_cap")
     plan, skipped, changes = [], [], []
     for (ws, dom), e in sorted(agg.items()):
         rate = (e["replies"] * 100.0 / e["sent"]) if e["sent"] else 0.0
@@ -20283,6 +20294,20 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
             continue
         if dom in resting:
             skipped.append({**row, "reason": "resting"})
+            continue
+        # Fixed-cap profile (Maildoso, owner ruling 2026-08-30): reply rate is
+        # ignored — every non-resting box is held at the flat cap. The send
+        # floor, tiering and park verdict below are skipped entirely, so a
+        # thin-sample box is set to 15 just like a busy one.
+        if fixed_cap is not None:
+            row["new_cap"] = fixed_cap
+            row["pause"] = False
+            plan.append(row)
+            for b in e["boxes"]:
+                if (b.get("message_per_day") or 0) != fixed_cap:
+                    changes.append({"smartlead_id": b["smartlead_id"], "email": b["email"],
+                                    "workspace": ws, "domain": dom,
+                                    "from_cap": b.get("message_per_day"), "to_cap": fixed_cap})
             continue
         if e["sent"] < prof["min_sends"]:
             skipped.append({**row, "reason": f"under {prof['min_sends']}-send floor"})
@@ -20326,11 +20351,15 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
                                 "workspace": ws, "domain": dom,
                                 "from_cap": b.get("message_per_day"), "to_cap": cap})
 
-    tiers = list(prof["tiers"]) + ([(0, prof["pause"])] if prof["pause"] is not None else [])
+    if fixed_cap is not None:
+        tier_caps = [fixed_cap]
+    else:
+        tier_caps = [c for _, c in prof["tiers"]] + (
+            [prof["pause"]] if prof["pause"] is not None else [])
     out = {"ok": True, "provider": provider, "mode": mode, "domains": len(plan),
            "skipped": skipped, "mailboxesToChange": len(changes), "plan": plan,
            "tierCount": {str(c): sum(1 for r in plan if r["new_cap"] == c)
-                         for _, c in tiers}}
+                         for c in tier_caps}}
     if mode != "apply" or not changes:
         return out
 
@@ -20392,8 +20421,10 @@ def outlook_reply_caps(mode: str = "preview") -> dict:
 
 
 def maildoso_reply_caps(mode: str = "preview") -> dict:
-    """Maildoso SMTP boxes: 20/15 a day, park below 0.5% (owner ruling
-    2026-08-23). Send caps only — warm-up stays owned by Instantly."""
+    """Maildoso SMTP boxes: FLAT 15/day, out of reply-rate tiering (owner ruling
+    2026-08-30, supersedes the 20/15/park-below-0.5% tiering of 2026-08-23).
+    Every non-resting Maildoso box is held at 15; resting domains keep their
+    rest cap. Send caps only — warm-up stays owned by Instantly."""
     return provider_reply_caps("MAILDOSO", mode)
 
 
@@ -24089,10 +24120,10 @@ class Handler(SimpleHTTPRequestHandler):
                 threading.Thread(target=_google_caps_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/maildoso-reply-caps":
-                # The Maildoso half of cap tiering (owner ruling 2026-08-23):
-                # SMTP boxes whose smtp_host names Maildoso, on their own tiers
-                # (20/15, park below 0.5%). Send caps only — warm-up stays on
-                # Instantly. Parking is gated by CAP_PARK_V2 like Outlook's.
+                # The Maildoso half of cap tiering (owner ruling 2026-08-30):
+                # SMTP boxes whose smtp_host names Maildoso are held at a FLAT
+                # 15/day — reply rate no longer moves or parks them. Send caps
+                # only — warm-up stays on Instantly; resting boxes keep cap 0.
                 # ?mode=preview returns the plan without writing.
                 from urllib.parse import parse_qs, urlparse
                 q = parse_qs(urlparse(self.path).query)
