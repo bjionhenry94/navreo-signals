@@ -15293,6 +15293,33 @@ def _training_covers_at(doc: dict) -> str:
     return max((a for a in ats if a), default="")
 
 
+def _strip_draft_frame(text: str, sender_first: str = "") -> str:
+    """Drop the greeting ("Hi X,") and signoff (bare sender-name / sign-off
+    word) lines from a taught exemplar. Teaching the full rewrite verbatim
+    made the drafter reproduce the owner's frame INSIDE its own, doubling
+    greeting and signature ("Hi Chris, Hi Chris, ... Marton Marton" - live
+    serve-path gauntlet 2026-08-30). Only the body teaches; the drafter
+    already owns the frame."""
+    out = []
+    sf = (sender_first or "").strip().lower()
+    for ln in (text or "").splitlines():
+        t = ln.strip()
+        if not t:
+            out.append(ln); continue
+        tl = t.lower().rstrip(",.! ")
+        if re.match(r"^(hi|hello|hey|dear)\b", tl) and len(t) <= 40:
+            continue
+        if sf and tl == sf:
+            continue
+        if tl in ("best", "best regards", "kind regards", "regards", "thanks", "many thanks", "cheers"):
+            continue
+        if len(t.split()) <= 2 and t[:1].isupper() and re.match(r"^[A-Za-z][A-Za-z .'-]{1,25}$", t) and tl not in ("yes", "no"):
+            # a bare name-looking line at either frame edge
+            continue
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
 def _merge_training_edit_entry(agent: dict, entry: dict):
     """One queued edit-as-feedback entry (see route_training_answer) merged
     into the agent's instructions. lesson_from_edit distils the diff into a
@@ -15308,7 +15335,7 @@ def _merge_training_edit_entry(agent: dict, entry: dict):
         edited = str(entry.get("edited") or "")
         rule = lesson_from_edit(original, edited, {}, instructions=_agent_instructions(agent))
         if not rule:
-            edited_text = _draft_text(edited).strip()
+            edited_text = _strip_draft_frame(_draft_text(edited), _sender_first_for(agent)).strip()
             if not edited_text:
                 return
             gist = str(entry.get("gist") or "").strip()
@@ -15532,7 +15559,7 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 6000) -> str
         # Edit-as-feedback (fastloop 2026-08-20): the rewrite itself is the
         # correction, carried here VERBATIM so a redraft that runs before the
         # slow lesson-from-edit merge lands still obeys it.
-        edited = _draft_text(str(ans.get("edited_body") or "")).strip()
+        edited = _strip_draft_frame(_draft_text(str(ans.get("edited_body") or ""))).strip()
         if note:
             note_lines.append(f"- {note}")
         if edited:
