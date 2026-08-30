@@ -1940,7 +1940,7 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
     }
     if (owner_hints or "").strip():
         payload["owner_corrections"] = owner_hints.strip()[:2000]
-    user = json.dumps(payload)
+    user = json.dumps(payload, ensure_ascii=False)
     r = _openai({"model": OPENAI_MODEL,
                  "messages": [{"role": "system", "content": CLASSIFY_SYSTEM},
                              {"role": "user", "content": user}],
@@ -2362,7 +2362,7 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         # silently discarded almost all teaching before the drafter saw it -
         # the root cause of "it keeps repeating the same mistakes".
         payload["reviewer_feedback"] = regen_feedback.strip()[:REVIEWER_FEEDBACK_CAP]
-    user = json.dumps(payload)
+    user = json.dumps(payload, ensure_ascii=False)
     r = _openai({"model": OPENAI_MODEL,
                  "messages": [{"role": "system", "content": DRAFT_SYSTEM},
                              {"role": "user", "content": user}],
@@ -4294,7 +4294,7 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                      {"Authorization": f"Bearer {key}"},
                      {"model": OPENAI_MODEL,
                       "messages": [{"role": "system", "content": MERGE_INSTRUCTIONS_SYSTEM},
-                                  {"role": "user", "content": json.dumps(payload)}],
+                                  {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                       "response_format": {"type": "json_schema", "json_schema": {
                           "name": "setter_instructions_merge", "strict": True,
                           "schema": MERGE_INSTRUCTIONS_SCHEMA}}})
@@ -4355,7 +4355,7 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                          {"Authorization": f"Bearer {key}"},
                          {"model": OPENAI_MODEL,
                           "messages": [{"role": "system", "content": CLEANUP_INSTRUCTIONS_SYSTEM},
-                                      {"role": "user", "content": json.dumps(payload)}],
+                                      {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                           "response_format": {"type": "json_schema", "json_schema": {
                               "name": "setter_instructions_cleanup", "strict": True,
                               "schema": CLEANUP_INSTRUCTIONS_SCHEMA}}})
@@ -4549,7 +4549,7 @@ def lesson_from_edit(generated_html: str, sent_html: str, context: dict | None =
                  {"Authorization": f"Bearer {key}"},
                  {"model": OPENAI_MODEL,
                   "messages": [{"role": "system", "content": LESSON_FROM_EDIT_SYSTEM},
-                              {"role": "user", "content": json.dumps(payload)}],
+                              {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                   "response_format": {"type": "json_schema", "json_schema": {
                       "name": "setter_lesson_from_edit", "strict": True,
                       "schema": LESSON_FROM_EDIT_SCHEMA}}})
@@ -13859,7 +13859,7 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
                  {"Authorization": f"Bearer {key}"},
                  {"model": OPENAI_MODEL,
                   "messages": [{"role": "system", "content": TRAINING_SCENARIO_SYSTEM},
-                              {"role": "user", "content": json.dumps(payload)}],
+                              {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                   "response_format": {"type": "json_schema", "json_schema": {
                       "name": "setter_training_scenarios", "strict": True,
                       "schema": TRAINING_SCENARIO_SCHEMA}}})
@@ -17028,7 +17028,7 @@ def _training_chat_llm(agent: dict, message: str, context: dict, chat_log: list)
     }
     r = _openai({"model": OPENAI_MODEL,
                  "messages": [{"role": "system", "content": TRAINING_CHAT_SYSTEM},
-                             {"role": "user", "content": json.dumps(payload)}],
+                             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                  "response_format": {"type": "json_schema", "json_schema": {
                      "name": "training_chat", "strict": True, "schema": TRAINING_CHAT_SCHEMA}}}, key)
     if not isinstance(r, dict):
