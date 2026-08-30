@@ -16124,6 +16124,29 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             # permanent without anyone waiting on them.
             if redraft == "pool":
                 updated = _redraft_training_pool(agent_id)
+                # SWEEP UNTIL FRESH (owner report 2026-08-30: a booking-link
+                # teach at 16:23 never reached a card generated at 16:11 that
+                # sat beyond the redraft horizon - the trainer was then SERVED
+                # that pre-teach draft, "my booking system isn't wired yet",
+                # after wiring it). One horizon window per pass is not enough:
+                # if unanswered cards beyond the window are still stale after
+                # this pass, queue another pool pass - the worker's own loop
+                # picks it up, and passes chain until every unanswered card
+                # post-dates the newest teaching. `updated > 0` guards against
+                # spinning when nothing can progress.
+                if updated > 0:
+                    try:
+                        _doc_chk = _load_training(agent_id)
+                        _cov = str(_doc_chk.get("brain_covers_at") or "")
+                        _ansk = set((_doc_chk.get("answers") or {}).keys())
+                        _stale = sum(
+                            1 for c in (_doc_chk.get("cases") or [])
+                            if str(c.get("id")) not in _ansk
+                            and str(c.get("redrafted_at") or c.get("generated_at") or "") < _cov)
+                        if _stale > 0:
+                            _flag_training_retrain_queued(agent_id, redraft="pool")
+                    except Exception:  # noqa: BLE001 - chaining is best-effort
+                        pass
 
             for entry in _drain_pending_merges(agent_id):
                 merge_agent = _load_agent(agent_id)
