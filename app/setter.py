@@ -1522,6 +1522,7 @@ def lint_draft(html: str, ctx: dict):
     if booking:
         allowed_urls.add(_norm_url(booking))
     allowed_urls.update(_extract_urls(str(ctx.get("thread_text") or "")))
+    allowed_urls.update(_extract_urls(str(ctx.get("owner_facts") or "")))
 
     draft_urls = _extract_urls(text)
     for u in draft_urls:
@@ -1648,6 +1649,14 @@ def lint_draft(html: str, ctx: dict):
     allowed_text = " ".join([
         str(ctx.get("instructions") or ""),
         str(ctx.get("thread_text") or ""),
+        # Owner-taught facts the drafter was given (digest / LATEST OWNER
+        # RULES) count as an allowed source (owner report 2026-08-30): a
+        # phone number or price the owner taught in training reaches the
+        # drafter via reviewer_feedback before it is folded into the
+        # instructions - without this the linter flagged that taught number
+        # as "invented" and forced the draft back to the [PHONE NUMBER]
+        # placeholder, so the teaching never showed.
+        str(ctx.get("owner_facts") or ""),
         " ".join(str(x) for x in (ctx.get("slot_labels") or [])),
         " ".join(str(x) for x in (ctx.get("slot_links") or [])),
     ])
@@ -1960,7 +1969,7 @@ DRAFT_SCHEMA = {
 # Single budget for the reviewer_feedback payload field - draft_reply enforces
 # it as a backstop, and route_queue_redraft allocates within it feedback-first
 # (owner ruling 2026-07-16: the typed feedback is never the part that gets cut).
-REVIEWER_FEEDBACK_CAP = 4000
+REVIEWER_FEEDBACK_CAP = 8000
 
 DRAFT_SYSTEM = """You write the reply for a cold-email appointment-setter agent, in the team's OWN voice. It must read as if the same person who sent these real replies wrote it. Output real, sendable HTML: short paragraphs, each its own <div>...</div>, separated by <br>. Sign off with just the sender's first name on its own line: <div>{SenderFirst}</div> (NO "Best,", no "Kind regards" - the real replies just sign the name). NEVER write one run-on line.
 
@@ -1994,7 +2003,7 @@ Rules:
 - CALL-ALREADY-REQUESTED (owner HARD RULE 2026-08-28, every SDR). When lead_requested_call is true - the lead asked for the call, asked you to propose times, asked for a setup call, or said yes to one - the call is AGREED. NEVER write "Would you be open to a call...", "would you be up for a quick chat", or any phrasing that re-asks whether they want the call they just asked for: that reads as not listening. Propose the two times DIRECTLY as the scheduling sentence ("Does Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST work for you?" - with the same per-slot links/plain-text rules as the two-times default), keep any answer to their other questions first per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, and confirm who should join when they named attendees (their CFO, their security team). Everything else about the two-times machinery (slots verbatim, fallback ladder, constraints, LEAD-PROPOSED TIME) applies unchanged - only the openness re-ask is banned.
 - NO-CALL-SELLING (owner HARD RULE 2026-08-28, every SDR). Once scheduling is agreed - the lead proposed their own time OR asked for the call - the scheduling sentence contains the times and NOTHING else: no purpose clause, no value pitch, no "where I can run through the discovery call and show what the assessment will surface for you". They already want the call; selling it again reads as scripted. Accept or counter plainly ("Unfortunately I can't make Tue morning, but I can do Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST - does either work?") and stop. Describing what the call covers is allowed ONLY when the lead themselves asked what the call is for, and then it belongs in its own answer sentence per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, never bolted onto the time proposal.
 - ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST (owner rule 2026-08-27, every SDR). The FIRST paragraph after the greeting answers the specific thing the lead's latest message asked - their access question, their timeline question, their security question, their pricing question, their "do you apply fixes or just recommend" question - in their terms. NEVER open with a stock offer, product, or process preamble ("[the deliverable] comes from our [offer/assessment/audit], which we set up on a call") before the answer: opening with anything but the answer reads as dodging the question, and repeating the same explanation sentence across replies reads as a bot. Where the reply genuinely needs to explain how the offer works, weave it in as ONE short clause AFTER the answer, never as its own opening paragraph. When the lead asked several questions, answer each briefly in the order they asked. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
-- SELF-SERVE ASSET REQUEST (owner rule 2026-08-22, every SDR, live-confirmed, OVERRIDES the two-fresh-times default). When the lead asks for your BOOKING LINK or your PHONE NUMBER - especially when they say they will book or call themselves ("what's your booking link? I'll book direct", "what's your number? I'll give you a call") - ANSWER WITH JUST THAT ASSET and STOP. For a booking-link ask, give the booking_link value and nothing else about scheduling; do NOT also propose two call times. For a phone-number ask, give the phone number EXACTLY as the instructions state it; if the instructions contain NO phone number, you must NOT invent one - a fabricated number (for example "+44 7700 900123") is a serious error - instead write the literal placeholder [PHONE NUMBER] where the number would go ("My number is [PHONE NUMBER].") exactly as with [BOOKING LINK]: the owner fills it in during training, and manufacture no digits. Either way do NOT append the two-times "Would you be open to a call on ..." paragraph: the lead has chosen to self-serve, so a fresh call pitch talks straight past them.
+- SELF-SERVE ASSET REQUEST (owner rule 2026-08-22, every SDR, live-confirmed, OVERRIDES the two-fresh-times default). When the lead asks for your BOOKING LINK or your PHONE NUMBER - especially when they say they will book or call themselves ("what's your booking link? I'll book direct", "what's your number? I'll give you a call") - ANSWER WITH JUST THAT ASSET and STOP. For a booking-link ask, give the booking_link value and nothing else about scheduling; do NOT also propose two call times. For a phone-number ask, give the phone number EXACTLY as it appears in the instructions OR in reviewer_feedback/owner_corrections - a number the owner taught during training arrives there first, before it is folded into the instructions, so USE IT; only when NEITHER source contains a phone number do you write the literal placeholder [PHONE NUMBER] ("My number is [PHONE NUMBER]."). Never invent one - a fabricated number (for example "+44 7700 900123") is a serious error, so manufacture no digits: use the taught number if you were given one anywhere, otherwise the placeholder. Either way do NOT append the two-times "Would you be open to a call on ..." paragraph: the lead has chosen to self-serve, so a fresh call pitch talks straight past them.
 - ANSWER THE LEAD'S ACTUAL QUESTION FIRST (owner rule 2026-08-22, every SDR, live-confirmed). Before anything else, the draft must make a genuine ATTEMPT at the specific thing the lead asked. If they asked for case studies, ENGAGE the case studies - say plainly they are early-stage and give the actual anonymised outcomes or proof the instructions hold - never reply with a generic website overview and a call pitch as if they had asked "what do you do". The recipient must FEEL their question was heard and attempted, even when part of it must be deferred to a call. A reply that skips the actual question and jumps to "here is an overview, would you be open to a call" is wrong even when it is polite. Only after you have truly engaged their question may a call be offered, and only when call_ask allows it.
 - ONE ASK, EVER (owner rule 2026-08-17: "You're asking for a call twice, don't do that"). A draft asks for the call at most once. The two-times call ask, a general-window proposal, and the "When would be a good time for us to talk?" availability ask are three ALTERNATIVES: exactly one may appear in a draft, never two. Each fallback-ladder step REPLACES the call ask, it never adds a second ask on top. A draft containing both "Would you be open to a call" and "When would be a good time" is invalid. Never write the call-ask sentence at all when you have no times to put in it. And never write the same sentence or phrase twice anywhere in one draft. A lead who has already said yes to a call, booked one, or shared THEIR OWN booking/scheduling link has chosen the path: confirm it (for their link: say you'll grab a time on it) and make ZERO fresh asks.
 - THE CTA IS A DIRECT ASK, NEVER PASSIVE (owner rule 2026-08-20, every SDR, outranks the agent's instructions). When the draft moves toward a call or a next step, ask for it outright: propose the two specific times when you have them, otherwise ask plainly for their availability by the fallback ladder. Never leave the decision hanging with a passive, opt-in CTA that puts the choice back on the lead - no "when you're ready you can book", "feel free to book if you'd like", "let me know if you'd like to", "should you wish to", "book in whenever suits you", "you're welcome to book if that's of interest". The ONLY exception is a lead who has EXPLICITLY declined or asked to reconnect later (not interested, "circle back in a couple of months", "reach out after Q3"): there the timing/constraint rule below governs - defer warmly to their timing, make NO push, and manufacture no call ask.
@@ -2032,7 +2041,7 @@ Rules:
 - recent_thread, when present, is a transcript of this thread, oldest first: lines starting "US" are emails WE sent, lines starting "LEAD" are the lead's replies, and the final LEAD line is the same message as reply_body - the one you are answering now. Read the WHOLE transcript before writing: a later-turn reply must read as a natural continuation of it, never repeating something already said, never re-introducing yourself, and never re-pitching what the transcript shows was already offered, answered, declined, or agreed.
 - Anything the lead has stated as a condition or constraint anywhere in the thread - and above all in their latest reply - binds the draft, even when it sits beside interest. A stated timing ("not until next year", "reach out after the summer", "busy until Q3") means propose NO call time now, even when slots were supplied and even when call_ask says times are the default: acknowledge their interest, defer to their timing in one natural sentence ("I'll circle back in the new year as you suggested"), and ask for nothing more. A stated channel or contact preference ("email only", "send it over rather than a call", "speak to my colleague") is obeyed the same way - the constraint always outranks the call-times default and every template mandate. Under a stated constraint, the open availability ask ("when would be a good time to talk?") counts as proposing a call and is equally banned. And a visible phone number is not a call request: only offer to ring the lead when they ASKED to be called - a number in a signature, or a request for terms or info "via WhatsApp", means send the content they asked for, not a call offer.
 - reviewer_feedback, when present, is the human reviewer's instruction for THIS regeneration ("shorter", "don't offer times", "mention the guide is free") - follow it faithfully while keeping every rule above. It never overrides the never-invent rules.
-- reviewer_feedback/owner_corrections may contain a LATEST OWNER RULES block: those rules are the owner's newest teaching and take priority over everything else, including older instructions - obey them exactly.
+- reviewer_feedback/owner_corrections may contain a LATEST OWNER RULES block: those rules are the owner's newest teaching and take priority over everything else, including older instructions - obey them exactly. It also carries the owner's directly-stated FACTS about their offer (a phone number, a person's name, a price or tier, a link, a deliverable, an availability window, and so on), under headings like "The owner told us these things directly" or "facts to use". Treat every such fact as ground truth and use it verbatim exactly as you would a fact written in the instructions - a fact the owner taught in training reaches you HERE first, before it is folded into the instructions, so NEVER answer with a placeholder, "I'll confirm that later", or a dodge for something the owner has already told you in this feedback.
 - feedback_note is ONLY about reviewer_feedback, and only about the part you could NOT honour. When reviewer_feedback asks for something you have NO source for (a resource link when the instructions contain none, a fact or asset not present in the instructions, thread, or slots), do NOT invent it and do NOT silently ignore the ask - write one plain-English sentence in feedback_note saying what you couldn't do and why, plus what would unblock it (e.g. "No agent is assigned to this campaign, so I have no resource links to include - assign an agent or paste the link into the draft manually."). Never use feedback_note for gaps the reviewer didn't raise: a missing booking link, missing call slots, empty instructions, or any other limitation is NOT feedback_note material unless reviewer_feedback itself asked for that thing. When you honoured the feedback fully, or there is no reviewer_feedback, feedback_note must be exactly "".
 - Output STRICT JSON: {"subject": "...", "html": "...", "feedback_note": "..."}. subject should read "Re: {original subject}" (or a sensible one if none given). html is the full reply body, written as the div/br block-paragraph shape shown above, using <a href="..."> for links, never markdown, never one run-on line."""
 
@@ -5782,6 +5791,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             "reply_body": body_text,
             "primary_intent": classification.get("primary_intent") or "",
             "lead_requested_call": bool(classification.get("lead_requested_call")),
+            "owner_facts": _regen_fb,
         }
         lint_ok, lint_reason = lint_draft(draft_body, ctx_lint)
 
@@ -12699,6 +12709,7 @@ def _redraft_sync(payload):
                 "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                 "primary_intent": classification.get("primary_intent") or "",
             "lead_requested_call": bool(classification.get("lead_requested_call")),
+            "owner_facts": combined_feedback,
             })
         first_touch = True
         if not row.get("is_test") and _SB:
@@ -13928,6 +13939,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                 "reply_body": body,
                 "primary_intent": cls.get("primary_intent") or "",
                 "lead_requested_call": bool(cls.get("lead_requested_call")),
+                "owner_facts": mem_digest,
             }
             # One lint-feedback redraft (owner report 2026-08-27, "countless
             # times"): a training draft that fails lint used to ship to the
@@ -15357,7 +15369,7 @@ def _maybe_run_queued_retrain(agent_id):
         pass
 
 
-def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str:
+def _training_session_feedback_digest(doc: dict, limit_chars: int = 6000) -> str:
     """Plain-English digest built from THIS training doc's own answers -
     every note plus every explicit wrong mark, newest first, capped to
     roughly limit_chars. Built from the training doc's answers dict
@@ -15375,7 +15387,16 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str
     answers = dict(doc.get("answers") or {})
     cases_by_id = {str(c.get("id")): c for c in (doc.get("cases") or [])}
     items = sorted(answers.items(), key=lambda kv: (kv[1] or {}).get("at") or "")
-    lines = []
+
+    # HARD FACTS vs SOFT SIGNALS (owner report 2026-08-30: taught facts, e.g.
+    # a phone number given in the interview, weren't reaching drafts - the
+    # digest cap evicted the interview facts because they sat AFTER every
+    # note/edit/wrong line). The owner's OUTRIGHT statements - direct
+    # correction notes and interview answers - are ground truth and go at the
+    # FRONT of the digest, so a cap can only ever bite the softer,
+    # example-shaped signals that follow, never a stated fact. Newest-first.
+    note_lines = []
+    soft_lines = []
     for case_id, ans in reversed(items):
         ans = ans or {}
         note = str(ans.get("note") or "").strip()
@@ -15384,29 +15405,23 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str
         # slow lesson-from-edit merge lands still obeys it.
         edited = _draft_text(str(ans.get("edited_body") or "")).strip()
         if note:
-            lines.append(f"- {note}")
+            note_lines.append(f"- {note}")
         if edited:
             case = cases_by_id.get(str(case_id)) or {}
             inbound_snip = str((case.get("inbound") or {}).get("body") or "")[:80]
-            lines.append(f"- For a reply like '{inbound_snip}', the owner rewrote our draft. "
-                         f"Write similar replies the way they did: '{edited[:220]}'")
+            soft_lines.append(f"- For a reply like '{inbound_snip}', the owner rewrote our draft. "
+                              f"Write similar replies the way they did: '{edited[:220]}'")
         if note or edited:
             continue
         if ans.get("decision_ok") is False or ans.get("reply_ok") is False:
             case = cases_by_id.get(str(case_id)) or {}
             inbound_snip = str((case.get("inbound") or {}).get("body") or "")[:80]
             if ans.get("decision_ok") is False:
-                lines.append(f"- The owner said the '{case.get('decision') or 'call'}' call was wrong for a "
-                             f"reply like: '{inbound_snip}'")
+                soft_lines.append(f"- The owner said the '{case.get('decision') or 'call'}' call was wrong for a "
+                                  f"reply like: '{inbound_snip}'")
             else:
-                lines.append(f"- The owner disliked the draft written for: '{inbound_snip}'")
-    digest = "\n".join(lines)
+                soft_lines.append(f"- The owner disliked the draft written for: '{inbound_snip}'")
 
-    # Offer-interview answers (fastloop 2026-08-20) ride the digest too, so
-    # the very first generate - and every redraft - obeys them the moment
-    # they are given, without waiting on the slow instruction merge. Newest
-    # interview first, answered questions only, capped alongside everything
-    # else by the final limit_chars cut.
     iv_lines = []
     for interview in reversed(list(doc.get("interviews") or [])[-4:]):
         interview = interview or {}
@@ -15415,25 +15430,31 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 2000) -> str
             a = str(iv_answers.get(str((q or {}).get("id"))) or "").strip()
             if a:
                 iv_lines.append(f"- Q: {str((q or {}).get('q') or '').strip()} A: {a[:200]}")
-    if iv_lines and len(digest) < limit_chars:
-        iv_block = "The owner answered these questions about their offer - facts to use:\n" + "\n".join(iv_lines)
-        digest = (digest + "\n\n" + iv_block) if digest else iv_block
+
+    blocks = []
+    if note_lines:
+        blocks.append("The owner told us these things directly - treat every one as fact and use it:\n"
+                      + "\n".join(note_lines))
+    if iv_lines:
+        blocks.append("The owner answered these questions about their offer - facts to use:\n"
+                      + "\n".join(iv_lines))
+    if soft_lines:
+        blocks.append("\n".join(soft_lines))
 
     confirmed = list(doc.get("confirmed_examples") or [])
-    if confirmed and len(digest) < limit_chars:
-        conf_lines = []
-        for entry in reversed(confirmed[-5:]):  # newest ~5, newest first
-            entry = entry or {}
-            gist = str(entry.get("gist") or "").strip()
-            if not gist:
-                continue
-            verb = "answer on its own" if entry.get("decision") == "auto_send" else "leave it to a human"
-            conf_lines.append(f"- '{gist}' -> {verb}")
-        if conf_lines:
-            conf_block = ("The owner CONFIRMED these calls were right - treat similar replies the same "
-                          "way:\n" + "\n".join(conf_lines))
-            digest = (digest + "\n\n" + conf_block) if digest else conf_block
-    return digest[:limit_chars]
+    conf_lines = []
+    for entry in reversed(confirmed[-5:]):  # newest ~5, newest first
+        entry = entry or {}
+        gist = str(entry.get("gist") or "").strip()
+        if not gist:
+            continue
+        verb = "answer on its own" if entry.get("decision") == "auto_send" else "leave it to a human"
+        conf_lines.append(f"- '{gist}' -> {verb}")
+    if conf_lines:
+        blocks.append("The owner CONFIRMED these calls were right - treat similar replies the same way:\n"
+                      + "\n".join(conf_lines))
+
+    return "\n\n".join(blocks)[:limit_chars]
 
 
 def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: dict, avail: list,
@@ -15514,6 +15535,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                     "primary_intent": cls.get("primary_intent") or "",
                 "lead_requested_call": bool(cls.get("lead_requested_call")),
+                "owner_facts": digest,
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
@@ -15644,6 +15666,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                     "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
                     "primary_intent": cls.get("primary_intent") or "",
                 "lead_requested_call": bool(cls.get("lead_requested_call")),
+                "owner_facts": digest,
                 })
             except Exception:  # noqa: BLE001
                 draft_html = None
