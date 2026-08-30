@@ -9821,7 +9821,19 @@ def _fetch_queue_rows(status: str, limit: int, before: str = None,
         # than the client's oldest loaded row (infinite scroll). No `before`
         # is the normal newest-`limit` head fetch, byte-identical to before.
         cursor = f"&created_at=lt.{quote(before, safe='')}" if before else ""
-        base = (f"{_list_ws_filter()}&order=created_at.desc&limit={limit}{cursor}"
+        # is_test=false at the SQL layer (list-starvation fix 2026-08-30): the
+        # inbox never renders test rows (the FE filters !is_test universally;
+        # the "Show test items" toggle was retired 2026-08-17) and every pill
+        # COUNT is is_test=false. But this list fetch used to pull test rows
+        # too, and when synthetic-training seeds a few hundred fresh is_test
+        # needs_review rows they are the NEWEST by created_at — they filled the
+        # whole limit-200 head window (198/200 test), so the real threads whose
+        # representative row fell outside it silently vanished from the list
+        # while the count still reported them (badge "Needs review 32" over an
+        # all-but-empty list, owner report 2026-08-30). Excluding test rows in
+        # the query realigns the list with the count and frees the window for
+        # real conversations. Training/QA rows live on their own surfaces.
+        base = (f"{_list_ws_filter()}&is_test=eq.false&order=created_at.desc&limit={limit}{cursor}"
                 f"&select={QUEUE_LIST_COLUMNS}")
         # For the direction-aware pills (needs_review / sent / auto_sent) the
         # membership depends on who spoke last, computed at read time from
