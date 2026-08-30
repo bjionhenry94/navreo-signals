@@ -15249,19 +15249,31 @@ def _merge_training_edit_entry(agent: dict, entry: dict):
             # line-level diff captures exactly the added/changed lines; the
             # concrete-value backstop in merge_correction_into_instructions
             # then guarantees any value in them survives into the manual.
-            _orig_lines = {l.strip() for l in _draft_text(original).splitlines() if l.strip()}
-            _added = [l.strip() for l in edited_text.splitlines()
-                      if l.strip() and l.strip() not in _orig_lines]
+            # Format-normalized diff (2026-08-30): compare on whitespace-
+            # collapsed sentences, not raw lines - the editor (or a
+            # contenteditable rewrite) can re-wrap lines, and a raw line-set
+            # diff then counts UNCHANGED draft text as "owner-added". That
+            # once taught a draft's own fabricated phone number into the
+            # brain as if the owner had stated it. Sentences of the original
+            # can never become owner-taught facts.
+            import re as _re
+            def _sents(txt):
+                return [_re.sub(r"\s+", " ", x).strip()
+                        for x in _re.split(r"(?<=[.!?])\s+|\n+", txt) if x.strip()]
+            _orig_sents = set(_sents(_draft_text(original)))
+            _added = [x for x in _sents(edited_text) if x not in _orig_sents]
             _added_block = " / ".join(_added)[:800]
             rule = (f"For a reply like '{gist}', the owner rewrote our draft. Learn the tone and "
                     f"content of their version and write replies to similar messages the same "
-                    f"way. Any concrete fact in their version (a price, timeframe, certification, "
-                    f"name, link, or role) is the owner's stated truth - update the manual's "
-                    f"matching section to it.")
+                    f"way.")
             if _added_block:
-                rule += (f" These are the exact lines the owner ADDED or CHANGED - treat every "
-                         f"fact in them as the newest truth: '{_added_block}'")
-            rule += f" Their full version, for tone: '{edited_text[:600]}'"
+                rule += (f" These are the exact sentences the owner ADDED or CHANGED - treat "
+                         f"every concrete fact in them (a price, timeframe, certification, name, "
+                         f"link, or role) as the owner's newest stated truth and update the "
+                         f"manual's matching section: '{_added_block}'")
+            rule += (f" Their full version, for TONE AND STRUCTURE ONLY - facts appearing only "
+                     f"here and not in the added sentences above are the draft's own words, NOT "
+                     f"owner statements, never store them as facts: '{edited_text[:600]}'")
         merge_correction_into_instructions(agent, rule, source=entry.get("source") or "training-edit")
     except Exception:  # noqa: BLE001 - one bad edit must never sink the drain
         pass
@@ -15564,26 +15576,39 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 # 1 2026-08-17: never "Hi there").
                 lead_first = _case_lead_first_name(case)
                 _train_ca = call_ask_for(cls, body, "", first_touch=True)
-                d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
-                                 "first_outbound": first_outbound, "call_ask": _train_ca}, agent_snapshot, cls, slots, slot_status,
-                                sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
-                draft_html = d.get("html")
-                if draft_html:
-                    # Second sweep (owner brief 2026-07-14) - BEFORE lint so
-                    # lint checks the final, proofread text.
-                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot), _booking_link(agent_snapshot))
-                lint_ok, lint_reason = lint_draft(draft_html, {
-                    "subject": d.get("subject"), "first_name": lead_first,
-                    "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
-                    "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
-                    "slot_labels": [s.get("label") for s in slots],
-                    "instructions": _agent_instructions(agent_snapshot),
-                    "booking_link": _booking_link(agent_snapshot), "thread_text": body,
-                    "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
-                    "primary_intent": cls.get("primary_intent") or "",
-                "lead_requested_call": bool(cls.get("lead_requested_call")),
-                "owner_facts": digest,
-                })
+                # Lint-retry (2026-08-30): a lint-FAILED redraft used to be
+                # stored and DISPLAYED anyway - a fabricated phone number
+                # (the rulebook's own "for example" number) reached the
+                # trainer as "the reply we'd send", and their edit then
+                # taught it back into the brain as fact. One retry with the
+                # lint reason fed back, mirroring _build_training_case.
+                for _attempt in range(2):
+                    _fb = digest if _attempt == 0 else (
+                        (digest + "\n\n" if digest else "") +
+                        "PREVIOUS DRAFT REJECTED: " + str(lint_reason or "") +
+                        " - fix exactly that and change nothing else.")
+                    d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
+                                     "first_outbound": first_outbound, "call_ask": _train_ca}, agent_snapshot, cls, slots, slot_status,
+                                    sender_first=_sender_first_for(agent_snapshot), regen_feedback=_fb)
+                    draft_html = d.get("html")
+                    if draft_html:
+                        # Second sweep (owner brief 2026-07-14) - BEFORE lint so
+                        # lint checks the final, proofread text.
+                        draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot), _booking_link(agent_snapshot))
+                    lint_ok, lint_reason = lint_draft(draft_html, {
+                        "subject": d.get("subject"), "first_name": lead_first,
+                        "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
+                        "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                        "slot_labels": [s.get("label") for s in slots],
+                        "instructions": _agent_instructions(agent_snapshot),
+                        "booking_link": _booking_link(agent_snapshot), "thread_text": body,
+                        "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+                        "primary_intent": cls.get("primary_intent") or "",
+                    "lead_requested_call": bool(cls.get("lead_requested_call")),
+                    "owner_facts": digest,
+                    })
+                    if lint_ok:
+                        break
             except Exception:  # noqa: BLE001
                 draft_html = None
                 lint_ok, lint_reason = False, "No draft was produced."
@@ -15695,26 +15720,39 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 # 2026-08-17: never "Hi there").
                 lead_first = _case_lead_first_name(case)
                 _train_ca = call_ask_for(cls, body, "", first_touch=True)
-                d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
-                                 "first_outbound": first_outbound, "call_ask": _train_ca}, agent_snapshot, cls, slots, slot_status,
-                                sender_first=_sender_first_for(agent_snapshot), regen_feedback=digest)
-                draft_html = d.get("html")
-                if draft_html:
-                    # Second sweep (owner brief 2026-07-14) - BEFORE lint so
-                    # lint checks the final, proofread text.
-                    draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot), _booking_link(agent_snapshot))
-                lint_ok, lint_reason = lint_draft(draft_html, {
-                    "subject": d.get("subject"), "first_name": lead_first,
-                    "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
-                    "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
-                    "slot_labels": [s.get("label") for s in slots],
-                    "instructions": _agent_instructions(agent_snapshot),
-                    "booking_link": _booking_link(agent_snapshot), "thread_text": body,
-                    "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
-                    "primary_intent": cls.get("primary_intent") or "",
-                "lead_requested_call": bool(cls.get("lead_requested_call")),
-                "owner_facts": digest,
-                })
+                # Lint-retry (2026-08-30): a lint-FAILED redraft used to be
+                # stored and DISPLAYED anyway - a fabricated phone number
+                # (the rulebook's own "for example" number) reached the
+                # trainer as "the reply we'd send", and their edit then
+                # taught it back into the brain as fact. One retry with the
+                # lint reason fed back, mirroring _build_training_case.
+                for _attempt in range(2):
+                    _fb = digest if _attempt == 0 else (
+                        (digest + "\n\n" if digest else "") +
+                        "PREVIOUS DRAFT REJECTED: " + str(lint_reason or "") +
+                        " - fix exactly that and change nothing else.")
+                    d = draft_reply({"first_name": lead_first, "subject": subject, "body": body,
+                                     "first_outbound": first_outbound, "call_ask": _train_ca}, agent_snapshot, cls, slots, slot_status,
+                                    sender_first=_sender_first_for(agent_snapshot), regen_feedback=_fb)
+                    draft_html = d.get("html")
+                    if draft_html:
+                        # Second sweep (owner brief 2026-07-14) - BEFORE lint so
+                        # lint checks the final, proofread text.
+                        draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent_snapshot), _booking_link(agent_snapshot))
+                    lint_ok, lint_reason = lint_draft(draft_html, {
+                        "subject": d.get("subject"), "first_name": lead_first,
+                        "needs_resource_link": "send_resource" in (cls.get("all_intents") or []),
+                        "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                        "slot_labels": [s.get("label") for s in slots],
+                        "instructions": _agent_instructions(agent_snapshot),
+                        "booking_link": _booking_link(agent_snapshot), "thread_text": body,
+                        "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
+                        "primary_intent": cls.get("primary_intent") or "",
+                    "lead_requested_call": bool(cls.get("lead_requested_call")),
+                    "owner_facts": digest,
+                    })
+                    if lint_ok:
+                        break
             except Exception:  # noqa: BLE001
                 draft_html = None
                 lint_ok, lint_reason = False, "No draft was produced."
