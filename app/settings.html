@@ -378,6 +378,19 @@ async function obOpen(row){
   const picked = Object.keys(doc.offers||{}).filter(k=>doc.offers[k]);
   const offers = offerList.concat(picked.map(obEsc)).join(", ") || "—";
   const notes = Object.values(doc.notes||{}).filter(Boolean).map(obEsc).join("<br>") || "—";
+  // Do-not-contact lists the client linked on the "Who we should never email" card.
+  const dncRows = (doc.dncLists||[])
+    .map(r=>({name:String((r&&r.name)||"").trim(), url:String((r&&r.url)||"").trim()}))
+    .filter(r=>r.name||r.url);
+  const dnc = dncRows.length
+    ? dncRows.map(r=>{
+        const nm = obEsc(r.name||"Untitled list");
+        if(!r.url) return nm;
+        return /^https?:\/\//i.test(r.url)
+          ? `${nm} — <a href="${obEsc(r.url)}" target="_blank" rel="noopener">${obEsc(r.url)}</a>`
+          : `${nm} — ${obEsc(r.url)}`;
+      }).join("<br>")
+    : (doc.dncNone ? "Client confirmed: nobody to block" : "—");
   const field = (label,val)=>`<div style="margin:10px 0"><div style="font-size:12px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em">${label}</div><div style="color:var(--ink)">${val}</div></div>`;
   // Onboarding intake answers (the 14 questions) — kept in step with onboarding.html QS.
   const INTAKE_QS = [
@@ -405,6 +418,7 @@ async function obOpen(row){
     + field("Audience", obEsc(doc.offerAudience||"—"))
     + field("Senders", senders)
     + field("Offers", offers)
+    + field("Do-not-contact lists", dnc)
     + field("Redirect / domains", obEsc(doc.redirect||Object.keys(doc.domainPicks||{}).join(", ")||"—"))
     + field("Notes on emails", notes)
     + field("Last saved", obEsc(obAgo(row.updated_at)) + (row.created_at?` · started ${obEsc(obAgo(row.created_at))}`:""))

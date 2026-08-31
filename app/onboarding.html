@@ -405,6 +405,17 @@ textarea.ob-dnc { width:100%; box-sizing:border-box; border:1.5px solid var(--li
   border-radius:12px; background:#fff; color:var(--ink); padding:12px; font:inherit;
   font-size:14.5px; min-height:96px; resize:vertical; }
 textarea.ob-dnc:focus { outline:none; box-shadow:var(--focus); }
+/* never-email card: one row per do-not-contact list — what it is + the link, side by side */
+.dncrows { display:grid; gap:9px; }
+.dncrow { display:flex; gap:8px; align-items:center; }
+.dncrow .ob-inp.nm { flex:1; font-weight:600; }
+.dncrow .ob-inp.lk { flex:1.45; }
+.dncrow .srm { border:none; background:var(--bg-sunken); color:var(--ink-3); width:32px; height:32px;
+  border-radius:50%; font-size:15px; cursor:pointer; flex:none; }
+.dncrow .srm:hover { color:var(--ink); }
+.dncrow .srm:focus-visible { outline:none; box-shadow:var(--focus); }
+.dnc-add { margin-top:12px; display:flex; justify-content:center; }
+@media (max-width:600px){ .dncrow { flex-wrap:wrap; } .dncrow .ob-inp.lk { flex:1 1 100%; } }
 input.ob-inp { border:1.5px solid var(--line-2); border-radius:9px; background:#fff;
   color:var(--ink); padding:10px 12px; font:inherit; font-size:14px; flex:1; min-width:0; }
 input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
@@ -743,7 +754,7 @@ var SCENS=[
 ];
 
 var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
- notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},intake:{},intakeTouched:{},intakeOk:{},tw:false,mine:{},
+ notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},intake:{},intakeTouched:{},intakeOk:{},tw:false,mine:{},dncLists:[],dncNone:false,
  senders:[{name:"John Doe",title:"VP Sales"}],
  redirect:"",domainPicks:{}};
 var S=JSON.parse(JSON.stringify(FRESH));
@@ -1164,10 +1175,26 @@ var PAGES={
   +hrow("reports","Weekly reports","")
   +'</div></div>'
   +'<div class="ob-foot2"><button class="btn-go" data-done="home">Got it</button></div>';},
- block:function(){return '<div class="headline">Who we should <span class="date">never email</span>.</div>'
-  +'<div class="subline">Your clients, live deals, competitors. Type or paste — no spreadsheet needed. We’ll double-check with you 2 days before launch.</div>'
-  +'<div class="ob-body"><textarea class="ob-dnc" placeholder="Northwind Logistics · jane@bigclient.com · rivalco.com"></textarea></div>'
-  +'<div class="ob-foot2"><button class="btn-ghost" data-done="block">Save list</button><button class="btn-ghost" data-done2="block">Nobody to block</button></div>';},
+ block:function(){
+  if(!Array.isArray(S.dncLists))S.dncLists=[];
+  if(!S.dncLists.length)S.dncLists=[{name:"",url:""}];
+  function av(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
+  var n=S.dncLists.length;
+  var rows=S.dncLists.map(function(r,i){
+   return '<div class="dncrow"><input class="ob-inp nm" data-dncf="name:'+i+'" value="'+av(r.name)+'" placeholder="What it is — e.g. Current clients" aria-label="What this list is">'
+    +'<input class="ob-inp lk" data-dncf="url:'+i+'" value="'+av(r.url)+'" inputmode="url" placeholder="Paste the link to the list" aria-label="Link to this list">'
+    +(n>1?'<button class="srm" data-dncrm="'+i+'" aria-label="Remove this list">✕</button>':'')+'</div>';
+  }).join("");
+  return '<div class="headline">Who we should <span class="date">never email</span>.</div>'
+  +'<div class="subline">Your clients, live deals, competitors. Link us every do-not-contact list you keep — as many as you like. We’ll double-check with you 2 days before launch.</div>'
+  +'<div class="ob-body">'
+  +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/9da21f5d895442ae972d0f2a298b5eec" title="Who we should never email — Bjion, Navreo" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
+  +'<p class="ob-vcap">Watch this first — what to send, and the format that makes it easy.</p>'
+  +'<div class="dncrows">'+rows+'</div>'
+  +'<div class="dnc-add"><button class="btn-ghost" data-dncadd>＋ Add another list</button></div>'
+  +'<div class="ob-res"><a class="ob-rlink" href="https://docs.google.com/spreadsheets/d/1Dbuf-_q-QaNbW9dTY3w2mH6WeQjEtBP-y0XWC_ICm4k/edit" target="_blank" rel="noopener">See the example format ↗</a></div>'
+  +'</div>'
+  +'<div class="ob-foot2"><button class="btn-ghost" data-dncsave>Save my lists</button><button class="btn-ghost" data-done2="block">Nobody to block</button></div>';},
  emails:function(){
   var i=S.eIdx,e=EMAILS[i],read=S.eRead,all=EMAILS.length,left=all-read;
   var bars="";for(var b=0;b<all;b++){bars+='<i class="'+(b<read?"on":"")+'"></i>';}
@@ -1370,7 +1397,8 @@ function route(){var h=location.hash.replace(/^#\/?/,"");return h||"";}
 function render(){
  var app=document.getElementById("app");
  var r=route();
- var out='<div class="ob-top"><div class="ob-brand"><img src="navreo-logo.png" alt="Navreo"><span>· Acme Corp</span></div>'
+ var _cn=(S.clientName||S.sigCompany||S.offerAudience||"").trim();
+ var out='<div class="ob-top"><div class="ob-brand"><img src="navreo-logo.png" alt="Navreo">'+(_cn?'<span>· '+_cn.replace(/</g,"&lt;")+'</span>':'')+'</div>'
   +'<button class="ob-date mono '+(S.locked?"locked":"")+'" data-pop="chain">🚀 <u>'+LDATE()+(S.locked?" · locked ✓":"")+'</u></button></div>';
 
  if(r&&PAGES[r]){
@@ -1527,9 +1555,27 @@ function bindAll(){
   go("infra-domains");});
  qa("[data-done]").forEach(function(b){if(b.disabled)return;b.addEventListener("click",function(){
   var id=b.getAttribute("data-done");
-  complete(id,({home:"Saved — it’s pinned in Slack too",business:"3 checked, 19 waiting whenever you fancy — thank you",offers:"Great — bring the ones you liked to your call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
+  complete(id,({home:"Saved — it’s pinned in Slack too",business:"3 checked, 19 waiting whenever you fancy — thank you",offers:"Great — bring the ones you liked to your call",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
+ /* never-email card: list rows (what it is + link), add/remove, validated save */
+ qa("[data-dncf]").forEach(function(inp){
+  var kv=inp.getAttribute("data-dncf").split(":"),f=kv[0],i=+kv[1];
+  inp.addEventListener("input",function(){if(S.dncLists&&S.dncLists[i]){S.dncLists[i][f]=inp.value;save();}});});
+ qa("[data-dncrm]").forEach(function(b){b.addEventListener("click",function(){
+  S.dncLists.splice(+b.getAttribute("data-dncrm"),1);save();render();});});
+ var dna=app.querySelector("[data-dncadd]");
+ if(dna)dna.addEventListener("click",function(){S.dncLists.push({name:"",url:""});save();render();
+  var ins=document.querySelectorAll('[data-dncf^="name:"]');if(ins.length)ins[ins.length-1].focus();});
+ var dns=app.querySelector("[data-dncsave]");
+ if(dns)dns.addEventListener("click",function(){
+  var rows=(S.dncLists||[]).map(function(r){return {name:String((r&&r.name)||"").trim(),url:String((r&&r.url)||"").trim()};})
+   .filter(function(r){return r.name||r.url;});
+  if(!rows.length){toast("Add at least one list — or tap ‘Nobody to block’");return;}
+  var miss=null;for(var mi=0;mi<rows.length;mi++){if(!rows[mi].url){miss=rows[mi];break;}}
+  if(miss){toast("Add the link for “"+miss.name+"” — the list itself is what we need");return;}
+  S.dncLists=rows;S.dncNone=false;save();
+  complete("block",rows.length===1?"Got it — your list is protected":"Got it — all "+rows.length+" lists are protected");});
  var el2=app.querySelector("[data-done2]");
- if(el2)el2.addEventListener("click",function(){complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
+ if(el2)el2.addEventListener("click",function(){S.dncNone=true;S.dncLists=[];save();complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
  var sl=app.querySelector("[data-slack]");
  if(sl)sl.addEventListener("click",function(){if(S.slackUrl)window.open(S.slackUrl,"_blank","noopener");
   S.slackWait=true;save();render();
