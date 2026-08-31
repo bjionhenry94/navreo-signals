@@ -378,15 +378,37 @@ async function obOpen(row){
   const offers = offerList.concat(picked.map(obEsc)).join(", ") || "—";
   const notes = Object.values(doc.notes||{}).filter(Boolean).map(obEsc).join("<br>") || "—";
   const field = (label,val)=>`<div style="margin:10px 0"><div style="font-size:12px;color:var(--ink-3);text-transform:uppercase;letter-spacing:.04em">${label}</div><div style="color:var(--ink)">${val}</div></div>`;
+  // Onboarding intake answers (the 14 questions) — kept in step with onboarding.html QS.
+  const INTAKE_QS = [
+    ["titles","Decision-makers"],["icp","Ideal customer"],
+    ["industry","Best-fit industries"],["markets","Countries & regions"],
+    ["banned","Who never to contact"],["pains","Customer pain points"],
+    ["diff","What makes you different"],["magnets","Free or low-risk offers"],
+    ["proof","Your best proof"],["leadgen","Finding customers today"],
+    ["sales","Turning interest into a sale"],["prev","Past cold outreach"],
+    ["referrals","Network referrals"],["ops","Compliance, operator & language"]
+  ];
+  const IN = doc.intake || {};
+  const answered = INTAKE_QS.filter(([id])=>String(IN[id]||"").trim()).length;
+  const intakeRows = INTAKE_QS.map(([id,label],i)=>{
+    const a = String(IN[id]||"").trim();
+    const val = a ? `<div style="color:var(--ink);white-space:pre-wrap">${obEsc(a)}</div>`
+                  : `<div style="color:var(--orange-600,#c2683a);font-weight:600">Still needed from client</div>`;
+    return `<div style="margin:0 0 12px;padding:0 0 12px;border-bottom:1px solid var(--line)">
+      <div style="font-size:12px;color:var(--ink-3)"><b>${i+1}.</b> ${obEsc(label)}</div>${val}</div>`;
+  }).join("");
   box.innerHTML =
     field("Status", row.status==="submitted"?"Submitted":"In progress")
     + field("Stage", `${obEsc(stage)} — ${row.progress||0}% complete`)
+    + field("Onboarding form", `<b>${answered}</b> of ${INTAKE_QS.length} questions answered`)
     + field("Audience", obEsc(doc.offerAudience||"—"))
     + field("Senders", senders)
     + field("Offers", offers)
     + field("Redirect / domains", obEsc(doc.redirect||Object.keys(doc.domainPicks||{}).join(", ")||"—"))
     + field("Notes on emails", notes)
-    + field("Last saved", obEsc(obAgo(row.updated_at)) + (row.created_at?` · started ${obEsc(obAgo(row.created_at))}`:""));
+    + field("Last saved", obEsc(obAgo(row.updated_at)) + (row.created_at?` · started ${obEsc(obAgo(row.created_at))}`:""))
+    + `<div style="margin:18px 0 8px;font-size:13px;font-weight:700;color:var(--ink);border-top:2px solid var(--line);padding-top:14px">Onboarding form answers</div>`
+    + intakeRows;
 }
 function obCloseDetail(){ document.getElementById("ob-overlay").classList.add("hidden"); }
 document.getElementById("ob-close").addEventListener("click", obCloseDetail);

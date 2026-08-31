@@ -325,6 +325,85 @@ a.drow .go { font-size:12.5px; font-weight:700; color:var(--orange-700); margin-
 .ob-q textarea:focus { outline:none; border-color:var(--orange); }
 .frombadge { display:inline-block; font-size:11px; font-weight:700; color:var(--amber);
   background:var(--amber-bg); border-radius:6px; padding:2px 7px; margin-top:10px; }
+/* ---------- intake form (About your business — pre-filled, gaps highlighted) ---------- */
+.intake-bar { position:sticky; top:8px; z-index:5; display:flex; align-items:center; gap:12px 14px; flex-wrap:wrap;
+  background:#fff; border:1px solid var(--line); border-radius:14px; padding:12px 15px; margin:20px 0 4px;
+  box-shadow:0 10px 26px -18px rgba(20,17,14,.5); }
+.intake-bar .ip { flex:1; min-width:190px; }
+.intake-bar .ip .pbar { margin:0 0 6px; position:relative; background:rgba(255,77,0,.16); }
+.intake-bar .ip .pbar .pfill { position:absolute; left:0; top:0; bottom:0; border-radius:4px; }
+.intake-bar .ip .pbar .pfill.pre { background:var(--amber); }
+.intake-bar .ip .pbar .pfill.done { background:var(--green); box-shadow:inset -1px 0 0 rgba(247,246,244,.9); }
+.intake-bar .ip .lab { font-size:12.5px; font-weight:600; color:var(--ink-2); }
+.intake-bar .ip .lab b { color:var(--ink); }
+.intake-bar .ip .lab .need-n { color:var(--orange-700); }
+.intake-bar .ip .lab .chk { color:var(--ink-3); font-weight:600; }
+.intake-bar .auto { display:inline-flex; align-items:center; gap:6px; font-size:12px; font-weight:600;
+  color:var(--ink-3); white-space:nowrap; }
+.intake-bar .auto .dot { width:7px; height:7px; border-radius:50%; background:var(--green); flex:none; }
+.intake-bar .auto.flash { color:var(--green); font-weight:700; }
+.intake-jump { font:inherit; font-size:12.5px; font-weight:700; color:#fff; background:var(--orange);
+  border:0; border-radius:999px; padding:8px 14px; cursor:pointer; white-space:nowrap; }
+.intake-jump:hover { background:var(--orange-600); }
+.intake-jump[disabled] { color:var(--green); background:var(--green-bg); cursor:default; }
+.intake-sec { font-family:var(--font-mono); font-size:10.5px; font-weight:700; letter-spacing:.09em;
+  text-transform:uppercase; color:var(--brown-400); margin:36px 2px 12px; display:flex; align-items:center; gap:8px; }
+.intake-sec:first-of-type { margin-top:18px; }
+.intake-sec .c { color:var(--ink-3); }
+.intake { display:grid; gap:14px; margin-top:8px; }
+.iq { background:#fff; border:1px solid var(--line); border-radius:14px; padding:15px 17px; scroll-margin-top:88px;
+  box-shadow:0 1px 2px rgba(20,17,14,.03); }
+.iq.need { border-color:var(--orange-line); box-shadow:inset 3px 0 0 var(--orange); }
+.iq-h { display:flex; align-items:center; gap:10px; }
+.iq.need .iq-h, .iq.open .iq-h { margin-bottom:8px; }
+.iq-n { font-family:var(--font-mono); font-size:11px; font-weight:700; color:var(--ink-3); background:var(--bg-sunken);
+  border:1px solid var(--line); border-radius:7px; padding:2px 7px; flex:none; }
+.iq-t { font-family:var(--font-mono); font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--brown-400); flex:1; min-width:0; }
+.iq-chip { font-size:10.5px; font-weight:700; letter-spacing:.04em; border-radius:6px; padding:3px 8px; flex:none;
+  text-transform:uppercase; }
+.iq-need { color:var(--orange-700); background:var(--orange-100); }
+.iq-ok { color:#1c6446; background:var(--green-bg); }   /* darkened for AA contrast on green-bg */
+.iq-check { color:#785400; background:var(--amber-bg); }   /* darkened for AA contrast on amber-bg */
+.iq-q { font-size:15px; font-weight:600; color:var(--ink); line-height:1.35; letter-spacing:-.01em; margin-bottom:4px; }
+.iq-hint { font-size:12.5px; color:var(--ink-3); line-height:1.5; margin-bottom:9px; }
+.iq-sum { font-size:13.5px; color:var(--ink-2); line-height:1.5; margin-top:7px;
+  overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
+.iq-a { width:100%; box-sizing:border-box; border:1.5px solid #8a847b; border-radius:10px; background:#fff;
+  color:var(--ink); padding:11px 12px; font:inherit; font-size:14px; line-height:1.5; min-height:62px; resize:vertical;
+  scroll-margin-top:88px; }
+.iq-a::placeholder { color:var(--ink-3); }   /* AA: ≥4.5:1 on white/cream */
+.iq-a:focus { outline:none; border-color:var(--orange); }
+.iq.need .iq-a { background:var(--cream-50); border-color:var(--orange-600); }
+.iq-foot { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:9px; flex-wrap:wrap; }
+.iq-foot .l { display:inline-flex; align-items:center; gap:14px; }
+.iq-ex { font:inherit; font-size:12px; font-weight:600; color:var(--ink-3); background:none; border:0; padding:0;
+  cursor:pointer; text-decoration:underline; text-underline-offset:3px; min-height:24px; display:inline-flex; align-items:center; }
+.iq-ex:hover { color:var(--ink); }
+.iq-confirm { font:inherit; font-size:12.5px; font-weight:700; color:var(--green); background:var(--green-bg);
+  border:0; border-radius:999px; padding:6px 12px; cursor:pointer; }
+.iq-confirm:hover { filter:brightness(.96); }
+.iq-edit { font:inherit; font-size:12.5px; font-weight:600; color:var(--ink-2); background:none; border:0; padding:0;
+  cursor:pointer; text-decoration:underline; text-underline-offset:3px; min-height:24px; display:inline-flex; align-items:center; }
+.iq-edit:hover { color:var(--ink); }
+.iq-saved { font-size:11.5px; font-weight:700; color:var(--green); opacity:0; transition:opacity .2s; }
+.iq-saved.show { opacity:1; }
+.iq-sample { margin-top:9px; font-size:12.5px; color:var(--ink-2); line-height:1.55; background:var(--bg-sunken);
+  border:1px solid var(--line); border-left:3px solid var(--brown-400); border-radius:10px; padding:11px 13px; }
+.iq-sample b { color:var(--ink); }
+.iq-parts { margin:6px 0 0; padding-left:18px; display:grid; gap:5px; }
+.iq-parts li { font-size:13.5px; font-weight:500; color:var(--ink-2); line-height:1.4; }
+.iq-optional { font-size:11px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:var(--ink-3);
+  background:var(--bg-sunken); border:1px solid var(--line); border-radius:5px; padding:1px 6px; }
+.btn-ink { font:inherit; font-size:14.5px; font-weight:700; color:#fff; background:var(--ink); border:0;
+  border-radius:12px; padding:13px 22px; cursor:pointer; }
+.btn-ink:hover { background:#2b2620; }
+.btn-ink:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
+/* focus visibility + reduced motion (a11y) */
+.iq-a:focus-visible, .intake-bar button:focus-visible, .iq-ex:focus-visible, .iq-confirm:focus-visible,
+.iq-edit:focus-visible, .iq-row:focus-visible { outline:2px solid var(--ink); outline-offset:2px; border-radius:8px; }
+.iq-row { cursor:pointer; min-height:28px; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } .iq-saved { transition:none; } }
 .pnote { font-size:12px; font-weight:600; color:var(--ink-3); }
 .pbar { height:6px; border-radius:4px; background:var(--bg-sunken); overflow:hidden;
   margin:0 0 8px; border:1px solid var(--line); }
@@ -552,9 +631,9 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 <body>
 <div class="ob-app" id="app"></div>
 <div class="ob-scrim" id="scrim"></div>
-<div class="ob-toast" id="toast"></div>
+<div class="ob-toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
 <div class="ob-demo">
-  <span id="obSave" data-st="idle" title="Your progress saves automatically to Navreo — you can safely close this and come back" style="font-size:11px;color:#8a8378;margin-right:8px;align-self:center"></span>
+  <span id="obSave" data-st="idle" role="status" aria-live="polite" aria-atomic="true" title="Your progress saves automatically to Navreo — you can safely close this and come back" style="font-size:11px;color:#8a8378;margin-right:8px;align-self:center"></span>
   <button id="demoBtn" title="Demo only — clients never see this">▸ preview · demo only</button>
   <button id="resetBtn" title="Reset the demo">↺</button>
 </div>
@@ -596,10 +675,73 @@ var EMAILS=[
  {to:"Elena Ford — CEO, Parkway Logistics",body:"Elena — most CEOs we talk to can’t see which lane is quietly losing money. Our teardown finds it in 6 minutes of reading. Want a copy?"},
  {to:"Elena Ford — follow-up, day 5",body:"Last one from me, Elena — if now’s not the moment I’ll close the loop here. The offer stands whenever it’s useful."}
 ];
+/* The 14 onboarding questions — mirrored from the Notion onboarding document,
+   grouped into 4 plain-English sections, jargon spelled out. Client answers live
+   in S.intake[id] (per-client, autosaved + synced — never mutate this array). */
 var QS=[
- {q:"What do customers complain about most — in their words?",a:"“We’re spending a fortune on ads but can’t prove what’s driving revenue.”"},
- {q:"Who is your dream customer?",a:"Mid-size logistics companies, 50–500 staff, US + UK, the ops leader or founder."},
- {q:"What makes you different from the next company that does what you do?",a:"Fixed monthly price, results in the first month, and clients keep the playbook."}
+ // — Who you're going after —
+ {id:"titles",sec:"Who you're going after",name:"Decision-makers",
+  q:"Who are the decision-makers you sell to? The exact job titles, and how senior.",
+  hint:"Name the titles that actually hold the budget — and any you'd rather we avoid.",
+  sample:"Primary: VP Marketing, Head of Growth, CMO. Also Head of RevOps. Director level and above. We skip junior coordinators — they don't hold budget."},
+ {id:"icp",sec:"Who you're going after",name:"Ideal customer",
+  q:"Beyond the job title, what does your ideal customer company look like?",
+  hint:"Industry, size (revenue or headcount), location, the tools they use, and how established they are.",
+  sample:"Mid-market B2B software, $10–50M revenue, 50–250 staff. US (Midwest + Southeast strongest). On HubSpot or Salesforce. Growing their sales team."},
+ {id:"industry",sec:"Who you're going after",name:"Best-fit industries",
+  q:"Which one or two industries do your best customers come from?",
+  hint:"Where you win most often — and any sectors where deals drag on forever.",
+  sample:"Most profitable: B2B software and professional services. Some e-commerce (smaller deals). We avoid sectors with year-long buying cycles."},
+ {id:"markets",sec:"Who you're going after",name:"Countries & regions",
+  q:"Which countries or regions are you focused on — and any you're expanding into next?",
+  hint:"Where you sell today, and where you're heading. Regions to avoid help too.",
+  sample:"US Midwest + Southeast now (OH, MI, IL, GA, NC). Expanding to Texas + Florida next quarter. Avoiding the Northeast for now."},
+ {id:"banned",sec:"Who you're going after",name:"Who never to contact",
+  q:"Are there whole industries or types of company we should never contact?",
+  hint:"Sectors to rule out entirely. (Your specific list of clients and competitors to avoid comes later, in the welcome email.)",
+  sample:"Tobacco, firearms, adult, gambling — plus anything that clashes with our existing clients (e.g. a current client's direct rivals)."},
+ // — Your customers & your edge —
+ {id:"pains",sec:"Your customers & your edge",name:"Customer pain points",
+  q:"What are the top 3 problems your best customers feel — in their exact words?",
+  hint:"Quote them. The real phrases they use beat a tidy summary — it's what makes a cold email land.",
+  sample:"1. “We're spending a fortune on ads but can't prove what's driving revenue.”  2. “My team is buried in reporting.”  3. “We win clients then lose them and don't know why.”"},
+ {id:"diff",sec:"Your customers & your edge",name:"What makes you different",
+  q:"What do you do differently from everyone else who does what you do? And one thing about your market most competitors would disagree with?",
+  hint:"The stronger the opinion, the better — this becomes your angle.",
+  sample:"We won't take a client until we've audited their numbers — even if it costs us the deal. And we believe most growth problems are retention problems, not traffic problems."},
+ {id:"magnets",sec:"Your customers & your edge",name:"Free or low-risk offers",
+  q:"Any free or low-risk offers you already give away? “None” is a perfectly good answer.",
+  hint:"Free audits, trials, guarantees, sample work, teardown reports — anything that's easy to say yes to.",
+  sample:"A free 30-day pilot, a money-back guarantee on the first quarter, and a “teardown” — a 5-page brief on where a prospect is leaking revenue."},
+ {id:"proof",sec:"Your customers & your edge",name:"Your best proof",
+  q:"Your strongest proof — up to 3 results. Client, industry, a hard number, a quote, and the problem you solved.",
+  hint:"Anonymised or rough numbers are fine if you can't name names. Proof is one of the biggest things that makes cold email work — even one helps a lot.",
+  sample:"BrightCommerce (e-commerce): +38% repeat-purchase revenue in 4 months. “They paid for themselves by week 3.” Problem solved: no post-purchase retention."},
+ // — How you sell & reach out —
+ {id:"leadgen",sec:"How you sell & reach out",name:"Finding customers today",
+  q:"What are you doing right now to find new customers?",
+  hint:"Every channel you use today — social, events, referrals, ads, any past cold outreach. Rough is fine.",
+  sample:"We post 2–3× a week on LinkedIn, our CEO speaks at ~2 industry events a quarter, and we've tried small cold-email batches (~200) without proper setup."},
+ {id:"sales",sec:"How you sell & reach out",name:"Turning interest into a sale",
+  q:"Once someone's interested, how do you turn them into a customer?",
+  hint:"Walk us from first conversation to signed — calls, proposals, demos — and how long it usually takes.",
+  sample:"They book a 30-min discovery call → custom proposal within 48h → presentation about a week later. Usually ~3 weeks from first call to signed."},
+ {id:"prev",sec:"How you sell & reach out",name:"Past cold outreach",
+  q:"Have you tried cold email or LinkedIn outreach before? What worked, what didn't?",
+  hint:"Volumes, reply rates, the tools you used, and which angles landed or flopped.",
+  sample:"LinkedIn messages: ~15% reply but mostly unqualified. Cold email ~200: ~5% reply, 2 signed. Cost-savings angles worked best. Never ran above 1K a month."},
+ {id:"referrals",sec:"How you sell & reach out",name:"Network referrals",optional:true,
+  q:"Anyone in your network who'd also benefit from what we do?",
+  hint:"Optional, but warm intros convert well — names, websites or LinkedIn links, whenever you have them. Skip if you'd rather.",
+  sample:"1. John Doe, COO at AlphaCo, alphaco.com.  2. Jane Smith, VP Ops at BetaInc, betainc.com.  3. Their team at GammaPartners — I can intro over Slack."},
+ // — Practical setup —
+ {id:"ops",sec:"Practical setup",name:"Compliance, operator & language",
+  q:"A few quick practical ones:",
+  parts:["Any legal or compliance sign-off needed before campaigns go out — and any rules we should know about?",
+   "Who'll run the tools day-to-day on your side — and will they have admin rights on their laptop?",
+   "Any campaigns in a language other than English? If so, which."],
+  hint:"These shape your timeline, your setup on the call, and how we write your copy.",
+  sample:"(a) No legal sign-off needed, no special rules. (b) Our ops lead runs it and has admin rights. (c) English only."}
 ];
 var SCENS=[
  {in:"“Interesting — how much does this cost?”",dr:"Great question — it depends on volume, so the honest answer is a 15-minute call. Would Tue or Thu suit for a quick run-through?"},
@@ -608,7 +750,7 @@ var SCENS=[
 ];
 
 var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
- notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},tw:false,mine:{},
+ notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},intake:{},intakeTouched:{},intakeOk:{},tw:false,mine:{},
  senders:[{name:"Sarah Chen",title:"VP Sales"},{name:"Mike Torres",title:"Head of Growth"}],
  redirect:"",domainPicks:{}};
 var S=JSON.parse(JSON.stringify(FRESH));
@@ -638,6 +780,21 @@ if(!S.domainPicks||typeof S.domainPicks!=="object")S.domainPicks={};
 if(typeof S.redirect!=="string")S.redirect="";
 if(!S.clientId)S.clientId=OB_CID||obUuid();
 OB_CID=S.clientId;
+/* Demo preview only (unscoped): seed pre-filled intake so the reviewer sees the
+   real experience — mostly answered from "your calls", a few gaps left highlighted.
+   Real clients are scoped (?client=/?new=1); their intake is filled by /onboard-client. */
+if(!OB_SCOPED&&(!S.intake||!Object.keys(S.intake).length)){S.intake={
+ leadgen:"Mostly LinkedIn organic (2–3 posts/week from a partner) plus ad-hoc campaigns tied to conferences and partner travel. We've tried small cold-email batches but never at proper scale.",
+ sales:"Short outbound email sequence → lead with who they are and social proof → case-study link in email 2–3 → ask for a call. Event leads we try to turn into an in-person coffee.",
+ pains:"1. “The top firms are too expensive — $300–500k a week.” 2. “Boutique shops aren't great on quality.” 3. “We need people who actually know our market, not generalists.”",
+ titles:"Partners, Managing Directors, Directors, Principals, VPs. C-suite on the corporate side. For PE, the person closest to the deal beats the most senior title.",
+ icp:"Lower-mid-market private equity funds, ~$300M+ AUM, investing in tech-enabled services. Mainly US, Canada + UK secondary. Corporate-dev buyers doing ~$5M+ EBITDA deals.",
+ markets:"Primarily the US, with possible expansion into Canada and London/UK.",
+ banned:"None.",
+ prev:"Ad-hoc campaigns around partner travel hit ~6% reply; in-person converted best. Direct cold outreach ~2%. Domains got flagged recently — mid-week pause, restarting warm-up at 10–15/day.",
+ industry:"Solely private equity, strongest in lower-mid-market US funds — many of them investing in tech-enabled services.",
+ ops:""
+};}
 if(OB_FORCE_NEW){if(OB_Q.name)S.clientName=OB_Q.name;if(OB_Q.company&&!S.clientName)S.clientName=OB_Q.company;}
 
 var _obTimer=null,_obLast="";
@@ -690,6 +847,30 @@ function nextCard(){var u=undone(S.stage);return u.length?u[0]:null;}
 function go(route){location.hash=route?("#/"+route):"#/";}
 function toast(msg){var t=document.getElementById("toast");t.textContent=msg;t.classList.add("show");
  clearTimeout(t._h);t._h=setTimeout(function(){t.classList.remove("show");},2600);}
+/* escape a string for safe injection into a <textarea> body */
+function qesc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
+/* intake: which pre-filled cards the client has expanded to edit (UI-only, not persisted) */
+var IOPEN={};
+/* live-update the intake progress bar + gap count + jump button without a full re-render */
+function intakeBar(){var IN=S.intake||{},TC=S.intakeTouched||{},OK=S.intakeOk||{},N=QS.length;
+ function gap(q){return !String(IN[q.id]||"").trim();}
+ function conf(q){return !gap(q)&&(!!TC[q.id]||!!OK[q.id]);}
+ var toFill=QS.filter(gap).length, confN=QS.filter(conf).length;
+ var toCheck=N-toFill-confN;
+ var bar=document.querySelector(".intake-bar");if(!bar)return;
+ var pre=bar.querySelector(".pfill.pre");if(pre)pre.style.width=Math.round((N-toFill)/N*100)+"%";
+ var dn=bar.querySelector(".pfill.done");if(dn)dn.style.width=Math.round(confN/N*100)+"%";
+ var pb=bar.querySelector(".pbar");if(pb){pb.setAttribute("aria-valuenow",confN);
+  pb.setAttribute("aria-valuetext",confN+" confirmed, "+toCheck+" to check, "+toFill+" to fill");}
+ var lab=bar.querySelector(".lab");
+ if(lab)lab.innerHTML=toFill?('<b class="need-n">'+toFill+'</b> still needed<span class="chk"> · '+toCheck+' to check · about 10 min</span>')
+   :(toCheck?('<b>All the essentials are in ✓</b><span class="chk"> · '+toCheck+' to check if you like</span>'):'All done — thank you ✓');
+ var jb=bar.querySelector(".intake-jump");
+ if(jb){if(toFill){jb.removeAttribute("disabled");jb.setAttribute("data-ijump","need");jb.textContent="Jump to next gap →";}
+  else if(toCheck){jb.removeAttribute("disabled");jb.setAttribute("data-ijump","check");jb.textContent="Review our notes →";}
+  else{jb.setAttribute("disabled","");jb.removeAttribute("data-ijump");jb.textContent="All done ✓";}}
+ var fb=document.querySelector(".ob-foot2 .btn-ink");
+ if(fb)fb.textContent=toFill?('Done for now — '+toFill+' still needed'):(toCheck?'Essentials are in — see you on the call ✓':'All done — see you on the call ✓');}
 
 function complete(id,msg){
  var was=S.done[id];S.done[id]=true;
@@ -897,19 +1078,73 @@ var PAGES={
  "infra-confirm":function(){return S.done.infrastructure?infraPage():infraConfirm();},
  offers:function(){ return S.offerStep>=1?offersShowcase():offersIntro(); },
  business:function(){
-  if(S.q>=QS.length){return '<div class="headline">About your business — <span class="date">checked</span>.</div>'
-   +'<div class="subline">3 checked · 19 pre-filled the same way. Skim the rest any time before your call — change anything, whenever.</div>'
-   +'<div class="ob-foot2"><button class="btn-go" data-done="business">All done</button><button class="linkbtn" data-qreset>Look again</button></div>';}
-  var i=S.q,item=QS[i];
-  return '<div class="headline">Your job is <span class="date">checking</span>, not typing.</div>'
-  +'<div class="subline">Pre-filled from your sales calls. Question '+(i+7)+' of 22 · saved as you go.</div>'
-  +'<div class="ob-body"><div class="pbar"><i style="width:'+Math.round(((i+7)/22)*100)+'%"></i></div>'
-  +'<div class="ob-q"><div class="q">'+item.q+'</div>'
-  +(S.editQ===i?'<textarea id="qedit">'+item.a.replace(/&/g,"&amp;")+'</textarea>':'<div class="a">'+item.a+'</div>')
-  +'<span class="frombadge">FROM YOUR SALES CALL — CHECK IT</span></div></div>'
-  +'<div class="ob-foot2">'+(S.editQ===i
-   ?'<button class="btn-go" data-qsave>Save my version →</button>'
-   :'<button class="btn-ghost" data-qok>Looks right →</button><button class="btn-ghost" data-qfix>Fix it</button>')+'</div>';},
+  var IN=S.intake||{}, TC=S.intakeTouched||{}, OK=S.intakeOk||{};
+  function val(q){return String(IN[q.id]||"");}
+  function gapOf(q){return !val(q).trim();}
+  function confirmed(q){return !gapOf(q)&&(!!TC[q.id]||!!OK[q.id]);}
+  var toFill=QS.filter(gapOf).length;
+  var toCheck=QS.filter(function(q){return !gapOf(q)&&!confirmed(q);}).length;
+  var conf=QS.filter(confirmed).length, N=QS.length;
+  var prePct=Math.round((N-toFill)/N*100), donePct=Math.round(conf/N*100);
+  // sticky progress + split counter (required bold, optional check muted) + time cost + smart jump
+  var lab;
+  if(toFill) lab='<b class="need-n">'+toFill+'</b> still needed · about 8 min<span class="chk"> · '+toCheck+' to check if you like</span>';
+  else if(toCheck) lab='<b>All the essentials are in ✓</b><span class="chk"> · '+toCheck+' to check if you like</span>';
+  else lab='All done — thank you ✓';
+  var jump=toFill?'<button class="intake-jump" data-ijump="need">Jump to next gap →</button>'
+          :(toCheck?'<button class="intake-jump" data-ijump="check">Review our notes →</button>'
+                   :'<button class="intake-jump" disabled>All done ✓</button>');
+  var bar='<div class="intake-bar">'
+   +'<div class="ip"><div class="pbar" role="progressbar" aria-valuemin="0" aria-valuemax="'+N+'" aria-valuenow="'+conf+'" aria-valuetext="'+conf+' confirmed · '+toCheck+' drafted for you to check · '+toFill+' still needed" aria-label="Onboarding progress">'
+     +'<span class="pfill pre" style="width:'+prePct+'%"></span><span class="pfill done" style="width:'+donePct+'%"></span></div>'
+   +'<div class="lab">'+lab+'</div></div>'
+   +'<span class="auto"><span class="dot"></span>Saves automatically</span>'
+   +jump+'</div>';
+  // cards, grouped into their sections; pre-filled/confirmed collapse to a summary row
+  var body="", curSec="", num=0;
+  QS.forEach(function(q){
+   num++;
+   if(q.sec!==curSec){curSec=q.sec;
+    var secNeed=QS.filter(function(x){return x.sec===curSec&&gapOf(x);}).length;
+    var secCheck=QS.filter(function(x){return x.sec===curSec&&!gapOf(x)&&!confirmed(x);}).length;
+    var sp=[];if(secNeed)sp.push(secNeed+' needed');if(secCheck)sp.push(secCheck+' to check');
+    body+='<div class="intake-sec">'+curSec+(sp.length?(' <span class="c">· '+sp.join(' · ')+'</span>'):'')+'</div>';}
+   var gap=gapOf(q), v=val(q), isConf=confirmed(q), open=!!IOPEN[q.id];
+   var stateCls=gap?'iq-need':(isConf?'iq-ok':'iq-check');
+   var chipTxt=gap?'We need this':(isConf?'Done ✓':'Check this');
+   var tId='t-'+q.id, qId='q-'+q.id, hId='h-'+q.id, cId='c-'+q.id, exId='ex-'+q.id;
+   var qbody=q.q+(q.parts?('<ul class="iq-parts">'+q.parts.map(function(p){return '<li>'+p+'</li>';}).join("")+'</ul>'):'');
+   var hintbody=q.hint+(q.optional?' <span class="iq-optional">Optional</span>':'');
+   var header='<span class="iq-n">'+num+'</span><span class="iq-t" id="'+tId+'" role="heading" aria-level="3">'+q.name+'</span>'
+     +'<span class="iq-chip '+stateCls+'" id="'+cId+'">'+chipTxt+'</span>';
+   if(gap||open){
+    // expanded, editable
+    body+='<div class="iq'+(gap?' need':' open')+'" id="iq-'+q.id+'">'
+     +'<div class="iq-h">'+header+'</div>'
+     +'<div class="iq-q" id="'+qId+'">'+qbody+'</div>'
+     +'<div class="iq-hint" id="'+hId+'">'+hintbody+'</div>'
+     +'<textarea class="iq-a" data-iq="'+q.id+'" rows="3" aria-labelledby="'+tId+' '+qId+'" aria-describedby="'+hId+' '+cId+'" placeholder="'+(gap?'Type your answer…':'')+'">'+qesc(v)+'</textarea>'
+     +'<div class="iq-foot"><span class="l"><button class="iq-ex" data-iex="'+q.id+'" aria-expanded="false" aria-controls="'+exId+'">See an example</button>'
+       +(gap?'':'<button class="iq-confirm" data-iok="'+q.id+'" aria-label="Confirm answer: '+q.name+'">Looks right ✓</button>')+'</span>'
+       +'<span class="iq-saved" data-saved="'+q.id+'" aria-hidden="true">Saved ✓</span></div>'
+     +'<div class="iq-sample" id="'+exId+'" hidden><b>Example:</b> '+q.sample+'</div>'
+    +'</div>';
+   } else {
+    // collapsed summary row (pre-filled or confirmed)
+    body+='<div class="iq" id="iq-'+q.id+'">'
+     +'<div class="iq-h iq-row" data-iedit="'+q.id+'">'+header+'</div>'
+     +'<div class="iq-sum">'+qesc(v)+'</div>'
+     +'<div class="iq-foot"><span class="l">'
+       +(isConf?'':'<button class="iq-confirm" data-iok="'+q.id+'" aria-label="Confirm answer: '+q.name+'">Looks right ✓</button>')
+       +'<button class="iq-edit" data-iedit="'+q.id+'" aria-label="Edit answer: '+q.name+'">Edit</button></span></div>'
+    +'</div>';
+   }
+  });
+  return '<div class="headline">About your <span class="date">business</span>.</div>'
+   +'<div class="subline">We’ve filled in what we picked up on your calls — have a quick look and fix anything that’s off. The ones marked <b>“We need this”</b> are what we’re still missing; anything you don’t get to, we’ll finish together on your call. It saves as you go, so you can stop and come back whenever.</div>'
+   +bar
+   +'<div class="ob-body intake">'+body+'</div>'
+   +'<div class="ob-foot2"><button class="btn-ink" data-done="business">'+(toFill?('Done for now — '+toFill+' still needed'):(toCheck?'Essentials are in — see you on the call ✓':'All done — see you on the call ✓'))+'</button><span class="ob-t clock">nothing to submit · we finish the rest on your call</span></div>';},
  slack:function(){
   if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
    +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
@@ -1328,14 +1563,33 @@ function bindAll(){
    okc?ok():toast("Couldn’t copy automatically — long-press the address bar instead");}catch(e){}}
   if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(url).then(ok,fb);}else{fb();}});
  qa("[data-ph]").forEach(function(a){a.addEventListener("click",function(ev){ev.preventDefault();toast("Opens here in your live hub ↗");});});
- var qok=app.querySelector("[data-qok]");
- if(qok)qok.addEventListener("click",function(){S.q++;save();render();});
- var qfix=app.querySelector("[data-qfix]");
- if(qfix)qfix.addEventListener("click",function(){S.editQ=S.q;render();var t=app.querySelector("#qedit")||document.getElementById("qedit");if(t)t.focus();});
- var qsave=app.querySelector("[data-qsave]");
- if(qsave)qsave.addEventListener("click",function(){var t=document.getElementById("qedit");if(t)QS[S.q].a=t.value||QS[S.q].a;S.editQ=undefined;S.q++;save();render();toast("Saved your version ✓");});
- var qreset=app.querySelector("[data-qreset]");
- if(qreset)qreset.addEventListener("click",function(){S.q=0;save();render();});
+ qa("[data-iq]").forEach(function(t){t.addEventListener("input",function(){
+   if(!S.intake)S.intake={};if(!S.intakeTouched)S.intakeTouched={};
+   var id=t.getAttribute("data-iq");S.intake[id]=t.value;S.intakeTouched[id]=true;save();
+   var card=document.getElementById("iq-"+id),filled=t.value.trim().length>0;
+   if(card){card.classList.toggle("need",!filled);
+    var chip=card.querySelector(".iq-chip");
+    if(chip){chip.className="iq-chip "+(filled?"iq-ok":"iq-need");chip.textContent=filled?"Done ✓":"We need this";}
+    var sv=card.querySelector(".iq-saved");
+    if(sv){sv.classList.add("show");clearTimeout(sv._h);sv._h=setTimeout(function(){sv.classList.remove("show");},1400);}}
+   intakeBar();});});
+ qa("[data-iex]").forEach(function(b){b.addEventListener("click",function(){
+   var ex=document.getElementById("ex-"+b.getAttribute("data-iex"));if(!ex)return;
+   var hid=ex.hasAttribute("hidden");if(hid)ex.removeAttribute("hidden");else ex.setAttribute("hidden","");
+   b.setAttribute("aria-expanded",hid?"true":"false");b.textContent=hid?"Hide example":"See an example";});});
+ qa("[data-iok]").forEach(function(b){b.addEventListener("click",function(){
+   var id=b.getAttribute("data-iok");if(!S.intakeOk)S.intakeOk={};S.intakeOk[id]=true;delete IOPEN[id];save();render();
+   toast("Confirmed ✓");var e=document.querySelector('#iq-'+id+' .iq-edit');if(e)setTimeout(function(){e.focus();},60);});});
+ qa("[data-iedit]").forEach(function(b){b.addEventListener("click",function(){
+   var id=b.getAttribute("data-iedit");IOPEN[id]=true;render();
+   var t=document.querySelector('#iq-'+id+' .iq-a');if(t)setTimeout(function(){t.focus();},60);});});
+ var ij=app.querySelector("[data-ijump]");
+ if(ij)ij.addEventListener("click",function(){var mode=ij.getAttribute("data-ijump");
+   var g=(mode==="need")?app.querySelector(".iq.need"):null;
+   if(!g){var chips=qa(".iq .iq-chip.iq-check");if(chips.length)g=chips[0].closest(".iq");}
+   if(!g)return;g.scrollIntoView({behavior:"smooth",block:"center"});
+   var t=g.querySelector(".iq-a");if(t){setTimeout(function(){t.focus();},320);}
+   else{var ed=g.querySelector("[data-iedit]");if(ed)setTimeout(function(){ed.click();},320);}});
  qa("[data-offstep]").forEach(function(b){b.addEventListener("click",function(){S.offerStep=+b.getAttribute("data-offstep");save();render();window.scrollTo(0,0);});});
  qa("[data-loom]").forEach(function(b){b.addEventListener("click",function(){toast("The 2-min walkthrough plays here in your live hub ▶");});});
  qa("[data-star]").forEach(function(b){b.addEventListener("click",function(){ensureIdeas();var ix=+b.getAttribute("data-star");if(S.ideas[ix]){S.ideas[ix].star=!S.ideas[ix].star;save();render();toast(S.ideas[ix].star?"Starred ⭐":"Unstarred");}});});
