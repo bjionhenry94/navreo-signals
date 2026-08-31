@@ -21926,6 +21926,30 @@ def _mint_session(email: str) -> str:
     return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
 
 
+def _api_token_email(auth_header: str, token_header: str = "") -> str | None:
+    """Headless API auth for the morning-routine callers (Bjion, 31 Aug 2026):
+    a per-person bearer token in NAVREO_API_TOKENS ("email:token,email:token")
+    authenticates API calls with no browser session, attributed to that email —
+    so assignments ownership and optiqueue reports stay per-person. Checked
+    only after the session cookie misses; an unset env var disables the whole
+    path. Constant-time compares; tokens are never logged."""
+    import hmac
+    raw = os.environ.get("NAVREO_API_TOKENS", "").strip()
+    if not raw:
+        return None
+    tok = ""
+    if (auth_header or "").lower().startswith("bearer "):
+        tok = auth_header[7:].strip()
+    tok = tok or (token_header or "").strip()
+    if not tok:
+        return None
+    for pair in raw.split(","):
+        email, _, want = pair.strip().partition(":")
+        if email and want and hmac.compare_digest(tok, want):
+            return email.strip().lower()
+    return None
+
+
 def _session_email(cookie_header) -> str | None:
     """Email of the signed-in user, or None. Verifies signature + expiry."""
     import hmac, hashlib, base64
@@ -22842,7 +22866,9 @@ class Handler(SimpleHTTPRequestHandler):
 
     # ── login gate plumbing ────────────────────────────────────────────────
     def _authed_email(self):
-        return _session_email(self.headers.get("Cookie"))
+        return (_session_email(self.headers.get("Cookie"))
+                or _api_token_email(self.headers.get("Authorization") or "",
+                                    self.headers.get("X-Navreo-Token") or ""))
 
     _MAX_POST_BODY = 32 * 1024 * 1024
 

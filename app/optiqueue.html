@@ -153,15 +153,19 @@ const INSTALL_PROMPT = `You are setting up my morning optimisation routine. Save
 "Morning optimisation queue — [MY NAME]", running every weekday at 08:30 UTC — just after
 the morning crunch writes fresh optimisation cards (~08:15 UTC). Run it once now.
 
-SETUP — one line: I am [Asad or Yasir]. Everything else comes from the tool, the single
-source of truth: my kinds, my client exclusions, the task labels and due rules all live at
-Settings -> Task Queue (GET /api/optiqueue/config). To change what I receive, I just tell
-you and you POST the change to /api/optiqueue/config — or I edit the Settings page myself.
+SETUP — two lines: I am [Asad or Yasir], and Bjion gave me a personal API token. Store the
+token ONCE in ~/.navreo-keys.env as NAVREO_QUEUE_TOKEN=<token> — never anywhere else: not
+in this prompt, not in Notion, not in Slack. Everything else comes from the tool, the
+single source of truth: my kinds, my client exclusions, the task labels and due rules all
+live at Settings -> Task Queue (GET /api/optiqueue/config). To change what I receive, I
+just tell you and you POST the change to /api/optiqueue/config — or I edit Settings myself.
 
-EVERY RUN, IN THIS ORDER:
+EVERY RUN, IN THIS ORDER — all by API, no browser, no sign-in. Every call to
+https://app.navreo.ai carries the header  Authorization: Bearer $NAVREO_QUEUE_TOKEN
+(sourced from ~/.navreo-keys.env). If any call returns 401, stop and tell me the token was
+rejected — never fall back to the browser, never guess credentials.
 
-1. READ. Open https://app.navreo.ai/app/campaigns.html in the browser — if it shows the
-   login page, stop and tell me to sign in; never guess credentials. In-page fetch:
+1. READ (GET, with the auth header):
    /api/optiqueue/config (my kinds + exclusions), /api/cockpit/insights,
    /api/campaigns-unified, /api/cockpit/assignments.
    Freshness gate: if the insights' generated_at is not from today, wait 30 minutes and
