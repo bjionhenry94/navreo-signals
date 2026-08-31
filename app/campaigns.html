@@ -5605,6 +5605,18 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     var byStep = {};
     versions.forEach(function (v) { var k = v.step != null ? String(v.step) : '?'; (byStep[k] = byStep[k] || []).push(v); });
     var stepKeys = Object.keys(byStep).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
+    /* fair-test gate (Bjion 2026-08-31): no best-opener verdict while any
+       live Email-1 version is still in the monitor phase — every version
+       actually competing (not deleted, not switched off) must clear
+       JUDGE_MIN_SENT sends first, the same judging bar the crunch uses. One
+       early positive at ~200 sends reads exactly like a winner but can be
+       pure luck, and crowning it early starves the versions that never got
+       their fair run. Mirrored in optimise.html's versionTableHTML and
+       build_notifications.py's pill_best_opener — keep all three in step. */
+    var JUDGE_MIN_SENT = 800;
+    function liveVs(sk2) { return (byStep[sk2] || []).filter(function (v) { return !v.disabled && !v.inline && v.label != null && v.split !== 0; }); }
+    function stepJudged(sk2) { var l = liveVs(sk2); return l.length > 0 && l.every(function (v) { return (v.sent || 0) >= JUDGE_MIN_SENT; }); }
+    var e1Judged = stepJudged('1');
     /* best opener: Email-1, active, most meetings per email sent (lowest
        Sent/meeting, own sends). If no opener has a meeting yet, fall back to
        fewest sends per positive so young campaigns still get a pill. */
@@ -5613,7 +5625,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
        (most meetings, then most positives). The Meetings column itself is
        reply-grain (2026-08-09b) and no longer carries journey credit, so the
        badge reads the same data the Best-path medal does — one signal. */
-    if (paths) {
+    if (e1Judged && paths) {
       /* same EFFICIENCY ranking as the Best-path medal (fewest sends per
          meeting, 800-send floor preferred; then fewest sends per positive) —
          the badge and the medal must never crown two different openers. */
@@ -5638,7 +5650,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         });
       }
     }
-    if (best === null) (byStep['1'] || []).forEach(function (v) {
+    if (e1Judged && best === null) (byStep['1'] || []).forEach(function (v) {
       if (v.disabled || v.inline || !v.sent || v.label == null) return;
       var rep = repOf['1|' + v.label] || v.label;
       var mv = rep === v.label ? (byVar['1|' + rep] || 0) : 0;
@@ -5646,15 +5658,20 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       var pm = v.sent / mv;
       if (best === null || pm < best.pm) best = { label: v.label, pm: pm };
     });
-    if (best === null) (byStep['1'] || []).forEach(function (v) {
+    if (e1Judged && best === null) (byStep['1'] || []).forEach(function (v) {
       if (v.disabled || v.inline || !(v.positives > 0) || !v.sent) return;
       var pp = v.sent / v.positives;
       if (best === null || pp < best.pp) best = { label: v.label, pp: pp };
     });
     var rows = stepKeys.map(function (sk) {
       var vs = byStep[sk].slice().sort(function (a, b) { return (a.label == null ? '￿' : String(a.label)).localeCompare(b.label == null ? '￿' : String(b.label)); });
+      /* honest state while the gate holds the verdict back — say WHY there is
+         no best pill, so a missing badge never reads as a broken page */
+      var testing = sk === '1' && liveVs('1').length > 1 && !e1Judged;
       var band = '<tr class="vp-band"><td class="vp-l" colspan="7">Email ' + esc(sk) +
-        ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') + '</span></td></tr>';
+        ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') +
+        (testing ? ' &middot; still testing &mdash; a best opener is only called once every live version has ' + fmtInt(JUDGE_MIN_SENT) + ' sends' : '') +
+        '</span></td></tr>';
       /* an inline (step-level) counter row can coexist with real versions of
          the same email — Smartlead keeps the pre-split sends on it. Calling it
          "the only version" beside version rows contradicts itself (founder
