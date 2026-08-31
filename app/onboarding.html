@@ -1190,7 +1190,8 @@ var PAGES={
   var rows=S.dncLists.map(function(r,i){
    return '<div class="dncrow"><input class="ob-inp nm" data-dncf="name:'+i+'" value="'+av(r.name)+'" placeholder="What it is — e.g. Current clients" aria-label="What this list is">'
     +'<input class="ob-inp lk" data-dncf="url:'+i+'" value="'+av(r.url)+'" inputmode="url" placeholder="Paste the link to the list" aria-label="Link to this list">'
-    +(n>1?'<button class="srm" data-dncrm="'+i+'" aria-label="Remove this list">✕</button>':'')+'</div>';
+    +(n>1?'<button class="srm" data-dncrm="'+i+'" aria-label="Remove this list">✕</button>':'')
+    +(i===n-1?'<button class="dnc-addbtn" data-dncadd>＋ Add another list</button>':'')+'</div>';
   }).join("");
   return '<div class="headline">Who we should <span class="date">never email</span>.</div>'
   +'<div class="subline">Your clients, live deals, competitors. Link us every do-not-contact list you keep — as many as you like. We’ll double-check with you 2 days before launch.</div>'
@@ -1198,8 +1199,8 @@ var PAGES={
   +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/9da21f5d895442ae972d0f2a298b5eec" title="Who we should never email — Bjion, Navreo" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
   +'<p class="ob-vcap">Watch this first — what to send, and the format that makes it easy.</p>'
   +'<div class="dncrows">'+rows+'</div>'
-  +'<div class="dnc-add"><button class="btn-ghost" data-dncadd>＋ Add another list</button></div>'
-  +'<div class="ob-res"><a class="ob-rlink" href="https://docs.google.com/spreadsheets/d/1Dbuf-_q-QaNbW9dTY3w2mH6WeQjEtBP-y0XWC_ICm4k/edit" target="_blank" rel="noopener">See the example format ↗</a></div>'
+  +'<div class="dnc-foot"><span class="iq-saved" id="dncSaved" aria-hidden="true">Saved automatically ✓</span></div>'
+  +'<div class="ob-res"><a class="btn-go dnc-example" href="https://docs.google.com/spreadsheets/d/1Dbuf-_q-QaNbW9dTY3w2mH6WeQjEtBP-y0XWC_ICm4k/edit" target="_blank" rel="noopener">See the example format ↗</a></div>'
   +'</div>'
   +'<div class="ob-foot2"><button class="btn-ghost" data-dncsave>Save my lists</button><button class="btn-ghost" data-done2="block">Nobody to block</button></div>';},
  emails:function(){
@@ -1566,7 +1567,9 @@ function bindAll(){
  /* never-email card: list rows (what it is + link), add/remove, validated save */
  qa("[data-dncf]").forEach(function(inp){
   var kv=inp.getAttribute("data-dncf").split(":"),f=kv[0],i=+kv[1];
-  inp.addEventListener("input",function(){if(S.dncLists&&S.dncLists[i]){S.dncLists[i][f]=inp.value;save();}});});
+  inp.addEventListener("input",function(){if(S.dncLists&&S.dncLists[i]){S.dncLists[i][f]=inp.value;save();
+   var sv=document.getElementById("dncSaved");
+   if(sv){sv.classList.add("show");clearTimeout(sv._h);sv._h=setTimeout(function(){sv.classList.remove("show");},1400);}}});});
  qa("[data-dncrm]").forEach(function(b){b.addEventListener("click",function(){
   S.dncLists.splice(+b.getAttribute("data-dncrm"),1);save();render();});});
  var dna=app.querySelector("[data-dncadd]");
