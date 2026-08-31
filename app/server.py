@@ -18427,6 +18427,126 @@ def _ui_prefs_set(show_demo: bool) -> dict:
     return blob
 
 
+# ── Optimisation Queue (morning task routine) — config + daily run log ───────
+# Single source of truth for the team's morning optimisation routine (Settings →
+# Task Queue). Each person's Claude routine READS its kinds + client exclusions
+# from /api/optiqueue/config at every run (nothing is hardcoded in a prompt),
+# and POSTS its run summary to /api/optiqueue/report so the panel can show, per
+# day: created / completed / reassigned / dismissed / unattended. Storage rides
+# the deliverability_audit_cache KV rows (same pattern as ui_prefs — no new
+# table, no migration): "optiqueue_config" + one "optiqueue_log_<date>" per day.
+_OPTIQ_KINDS = ("offer", "scale-winner", "copy-solo", "new-versions", "pattern", "list-audit")
+_OPTIQ_DEFAULT_CONFIG = {
+    "labels": {"offer": "Add new offers", "scale-winner": "Scale the winner",
+               "copy-solo": "Drop dead-weight variants", "new-versions": "Add new versions",
+               "pattern": "Add more of who replies", "list-audit": "Audit the list"},
+    # role defaults (Bjion, 31 Aug 2026) — people may edit their own kinds/exclusions
+    "people": {
+        "Asad":  {"kinds": ["list-audit", "scale-winner", "copy-solo", "pattern"],
+                  "exclude_clients": [], "notion_email": "asad.rafique@navreo.ai"},
+        "Yasir": {"kinds": ["offer", "new-versions"],
+                  "exclude_clients": [], "notion_email": "yasir@navreo.ai"},
+    },
+    "due": {"same_day": ["scale-winner", "copy-solo"], "working_days": 3},
+}
+
+
+def _optiq_kv(kv_id: str):
+    rows = sb("GET", f"deliverability_audit_cache?id=eq.{kv_id}&select=blob") or []
+    return rows[0].get("blob") if rows and isinstance(rows[0].get("blob"), dict) else None
+
+
+def _optiq_kv_put(kv_id: str, blob: dict) -> None:
+    sb("POST", "deliverability_audit_cache?on_conflict=id",
+       {"id": kv_id, "blob": blob, "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
+       prefer="resolution=merge-duplicates,return=minimal")
+
+
+def optiq_config_get() -> dict:
+    stored = _optiq_kv("optiqueue_config") or {}
+    cfg = json.loads(json.dumps(_OPTIQ_DEFAULT_CONFIG))  # deep copy
+    for name, p in (stored.get("people") or {}).items():
+        mine = cfg["people"].setdefault(name, {"kinds": [], "exclude_clients": []})
+        if isinstance(p.get("kinds"), list):
+            mine["kinds"] = [k for k in p["kinds"] if k in _OPTIQ_KINDS]
+        if isinstance(p.get("exclude_clients"), list):
+            mine["exclude_clients"] = [str(c).strip() for c in p["exclude_clients"] if str(c).strip()]
+        if p.get("notion_email"):
+            mine["notion_email"] = str(p["notion_email"])
+    for k in ("updated_at", "updated_by"):
+        if stored.get(k):
+            cfg[k] = stored[k]
+    # coverage guard: a kind nobody receives means cards nobody is assigned
+    owned = {k for p in cfg["people"].values() for k in p.get("kinds", [])}
+    cfg["unowned_kinds"] = sorted(set(_OPTIQ_KINDS) - owned)
+    return cfg
+
+
+def optiq_config_set(patch: dict, who: str) -> dict:
+    """Deep-merge a {people: {name: {kinds/exclude_clients}}} patch onto the
+    stored config. Only those two per-person fields are writable — labels, due
+    rules and the kind list itself stay code-owned."""
+    stored = _optiq_kv("optiqueue_config") or {"people": {}}
+    people = stored.setdefault("people", {})
+    for name, p in (patch.get("people") or {}).items():
+        if not isinstance(p, dict):
+            continue
+        mine = people.setdefault(str(name), {})
+        if isinstance(p.get("kinds"), list):
+            mine["kinds"] = [k for k in p["kinds"] if k in _OPTIQ_KINDS]
+        if isinstance(p.get("exclude_clients"), list):
+            mine["exclude_clients"] = [str(c).strip() for c in p["exclude_clients"] if str(c).strip()][:40]
+    stored["updated_at"] = _dtmod.datetime.utcnow().isoformat() + "Z"
+    stored["updated_by"] = who or "unknown"
+    _optiq_kv_put("optiqueue_config", stored)
+    return optiq_config_get()
+
+
+_OPTIQ_COUNT_FIELDS = ("created", "completed", "reassigned", "dismissed", "unattended")
+
+
+def optiq_report_set(report: dict, who: str) -> dict:
+    """Idempotent per person+date: a routine re-run the same day replaces its
+    own entry, never appends a duplicate. Counts are clamped ints; the title
+    lists (what exactly was completed / reassigned / …) are capped so a runaway
+    payload can't bloat the day's KV row."""
+    person = str(report.get("person") or "").strip() or "unknown"
+    date = str(report.get("date") or "").strip()[:10] or _dtmod.date.today().isoformat()
+    entry = {"at": _dtmod.datetime.utcnow().isoformat() + "Z", "by": who or person}
+    for f in _OPTIQ_COUNT_FIELDS:
+        try:
+            entry[f] = max(0, min(int(report.get(f) or 0), 999))
+        except (TypeError, ValueError):
+            entry[f] = 0
+        titles = report.get(f + "_titles")
+        if isinstance(titles, list):
+            entry[f + "_titles"] = [str(t)[:160] for t in titles[:60]]
+    kv_id = "optiqueue_log_" + date
+    day = _optiq_kv(kv_id) or {"date": date, "runs": {}}
+    day["runs"][person] = entry
+    _optiq_kv_put(kv_id, day)
+    return {"date": date, "person": person, **{f: entry[f] for f in _OPTIQ_COUNT_FIELDS}}
+
+
+def optiq_summary(days: int = 14) -> dict:
+    days = max(1, min(days, 31))
+    today = _dtmod.date.today()
+    ids = ["optiqueue_log_" + (today - _dtmod.timedelta(days=i)).isoformat() for i in range(days)]
+    rows = sb("GET", "deliverability_audit_cache?id=in.(" + ",".join(ids) + ")&select=id,blob") or []
+    by_id = {r["id"]: r.get("blob") for r in rows if isinstance(r.get("blob"), dict)}
+    out = []
+    for kv_id in ids:
+        blob = by_id.get(kv_id)
+        if blob and blob.get("runs"):
+            out.append(blob)
+    totals = {f: 0 for f in _OPTIQ_COUNT_FIELDS}
+    for day in out:
+        for entry in day["runs"].values():
+            for f in _OPTIQ_COUNT_FIELDS:
+                totals[f] += int(entry.get(f) or 0)
+    return {"days": out, "totals": totals, "window_days": days}
+
+
 def _client_hidden(label) -> bool:
     """A demo client is hidden from day-to-day surfaces unless the toggle is ON.
     The single test every display builder calls so demo data never leaks in by default."""
@@ -23304,6 +23424,19 @@ class Handler(SimpleHTTPRequestHandler):
             # respect the 30s TTL (hot path); the Settings save POST busts it
             # via _ui_prefs_set, so a toggle still shows on the next read
             return self._json({"ok": True, **_ui_prefs()})
+        if path == "/api/optiqueue/config":
+            # Settings → Task Queue: who receives which optimisation kinds, and
+            # each person's client exclusions. The team's morning routines read
+            # this at every run — the tool is the single source of truth.
+            return self._json({"ok": True, **optiq_config_get()})
+        if path == "/api/optiqueue/summary":
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            try:
+                days = int((q.get("days") or ["14"])[0] or 14)
+            except ValueError:
+                days = 14
+            return self._json({"ok": True, **optiq_summary(days)})
         if path == "/api/infrastructure/batches":
             # Settings → Email Infrastructure: live batch state (KV-backed,
             # updated by the domain-infra-orchestrator as batches progress).
@@ -23897,6 +24030,27 @@ class Handler(SimpleHTTPRequestHandler):
             blob = _ui_prefs_set(bool(p.get("show_demo_clients")))
             log_activity("/api/settings/ui", blob, action="set", entity="settings")
             return self._json({"ok": True, **blob})
+        if path == "/api/optiqueue/config":
+            # Settings → Task Queue config patch: a person (or their Claude)
+            # updates their own kinds / client exclusions. Per-person fields
+            # only — labels and due rules stay code-owned.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            cfg = optiq_config_set(p, self._authed_email())
+            log_activity("/api/optiqueue/config",
+                         {"people": list((p.get("people") or {}).keys())},
+                         action="set", entity="optiqueue")
+            return self._json({"ok": True, **cfg})
+        if path == "/api/optiqueue/report":
+            # A morning routine posting its run summary (idempotent per
+            # person+date) — this feeds the Task Queue daily log.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            return self._json({"ok": True, **optiq_report_set(p, self._authed_email())})
         if path == "/api/infrastructure/requests":
             # Settings → Email Infrastructure "Add domains": queue the request
             # for the orchestrator. The web tier never ideates, checks or buys —
