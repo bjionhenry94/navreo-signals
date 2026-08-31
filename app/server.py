@@ -2444,6 +2444,16 @@ def onboarding_draft_upsert(p: dict):
     for _bo in ("domains", "site"):
         if not doc.get(_bo) and pdoc.get(_bo):
             doc[_bo] = pdoc[_bo]
+    # A REPLACED list carries a bumped doc.domainsRev; a save from a browser
+    # still holding an older rev must not roll the newer list back.
+    try:
+        if int(doc.get("domainsRev") or 0) < int(pdoc.get("domainsRev") or 0):
+            doc["domains"] = pdoc.get("domains") or doc.get("domains")
+            doc["domainsRev"] = pdoc.get("domainsRev")
+            if pdoc.get("site"):
+                doc["site"] = pdoc["site"]
+    except (TypeError, ValueError):
+        pass
     name = (str(p.get("name") or "")).strip() or (str(doc.get("clientName") or "")).strip() \
         or (str(doc.get("sigCompany") or "")).strip() or prev.get("name") or "Untitled client"
     status = (str(p.get("status") or "")).strip() or prev.get("status") or "draft"
