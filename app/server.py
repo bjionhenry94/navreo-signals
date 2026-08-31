@@ -2441,6 +2441,26 @@ def onboarding_draft_upsert(p: dict):
     # browsers whose local state predates it — the client UI only toggles picks,
     # it never edits these fields, so an empty incoming value is always stale.
     pdoc = prev.get("doc") if isinstance(prev.get("doc"), dict) else {}
+    # Reset guard: a back-office reset bumps doc.resetRev to a higher value than
+    # any browser has seen. A client POST whose resetRev is BEHIND the stored one
+    # is a stale browser that has not yet adopted the reset — ignore its content
+    # wholesale and keep the stored (reset) doc, so a cached tab can't re-clobber
+    # the reset before it reloads. resetRev is kept monotonic. This is the server
+    # half of the client-side forceReset adopt in onboarding.html.
+    try:
+        _in_rev = int(doc.get("resetRev") or 0)
+    except (TypeError, ValueError):
+        _in_rev = 0
+    try:
+        _prev_rev = int(pdoc.get("resetRev") or 0)
+    except (TypeError, ValueError):
+        _prev_rev = 0
+    if prev and _in_rev < _prev_rev:
+        return 200, {"ok": True, "id": cid,
+                     "updated_at": prev.get("updated_at") or now,
+                     "created_at": prev.get("created_at") or now,
+                     "store": "noop-behind-reset"}
+    doc["resetRev"] = max(_in_rev, _prev_rev)
     for _bo in ("domains", "site"):
         if not doc.get(_bo) and pdoc.get(_bo):
             doc[_bo] = pdoc[_bo]
