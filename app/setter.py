@@ -1477,6 +1477,55 @@ _BLOCK_TAG_RE = re.compile(r"<(?:div|p)\b", re.IGNORECASE)
 _ANCHOR_HREF_RE = re.compile(r'<a\b[^>]*\bhref\s*=\s*"([^"]*)"', re.IGNORECASE)
 
 
+# NEVER-ADMIT-MISSING-WIRING patterns (owner HARD RULE 2026-08-31), shared by
+# the lint_draft backstop and the strip_wiring_admissions draft-time repair.
+_WIRED_NOUN_PAT = (r"(?:booking\s+(?:link|page|system)|scheduling\s+link|calendar\s+link"
+                   r"|phone\s+number|direct\s+(?:line|number))")
+_WIRING_GAP_PAT = (r"(?:(?:isn'?t|is\s+not|hasn'?t\s+been|has\s+not\s+been|not)\s+"
+                   r"(?:currently\s+)?(?:yet\s+)?(?:set\s*up|wired(?:\s+up)?|available"
+                   r"|provided|ready|live|in\s+place|active|configured)"
+                   r"|unavailable|missing)")
+_WIRING_ADMIT_RES = [
+    re.compile(_WIRED_NOUN_PAT + r"[^.!?]{0,60}?" + _WIRING_GAP_PAT, re.IGNORECASE),
+    re.compile(r"(?:don'?t|do\s+not|can'?t|cannot|won'?t|unable\s+to)\s+"
+               r"(?:currently\s+)?(?:have|provide|share|give|offer)\s+"
+               r"(?:a\s+|the\s+|any\s+)?" + _WIRED_NOUN_PAT, re.IGNORECASE),
+    re.compile(r"\bno\s+" + _WIRED_NOUN_PAT, re.IGNORECASE),
+]
+
+
+def _text_admits_missing_wiring(text: str) -> bool:
+    """True when the text tells the lead a phone number/booking link is
+    missing, not set up, or unavailable."""
+    return any(p.search(text or "") for p in _WIRING_ADMIT_RES)
+
+
+def strip_wiring_admissions(html: str) -> str:
+    """Deterministic draft-time repair (owner HARD RULE 2026-08-31, live:
+    the brain's own "Booking link - none is wired up yet" line kept getting
+    echoed to the lead as "My booking link isn't wired up yet..." - and a
+    draft that failed the lint twice was stored and SERVED anyway). Drops
+    any sentence that admits missing wiring from plain-text <div> blocks;
+    a div left empty disappears entirely. Divs carrying nested markup
+    (slot-link anchors) are left alone - the lint backstop still rejects
+    those. Never raises."""
+    try:
+        def _fix_div(m):
+            inner = m.group(2)
+            if "<" in inner:
+                return m.group(0)
+            sents = re.split(r"(?<=[.!?])\s+", inner)
+            kept = [s for s in sents if not _text_admits_missing_wiring(s)]
+            if len(kept) == len(sents):
+                return m.group(0)
+            new_inner = " ".join(kept).strip()
+            return (m.group(1) + new_inner + m.group(3)) if new_inner else ""
+        return re.sub(r"(<div[^>]*>)(.*?)(</div>)", _fix_div, html or "",
+                      flags=re.S | re.I)
+    except Exception:  # noqa: BLE001 - a repair must never break drafting
+        return html or ""
+
+
 def lint_draft(html: str, ctx: dict):
     """Deterministic pre-send checks. Returns (ok, reason)."""
     ctx = ctx or {}
@@ -1579,18 +1628,10 @@ def lint_draft(html: str, ctx: dict):
     # another "We don't provide a phone number, sorry" - "the AISDR should
     # never say the booking link isn't set up"). A draft never narrates
     # missing wiring; it answers with what it has (the two times, the
-    # placeholder rule) and zero comment about the gap.
-    _wired_noun = (r"(?:booking\s+(?:link|page|system)|scheduling\s+link|calendar\s+link"
-                   r"|phone\s+number|direct\s+(?:line|number))")
-    _gap_state = (r"(?:(?:isn'?t|is\s+not|hasn'?t\s+been|has\s+not\s+been|not)\s+"
-                  r"(?:currently\s+)?(?:yet\s+)?(?:set\s*up|wired(?:\s+up)?|available"
-                  r"|provided|ready|live|in\s+place|active|configured)"
-                  r"|unavailable|missing)")
-    if (re.search(_wired_noun + r"[^.!?]{0,60}?" + _gap_state, _low_plain)
-            or re.search(r"(?:don'?t|do\s+not|can'?t|cannot|won'?t|unable\s+to)\s+"
-                         r"(?:currently\s+)?(?:have|provide|share|give|offer)\s+"
-                         r"(?:a\s+|the\s+|any\s+)?" + _wired_noun, _low_plain)
-            or re.search(r"\bno\s+" + _wired_noun, _low_plain)):
+    # placeholder rule) and zero comment about the gap. Shared predicate
+    # with strip_wiring_admissions, the deterministic repair that excises
+    # these sentences at draft time - this lint is the backstop.
+    if _text_admits_missing_wiring(_low_plain):
         return False, ("Never tell the lead a phone number or booking link is missing, "
                        "not set up, or unavailable. Answer with what you have - propose "
                        "the two times (using the [BOOKING LINK] placeholder rule when no "
@@ -3005,9 +3046,9 @@ def proofread_draft(html: str, sender_first: str = "", booking_link: str = "", *
     original's length (a wildly shorter or longer result is a bad edit, not
     a proofread). Never raises. Returns (html, changed): changed is True
     only when the (guard-passed) result actually differs from the input."""
-    _repaired = strip_deadend_ask(destack_same_block(destack_call_ask(
+    _repaired = strip_wiring_admissions(strip_deadend_ask(destack_same_block(destack_call_ask(
         standardize_backup_link(humanize_availability_fallback(normalize_call_ask_opener(repair_timeless_ask(repair_here_is_graft(
-            dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(html or "")))))))))))
+            dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(html or ""))))))))))))
     _repaired = hyperlink_backup_phrase(_repaired, booking_link)
     original = dedupe_adjacent_blocks(normalize_greeting(_repaired, sender_first))
     if not original.strip():
@@ -14427,17 +14468,32 @@ def route_training_get(params):
             except (TypeError, ValueError):
                 generating = {**generating, "status": "idle", "stale_recovered": True}
 
-        # STRANDED-MERGE HEAL (owner session 2026-08-31): teachings queued
-        # right before a deploy/restart die with the worker thread and sit
-        # un-merged until something re-kicks - overnight, in the live case,
-        # so the next morning's pool drafted from a stale brain. The portal
-        # polls this route constantly: when queued merges exist and nothing
-        # is running or queued to run, kick the retrain now.
+        # STRANDED-MERGE / DEAD-SWEEP HEAL (owner session 2026-08-31):
+        # teachings queued right before a deploy/restart die with the worker
+        # thread and sit un-merged until something re-kicks - overnight, in
+        # the live case, so the next morning's pool drafted from a stale
+        # brain. Same for a pool sweep that dies mid-pass: the brain is
+        # fresh, cards stay stale, and nothing re-flags. The portal polls
+        # this route constantly: when queued merges OR stale-vs-brain cards
+        # exist and nothing is running or queued to run, kick the retrain.
+        # The frontend's serve gate ("never show a pre-teaching draft")
+        # relies on this as its convergence warranty. 90s dampener so a
+        # sweep that genuinely cannot progress doesn't thrash workers.
         try:
-            if (doc.get("pending_merges")
+            _cov = str(doc.get("brain_covers_at") or "")
+            _stale_n = sum(
+                1 for c in cases
+                if not _is_case_answered(c.get("id"), answers)
+                and str((c.get("redrafted_at") or c.get("generated_at") or "")) < _cov) if _cov else 0
+            _gen_raw = dict(doc.get("generating") or {})
+            _recent = str(_gen_raw.get("finished_at") or _gen_raw.get("started_at") or "")
+            _cutoff = (_dt.datetime.now(_dt.timezone.utc)
+                       - _dt.timedelta(seconds=90)).isoformat(timespec="seconds")
+            if ((doc.get("pending_merges") or _stale_n > 0)
                     and str(generating.get("status")) != "running"
-                    and not (doc.get("generating") or {}).get("retrain_queued")
-                    and not _get_training_merge_lock(agent_id).locked()):
+                    and not _gen_raw.get("retrain_queued")
+                    and not _get_training_merge_lock(agent_id).locked()
+                    and (doc.get("pending_merges") or not _recent or _recent < _cutoff)):
                 _kick_off_training_retrain(agent_id, redraft="pool")
         except Exception:  # noqa: BLE001 - healing is best-effort, the poll must answer
             pass

@@ -738,12 +738,6 @@ function renderCasesOrEmpty() {
     if (shortRoundHolding()) { renderShortRoundWait(); return; }
     view = "done"; render(); return;
   }
-  // Open the round as soon as a full round of spares exists (owner ruling
-  // 2026-08-25, bug #2). The old freshness door bounced to the round-done
-  // screen + transition poll whenever no card was fresh yet - which, right
-  // after the intake is submitted, is ALWAYS (the pool predates the teaching)
-  // - so the very first round landed on a spinner/loop. Freshness now only
-  // orders the round; the background redraft still shapes later ones.
   if (SHARE_MODE && unanswered.length < ROUND_SIZE) {
     // Genuinely short pool: hold and let the transition poll / build fill it.
     view = "done";
@@ -752,6 +746,18 @@ function renderCasesOrEmpty() {
     return;
   }
   beginRoundIfNeeded();
+  // SERVE GATE (owner HARD RULE 2026-08-31, supersedes the 2026-08-25
+  // "freshness only orders the round" relaxation): the round composed
+  // EMPTY means every unanswered card predates the trainer's newest
+  // teaching - hold on the personalising wait and let the short-round poll
+  // open the stream on the first redrafted card. Never a stale serve, and
+  // never the old dead-end either: the poll + the server's dead-sweep heal
+  // guarantee cards arrive.
+  if (SHARE_MODE && ROUND_IDS && ROUND_IDS.length === 0) {
+    renderShortRoundWait();
+    startShortRoundPoll();
+    return;
+  }
   idx = 0;
   view = "stream";
   render();
@@ -881,7 +887,10 @@ function mountFirstInterviewForm(iv) {
    lands (generateMore nulls ROUND_IDS first). Owner mode never rounds. */
 function beginRoundIfNeeded() {
   if (!SHARE_MODE) return;
-  if (ROUND_IDS && ROUND_IDS.some((id) => !isAnswered(id))) return; // round still going
+  // An EMPTY round is a round in WAITING (serve gate below): its cards are
+  // still being redrafted with the trainer's teachings and will be grown in
+  // by growRoundIfShort - never recompose (and never re-count) it here.
+  if (ROUND_IDS && (ROUND_IDS.length === 0 || ROUND_IDS.some((id) => !isAnswered(id)))) return; // round still going
   // A refresh mid-round restores the same round instead of starting (and
   // counting) a new one - the id set is persisted per sitting.
   if (!ROUND_IDS) {
@@ -896,7 +905,15 @@ function beginRoundIfNeeded() {
   // Cap the round at ROUND_SIZE (owner ruling 2026-08-20): a backlog of
   // unanswered cases (a prefetched batch, or an old doc) feeds the NEXT
   // rounds instead of inflating this one.
-  ROUND_IDS = currentUnanswered().slice(0, ROUND_SIZE).map((c) => c.id);
+  // SERVE GATE (owner HARD RULE 2026-08-31, after two live sessions were
+  // served pre-teaching drafts: "I had given it in the first entry... I've
+  // told you this maybe 10, 15 times"): a round is composed from FRESH
+  // cards ONLY - a card drafted before the trainer's newest teaching must
+  // NEVER be shown. When no card is fresh yet the round begins EMPTY: the
+  // caller shows the personalising wait and the short-round poll grows the
+  // round card-by-card as the background redraft lands (convergence is
+  // warranted server-side - route_training_get re-kicks a dead sweep).
+  ROUND_IDS = currentUnanswered().filter((c) => caseFresh(c)).slice(0, ROUND_SIZE).map((c) => c.id);
   let n = 0, sitting = 0;
   try {
     n = Number(SS.get("trainRoundNum") || "0");
@@ -1619,7 +1636,7 @@ function stopShortRoundPoll() {
 }
 function startShortRoundPoll() {
   stopShortRoundPoll();
-  const deadline = Date.now() + 90000;
+  const deadline = Date.now() + 150000;
   shortRoundPollHandle = setInterval(async () => {
     // Keep polling while the round is short OR any unanswered round card is
     // still pre-teaching (instant-open 2026-08-28: swaps land behind the
@@ -1640,7 +1657,10 @@ function startShortRoundPoll() {
       const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
       if (res.ok) mergeCasesSnapshot(res.data, { replaceUnanswered: true });
     } catch { /* transient - next tick retries, deadline bounds the wait */ }
-    if (view === "shortwait" && currentUnanswered().length) {
+    // Open from the wait ONLY once the round itself holds a (fresh) card -
+    // an empty waiting round must not open on the unscoped stale backlog
+    // (serve gate 2026-08-31).
+    if (view === "shortwait" && ROUND_IDS && ROUND_IDS.length && currentUnanswered().length) {
       view = "stream";
       idx = 0;
       render();
@@ -1654,13 +1674,21 @@ function renderShortRoundWait() {
   view = "shortwait";
   const el = document.getElementById("trainApp");
   if (!el || document.getElementById("shortRoundWaitMsg")) return;
+  // Empty waiting round = the serve gate is holding for the FIRST card
+  // redrafted with the trainer's answers; a short round mid-top-up keeps
+  // the original copy.
+  const txt = (ROUND_IDS && ROUND_IDS.length === 0)
+    ? "Personalising your scenarios with your answers…"
+    : "Nice - your next scenario is just landing…";
   el.innerHTML = `<div class="empty-flow"><div class="round-updating" id="shortRoundWaitMsg">`
-    + `<span class="spin"></span><span>Nice - your next scenario is just landing…</span></div></div>`;
+    + `<span class="spin"></span><span>${txt}</span></div></div>`;
 }
 
 function growRoundIfShort() {
-  if (!SHARE_MODE || view !== "stream" || !ROUND_IDS || ROUND_IDS.length >= ROUND_SIZE) return;
-  if (!ROUND_IDS.some((id) => !isAnswered(id))) return; // round already over
+  // "shortwait" grows too (serve gate 2026-08-31): an EMPTY waiting round
+  // gets its first card here, and the poll's open branch shows it.
+  if (!SHARE_MODE || (view !== "stream" && view !== "shortwait") || !ROUND_IDS || ROUND_IDS.length >= ROUND_SIZE) return;
+  if (ROUND_IDS.length && !ROUND_IDS.some((id) => !isAnswered(id))) return; // round already over
   const inRound = new Set(ROUND_IDS.map(String));
   const extra = CASES.filter((c) => !isAnswered(c.id) && !inRound.has(String(c.id)) && caseFresh(c))
     .slice(0, ROUND_SIZE - ROUND_IDS.length).map((c) => c.id);
@@ -1735,10 +1763,24 @@ function streamOneInterviewAnswer(inp) {
   const body = { agent_id: selectedAgentId, action: "answers",
                  answers: { [qid]: val }, questions: [q] };
   if (SHARE_MODE) body.share = SHARE_TOKEN;
+  // The freshness clock MUST tick for streamed answers too (owner session
+  // 2026-08-31: a fully-streamed intake left lastFeedbackAt empty - the
+  // final Save had nothing unsent and returned before its own bump - so
+  // round 1 counted every pre-intake draft as fresh and served the stale
+  // pool: "I had given it in the first entry... I've told you this maybe
+  // 10, 15 times").
+  pendingFeedbackSync++;
   fetchJson("/api/setter/training/interview", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-  }).catch(() => { delete IV_STREAM_SENT[qid]; /* retried by the final Save */ });
+  }).then((res) => {
+    pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
+    if (res && res.ok) bumpLastFeedbackAt((res.data && res.data.at) || "");
+    else delete IV_STREAM_SENT[qid]; /* retried by the final Save */
+  }).catch(() => {
+    pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
+    delete IV_STREAM_SENT[qid]; /* retried by the final Save */
+  });
 }
 document.addEventListener("input", (e) => {
   const inp = e.target;
@@ -2137,10 +2179,6 @@ async function startNextRoundOrGenerate() {
       stopPrefetchPoll();
       stopTransitionPoll();
       stopShortRoundPoll();
-      // Freshness only ORDERS the round (fresh cards lead) - it NEVER
-      // blocks the open (owner ruling 2026-08-25, bug #2 "goes in a
-      // circle"): the old gate bounced back to round-done while the brain
-      // pass ran.
       const spare = CASES.filter((c) => !isAnswered(c.id));
       const freshIds = new Set(spare.filter(caseFresh).map((c) => String(c.id)));
       if (freshIds.size && freshIds.size < spare.length) {
@@ -2150,6 +2188,19 @@ async function startNextRoundOrGenerate() {
       ROUND_IDS = null;
       try { SS.del("trainRoundIds"); } catch { /* ignore */ }
       beginRoundIfNeeded();
+      // SERVE GATE (owner HARD RULE 2026-08-31, supersedes 2026-08-25's
+      // "freshness never blocks the open" and 2026-08-28's stale instant
+      // open): a pre-teaching draft must NEVER be shown. Round composed
+      // empty -> hold on the personalising wait until the first redrafted
+      // card lands (short-round poll opens it; the server's dead-sweep heal
+      // warrants convergence). Short round -> open staggered and let the
+      // poll grow it.
+      if (ROUND_IDS && ROUND_IDS.length === 0) {
+        renderShortRoundWait();
+        startShortRoundPoll();
+        return;
+      }
+      if (ROUND_IDS && ROUND_IDS.length < ROUND_SIZE) startShortRoundPoll();
       idx = 0;
       view = "stream";
       render();
@@ -2168,16 +2219,14 @@ async function startNextRoundOrGenerate() {
         .catch(() => { /* background refresh only */ });
       return;
     }
-    // INSTANT OPEN (owner ruling 2026-08-28: "ease the load - shovel work
-    // to the background"). The old hold waited up to 10s for redrafted
-    // cards; now the round opens IMMEDIATELY from whatever the pool holds,
-    // freshest cards first, and the short-round poll keeps swapping fresher
-    // redrafts into the cards the trainer has not reached yet (the visible
-    // card is never touched - see mergeCasesSnapshot + the round_ids the
-    // answer POST sends). The brain pass runs entirely behind the reading.
-    if (localSpare.length >= ROUND_SIZE) {
+    // STAGGERED OPEN (owner HARD RULE 2026-08-31, replacing 2026-08-28's
+    // stale instant open): with a pool present, openRound gates on
+    // freshness - the round opens the moment its FIRST redrafted card
+    // exists (usually instantly: the sweep runs while the trainer types)
+    // and shows the honest personalising wait otherwise. It never serves a
+    // card that predates the trainer's teachings.
+    if (localSpare.length) {
       openRound();
-      startShortRoundPoll();
       fetchJson(`/api/setter/training?${trainingQS()}`)
         .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); })
         .catch(() => { /* background refresh only */ });
@@ -2765,15 +2814,22 @@ function submitAndAdvance(c) {
     // against brain_covers_at. Never invented client-side.
     if (SHARE_MODE && res.data) {
       const learned = res.data.learned;
+      let taught = false;
       if (learned) {
         LEARNED_CHIP = { ...learned };
         bumpLastFeedbackAt(res.data.at || "");
+        taught = true;
         renderLearnedChip();
         if (learned.pending) startChipPoll();
       } else if (res.data.at && (answerBody.decision_ok === false || answerBody.reply_ok === false)) {
         // A bare "wrong" mark still teaches through the digest - gate on it.
         bumpLastFeedbackAt(res.data.at);
+        taught = true;
       }
+      // A teaching makes the round's unreached cards stale (serve gate
+      // 2026-08-31): restart the swap-poll so their redrafts land behind
+      // the reading - it stops itself the moment the round is fresh again.
+      if (taught && ROUND_IDS && ROUND_IDS.some((id) => !isAnswered(id))) startShortRoundPoll();
     }
 
     // Feature B: ANY feedback (a note, an edit, or a "No") kicks off a
