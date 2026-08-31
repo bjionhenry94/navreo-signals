@@ -797,6 +797,16 @@ if(!S.domainPicks||typeof S.domainPicks!=="object")S.domainPicks={};
 if(typeof S.redirect!=="string")S.redirect="";
 if(!S.clientId)S.clientId=OB_CID||obUuid();
 OB_CID=S.clientId;
+/* Client-facing Slack channel label: per-client channel (#<client>-navreo, the
+   onboard-client convention), an explicit S.slackChannel override, or the demo
+   name only on unscoped previews. */
+function slackChan(){
+ if(S.slackChannel)return S.slackChannel;
+ var nm=String(S.clientName||"").trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-+|-+$/g,"");
+ return (OB_SCOPED&&nm)?("#"+nm+"-navreo"):"#acme-navreo";
+}
+/* Demo controls are for unscoped previews only — never on a real client's page. */
+if(OB_SCOPED){["demoBtn","resetBtn"].forEach(function(id){var el=document.getElementById(id);if(el)el.remove();});}
 /* Demo preview only (unscoped): seed pre-filled intake so the reviewer sees the
    real experience — mostly answered from "your calls", a few gaps left highlighted.
    Real clients are scoped (?client=/?new=1); their intake is filled by /onboard-client. */
@@ -937,7 +947,7 @@ function chainHTML(){
  +'<p class="physics">Warm-up is physics — brand-new addresses must earn trust slowly. Nobody can skip it, which is why it starts the moment you approve.</p>';
 }
 function journeyHTML(){
- var lines=["Your 7 quick things — done in ~30 min","1 hour with Yasir — expectations + your onboarding","We present the campaign ideas; you decide together","Connect your calendar, how we handle replies, then launch","Replies land, meetings book, weekly reports"];
+ var lines=["Your "+cardsIn(0).length+" quick things — done in ~30 min","1 hour with Yasir — expectations + your onboarding","We present the campaign ideas; you decide together","Connect your calendar, how we handle replies, then launch","Replies land, meetings book, weekly reports"];
  var out='<h2>Your whole journey</h2><p class="lead">Five stages, about two weeks. You are here:</p><div class="chain">';
  for(var i=0;i<STAGES.length;i++){
   out+='<div class="clink '+(i<S.stage?"ok":(i===S.stage?"now":""))+'"><span class="d"></span><span><b>'+STAGES[i]+'</b> — '+lines[i]+'</span><span class="o">'+(i<S.stage?"DONE":(i===S.stage?"NOW":""))+'</span></div>';
@@ -1162,8 +1172,9 @@ var PAGES={
    +'<div class="ob-body intake">'+body+'</div>'
    +'<div class="ob-foot2"><button class="btn-ink" data-done="business">'+(toFill?('Done for now — '+toFill+' still needed'):(toCheck?'Essentials are in — see you on the call ✓':'All done — see you on the call ✓'))+'</button><span class="ob-t clock">you can finish anytime, even with blanks — we complete the rest on your call</span></div>';},
  slack:function(){
-  if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
-   +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
+  if(S.slackWait){return '<div class="headline">Channel opened — <span class="date">see you in there</span>.</div>'
+   +'<div class="subline">Say hi in '+slackChan()+' when you land — that’s it.</div>'
+   +(S.slackUrl?'<div class="ob-foot2"><a class="btn-ghost" style="text-decoration:none" href="'+String(S.slackUrl).replace(/"/g,"&quot;")+'" target="_blank" rel="noopener">Open the channel again ↗</a></div>':'');}
   return '<div class="headline">Join us on <span class="date">Slack</span>.</div>'
   +'<div class="subline">Your main line to our team — updates, questions, wins and resources, all in one place. No lost emails, no mixed threads.</div>'
   +'<div class="ob-body">'
@@ -1171,8 +1182,8 @@ var PAGES={
   +'<p class="ob-vcap">The quick tour — how Slack works, from zero.</p>'
   +'<div class="ob-steps">'
   +'<div class="ob-s3"><span class="n">1</span><span>No Slack? Use it in the browser — nothing to install</span></div>'
-  +'<div class="ob-s3"><span class="n">2</span><span>Tap your invite to <b>#acme-navreo</b> — your channel, made for you during onboarding</span></div>'
-  +'<div class="ob-s3"><span class="n">3</span><span>Say hi — we’ll spot you arrive, nothing to tick</span></div>'
+  +'<div class="ob-s3"><span class="n">2</span><span>Open <b>'+slackChan()+'</b> — your channel, made for you during onboarding (your email invite gets you in)</span></div>'
+  +'<div class="ob-s3"><span class="n">3</span><span>Say hi once you’re in — that’s it</span></div>'
   +'</div>'
   +'<div class="ob-res">'
   +'<a class="ob-rlink" href="https://slack.com/intl/en-gb/downloads" target="_blank" rel="noopener">Download Slack ↗</a>'
@@ -1180,8 +1191,10 @@ var PAGES={
   +'<a class="ob-rlink" href="https://www.youtube.com/watch?v=zfjuEyRWHwM" target="_blank" rel="noopener">Conversations in Slack (video) ↗</a>'
   +'</div>'
   +'</div>'
-  +'<div class="ob-foot2"><button class="btn-go" data-slack>Open my invite</button></div>'
-  +'<p class="ob-note">Prefer email? Totally fine — updates mirror there.</p>';},
+  +'<div class="ob-foot2">'+(S.slackUrl
+    ?('<a class="btn-go" style="text-decoration:none" href="'+String(S.slackUrl).replace(/"/g,"&quot;")+'" target="_blank" rel="noopener" data-slack>Open my channel ↗</a>')
+    :'<button class="btn-go" data-slack>Open my invite</button>')+'</div>'
+  +'<p class="ob-note">Your invite arrives by email — this link is your channel once you’re in. Prefer email? Totally fine — updates mirror there.</p>';},
  home:function(){
   var L=S.homeLinks||{};
   function hrow(key,label,status){var url=L[key]||"";
@@ -1599,9 +1612,9 @@ function bindAll(){
  var el2=app.querySelector("[data-done2]");
  if(el2)el2.addEventListener("click",function(){S.dncNone=true;S.dncLists=[];save();complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
  var sl=app.querySelector("[data-slack]");
- if(sl)sl.addEventListener("click",function(){if(S.slackUrl)window.open(S.slackUrl,"_blank","noopener");
-  S.slackWait=true;save();render();
-  setTimeout(function(){S.slackWait=false;complete("slack","Spotted you — welcome in 👋");},1400);});
+ if(sl)sl.addEventListener("click",function(){
+  if(sl.tagName!=="A"&&S.slackUrl)window.open(S.slackUrl,"_blank","noopener");
+  setTimeout(function(){complete("slack","Channel opened — say hi when you’re in 👋");},150);});
  var cp=app.querySelector("[data-copy-portal]");
  if(cp)cp.addEventListener("click",function(){
   var url=S.portalUrl||(location.origin+location.pathname+location.search);
@@ -1679,13 +1692,15 @@ function bindAll(){
 }
 
 var demoArm=null;
-document.getElementById("demoBtn").addEventListener("click",function(){
+var _demoEl=document.getElementById("demoBtn");
+if(_demoEl)_demoEl.addEventListener("click",function(){
  var b=document.getElementById("demoBtn");
  if(demoArm){clearTimeout(demoArm);demoArm=null;b.textContent="▸ preview · demo only";demoSkip();return;}
  b.textContent="tap again to skip ahead";
  demoArm=setTimeout(function(){demoArm=null;b.textContent="▸ preview · demo only";},2500);
 });
-document.getElementById("resetBtn").addEventListener("click",resetAll);
+var _resetEl=document.getElementById("resetBtn");
+if(_resetEl)_resetEl.addEventListener("click",resetAll);
 window.addEventListener("hashchange",render);
 window.addEventListener("message",function(e){try{if(e&&e.data&&e.data.ibHeight){var f=document.querySelector(".ibframe iframe");if(f)f.style.height=(e.data.ibHeight+2)+"px";}}catch(_){}});
 window.addEventListener("message",function(e){try{if(e&&e.data&&typeof e.data.obHeight==="number"){var f=document.getElementById("offersFrame");if(f)f.style.height=(e.data.obHeight+2)+"px";}}catch(_){}});
