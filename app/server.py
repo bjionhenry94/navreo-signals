@@ -2507,6 +2507,11 @@ def _ob_summary(rec: dict) -> dict:
         "created_at": rec.get("created_at"), "updated_at": rec.get("updated_at"),
         "submitted_at": rec.get("submitted_at"),
         "senders": len(doc.get("senders") or []), "company": doc.get("sigCompany") or "",
+        # Never-email card: linked-list count + explicit none flag, so the Clients
+        # table shows at a glance that a client's do-not-contact lists saved.
+        "dnc_lists": sum(1 for r in (doc.get("dncLists") or [])
+                         if isinstance(r, dict) and str(r.get("url") or "").strip()),
+        "dnc_none": bool(doc.get("dncNone")),
     }
 
 

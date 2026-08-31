@@ -352,16 +352,19 @@ async function obLoad(){
       ? `<span class="pill on">Submitted</span>`
       : `<span class="pill off">In progress</span>`;
     const stage = OB_STAGES[obStageNum(c.stage)] || "–";
+    const dnc = c.dnc_none ? `<span class="pill off">none ✓</span>`
+      : (c.dnc_lists ? `<span class="pill on">${c.dnc_lists} list${c.dnc_lists===1?"":"s"} ✓</span>` : `—`);
     return `<tr>
       <td><div class="ws-name">${obEsc(c.name)}</div><div class="ws-slug">${obEsc(c.id)}</div></td>
       <td>${obEsc(stage)} · ${c.progress||0}%</td>
+      <td>${dnc}</td>
       <td>${pill}</td>
       <td>${obEsc(obAgo(c.updated_at))}</td>
       <td style="text-align:right"><button class="btn sm ob-view" data-i="${i}">View</button></td>
     </tr>`;
   }).join("");
   box.innerHTML = `<table class="ws">
-    <thead><tr><th>Client</th><th>Progress</th><th>Status</th><th>Last saved</th><th></th></tr></thead>
+    <thead><tr><th>Client</th><th>Progress</th><th>Never email</th><th>Status</th><th>Last saved</th><th></th></tr></thead>
     <tbody>${rows}</tbody></table>`;
   box.querySelectorAll("button.ob-view").forEach(b=>
     b.addEventListener("click",()=>obOpen(OB_ROWS[+b.dataset.i])));
