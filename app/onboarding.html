@@ -18,9 +18,8 @@ body { background:var(--bg); }
 /* ---------- top bar ---------- */
 .ob-top { display:flex; justify-content:space-between; align-items:center; gap:12px;
   padding:20px 0 6px; flex-wrap:wrap; }
-.ob-brand { font-family:var(--font-display); font-weight:700; font-size:18px;
-  letter-spacing:-.01em; color:var(--ink); }
-.ob-brand em { font-style:normal; color:var(--orange); }
+.ob-brand { display:flex; align-items:center; color:var(--ink); }
+.ob-brand img { height:22px; display:block; }
 .ob-brand span { font-family:var(--font-sans); font-weight:400; font-size:13.5px;
   color:var(--ink-3); margin-left:8px; }
 .ob-date { display:inline-flex; align-items:center; gap:8px; background:#fff;
@@ -1371,7 +1370,7 @@ function route(){var h=location.hash.replace(/^#\/?/,"");return h||"";}
 function render(){
  var app=document.getElementById("app");
  var r=route();
- var out='<div class="ob-top"><div class="ob-brand">nav<em>reo</em><span>· Acme Corp</span></div>'
+ var out='<div class="ob-top"><div class="ob-brand"><img src="navreo-logo.png" alt="Navreo"><span>· Acme Corp</span></div>'
   +'<button class="ob-date mono '+(S.locked?"locked":"")+'" data-pop="chain">🚀 <u>'+LDATE()+(S.locked?" · locked ✓":"")+'</u></button></div>';
 
  if(r&&PAGES[r]){
