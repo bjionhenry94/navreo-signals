@@ -794,7 +794,7 @@ var SCENS=[
 var FRESH={stv:2,stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
  notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},intake:{},intakeTouched:{},intakeOk:{},tw:false,mine:{},dncLists:[],dncNone:false,
  senders:[{name:"John Doe",title:"VP Sales"}],
- redirect:"",domainPicks:{},domains:[],domainsRev:0,site:""};
+ redirect:"",domainPicks:{},domains:[],domainsRev:0,site:"",resetRev:0};
 var S=JSON.parse(JSON.stringify(FRESH));
 
 /* ---- client identity + server-side autosave (surfaced in Settings ▸ Clients).
@@ -881,7 +881,13 @@ function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
   .then(function(r){return r.ok?r.json():null;})
   .then(function(j){if(!j||!j.draft||!j.draft.doc)return;var sv=obMigrate(j.draft.doc);
    var pristine=(S.stage===0&&Object.keys(S.done||{}).length===0);
-   if((sv.stage||0)>(S.stage||0)||pristine){
+   /* Back-office reset: when the server issues a newer resetRev than this browser
+      last adopted, the server copy wins wholesale — even if the local cache is
+      ahead. This is the ONLY way a reset (which moves state backwards) can reach a
+      browser that already holds progress; without it a stale localStorage copy
+      re-saves the old data over the reset forever. */
+   var forceReset=((sv.resetRev||0)>(S.resetRev||0));
+   if(forceReset||(sv.stage||0)>(S.stage||0)||pristine){
     for(var k in FRESH){if(!(k in sv))sv[k]=JSON.parse(JSON.stringify(FRESH[k]));}
     sv.clientId=S.clientId;S=sv;try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}
     if(typeof render==="function")render();obSetStatus("saved");}
