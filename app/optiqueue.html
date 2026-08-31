@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Task Queue · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* settings-optiqueue-v1 — morning optimisation routine: config + daily log.
+   One source of truth: routines READ /api/optiqueue/config each run and POST
+   /api/optiqueue/report after; this page renders both. */
+.page-head { display: flex; align-items: baseline; gap: 14px; margin: 26px 0 6px; }
+.page-head h1 { font-size: 22px; font-weight: 700; color: var(--ink); margin: 0; }
+.section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-top: 18px; max-width: 980px; }
+.section h2 { font-size: 15px; font-weight: 600; color: var(--ink); margin: 0 0 6px; }
+.section .sub { font-size: 12.5px; color: var(--ink-3); line-height: 1.55; margin: 0 0 14px; max-width: 76ch; }
+table.ws { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.ws th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-3); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line-2); }
+table.ws td { padding: 10px; border-bottom: 1px solid var(--line); color: var(--ink-2); vertical-align: middle; }
+table.ws tr:last-child td { border-bottom: none; }
+.num { font-variant-numeric: tabular-nums; }
+.today-strip { display: flex; border: 1px solid var(--line); border-radius: 12px; overflow: hidden; }
+.today-cell { flex: 1; padding: 14px 16px 12px; border-right: 1px solid var(--line); }
+.today-cell:last-child { border-right: 0; }
+.today-cell .n { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.today-cell .l { font-size: 11.5px; color: var(--ink-3); margin-top: 2px; }
+.n.good { color: var(--green); } .n.bad { color: var(--red); } .n.warn { color: var(--orange-600, #DB4100); }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+.pill.on { color: var(--green); background: var(--green-bg); border: 1px solid var(--green-line); }
+.pill.off { color: var(--ink-3); background: var(--bg-sunken); border: 1px solid var(--line-2); }
+.pill.warn { color: var(--red); background: var(--red-bg); border: 1px solid var(--red-line); }
+.empty, .loading { padding: 20px 10px; color: var(--ink-3); font-size: 13px; }
+.kind-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; border: 1px solid var(--line-2);
+  border-radius: 999px; padding: 4px 11px; margin: 0 6px 6px 0; cursor: pointer; user-select: none; color: var(--ink-2); }
+.kind-chip input { margin: 0; accent-color: var(--orange); }
+.kind-chip.on { background: var(--orange-100); border-color: var(--orange-100); color: var(--orange-700); font-weight: 600; }
+.person-card { border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; margin: 0 0 12px; }
+.person-card h3 { margin: 0 0 2px; font-size: 14px; color: var(--ink); }
+.person-role { font-size: 11.5px; color: var(--ink-3); margin: 0 0 10px; }
+.excl-row { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+.excl-row label { font-size: 12px; color: var(--ink-3); }
+.excl-row input { flex: 1; min-width: 220px; padding: 7px 10px; border: 1px solid var(--line-2); border-radius: 8px;
+  font-size: 12.5px; font-family: inherit; color: var(--ink); background: var(--bg); }
+.excl-row input:focus { outline: none; border-color: var(--ink-3); }
+.day-toggle { background: none; border: 0; padding: 0; cursor: pointer; color: var(--orange-700); font-size: 12px; font-weight: 600; }
+.titles-cell { background: var(--bg-sunken); font-size: 12px; }
+.titles-cell b { display: block; margin: 6px 0 2px; color: var(--ink-2); font-size: 11px; text-transform: uppercase; letter-spacing: .05em; }
+.titles-cell div { color: var(--ink-2); padding: 1px 0; }
+pre.prompt { background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px;
+  font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 11.5px; line-height: 1.55;
+  white-space: pre-wrap; word-break: break-word; color: var(--ink-2); max-height: 340px; overflow: auto; }
+.toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: var(--ink); color: var(--cream); font-size: 12.5px; font-weight: 500;
+  padding: 10px 18px; border-radius: 999px; z-index: 95; max-width: calc(100vw - 32px);
+  box-shadow: 0 8px 24px rgba(20,17,14,.25); }
+.toast.hidden { display: none; }
+.settings-cols { display: flex; flex: 1; min-width: 0; }
+.submenu { width: 208px; flex: 0 0 208px; background: var(--cream-50, #FCF7F1);
+  border-right: 1px solid var(--line); }
+.submenu h2 { font-size: 13px; font-weight: 600; color: var(--ink-3); text-transform: uppercase;
+  letter-spacing: .06em; padding: 22px 18px 10px; margin: 0; }
+.submenu .items { padding: 0 10px; }
+.submenu a { display: block; font-size: 13.5px; padding: 9px 18px; border-radius: 8px;
+  text-decoration: none; color: var(--ink-2); border: 1px solid transparent; }
+.submenu a:hover { background: var(--cream); }
+.submenu a.active { background: #fff; border: 1px solid var(--line-2); font-weight: 600;
+  color: var(--ink); box-shadow: 0 1px 2px rgba(20,17,14,.06); }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <div class="settings-cols">
+  <nav class="submenu">
+    <h2>Settings</h2>
+    <div class="items">
+      <a href="settings.html">Clients</a>
+      <a href="infrastructure.html">Email Infrastructure</a>
+      <a href="lists.html">All prospect lists</a>
+      <a href="optiqueue.html" class="active">Task Queue</a>
+    </div>
+  </nav>
+  <main class="main">
+    <div class="page-head"><h1>Task Queue</h1></div>
+
+    <section class="section">
+      <h2>Today</h2>
+      <p class="sub">The morning optimisation routine, across everyone who ran it today. Completed is
+      verified-done (the card cleared, or evidence was recorded); reassigned is done-claims the cards
+      contradicted; unattended is open tasks nobody has touched for 2+ working days.</p>
+      <div class="today-strip" id="today-strip"><div class="loading">Loading…</div></div>
+    </section>
+
+    <section class="section">
+      <h2>Daily log</h2>
+      <p class="sub">One row per person per run day, last 14 days. Titles shows exactly which tasks
+      sat behind each number.</p>
+      <div id="log-table"><div class="loading">Loading…</div></div>
+    </section>
+
+    <section class="section">
+      <h2>Who gets what</h2>
+      <p class="sub">The routing every routine obeys — each person's Claude reads this at every run,
+      so a change here is live tomorrow morning without touching anyone's prompt. Recommended defaults:
+      Asad (GTME) takes audits, variant and traffic moves, and add-more-leads; Yasir (CSM) takes new
+      offers and new versions. Client exclusions are name matches against campaign names.</p>
+      <div id="config-box"><div class="loading">Loading…</div></div>
+      <div id="unowned-warn"></div>
+    </section>
+
+    <section class="section">
+      <h2>Install — for the team</h2>
+      <p class="sub">One prompt each. Fill in the name, paste it to your Claude, done — kinds, client
+      exclusions and labels all come from this page, and every run reports back here. To change what
+      you receive, edit it above or just tell your Claude.</p>
+      <button class="btn primary sm" id="copy-install">Copy install prompt</button>
+      <details style="margin-top:12px"><summary style="cursor:pointer;font-size:12.5px;font-weight:600;color:var(--ink-3)">Read the prompt</summary>
+      <pre class="prompt" id="prompt-pre"></pre></details>
+    </section>
+  </main>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("settings");
+
+const KINDS = ["offer", "scale-winner", "copy-solo", "new-versions", "pattern", "list-audit"];
+const ROLE_HINT = { "Asad": "GTME — recommended: audits, variant & traffic moves, add-more-leads",
+                    "Yasir": "CSM — recommended: new offers, new versions" };
+const COUNT_FIELDS = ["created", "completed", "reassigned", "dismissed", "unattended"];
+const FIELD_CLASS = { completed: "good", reassigned: "bad", dismissed: "", unattended: "warn", created: "" };
+
+const INSTALL_PROMPT = `You are setting up my morning optimisation routine. Save it as a scheduled task named
+"Morning optimisation queue — [MY NAME]", running every weekday at 08:30 UTC — just after
+the morning crunch writes fresh optimisation cards (~08:15 UTC). Run it once now.
+
+SETUP — one line: I am [Asad or Yasir]. Everything else comes from the tool, the single
+source of truth: my kinds, my client exclusions, the task labels and due rules all live at
+Settings -> Task Queue (GET /api/optiqueue/config). To change what I receive, I just tell
+you and you POST the change to /api/optiqueue/config — or I edit the Settings page myself.
+
+EVERY RUN, IN THIS ORDER:
+
+1. READ. Open https://app.navreo.ai/app/campaigns.html in the browser — if it shows the
+   login page, stop and tell me to sign in; never guess credentials. In-page fetch:
+   /api/optiqueue/config (my kinds + exclusions), /api/cockpit/insights,
+   /api/campaigns-unified, /api/cockpit/assignments.
+   Freshness gate: if the insights' generated_at is not from today, wait 30 minutes and
+   retry (up to 3 times) before doing anything else.
+   Cards = insight rows with an all-digit scope whose insight_key starts with one of MY
+   kinds (from the config). Ignore everything else — strategy/book/wizard rows and the
+   optimiser feed's merged write-ups; the six categories are the whole menu. Skip campaigns
+   whose name contains one of my excluded clients. Drop cards whose assignments entry
+   ("{scope}::{insight_key}") is "dismiss". Do NOT drop tool-state "done" — that is a
+   done-claim for step 2. ONE task per kind per campaign; Key = "{scope}::{kind}".
+   Every campaign of every client is in scope by default — clients added to the tool are
+   covered automatically; never keep a client list in this routine.
+
+2. VERIFY YESTERDAY before assigning anything new. STATUS LAW: only "Not started" and
+   "Done" tasks may ever be edited — "In progress" and "Dismissed" are the human's.
+   A done-claim counts from EITHER surface (Notion task Done, or tool card completed).
+   Tool mirror writes go via POST /api/cockpit/assignments
+   {action_key: "{scope}::{insight_key}", campaign_id, insight_key, state} (ack|done|dismiss).
+   For each of my Keys with a Notion task (last 10 working days) or a tool done-claim:
+   - "Dismissed" in Notion -> doesn't apply. Leave forever, never re-task the Key, and
+     Dismiss the live card in the tool so the surfaces agree.
+   - Card dismissed in the tool -> set its Notion task to "Dismissed" if it is Not started
+     or Done; if In progress, don't touch it — flag the mismatch in the digest. Never
+     reassign a dismissed Key.
+   - "In progress" -> hands off entirely. Card cleared -> digest line
+     "(check) {title} — card cleared, mark it Done when ready". No edits, no new task.
+   - Done-claim: card GONE -> verified done (mark a Not-started task Done with comment
+     "verified — card cleared"). Card STILL LIVE -> for scale-winner / copy-solo /
+     new-versions, or audit/offer/pattern with NO evidence line ("Found: … / Shipped: …"):
+     NOT done — reopen the task (Not started, due today) and rename it appending
+     " — reassigned due to incompletion" (create fresh with that suffix if the claim only
+     exists on the tool card), then reset the tool card to "ack". With evidence: accept,
+     mirror done onto the tool card, watch the card 5 more working days.
+   - RELEVANCE GATE: a campaign that is not ACTIVE, or whose list is 100% worked through,
+     only ever gets add-more-leads tasks (pattern / top-up) — never create or reassign any
+     other kind there.
+   - Never delete anything.
+
+3. CREATE. A Key gets a new task ONLY if: no task in "Not started"/"In progress", no
+   "Dismissed" task, no dismissed tool card, and no evidence-accepted "Done" inside its
+   5-day watch. Dedupe by querying Client Tasks on Title containing
+   "{Task label} - {Campaign Name}" — the title IS the key (matches the reassigned variant
+   too; Notion cannot search body text). Create in "Client Tasks": Client = the campaign's
+   client · Assigned To = me · Status = Not started · Due = today for scale-winner and
+   copy-solo (one-click), today + 3 working days for everything else.
+   Title, exactly: "{Task label} - {Campaign Name}" — labels from the config, never
+   improvised. Body, exactly this shape — nothing longer:
+     [callout] "Automated assignment — this task was created automatically by the morning
+     optimisation routine from the live optimisation card on this campaign."
+     Why: one line — which rule broke, with its number
+     What: the card's numbers, verbatim · {n} meetings · {status}
+     How: https://app.navreo.ai/app/optimise.html?c={scope} · Due {date}
+     toggle "Claude prompt" -> the card's full Copy-prompt-for-Claude text
+     toggle "Marking done?" -> "Add one line: Found:… / Shipped:… — the card is checked
+       tomorrow. Doesn't apply? Set status Dismissed (or Dismiss the card)."
+     Last line: "Key: {scope}::{kind}"
+
+4. TELL ME. One Slack DM, delta first, no prose:
+   "(sun) {n} new · {n} auto-closed (check) · {n} reassigned (warn)" — reassigned on top,
+   new one-clicks next, the rest one line each, then "Open total: {n}".
+
+5. ESCALATE. My "Not started"/"In progress" tasks untouched 2 working days -> one line to
+   Bjion on Slack. Never escalate "Done" or "Dismissed".
+
+6. REPORT BACK — this feeds Settings -> Task Queue, where Bjion watches the whole system:
+   POST /api/optiqueue/report with {person, date (today), created, completed, reassigned,
+   dismissed, unattended, and created_titles / completed_titles / reassigned_titles /
+   dismissed_titles / unattended_titles}. completed = verified dones (auto-closed +
+   evidence-accepted); dismissed = tasks or cards newly Dismissed today; unattended = the
+   step-5 escalation set. Idempotent — a re-run the same day replaces my entry.
+
+7. FRIDAY ONLY: post the week's scoreboard to the team Slack: created · done-verified ·
+   auto-closed · reassigned · average days-to-done, per person. Numbers only.
+
+HARD RULES: only "Not started" and "Done" tasks may ever be edited · "Dismissed" (Notion)
+and Dismiss (tool) both suppress their Key permanently · never send emails · never touch
+Smartlead · tool card states may be written ONLY to mirror a human's status or reset a
+failed done-claim · never create a task without Client + Due Date · labels, title format
+and body shape are fixed · if a fetch fails, report it and stop.`;
+
+let toastTimer = null;
+function toast(msg, ms = 4200) {
+  const t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add("hidden"), ms);
+}
+function qEsc(s){ return (typeof esc === "function") ? esc(String(s ?? "")) :
+  String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); }
+
+document.getElementById("prompt-pre").textContent = INSTALL_PROMPT;
+document.getElementById("copy-install").addEventListener("click", async () => {
+  try { await navigator.clipboard.writeText(INSTALL_PROMPT); }
+  catch {
+    const ta = document.createElement("textarea");
+    ta.value = INSTALL_PROMPT; document.body.appendChild(ta); ta.select();
+    document.execCommand("copy"); ta.remove();
+  }
+  toast("Install prompt copied — fill in the name and paste it to your Claude.");
+});
+
+// ── Today + daily log ────────────────────────────────────────────────────────
+async function loadSummary() {
+  const strip = document.getElementById("today-strip");
+  const box = document.getElementById("log-table");
+  let s = null;
+  try {
+    const r = await fetch("/api/optiqueue/summary?days=14", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    s = await r.json();
+  } catch (e) {
+    strip.innerHTML = `<div class="empty">Could not load (${qEsc(String(e))}).</div>`;
+    box.innerHTML = "";
+    return;
+  }
+  const todayIso = new Date().toISOString().slice(0, 10);
+  const today = (s.days || []).find(d => d.date === todayIso);
+  const tSum = {};
+  COUNT_FIELDS.forEach(f => tSum[f] = 0);
+  if (today) Object.values(today.runs).forEach(e => COUNT_FIELDS.forEach(f => tSum[f] += (e[f] || 0)));
+  strip.innerHTML = COUNT_FIELDS.map(f =>
+    `<div class="today-cell"><div class="n num ${FIELD_CLASS[f]}">${tSum[f]}</div><div class="l">${f}${today ? "" : " (no run yet today)"}</div></div>`).join("");
+  if (!(s.days || []).length) {
+    box.innerHTML = `<div class="empty">No runs reported yet. The first morning routine that runs will start this log.</div>`;
+    return;
+  }
+  const rows = [];
+  (s.days || []).forEach((d, di) => {
+    Object.entries(d.runs).forEach(([person, e]) => {
+      const hasTitles = COUNT_FIELDS.some(f => (e[f + "_titles"] || []).length);
+      rows.push(`<tr>
+        <td class="num">${qEsc(d.date)}</td><td>${qEsc(person)}</td>
+        ${COUNT_FIELDS.map(f => `<td class="num">${e[f] || 0}</td>`).join("")}
+        <td>${hasTitles ? `<button class="day-toggle" data-t="t${di}-${qEsc(person)}">Titles</button>` : ""}</td>
+      </tr>
+      <tr class="hiddenrow" id="t${di}-${qEsc(person)}" hidden><td colspan="8" class="titles-cell">${
+        COUNT_FIELDS.map(f => {
+          const list = e[f + "_titles"] || [];
+          return list.length ? `<b>${f}</b>` + list.map(t => `<div>${qEsc(t)}</div>`).join("") : "";
+        }).join("")
+      }</td></tr>`);
+    });
+  });
+  box.innerHTML = `<table class="ws">
+    <thead><tr><th>Date</th><th>Person</th><th>Created</th><th>Completed</th><th>Reassigned</th><th>Dismissed</th><th>Unattended</th><th></th></tr></thead>
+    <tbody>${rows.join("")}</tbody></table>`;
+  box.querySelectorAll(".day-toggle").forEach(b => b.addEventListener("click", () => {
+    const r = document.getElementById(b.dataset.t);
+    if (r) r.hidden = !r.hidden;
+  }));
+}
+
+// ── Config editor ────────────────────────────────────────────────────────────
+let CFG = null;
+function renderConfig() {
+  const box = document.getElementById("config-box");
+  const people = Object.keys(CFG.people || {});
+  box.innerHTML = people.map(name => {
+    const p = CFG.people[name];
+    const chips = KINDS.map(k => {
+      const on = (p.kinds || []).includes(k);
+      return `<label class="kind-chip ${on ? "on" : ""}" data-person="${qEsc(name)}" data-kind="${k}">
+        <input type="checkbox" ${on ? "checked" : ""}> ${qEsc(CFG.labels[k] || k)}</label>`;
+    }).join("");
+    return `<div class="person-card" data-person="${qEsc(name)}">
+      <h3>${qEsc(name)}</h3>
+      <p class="person-role">${qEsc(ROLE_HINT[name] || "")}</p>
+      <div>${chips}</div>
+      <div class="excl-row">
+        <label>Exclude clients</label>
+        <input type="text" class="excl-input" data-person="${qEsc(name)}"
+          value="${qEsc((p.exclude_clients || []).join(", "))}" placeholder="e.g. Grout, Amplifyy — matched against campaign names">
+        <button class="btn primary sm save-person" data-person="${qEsc(name)}">Save</button>
+      </div>
+    </div>`;
+  }).join("");
+  const warn = document.getElementById("unowned-warn");
+  warn.innerHTML = (CFG.unowned_kinds || []).length
+    ? `<span class="pill warn">No owner: ${CFG.unowned_kinds.map(k => qEsc(CFG.labels[k] || k)).join(" · ")} — cards of these kinds are reaching nobody</span>`
+    : `<span class="pill on">Every optimisation kind has an owner</span>`;
+  box.querySelectorAll(".kind-chip input").forEach(i => i.addEventListener("change", e => {
+    e.target.closest(".kind-chip").classList.toggle("on", e.target.checked);
+  }));
+  box.querySelectorAll(".save-person").forEach(b => b.addEventListener("click", () => savePerson(b.dataset.person)));
+}
+async function savePerson(name) {
+  const card = document.querySelector(`.person-card[data-person="${CSS.escape(name)}"]`);
+  const kinds = [...card.querySelectorAll(".kind-chip")].filter(c => c.querySelector("input").checked).map(c => c.dataset.kind);
+  const excl = card.querySelector(".excl-input").value.split(",").map(s => s.trim()).filter(Boolean);
+  try {
+    const r = await fetch("/api/optiqueue/config", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ people: { [name]: { kinds: kinds, exclude_clients: excl } } })
+    });
+    const b = await r.json();
+    if (!r.ok || !b.ok) throw new Error(b.message || ("HTTP " + r.status));
+    CFG = b;
+    renderConfig();
+    toast(`${name}'s routing saved — live from the next run.`);
+  } catch (e) {
+    toast("Couldn't save: " + String(e.message || e));
+  }
+}
+async function loadConfig() {
+  const box = document.getElementById("config-box");
+  try {
+    const r = await fetch("/api/optiqueue/config", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    CFG = await r.json();
+    renderConfig();
+  } catch (e) {
+    box.innerHTML = `<div class="empty">Could not load config (${qEsc(String(e))}).</div>`;
+  }
+}
+
+loadSummary();
+loadConfig();
+</script>
+</body>
+</html>
