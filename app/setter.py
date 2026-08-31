@@ -16835,7 +16835,11 @@ def route_training_interview(payload):
                 for _qid, _ans in raw.items():
                     _a = str(_ans or "").strip()
                     _qt = by_id.get(str(_qid), "").lower()
-                    if "booking" in _qt and _a:
+                    # "book" not just "booking" (owner session 2026-08-31): the
+                    # static intake question reads "What link should people use
+                    # to BOOK A CALL with you?" - the old substring never
+                    # matched it, so a pasted URL still left the field empty.
+                    if _a and "link" in _qt and re.search(r"\bbook", _qt):
                         _m = _URL_RE.findall(_a)
                         if not _m:
                             # Scheme-less answers (owner session 2026-08-31:
