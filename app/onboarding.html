@@ -808,11 +808,18 @@ var OB_CID=(OB_Q.client||"").trim();
 var OB_SCOPED=(!!OB_CID||OB_FORCE_NEW);
 if(OB_FORCE_NEW&&!OB_CID)OB_CID=obUuid();
 var LS_KEY=OB_SCOPED?("nav_onboarding_v1:"+OB_CID):"nav_onboarding_v1";
+/* Real client pages (?client= / ?new=1) are SERVER-ONLY: the server draft is the
+   single source of truth, loaded fresh on every open, and localStorage is never
+   read or written. A local mirror that can win over the server means a stale
+   cached tab silently resurrects old data over back-office edits and resets —
+   that class of bug is only closed by not having a local copy at all. The
+   unscoped demo preview keeps localStorage so reviewers don't lose their spot. */
+var OB_LOCAL=!OB_SCOPED;
 /* five-stage migration (stv 2, 2026-08-31): "Your emails" is no longer its own journey
    stage — the read+approve card now lives inside Pre-launch. Old 6-stage saves (no stv)
    shift stages 4/5 down to 3/4; old stage 3 keeps its number (emails undone in Pre-launch). */
 function obMigrate(d){if(d&&typeof d.stage==="number"&&d.stv!==2){if(d.stage>=4)d.stage-=1;d.stv=2;}return d;}
-if(!OB_FORCE_NEW){try{var raw=localStorage.getItem(LS_KEY);if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=obMigrate(p);}}catch(e){}}
+if(OB_LOCAL){try{var raw=localStorage.getItem(LS_KEY);if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=obMigrate(p);}}catch(e){}}
 /* offers-section state migration: own[] may hold legacy strings; normalise to offer objects + default new fields. */
 if(!Array.isArray(S.own))S.own=[];
 S.own=S.own.map(function(o){return (o&&typeof o==="object")?o:{name:String(o),line:String(o),mech:"lead_magnet",raw:String(o),pick:true};});
@@ -853,33 +860,42 @@ if(!OB_SCOPED&&(!S.intake||!Object.keys(S.intake).length)){S.intake={
 };}
 if(OB_FORCE_NEW){if(OB_Q.name)S.clientName=OB_Q.name;if(OB_Q.company&&!S.clientName)S.clientName=OB_Q.company;}
 
-var _obTimer=null,_obLast="";
+/* Server-only write gate: a scoped page must not POST anything until the server
+   copy has been fetched and adopted — otherwise a fast tab-close (or any startup
+   save) would flush the pristine FRESH doc over a client's real server progress.
+   Unscoped demo previews keep the old behavior (local copy is their truth). */
+var _obTimer=null,_obLast="",_obReady=OB_LOCAL;
 function obSetStatus(st){var el=document.getElementById("obSave");if(!el)return;
  var m={saving:"Saving…",saved:"Saved ✓",error:"Saved on this device — retrying…"};
  el.textContent=m[st]||"";el.setAttribute("data-st",st);el.style.color=(st==="saved")?"#3f9e5a":(st==="error")?"#c2683a":"#8a8378";}
 function obPayload(){return {id:S.clientId,name:(S.clientName||S.offerAudience||""),stage:S.stage,status:(S.stage>=4?"submitted":"draft"),doc:S};}
-function obSync(){var body;try{body=JSON.stringify(obPayload());}catch(e){return;}
+function obSync(){if(!_obReady)return;var body;try{body=JSON.stringify(obPayload());}catch(e){return;}
  if(body===_obLast){obSetStatus("saved");return;}
  obSetStatus("saving");
  fetch("/api/onboarding/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:body})
   .then(function(r){if(!r.ok)throw r.status;return r.json();})
   .then(function(){_obLast=body;obSetStatus("saved");})
   .catch(function(){obSetStatus("error");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,4000);});}
-function scheduleSync(){obSetStatus("saving");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,700);}
-function obFlush(){try{var body=JSON.stringify(obPayload());if(body===_obLast)return;
+function scheduleSync(){if(!_obReady)return;obSetStatus("saving");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,700);}
+function obFlush(){if(!_obReady)return;try{var body=JSON.stringify(obPayload());if(body===_obLast)return;
  if(navigator.sendBeacon&&navigator.sendBeacon("/api/onboarding/draft",new Blob([body],{type:"application/json"}))){_obLast=body;return;}}catch(e){}
  obSync();}
 window.addEventListener("pagehide",obFlush);
 document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden")obFlush();});
 
-function save(){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}scheduleSync();}
+function save(){if(OB_LOCAL){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}}scheduleSync();}
 
-/* On load, pull any server-side progress for this client and adopt it when the
-   browser copy is pristine or behind — so a fresh device resumes cleanly. */
-function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
+/* On load, pull the server-side progress for this client. Scoped pages adopt it
+   as the single source of truth (S starts FRESH, so the pristine branch always
+   fires); unscoped previews adopt it only when pristine or behind. Until this
+   fetch answers, the write gate stays closed and nothing can POST. */
+function obRestore(){if(OB_FORCE_NEW){_obReady=true;scheduleSync();return;}
  fetch("/api/onboarding/draft?id="+encodeURIComponent(S.clientId),{cache:"no-store"})
   .then(function(r){return r.ok?r.json():null;})
-  .then(function(j){if(!j||!j.draft||!j.draft.doc)return;var sv=obMigrate(j.draft.doc);
+  .then(function(j){
+   if(!j){setTimeout(obRestore,3000);return;} /* server hiccup — retry, keep gate closed */
+   if(!j.draft||!j.draft.doc){_obReady=true;scheduleSync();return;} /* brand-new client: FRESH is correct, create the record */
+   var sv=obMigrate(j.draft.doc);
    var pristine=(S.stage===0&&Object.keys(S.done||{}).length===0);
    /* Back-office reset: when the server issues a newer resetRev than this browser
       last adopted, the server copy wins wholesale — even if the local cache is
@@ -889,7 +905,8 @@ function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
    var forceReset=((sv.resetRev||0)>(S.resetRev||0));
    if(forceReset||(sv.stage||0)>(S.stage||0)||pristine){
     for(var k in FRESH){if(!(k in sv))sv[k]=JSON.parse(JSON.stringify(FRESH[k]));}
-    sv.clientId=S.clientId;S=sv;try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}
+    sv.clientId=S.clientId;S=sv;if(OB_LOCAL){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}}
+    _obReady=true;try{_obLast=JSON.stringify(obPayload());}catch(e){}
     if(typeof render==="function")render();obSetStatus("saved");}
    else{/* back-office-drafted sending plan (domains/site/redirect default) adopts even when this browser is ahead — the client UI never edits these. domainsRev lets a REPLACED list supersede a stale local copy (picks reset with it). */
     var chg=false,svOk=Array.isArray(sv.domains)&&sv.domains.length,mineOk=Array.isArray(S.domains)&&S.domains.length;
@@ -903,8 +920,9 @@ function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
     for(var bi=0;bi<bo.length;bi++){var bk=bo[bi];if(sv[bk]&&sv[bk]!==S[bk]){S[bk]=sv[bk];chg=true;}}
     var svL=sv.homeLinks||{};if(!S.homeLinks)S.homeLinks={};
     for(var hk in svL){if(svL[hk]&&svL[hk]!==S.homeLinks[hk]){S.homeLinks[hk]=svL[hk];chg=true;}}
-    if(chg){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}if(typeof render==="function")render();}}
-  }).catch(function(){});}
+    if(chg){if(OB_LOCAL){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}}if(typeof render==="function")render();}
+    _obReady=true;try{_obLast=JSON.stringify(obPayload());}catch(e){}}
+  }).catch(function(){setTimeout(obRestore,3000);});}
 
 var _DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function fmtD(d){return _DOW[d.getDay()]+" "+_MON[d.getMonth()]+" "+d.getDate();}
