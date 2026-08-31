@@ -758,6 +758,9 @@ function renderCasesOrEmpty() {
     startShortRoundPoll();
     return;
   }
+  // A short (or freshness-trimmed restored) round keeps the swap-poll
+  // running so it grows to ROUND_SIZE as redrafts land.
+  if (SHARE_MODE && ROUND_IDS && ROUND_IDS.length < ROUND_SIZE) startShortRoundPoll();
   idx = 0;
   view = "stream";
   render();
@@ -899,7 +902,21 @@ function beginRoundIfNeeded() {
     if (Array.isArray(saved) && saved.length) {
       const live = new Set(CASES.map((c) => String(c.id)));
       const restored = saved.filter((id) => live.has(String(id)));
-      if (restored.some((id) => !isAnswered(id))) { ROUND_IDS = restored; return; }
+      // SERVE GATE on restore too (live-verify 2026-08-31: the restore
+      // branch re-served a card that predated the sitting's newest teaching
+      // verbatim, bypassing the fresh-only compose below). Keep only the
+      // still-fresh unanswered members; a restore with none left falls
+      // through to a fresh compose (which may hold on the wait).
+      const stillOk = restored.filter((id) => {
+        if (isAnswered(id)) return true;
+        const c = CASES.find((x) => String(x.id) === String(id));
+        return c && caseFresh(c);
+      });
+      if (stillOk.some((id) => !isAnswered(id))) {
+        ROUND_IDS = stillOk;
+        try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
+        return;
+      }
     }
   }
   // Cap the round at ROUND_SIZE (owner ruling 2026-08-20): a backlog of
