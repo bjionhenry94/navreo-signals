@@ -2444,6 +2444,18 @@ def onboarding_draft_upsert(p: dict):
     for _bo in ("domains", "site"):
         if not doc.get(_bo) and pdoc.get(_bo):
             doc[_bo] = pdoc[_bo]
+    # homeLinks / portalUrl / slackUrl are BACK-OFFICE-authored (CSM / onboarding
+    # autopilot). The client hub only ever READS them — it never lets the client
+    # edit them, yet it autosaves the whole doc, so a browser holding stale local
+    # state would POST an OLD copy back and silently revert a fresh back-office
+    # link edit. That is the "the portal links keep reverting" bug: every re-set
+    # from the back office got clobbered by whatever tab the client still had open.
+    # So the STORED value always wins here — a back-office link write must set
+    # `set_links: true` to be treated as authoritative.
+    if not p.get("set_links"):
+        for _lk in ("homeLinks", "portalUrl", "slackUrl"):
+            if _lk in pdoc:
+                doc[_lk] = pdoc[_lk]
     # A REPLACED list carries a bumped doc.domainsRev; a save from a browser
     # still holding an older rev must not roll the newer list back.
     try:
