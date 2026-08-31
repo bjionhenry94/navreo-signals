@@ -890,6 +890,11 @@ function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
     if(svOk&&(!mineOk||(sv.domainsRev||0)>(S.domainsRev||0))){S.domains=sv.domains;S.domainsRev=sv.domainsRev||0;S.domainPicks={};chg=true;}
     if(sv.site&&!S.site){S.site=sv.site;chg=true;}
     if(sv.redirect&&!(S.redirect&&S.redirect.trim())){S.redirect=sv.redirect;chg=true;}
+    /* portal identity + home links are back-office too — a tab from before they were drafted holds blanks, and its next sync would wipe them server-side. Fill local blanks from the server copy. */
+    var bo=["clientName","portalUrl","slackUrl"];
+    for(var bi=0;bi<bo.length;bi++){var bk=bo[bi];if(sv[bk]&&!(S[bk]&&String(S[bk]).trim())){S[bk]=sv[bk];chg=true;}}
+    var svL=sv.homeLinks||{};if(!S.homeLinks)S.homeLinks={};
+    for(var hk in svL){if(svL[hk]&&!(S.homeLinks[hk]&&String(S.homeLinks[hk]).trim())){S.homeLinks[hk]=svL[hk];chg=true;}}
     if(chg){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}if(typeof render==="function")render();}}
   }).catch(function(){});}
 
