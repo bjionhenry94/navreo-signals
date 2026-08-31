@@ -367,8 +367,6 @@ a.drow .go { font-size:12.5px; font-weight:700; color:var(--orange-700); margin-
 .iq-check { color:#785400; background:var(--amber-bg); }   /* darkened for AA contrast on amber-bg */
 .iq-q { font-size:15px; font-weight:600; color:var(--ink); line-height:1.35; letter-spacing:-.01em; margin-bottom:4px; }
 .iq-hint { font-size:12.5px; color:var(--ink-3); line-height:1.5; margin-bottom:9px; }
-.iq-sum { font-size:13.5px; color:var(--ink-2); line-height:1.5; margin-top:7px;
-  overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; }
 .iq-a { width:100%; box-sizing:border-box; border:1.5px solid #8a847b; border-radius:10px; background:#fff;
   color:var(--ink); padding:11px 12px; font:inherit; font-size:14px; line-height:1.5; min-height:62px; resize:vertical;
   scroll-margin-top:88px; }
@@ -383,9 +381,6 @@ a.drow .go { font-size:12.5px; font-weight:700; color:var(--orange-700); margin-
 .iq-confirm { font:inherit; font-size:12.5px; font-weight:700; color:var(--green); background:var(--green-bg);
   border:0; border-radius:999px; padding:6px 12px; cursor:pointer; }
 .iq-confirm:hover { filter:brightness(.96); }
-.iq-edit { font:inherit; font-size:12.5px; font-weight:600; color:var(--ink-2); background:none; border:0; padding:0;
-  cursor:pointer; text-decoration:underline; text-underline-offset:3px; min-height:24px; display:inline-flex; align-items:center; }
-.iq-edit:hover { color:var(--ink); }
 .iq-saved { font-size:11.5px; font-weight:700; color:var(--green); opacity:0; transition:opacity .2s; }
 .iq-saved.show { opacity:1; }
 .iq-sample { margin-top:9px; font-size:12.5px; color:var(--ink-2); line-height:1.55; background:var(--bg-sunken);
@@ -400,9 +395,8 @@ a.drow .go { font-size:12.5px; font-weight:700; color:var(--orange-700); margin-
 .btn-ink:hover { background:#2b2620; }
 .btn-ink:focus-visible { outline:2px solid var(--ink); outline-offset:2px; }
 /* focus visibility + reduced motion (a11y) */
-.iq-a:focus-visible, .intake-bar button:focus-visible, .iq-ex:focus-visible, .iq-confirm:focus-visible,
-.iq-edit:focus-visible, .iq-row:focus-visible { outline:2px solid var(--ink); outline-offset:2px; border-radius:8px; }
-.iq-row { cursor:pointer; min-height:28px; }
+.iq-a:focus-visible, .intake-bar button:focus-visible, .iq-ex:focus-visible,
+.iq-confirm:focus-visible { outline:2px solid var(--ink); outline-offset:2px; border-radius:8px; }
 @media (prefers-reduced-motion: reduce) { html { scroll-behavior:auto; } .iq-saved { transition:none; } }
 .pnote { font-size:12px; font-weight:600; color:var(--ink-3); }
 .pbar { height:6px; border-radius:4px; background:var(--bg-sunken); overflow:hidden;
@@ -647,7 +641,7 @@ var CARDS=[
  {id:"infrastructure",stage:0,title:"Your email addresses",time:"3 min",clock:true},
  {id:"offers",stage:0,title:"Think about your offers",time:"5 min",badge:"for your call"},
  {id:"slack",stage:0,title:"Join us on Slack",time:"2 min"},
- {id:"home",stage:0,title:"Your home base",time:"1 min"},
+ {id:"home",stage:0,title:"Your Client Portal",time:"1 min"},
  {id:"business",stage:0,title:"About your business",time:"10 min"},
  {id:"block",stage:0,title:"Who we should never email",time:"2 min"},
  {id:"emails",stage:3,title:"Read + approve your emails",time:"12 min"},
@@ -849,8 +843,6 @@ function toast(msg){var t=document.getElementById("toast");t.textContent=msg;t.c
  clearTimeout(t._h);t._h=setTimeout(function(){t.classList.remove("show");},2600);}
 /* escape a string for safe injection into a <textarea> body */
 function qesc(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}
-/* intake: which pre-filled cards the client has expanded to edit (UI-only, not persisted) */
-var IOPEN={};
 /* live-update the intake progress bar + gap count + jump button without a full re-render */
 function intakeBar(){var IN=S.intake||{},TC=S.intakeTouched||{},OK=S.intakeOk||{},N=QS.length;
  function gap(q){return !String(IN[q.id]||"").trim();}
@@ -863,7 +855,7 @@ function intakeBar(){var IN=S.intake||{},TC=S.intakeTouched||{},OK=S.intakeOk||{
  var pb=bar.querySelector(".pbar");if(pb){pb.setAttribute("aria-valuenow",confN);
   pb.setAttribute("aria-valuetext",confN+" confirmed, "+toCheck+" to check, "+toFill+" to fill");}
  var lab=bar.querySelector(".lab");
- if(lab)lab.innerHTML=toFill?('<b class="need-n">'+toFill+'</b> still needed<span class="chk"> · '+toCheck+' to check · about 10 min</span>')
+ if(lab)lab.innerHTML=toFill?('<b class="need-n">'+toFill+'</b> still needed · about 8 min<span class="chk"> · '+toCheck+' to check if you like</span>')
    :(toCheck?('<b>All the essentials are in ✓</b><span class="chk"> · '+toCheck+' to check if you like</span>'):'All done — thank you ✓');
  var jb=bar.querySelector(".intake-jump");
  if(jb){if(toFill){jb.removeAttribute("disabled");jb.setAttribute("data-ijump","need");jb.textContent="Jump to next gap →";}
@@ -1109,42 +1101,32 @@ var PAGES={
     var secCheck=QS.filter(function(x){return x.sec===curSec&&!gapOf(x)&&!confirmed(x);}).length;
     var sp=[];if(secNeed)sp.push(secNeed+' needed');if(secCheck)sp.push(secCheck+' to check');
     body+='<div class="intake-sec">'+curSec+(sp.length?(' <span class="c">· '+sp.join(' · ')+'</span>'):'')+'</div>';}
-   var gap=gapOf(q), v=val(q), isConf=confirmed(q), open=!!IOPEN[q.id];
+   var gap=gapOf(q), v=val(q), isConf=confirmed(q);
    var stateCls=gap?'iq-need':(isConf?'iq-ok':'iq-check');
    var chipTxt=gap?'We need this':(isConf?'Done ✓':'Check this');
+   var cardCls=gap?'need':(isConf?'':'check');
    var tId='t-'+q.id, qId='q-'+q.id, hId='h-'+q.id, cId='c-'+q.id, exId='ex-'+q.id;
    var qbody=q.q+(q.parts?('<ul class="iq-parts">'+q.parts.map(function(p){return '<li>'+p+'</li>';}).join("")+'</ul>'):'');
    var hintbody=q.hint+(q.optional?' <span class="iq-optional">Optional</span>':'');
    var header='<span class="iq-n">'+num+'</span><span class="iq-t" id="'+tId+'" role="heading" aria-level="3">'+q.name+'</span>'
      +'<span class="iq-chip '+stateCls+'" id="'+cId+'">'+chipTxt+'</span>';
-   if(gap||open){
-    // expanded, editable
-    body+='<div class="iq'+(gap?' need':' open')+'" id="iq-'+q.id+'">'
-     +'<div class="iq-h">'+header+'</div>'
-     +'<div class="iq-q" id="'+qId+'">'+qbody+'</div>'
-     +'<div class="iq-hint" id="'+hId+'">'+hintbody+'</div>'
-     +'<textarea class="iq-a" data-iq="'+q.id+'" rows="3" aria-labelledby="'+tId+' '+qId+'" aria-describedby="'+hId+' '+cId+'" placeholder="'+(gap?'Type your answer…':'')+'">'+qesc(v)+'</textarea>'
-     +'<div class="iq-foot"><span class="l"><button class="iq-ex" data-iex="'+q.id+'" aria-expanded="false" aria-controls="'+exId+'">See an example</button>'
-       +(gap?'':'<button class="iq-confirm" data-iok="'+q.id+'" aria-label="Confirm answer: '+q.name+'">Looks right ✓</button>')+'</span>'
-       +'<span class="iq-saved" data-saved="'+q.id+'" aria-hidden="true">Saved ✓</span></div>'
-     +'<div class="iq-sample" id="'+exId+'" hidden><b>Example:</b> '+q.sample+'</div>'
-    +'</div>';
-   } else {
-    // collapsed summary row (pre-filled or confirmed)
-    body+='<div class="iq" id="iq-'+q.id+'">'
-     +'<div class="iq-h iq-row" data-iedit="'+q.id+'">'+header+'</div>'
-     +'<div class="iq-sum">'+qesc(v)+'</div>'
-     +'<div class="iq-foot"><span class="l">'
-       +(isConf?'':'<button class="iq-confirm" data-iok="'+q.id+'" aria-label="Confirm answer: '+q.name+'">Looks right ✓</button>')
-       +'<button class="iq-edit" data-iedit="'+q.id+'" aria-label="Edit answer: '+q.name+'">Edit</button></span></div>'
-    +'</div>';
-   }
+   // every question is an always-open, immediately-editable text box — no collapse, no Edit button
+   body+='<div class="iq'+(cardCls?' '+cardCls:'')+'" id="iq-'+q.id+'">'
+    +'<div class="iq-h">'+header+'</div>'
+    +'<div class="iq-q" id="'+qId+'">'+qbody+'</div>'
+    +'<div class="iq-hint" id="'+hId+'">'+hintbody+'</div>'
+    +'<textarea class="iq-a" data-iq="'+q.id+'" rows="3" aria-labelledby="'+tId+' '+qId+'" aria-describedby="'+hId+' '+cId+'" placeholder="'+(gap?'Type your answer…':'')+'">'+qesc(v)+'</textarea>'
+    +'<div class="iq-foot"><span class="l"><button class="iq-ex" data-iex="'+q.id+'" aria-expanded="false" aria-controls="'+exId+'">See an example</button>'
+      +((!gap&&!isConf)?'<button class="iq-confirm" data-iok="'+q.id+'" aria-label="Confirm answer: '+q.name+'">Looks right ✓</button>':'')+'</span>'
+      +'<span class="iq-saved" data-saved="'+q.id+'" aria-hidden="true">Saved ✓</span></div>'
+    +'<div class="iq-sample" id="'+exId+'" hidden><b>Example:</b> '+q.sample+'</div>'
+   +'</div>';
   });
   return '<div class="headline">About your <span class="date">business</span>.</div>'
    +'<div class="subline">We’ve filled in what we picked up on your calls — have a quick look and fix anything that’s off. The ones marked <b>“We need this”</b> are what we’re still missing; anything you don’t get to, we’ll finish together on your call. It saves as you go, so you can stop and come back whenever.</div>'
    +bar
    +'<div class="ob-body intake">'+body+'</div>'
-   +'<div class="ob-foot2"><button class="btn-ink" data-done="business">'+(toFill?('Done for now — '+toFill+' still needed'):(toCheck?'Essentials are in — see you on the call ✓':'All done — see you on the call ✓'))+'</button><span class="ob-t clock">nothing to submit · we finish the rest on your call</span></div>';},
+   +'<div class="ob-foot2"><button class="btn-ink" data-done="business">'+(toFill?('Done for now — '+toFill+' still needed'):(toCheck?'Essentials are in — see you on the call ✓':'All done — see you on the call ✓'))+'</button><span class="ob-t clock">you can finish anytime, even with blanks — we complete the rest on your call</span></div>';},
  slack:function(){
   if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
    +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
@@ -1171,7 +1153,7 @@ var PAGES={
   function hrow(key,label,status){var url=L[key]||"";
    return '<a class="drow" href="'+(url||"#")+'"'+(url?' target="_blank" rel="noopener"':' data-ph')+'>'
    +'<span class="name">'+label+'</span><span class="status">'+status+'<span class="go">Open ↗</span></span></a>';}
-  return '<div class="headline">Your <span class="date">home base</span>.</div>'
+  return '<div class="headline">Your <span class="date">Client Portal</span>.</div>'
   +'<div class="subline">Contracts, invoices, recordings, weekly reports — one page, always up to date. Nothing to install.</div>'
   +'<div class="ob-body">'
   +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/51ee8db330024f218026eef43485ecf9" title="Navreo: Client Portal Introduction" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
@@ -1564,6 +1546,7 @@ function bindAll(){
   if(navigator.clipboard&&navigator.clipboard.writeText){navigator.clipboard.writeText(url).then(ok,fb);}else{fb();}});
  qa("[data-ph]").forEach(function(a){a.addEventListener("click",function(ev){ev.preventDefault();toast("Opens here in your live hub ↗");});});
  qa("[data-iq]").forEach(function(t){t.addEventListener("input",function(){
+   t.style.height="auto";t.style.height=t.scrollHeight+"px";
    if(!S.intake)S.intake={};if(!S.intakeTouched)S.intakeTouched={};
    var id=t.getAttribute("data-iq");S.intake[id]=t.value;S.intakeTouched[id]=true;save();
    var card=document.getElementById("iq-"+id),filled=t.value.trim().length>0;
@@ -1578,18 +1561,15 @@ function bindAll(){
    var hid=ex.hasAttribute("hidden");if(hid)ex.removeAttribute("hidden");else ex.setAttribute("hidden","");
    b.setAttribute("aria-expanded",hid?"true":"false");b.textContent=hid?"Hide example":"See an example";});});
  qa("[data-iok]").forEach(function(b){b.addEventListener("click",function(){
-   var id=b.getAttribute("data-iok");if(!S.intakeOk)S.intakeOk={};S.intakeOk[id]=true;delete IOPEN[id];save();render();
-   toast("Confirmed ✓");var e=document.querySelector('#iq-'+id+' .iq-edit');if(e)setTimeout(function(){e.focus();},60);});});
- qa("[data-iedit]").forEach(function(b){b.addEventListener("click",function(){
-   var id=b.getAttribute("data-iedit");IOPEN[id]=true;render();
-   var t=document.querySelector('#iq-'+id+' .iq-a');if(t)setTimeout(function(){t.focus();},60);});});
+   var id=b.getAttribute("data-iok");if(!S.intakeOk)S.intakeOk={};S.intakeOk[id]=true;save();render();
+   toast("Confirmed ✓");var t=document.querySelector('#iq-'+id+' .iq-a');if(t)setTimeout(function(){t.focus();},60);});});
+ qa(".iq-a").forEach(function(t){t.style.height="auto";t.style.height=t.scrollHeight+"px";});
  var ij=app.querySelector("[data-ijump]");
  if(ij)ij.addEventListener("click",function(){var mode=ij.getAttribute("data-ijump");
    var g=(mode==="need")?app.querySelector(".iq.need"):null;
    if(!g){var chips=qa(".iq .iq-chip.iq-check");if(chips.length)g=chips[0].closest(".iq");}
    if(!g)return;g.scrollIntoView({behavior:"smooth",block:"center"});
-   var t=g.querySelector(".iq-a");if(t){setTimeout(function(){t.focus();},320);}
-   else{var ed=g.querySelector("[data-iedit]");if(ed)setTimeout(function(){ed.click();},320);}});
+   var t=g.querySelector(".iq-a");if(t)setTimeout(function(){t.focus();},320);});
  qa("[data-offstep]").forEach(function(b){b.addEventListener("click",function(){S.offerStep=+b.getAttribute("data-offstep");save();render();window.scrollTo(0,0);});});
  qa("[data-loom]").forEach(function(b){b.addEventListener("click",function(){toast("The 2-min walkthrough plays here in your live hub ▶");});});
  qa("[data-star]").forEach(function(b){b.addEventListener("click",function(){ensureIdeas();var ix=+b.getAttribute("data-star");if(S.ideas[ix]){S.ideas[ix].star=!S.ideas[ix].star;save();render();toast(S.ideas[ix].star?"Starred ⭐":"Unstarred");}});});
