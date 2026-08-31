@@ -922,7 +922,7 @@ function dncStatusHTML(){
  var issue=c.bad?'<span class="warn">'+(c.bad>1?(c.bad+' links don’t look right'):(c.badName?'the link for “'+qesc(c.badName)+'” doesn’t look right':'That doesn’t look like a link'))+'. Paste the URL from your browser.</span>'
   :(c.named?(c.filed?('add the link for the other'+(c.named===1?' one':'s')+' to file '+(c.named===1?'it':'them')+' too.'):(c.named>1?'Add the links — each list needs its own.':'Add the link — that’s what puts the list on file.')):'');
  if(count&&issue)return count+' — '+issue;
- if(count)return count+' — we check each one opens, then go through them with you 2 days before launch.';
+ if(count)return count;
  return issue;
 }
 function dncSyncDone(){
