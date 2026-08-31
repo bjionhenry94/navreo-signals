@@ -295,6 +295,14 @@ body { background:var(--bg); }
   border-radius:12px; padding:13px 15px; font-size:14.5px; }
 .ob-s3 .n { font-weight:700; font-size:12px; color:var(--orange-700); background:var(--orange-100);
   width:24px; height:24px; border-radius:50%; display:grid; place-items:center; flex:none; }
+.ob-video { position:relative; border-radius:14px; overflow:hidden; border:1px solid var(--line);
+  aspect-ratio:16/9; background:#000; }
+.ob-video iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+.ob-vcap { font-size:12.5px; color:var(--ink-3); text-align:center; margin:10px 0 22px; }
+.ob-res { margin-top:18px; display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+.ob-rlink { font-size:13px; font-weight:600; color:var(--ink-2); text-decoration:none;
+  border:1px solid var(--line); border-radius:999px; padding:8px 14px; background:#fff; }
+.ob-rlink:hover { border-color:var(--line-2); color:var(--ink); }
 .ob-q { background:#fff; border:1px solid var(--line); border-radius:12px; padding:16px; }
 .ob-q .q { font-weight:700; font-size:15.5px; margin-bottom:8px; }
 .ob-q .a { font-size:14.5px; color:var(--ink-2); }
@@ -586,7 +594,7 @@ var SCENS=[
 ];
 
 var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
- notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,tw:false,mine:{},
+ notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",tw:false,mine:{},
  senders:[{name:"Sarah Chen",title:"VP Sales"},{name:"Mike Torres",title:"Head of Growth"}],
  redirect:"",domainPicks:{}};
 var S=JSON.parse(JSON.stringify(FRESH));
@@ -878,13 +886,23 @@ var PAGES={
   if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
    +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
   return '<div class="headline">Join us on <span class="date">Slack</span>.</div>'
-  +'<div class="subline">Quick questions, wins, updates — one room, your team and ours. Prefer email? Totally fine — updates mirror there.</div>'
-  +'<div class="ob-body ob-steps">'
+  +'<div class="subline">Your main line to our team — updates, questions, wins and resources, all in one place. No lost emails, no mixed threads.</div>'
+  +'<div class="ob-body">'
+  +'<div class="ob-video"><iframe src="https://www.youtube.com/embed/T9JSZxRlMVA" title="Your quick start guide to Slack" loading="lazy" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>'
+  +'<p class="ob-vcap">The quick tour — how Slack works, from zero.</p>'
+  +'<div class="ob-steps">'
   +'<div class="ob-s3"><span class="n">1</span><span>No Slack? Use it in the browser — nothing to install</span></div>'
-  +'<div class="ob-s3"><span class="n">2</span><span>Tap your invite to <b>#acme-navreo</b></span></div>'
+  +'<div class="ob-s3"><span class="n">2</span><span>Tap your invite to <b>#acme-navreo</b> — your channel, made for you during onboarding</span></div>'
   +'<div class="ob-s3"><span class="n">3</span><span>Say hi — we’ll spot you arrive, nothing to tick</span></div>'
   +'</div>'
-  +'<div class="ob-foot2"><button class="btn-go" data-slack>Open my invite</button></div>';},
+  +'<div class="ob-res">'
+  +'<a class="ob-rlink" href="https://slack.com/intl/en-gb/downloads" target="_blank" rel="noopener">Download Slack ↗</a>'
+  +'<a class="ob-rlink" href="https://slack.com/help/articles/218080037-Getting-started-for-new-Slack-users" target="_blank" rel="noopener">Quick start guide ↗</a>'
+  +'<a class="ob-rlink" href="https://www.youtube.com/watch?v=zfjuEyRWHwM" target="_blank" rel="noopener">Conversations in Slack (video) ↗</a>'
+  +'</div>'
+  +'</div>'
+  +'<div class="ob-foot2"><button class="btn-go" data-slack>Open my invite</button></div>'
+  +'<p class="ob-note">Prefer email? Totally fine — updates mirror there.</p>';},
  home:function(){return '<div class="headline">Your <span class="date">home base</span>.</div>'
   +'<div class="subline">Contracts, invoices, recordings, weekly reports — one page, always up to date. Nothing to install.</div>'
   +'<div class="ob-body"><div class="dcard">'
@@ -1252,7 +1270,8 @@ function bindAll(){
  var el2=app.querySelector("[data-done2]");
  if(el2)el2.addEventListener("click",function(){complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
  var sl=app.querySelector("[data-slack]");
- if(sl)sl.addEventListener("click",function(){S.slackWait=true;save();render();
+ if(sl)sl.addEventListener("click",function(){if(S.slackUrl)window.open(S.slackUrl,"_blank","noopener");
+  S.slackWait=true;save();render();
   setTimeout(function(){S.slackWait=false;complete("slack","Spotted you — welcome in 👋");},1400);});
  var qok=app.querySelector("[data-qok]");
  if(qok)qok.addEventListener("click",function(){S.q++;save();render();});
