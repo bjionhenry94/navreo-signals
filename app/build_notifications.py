@@ -763,9 +763,12 @@ def fetch_booked_journey_labels(campaign_id) -> set:
 # MEETING on the opener's best path (800-send floor preferred), falling back
 # to fewest sends per positive - which is a different rule from Section 4's
 # positives-only winner, and Section 4 is also gated to <60% completion.
-# Since 2026-08-31 the whole verdict sits behind the fair-test gate (see
-# pill_best_opener): every live Email-1 version must clear JUDGE_MIN_SENT
-# sends before anyone is crowned, so an early fluke can't move traffic. So
+# Since 2026-08-31 the whole verdict follows the fair-test law (see
+# pill_best_opener): nobody is crowned below the judging bar (800, or 300 on
+# lists too small to ever give each live version 800 — served as judge_bars
+# in the messaging payload), and while live laggards are still under the bar
+# the verdict is PARTIAL — 80% to the winner, 20% kept on the test — going
+# FULL (100%) only when every live version has crossed. So
 # clear winners routinely showed the pill with no optimisation row (parity
 # loop 2026-08-16: 41 of 41 pill campaigns had none). This section closes the
 # gap: it reads each campaign's pill from the SAME data the tab renders
@@ -825,16 +828,24 @@ def fetch_messaging(campaign_id) -> dict | None:
 
 def pill_best_opener(m: dict) -> tuple:
     """Faithful port of campaigns.html's best-opener block. Returns
-    (best_label|None, has_scale, evidence|None). has_scale True = the tab
-    renders the 'Send 100% of Email 1 to it' button right now.
+    (best_label|None, has_scale, evidence|None); evidence carries the verdict
+    mode - "full" (every live version past the bar, button says 100%) or
+    "partial" (a winner is judged but live laggards are still under the bar,
+    button says 80% with 20% kept on the test).
 
-    Fair-test gate (Bjion 2026-08-31, mirrored in campaigns.html and
-    optimise.html): no verdict while any live Email-1 version is still in the
-    monitor phase - every version actually competing (not deleted, not
-    switched off) must clear JUDGE_MIN_SENT sends first, the crunch's own
-    judging bar. One early positive at ~200 sends reads exactly like a winner
-    but can be pure luck, and crowning it early starves the versions that
-    never got their fair run."""
+    Fair-test law (Bjion 2026-08-31, mirrored in campaigns.html and
+    optimise.html - keep all three in step):
+      - the judging bar comes from the payload's judge_bars (800, or 300 when
+        the audience can never give every live version 800 - computed in
+        server._cockpit_messaging); unknown = conservative 800.
+      - nobody is EVER crowned below the bar - one early positive at ~200
+        sends reads exactly like a winner but can be pure luck.
+      - live versions (not deleted, not switched off) still under the bar are
+        laggards: they hold the verdict at PARTIAL (winner backed with 80%,
+        laggards keep 20% collectively so their test keeps running); only
+        when every live version has crossed does the verdict go FULL (100%).
+      - switched-off versions never block, but stay crownable once past the
+        bar - their late replies/meetings count (Bjion B-5)."""
     import math
     versions = m.get("versions") or []
     meetings = m.get("meetings") or {}
@@ -856,11 +867,21 @@ def pill_best_opener(m: dict) -> tuple:
         kk = f"{v.get('step')}|{rep}"
         sent_by_rep[kk] = sent_by_rep.get(kk, 0) + (v.get("sent") or 0)
     step1 = [v for v in versions if str(v.get("step")) == "1"]
+    try:
+        bar = int((m.get("judge_bars") or {}).get("1") or 0) or JUDGE_MIN_SENT
+    except (TypeError, ValueError):
+        bar = JUDGE_MIN_SENT
     live1 = [v for v in step1
              if not v.get("disabled") and not v.get("inline")
              and v.get("label") is not None and v.get("split") != 0]
-    if not live1 or any((v.get("sent") or 0) < JUDGE_MIN_SENT for v in live1):
+    crownable = {v["label"] for v in step1
+                 if not v.get("disabled") and not v.get("inline")
+                 and v.get("label") is not None and (v.get("sent") or 0) >= bar}
+    if not live1 or not crownable:
         return None, False, None
+    laggards = [v["label"] for v in live1 if (v.get("sent") or 0) < bar]
+    mode = "partial" if laggards else "full"
+    crown_reps = {rep_of.get("1|" + lb) or lb for lb in crownable}
     best = None
     via = None
     if paths:
@@ -873,6 +894,8 @@ def pill_best_opener(m: dict) -> tuple:
             e2s = sent_by_rep.get("2|" + p[1], 0) if len(p) > 1 else 0
             # JS Math.round = half away from zero (values are non-negative here)
             snt = e1s + math.floor((e2s * e1s / s1_tot if s1_tot else e2s) + 0.5) if e1s else 0
+            if p[0] not in crown_reps:
+                continue   # a path whose opener is under the bar can't crown
             bp_all.append({"e1": p[0], "mt": d.get("meetings") or 0,
                            "pos": d.get("positives") or 0, "snt": snt})
         bp_mt = sorted([c for c in bp_all if c["mt"] > 0 and c["snt"] > 0],
@@ -886,7 +909,7 @@ def pill_best_opener(m: dict) -> tuple:
         if bp_top and (bp_top["mt"] > 0 or bp_top["pos"] > 0):
             for v in step1:
                 if best or v.get("disabled") or v.get("inline") or not v.get("sent") \
-                        or v.get("label") is None:
+                        or v.get("label") is None or v["label"] not in crownable:
                     continue
                 if v["label"] == bp_top["e1"] or \
                         (rep_of.get("1|" + v["label"]) or v["label"]) == bp_top["e1"]:
@@ -894,7 +917,7 @@ def pill_best_opener(m: dict) -> tuple:
     if best is None:
         for v in step1:
             if v.get("disabled") or v.get("inline") or not v.get("sent") \
-                    or v.get("label") is None:
+                    or v.get("label") is None or v["label"] not in crownable:
                 continue
             rep = rep_of.get("1|" + v["label"]) or v["label"]
             mv = by_var.get("1|" + rep, 0) if rep == v["label"] else 0
@@ -906,7 +929,7 @@ def pill_best_opener(m: dict) -> tuple:
     if best is None:
         for v in step1:
             if v.get("disabled") or v.get("inline") or not (v.get("positives") or 0) \
-                    or not v.get("sent"):
+                    or not v.get("sent") or v.get("label") not in crownable:
                 continue
             pp = v["sent"] / v["positives"]
             if best is None or pp < best["pp"]:
@@ -916,8 +939,10 @@ def pill_best_opener(m: dict) -> tuple:
     lab = best["label"]
     bv = next((v for v in step1 if v.get("label") == lab and not v.get("inline")), None)
     split = bv.get("split") if bv else None
-    has_scale = bv is not None and split is not None and 0 < split < 100
-    return lab, has_scale, {"via": via, "split": split,
+    cap = 100 if mode == "full" else 80
+    has_scale = bv is not None and split is not None and 0 < split < cap
+    return lab, has_scale, {"via": via, "split": split, "mode": mode,
+                            "bar": bar, "laggards": laggards,
                             "sent": (bv or {}).get("sent") or 0,
                             "positives": (bv or {}).get("positives") or 0}
 
@@ -933,15 +958,31 @@ def build_pill_row(ctx: dict, m: dict) -> dict | None:
            "meetings-per-send": "it books the most meetings per email sent",
            "sends-per-positive": "it needs the fewest sends per positive reply",
            }.get(ev["via"], "it is the proven best opener")
-    title = f"Send 100% of Email 1 to Version {lab}"
+    if ev.get("mode") == "partial":
+        # Partial verdict (Bjion 2026-08-31): laggard versions are still under
+        # the judging bar, so the fair move is 80% to the winner with 20% kept
+        # on the test - never 100%. Title on stable identifiers so the row key
+        # flips (and the old row auto-resolves) when the verdict changes mode.
+        lag = ev.get("laggards") or []
+        lag_txt = ", ".join(str(x) for x in lag)
+        plural = len(lag) > 1
+        title = f"Send 80% of Email 1 to Version {lab}"
+        detail = (f"The Messaging tab crowns Version {lab} the best opener so far - {why} "
+                  f"({ev['sent']:,} sent, {rep_count(ev['positives'])} on its own sends). "
+                  f"Version{'s' if plural else ''} {lag_txt} "
+                  f"{'have' if plural else 'has'} not reached the {ev['bar']}-send judging bar yet, "
+                  f"so the fair move is 80% to the winner with 20% kept on the test. "
+                  "The 1-click button on the Messaging tab sets exactly that.")
+    else:
+        title = f"Send 100% of Email 1 to Version {lab}"
+        detail = (f"The Messaging tab crowns Version {lab} the best opener - {why} "
+                  f"({ev['sent']:,} sent, {rep_count(ev['positives'])} on its own sends) - "
+                  f"but it only gets {ev['split']}% of Email 1's traffic. "
+                  "The 1-click button on the Messaging tab moves all of Email 1 to it.")
     return {**row_base(ctx), "finding_type": "variant_call", "section": 4,
             "priority": "Medium", "action_type": "scale_winner",
             "title": title,
-            "detail": clean_text(
-                f"The Messaging tab crowns Version {lab} the best opener - {why} "
-                f"({ev['sent']:,} sent, {rep_count(ev['positives'])} on its own sends) - "
-                f"but it only gets {ev['split']}% of Email 1's traffic. "
-                "The 1-click button on the Messaging tab moves all of Email 1 to it."),
+            "detail": clean_text(detail),
             "suggested_action": title,
             "sent": ev["sent"], "positive": ev["positives"],
             "sent_pos_ratio": ratio(ev["sent"], ev["positives"])}
