@@ -537,7 +537,7 @@ function hydrateAudience(campaignId){
 /* ── Messaging: version performance (ported from the campaign page, including
    the variant-action seams: live on/off toggle + scale-the-winner. Every write
    goes through the same /variant-action endpoint, typed-confirm gated.) ───── */
-function versionTableHTML(versions, note, meetings, combinations, cid){
+function versionTableHTML(versions, note, meetings, combinations, cid, judgeBars){
   const hasMeet=!!(meetings&&(meetings.by_step||meetings.by_variant));
   const byVar=(meetings&&meetings.by_variant)||{};
   const clusters=(meetings&&meetings.clusters)||{};
@@ -559,23 +559,32 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
   const byStep={};
   versions.forEach(v=>{ const k=v.step!=null?String(v.step):'?'; (byStep[k]=byStep[k]||[]).push(v); });
   const stepKeys=Object.keys(byStep).sort((a,b)=>(parseInt(a,10)||0)-(parseInt(b,10)||0));
-  /* fair-test gate (Bjion 2026-08-31): no best-opener verdict while any live
-     version of the step is still in the monitor phase — every version that is
-     actually competing (not deleted, not switched off) must clear
-     JUDGE_MIN_SENT sends first, the same judging bar the crunch uses. One
-     early positive at ~200 sends reads exactly like a winner but can be pure
-     luck, and crowning it early starves the versions that never got their
-     fair run. */
-  const JUDGE_MIN_SENT=800;
+  /* fair-test law (Bjion 2026-08-31, campaign-page + pill-mirror parity —
+     keep all three in step): the judging bar comes from the payload (800, or
+     300 when the list can never give every live version 800). Nobody is EVER
+     crowned below the bar — one early positive at ~200 sends reads exactly
+     like a winner but can be pure luck. Live versions (not deleted, not
+     switched off) still under the bar are laggards: they hold the verdict at
+     PARTIAL — the winner is backed with 80% while the laggards keep 20%
+     collectively so their test keeps running — and only when every live
+     version has crossed does the verdict go FULL (Send 100%). Switched-off
+     versions never block, but stay crownable once past the bar: their late
+     replies/meetings count (Bjion B-5). */
+  const BARS=judgeBars||{};
+  const barOf=sk=>{ const b=parseInt(BARS[sk],10); return (b===300||b===800)?b:800; };
   const liveVs=sk=>(byStep[sk]||[]).filter(v=>!v.disabled&&!v.inline&&v.label!=null&&v.split!==0);
-  const stepJudged=sk=>{ const l=liveVs(sk); return l.length>0&&l.every(v=>(v.sent||0)>=JUDGE_MIN_SENT); };
-  /* best opener: Email-1, active, most meetings per email sent (lowest
-     Sent/meeting, own sends); fallback to fewest sends per positive when no
-     opener has a meeting yet (campaign-page parity). */
+  const e1Bar=barOf('1');
+  const e1Crown={};
+  (byStep['1']||[]).forEach(v=>{ if(!v.disabled&&!v.inline&&v.label!=null&&(v.sent||0)>=e1Bar) e1Crown[v.label]=1; });
+  const e1Laggards=liveVs('1').filter(v=>(v.sent||0)<e1Bar).map(v=>v.label);
+  const e1Mode=Object.keys(e1Crown).length?(e1Laggards.length?'partial':'full'):'none';
+  /* best opener: Email-1, crownable (past the bar), most meetings per email
+     sent (lowest Sent/meeting, own sends); fallback to fewest sends per
+     positive when no opener has a meeting yet (campaign-page parity). */
   let best=null;
-  if(stepJudged('1')){
+  if(e1Mode!=='none'){
     (byStep['1']||[]).forEach(v=>{
-      if(v.disabled||v.inline||!v.sent||v.label==null) return;
+      if(v.disabled||v.inline||!v.sent||v.label==null||!e1Crown[v.label]) return;
       const rep=repOf['1|'+v.label]||v.label;
       const mv=rep===v.label?(byVar['1|'+rep]||0):0;
       if(!(mv>0)) return;
@@ -583,19 +592,20 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
       if(best===null||pm<best.pm) best={label:v.label,pm:pm};
     });
     if(best===null)(byStep['1']||[]).forEach(v=>{
-      if(v.disabled||v.inline||!(v.positives>0)||!v.sent) return;
+      if(v.disabled||v.inline||!(v.positives>0)||!v.sent||!e1Crown[v.label]) return;
       const pp=v.sent/v.positives;
       if(best===null||pp<best.pp) best={label:v.label,pp:pp};
     });
   }
   const rows=stepKeys.map(sk=>{
     const vs=byStep[sk].slice().sort((a,b)=>(a.label==null?'￿':String(a.label)).localeCompare(b.label==null?'￿':String(b.label)));
-    /* honest state while the gate holds the verdict back — say WHY there is
+    /* honest state while the law holds the verdict back — say WHY there is
        no best pill, so a missing badge never reads as a broken page */
-    const testing=sk==='1'&&liveVs('1').length>1&&!stepJudged('1');
+    const testing=sk==='1'&&liveVs('1').length>1&&e1Mode==='none';
     const band='<tr class="vp-band"><td class="vp-l" colspan="7">Email '+esc(sk)
       +' <span class="ring-caption">'+vs.length+' variant'+(vs.length===1?'':'s')
-      +(testing?' &middot; still testing &mdash; a best opener is only called once every live version has '+fmt(JUDGE_MIN_SENT)+' sends':'')
+      +(testing?' &middot; still testing &mdash; a best opener is only called once every live version has '+fmt(e1Bar)+' sends'
+        +(e1Bar===300?' (small list &mdash; bar lowered from 800)':''):'')
       +'</span></td></tr>';
     const body=vs.map(v=>{
       const label=v.inline?'inline':(v.label||'?');
@@ -631,15 +641,30 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
                           :'Switched off — click to give it a share again')
           +'"><span class="vaw-knob"></span></button>';
       }
-      /* the proven best opener gets the explicit scale control */
+      /* the proven best opener gets the explicit scale control: Send 100% on
+         a full verdict; on a partial verdict (laggards still under the bar)
+         the fair move is 80% with 20% kept on the test (Bjion 2026-08-31) */
       let scaleBtn='';
-      if(isBest&&v.split!=null&&v.split>0&&v.split<100&&cid!=null)
-        scaleBtn=' <button type="button" class="vaw-mini" data-vaw-scale data-step="'+esc(String(sk))
-          +'" data-vlabel="'+esc(String(v.label))+'" data-split="'+v.split
-          +'">Send 100% of Email '+esc(String(sk))+' to it</button>';
+      if(isBest&&v.split!=null&&v.split>0&&cid!=null){
+        if(e1Mode==='full'&&v.split<100)
+          scaleBtn=' <button type="button" class="vaw-mini" data-vaw-scale data-step="'+esc(String(sk))
+            +'" data-vlabel="'+esc(String(v.label))+'" data-split="'+v.split
+            +'">Send 100% of Email '+esc(String(sk))+' to it</button>';
+        else if(e1Mode==='partial'&&v.split<80)
+          scaleBtn=' <button type="button" class="vaw-mini" data-vaw-scale80 data-step="'+esc(String(sk))
+            +'" data-vlabel="'+esc(String(v.label))+'" data-split="'+v.split
+            +'" data-laggards="'+esc(JSON.stringify(e1Laggards))
+            +'" title="'+esc(e1Laggards.join(', '))+' still testing &mdash; they keep 20% collectively'
+            +'">Send 80% of Email '+esc(String(sk))+' to it</button>';
+      }
+      /* a live version still under the judging bar shows its progress */
+      const lagChip=(sk==='1'&&!v.disabled&&!v.inline&&v.label!=null&&v.split!==0
+          &&(v.sent||0)<e1Bar&&(byStep['1']||[]).length>1)
+        ? ' <span class="ring-caption" title="still accruing its fair test &mdash; no verdict is passed on a version under the judging bar">testing &middot; '+fmt(v.sent||0)+'/'+fmt(e1Bar)+'</span>'
+        : '';
       return '<tr>'
         +'<td data-label="Version">'+esc(label)+stateCell
-          +(isBest?' <span class="vp-best" title="opener booking the most meetings per email sent (live)">best opener</span>':'')+scaleBtn+'</td>'
+          +(isBest?' <span class="vp-best" title="opener booking the most meetings per email sent (live)">best opener</span>':'')+scaleBtn+lagChip+'</td>'
         /* a deleted variant's counters were PURGED by Smartlead, not zero */
         +(v.stats_purged
           ? '<td class="tnum" data-label="Sent"><span class="ring-caption" title="Smartlead purges a variant\'s counters when it is deleted — it did send before deletion">&mdash;</span></td>'
@@ -666,7 +691,12 @@ function versionTableHTML(versions, note, meetings, combinations, cid){
       +'<div class="leads-table-wrap"><table class="leads-table version-perf-table"><thead><tr><th>Combination</th><th class="tnum">Sent</th><th class="tnum">Meetings</th><th class="tnum">Sent / meeting</th></tr></thead><tbody>'
       +crows.map(c=>{
         const isb=c.mt===bestMt&&c.mt>0;
-        return '<tr'+(isb?' class="vp-win"':'')+'><td data-label="Combination">'+esc(c.e1)+' <span class="ring-caption">&rarr;</span> '+esc(c.e2)+(isb?' <span class="vp-best">best</span>':'')+'</td>'
+        /* the medal is a leaderboard, not a verdict — but when the crowned
+           combination's opener copy is still under the judging bar, say so
+           (Bjion 2026-08-31, D-2) */
+        const early=isb&&(sentByRep['1|'+c.e1]||0)<e1Bar
+          ? ' <span class="ring-caption" title="this opener has not reached the '+e1Bar+'-send judging bar yet">early</span>':'';
+        return '<tr'+(isb?' class="vp-win"':'')+'><td data-label="Combination">'+esc(c.e1)+' <span class="ring-caption">&rarr;</span> '+esc(c.e2)+(isb?' <span class="vp-best">best</span>':'')+early+'</td>'
           +'<td class="tnum" data-label="Sent">'+(c.snt?fmt(c.snt):'<span class="ring-caption">—</span>')+'</td>'
           +'<td class="tnum" data-label="Meetings">'+fmt(c.mt)+'</td>'
           +'<td class="tnum" data-label="Sent / meeting">'+(c.mt&&c.snt?fmt(Math.round(c.snt/c.mt)):'<span class="ring-caption">—</span>')+'</td></tr>';
@@ -981,6 +1011,35 @@ function vawWireMessaging(root, c){
       });
     });
   });
+  root.querySelectorAll("[data-vaw-scale80]").forEach(b=>{
+    b.addEventListener("click",()=>{
+      /* partial fair-test verdict (Bjion 2026-08-31): winner 80%, the named
+         still-testing versions share 20% collectively, judged losers 0% */
+      const step=b.getAttribute("data-step"), lab=b.getAttribute("data-vlabel");
+      const split=parseInt(b.getAttribute("data-split"),10)||0;
+      let lags=[];
+      try{ lags=JSON.parse(b.getAttribute("data-laggards")||"[]"); }catch(e0){ lags=[]; }
+      const lagTxt=lags.map(l=>"Version "+l).join(", ")||"the still-testing versions";
+      vawModal({
+        title:"Back Version "+lab+" with 80% of Email "+step+"?",
+        sub:(c.name||"Campaign "+c.id)+" · campaign "+c.id,
+        lines:[["Version "+lab+" share",vawChangeV(split+"%","80%")],
+               [lagTxt+" (still testing)",vawChangeV("their shares","20% shared")],
+               ["Every other version on Email "+step,vawChangeV("their shares","0% (kept, not deleted)")],
+               ["Copy / subject","untouched"]],
+        idnote:VAW_IDNOTE, token:"BACK", danger:false,
+        confirmLabel:"Confirm — back the winner, keep the test",
+        run:()=>vawPost("/api/campaigns/"+c.id+"/variant-action",
+          {action:"back_winner", email:+step, variant_label:lab, laggards:lags, confirm:"BACK"}),
+        receipt:(resp)=>({
+          title:"Version "+lab+" now takes 80% of Email "+step,
+          lines:Object.keys(resp.after||{}).map(k=>["Version "+k+" share",vawChangeV((resp.before||{})[k]+"%",(resp.after||{})[k]+"%")]),
+          foot:"The still-testing versions keep 20% until they cross the judging bar — IDs and history intact."
+        }),
+        after:(resp)=>vawTrackJob(c, resp, b)
+      });
+    });
+  });
 }
 /* ══ end variant-action-wire ══════════════════════════════════════════════ */
 
@@ -1006,7 +1065,7 @@ function hydrateMessaging(r){
       }
       return;
     }
-    el.innerHTML=versionTableHTML(m.versions,m.note,m.meetings,m.combinations,r.campaign_id);
+    el.innerHTML=versionTableHTML(m.versions,m.note,m.meetings,m.combinations,r.campaign_id,m.judge_bars);
     vawWireMessaging(el, coOf(r));
   };
   if(CACHE.messaging){ apply(CACHE.messaging); return; }

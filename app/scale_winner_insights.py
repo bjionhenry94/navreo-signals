@@ -64,7 +64,9 @@ INSIGHT_KEY = "scale-winner"
 GENERATED_BY = "scale-winner parity (deterministic)"
 EXPIRES_DAYS = 3   # short box + 3h re-assert: a stale card self-expires within
                    # 3 days if the cron ever stops running
-TITLE_RE = re.compile(r"^Send 100% of Email (\d+) to Version (.+)$")
+# 100% = full verdict; 80% = partial fair-test verdict (Bjion 2026-08-31:
+# laggard versions under the judging bar keep 20% collectively)
+TITLE_RE = re.compile(r"^Send (100|80)% of Email (\d+) to Version (.+)$")
 
 
 def load_keys() -> dict:
@@ -151,27 +153,45 @@ def crunch_type3_scopes() -> set[str]:
     return out
 
 
-def build_payload(n: dict, email_num: str, label: str) -> dict:
+def build_payload(n: dict, pct: str, email_num: str, label: str) -> dict:
     cid = str(n["campaign_id"])
+    partial = pct == "80"
     detail = str(n.get("detail") or "").strip()
     # bold = the evidence sentence(s); the standing mechanics line lives in note
     bold = detail
-    tail = " The 1-click button on the Messaging tab moves all of Email 1 to it."
-    if bold.endswith(tail.strip()):
-        bold = bold[: -len(tail.strip())].strip()
+    for tail in (" The 1-click button on the Messaging tab moves all of Email 1 to it.",
+                 " The 1-click button on the Messaging tab sets exactly that."):
+        if bold.endswith(tail.strip()):
+            bold = bold[: -len(tail.strip())].strip()
+            break
+    # Partial act wording (Bjion 2026-08-31): deliberately avoids the card
+    # classifier's 1-click verbs (move/shift/back/scale/send 100%/...) so the
+    # adaptive primary keeps Copy-prompt instead of mis-wiring a full scale.
+    act = (f"Give variant {label} 80% of email {email_num} (20% stays on the test)"
+           if partial else
+           f"Move all sending to variant {label} on email {email_num}")
+    note = (("This is the same verdict as the BEST pill on the campaign's "
+             "Messaging tab. Some versions are still under the judging bar, so "
+             "the 1-click button there backs the winner with 80% and keeps 20% "
+             "on the still-testing versions - nothing changes until someone "
+             "actions it. The card clears itself once the traffic has moved or "
+             "the verdict changes.")
+            if partial else
+            ("This is the same verdict as the BEST pill on the campaign's "
+             "Messaging tab. The 1-click button there moves all of the step's "
+             "traffic to the winner - nothing changes until someone actions it. "
+             "The card clears itself once the traffic has moved or the verdict "
+             "changes."))
     return {
         "kind": INSIGHT_KEY,
         "tag": "act",                        # amber / Medium badge on the card
         "owner": "Lilly",
         "client": n.get("client") or "Navreo",
-        "act": f"Move all sending to variant {label} on email {email_num}",
+        "act": act,
         "bold": bold or (f"Version {label} is this campaign's proven best opener, "
-                         f"but it is not getting all of Email {email_num}'s traffic."),
-        "note": ("This is the same verdict as the BEST pill on the campaign's "
-                 "Messaging tab. The 1-click button there moves all of the step's "
-                 "traffic to the winner - nothing changes until someone actions it. "
-                 "The card clears itself once the traffic has moved or the verdict "
-                 "changes."),
+                         f"but it is not getting {'80%' if partial else 'all'} of "
+                         f"Email {email_num}'s traffic."),
+        "note": note,
         "stats": {},
         "campaign_name": n.get("campaign_name") or f"Campaign {cid}",
         "smartlead_url": n.get("smartlead_url") or "",
@@ -204,7 +224,7 @@ def refresh(dry_run: bool = False) -> dict:
         if cid in dupes:
             skipped += 1
             continue   # the crunch already shows its own Type 3 card here
-        want[cid] = build_payload(n, m.group(1), m.group(2))
+        want[cid] = build_payload(n, m.group(1), m.group(2), m.group(3))
 
     for cid, payload in want.items():
         fp = hashlib.md5(f"{cid}:{INSIGHT_KEY}:{payload['act']}".encode()).hexdigest()

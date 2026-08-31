@@ -4260,7 +4260,8 @@ def _disable_variant_pcts(steps: list, email_num: int, variant_label: str,
 
 _VARIANT_ACTION_CONFIRM = {"disable": "DISABLE", "enable": "ENABLE",
                            "scale_winner": "SCALE", "even_split": "SPLIT",
-                           "shift_share": "SHIFT", "repair_mode": "REPAIR"}
+                           "shift_share": "SHIFT", "repair_mode": "REPAIR",
+                           "back_winner": "BACK"}
 
 
 def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
@@ -4276,11 +4277,16 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
     except (TypeError, ValueError):
         return 400, {"ok": False, "message": "campaign id and email must be numeric"}
     variant_label = str(payload.get("variant_label") or "").strip()
-    if action in ("disable", "enable", "scale_winner", "shift_share") and not variant_label:
+    if action in ("disable", "enable", "scale_winner", "shift_share", "back_winner") and not variant_label:
         return 400, {"ok": False, "message": "variant_label is required for this action"}
     to_label = str(payload.get("to_label") or "").strip()
     if action == "shift_share" and not to_label:
         return 400, {"ok": False, "message": "to_label is required for shift_share"}
+    # back_winner: the still-testing versions that keep the 20% test lane
+    lag_labels = list(dict.fromkeys(
+        str(x).strip() for x in (payload.get("laggards") or []) if str(x or "").strip()))
+    if action == "back_winner" and not lag_labels:
+        return 400, {"ok": False, "message": "laggards (the still-testing version labels) are required for back_winner"}
 
     if _va_test_force_429():
         return 429, {"ok": False, "message": "Smartlead is rate-limiting right now — wait a few seconds and try again (synthetic test 429)"}
@@ -4362,6 +4368,45 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
                 raise SequenceActionRefused(400, {
                     "ok": False, "message": "this variant is switched off - switch it on before scaling it"})
             new_pcts = {v.get("id"): (100 if v.get("id") == target.get("id") else 0) for v in variants}
+            _apply_step_pcts(steps, email_num, new_pcts)
+            receipt["target_id"] = target.get("id")
+        elif action == "back_winner":
+            # Fair-test partial verdict (Bjion 2026-08-31): the winner takes
+            # 80%; the named still-testing versions share the remaining 20%
+            # collectively so their test keeps running; every other live
+            # version drops to 0 — tried and tested. Same id-intact door,
+            # history kept. Equal-split steps (no stored pcts) count as
+            # everyone-live, mirroring shift_share's equal_mode.
+            target = _find_variant(step, variant_label)
+            if target is None or target.get("is_deleted"):
+                raise SequenceActionRefused(404, {
+                    "ok": False, "message": f"variant {variant_label} not found (or deleted) on Email {email_num}"})
+            equal_mode = sum(_pct_of(v) for v in variants) <= 0
+            if equal_mode:
+                shares0 = _even_shares(len(variants))
+                receipt["pcts_before"] = {v.get("id"): shares0[i] for i, v in enumerate(variants)}
+            if not equal_mode and _pct_of(target) <= 0:
+                raise SequenceActionRefused(400, {
+                    "ok": False, "message": "this variant is switched off - switch it on before backing it"})
+            lags = []
+            for ll in lag_labels:
+                lv = _find_variant(step, ll)
+                if lv is None or lv.get("is_deleted"):
+                    raise SequenceActionRefused(404, {
+                        "ok": False, "message": f"variant {ll} not found (or deleted) on Email {email_num}"})
+                if lv.get("id") == target.get("id"):
+                    raise SequenceActionRefused(400, {
+                        "ok": False, "message": "the winner can't also be a still-testing version"})
+                if not equal_mode and _pct_of(lv) <= 0:
+                    raise SequenceActionRefused(400, {
+                        "ok": False,
+                        "message": f"variant {ll} is switched off - switch it on first or leave it out"})
+                lags.append(lv)
+            base20, rem20 = divmod(20, len(lags))
+            new_pcts = {v.get("id"): 0 for v in variants}
+            new_pcts[target.get("id")] = 80
+            for i, lv in enumerate(lags):
+                new_pcts[lv.get("id")] = base20 + (1 if i < rem20 else 0)
             _apply_step_pcts(steps, email_num, new_pcts)
             receipt["target_id"] = target.get("id")
         elif action == "shift_share":
@@ -4530,6 +4575,7 @@ def _va_label(payload: dict) -> str:
         "disable": f"Switch off Version {vl} — Email {em}",
         "enable": f"Switch on Version {vl} — Email {em}",
         "scale_winner": f"Send 100% of Email {em} to Version {vl}",
+        "back_winner": f"Back Version {vl} with 80% — Email {em}",
         "shift_share": f"Move Version {vl}'s share to Version {to} — Email {em}",
         "even_split": f"Even split — Email {em}",
         "repair_mode": f"Repair split mode — Email {em}",
@@ -4646,10 +4692,12 @@ def api_campaign_variant_action_async(cid: str, payload: dict) -> tuple:
         int(payload.get("email"))
     except (TypeError, ValueError):
         return 400, {"ok": False, "message": "campaign id and email must be numeric"}
-    if action in ("disable", "enable", "scale_winner", "shift_share") and not str(payload.get("variant_label") or "").strip():
+    if action in ("disable", "enable", "scale_winner", "shift_share", "back_winner") and not str(payload.get("variant_label") or "").strip():
         return 400, {"ok": False, "message": "variant_label is required for this action"}
     if action == "shift_share" and not str(payload.get("to_label") or "").strip():
         return 400, {"ok": False, "message": "to_label is required for shift_share"}
+    if action == "back_winner" and not [x for x in (payload.get("laggards") or []) if str(x or "").strip()]:
+        return 400, {"ok": False, "message": "laggards (the still-testing version labels) are required for back_winner"}
     job_id = _va_enqueue(cid, payload)
     return 202, {"ok": True, "queued": True, "job": job_id, "executed": action,
                  "message": "queued — the write runs in the background"}
@@ -10518,10 +10566,35 @@ def _cockpit_messaging(cid) -> dict:
                 campaign_positives = _sc[0].get("positives")
         except Exception:  # noqa: BLE001 — reconciliation is best-effort, never break the tab
             pass
+    # Fair-test judging bars (Bjion 2026-08-31): the house bar is 800 sends
+    # per live version before a best-opener verdict; when the audience can
+    # never give every live version 800 (total leads / live versions < 800,
+    # assuming an even split), the bar drops to 300 (the table's own 'early'
+    # line) so small campaigns still get a verdict eventually. Served in the
+    # payload so the campaign page, the cockpit and the parity mirror
+    # (build_notifications.pill_best_opener) all read ONE number. Unknown
+    # lead total = conservative 800.
+    judge_bars: dict = {}
+    try:
+        _tot = None
+        _sc2 = sb("GET", f"campaign_scorecard?smartlead_campaign_id=eq.{n}&select=total")
+        if isinstance(_sc2, list) and _sc2:
+            _tot = _sc2[0].get("total")
+        _live_ct: dict = {}
+        for _v2 in versions:
+            if (not _v2.get("inline") and not _v2.get("disabled")
+                    and _v2.get("label") is not None and _v2.get("split") != 0):
+                _k2 = str(_v2.get("step"))
+                _live_ct[_k2] = _live_ct.get(_k2, 0) + 1
+        for _k2, _ct in _live_ct.items():
+            judge_bars[_k2] = 300 if (_tot and _ct and _tot / _ct < 800) else 800
+    except Exception:  # noqa: BLE001 — bar computation must never break the tab
+        judge_bars = {}
     return {"campaign_id": n, "versions": versions, "meetings": meetings,
             "campaign_positives": campaign_positives,
             "combinations": vpaths.get("combinations") or {},
             "paths": vpaths.get("paths") or {},
+            "judge_bars": judge_bars,
             "degraded": False}
 
 
