@@ -766,7 +766,7 @@ var SCENS=[
 var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
  notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},intake:{},intakeTouched:{},intakeOk:{},tw:false,mine:{},dncLists:[],dncNone:false,
  senders:[{name:"John Doe",title:"VP Sales"}],
- redirect:"",domainPicks:{}};
+ redirect:"",domainPicks:{},domains:[],site:""};
 var S=JSON.parse(JSON.stringify(FRESH));
 
 /* ---- client identity + server-side autosave (surfaced in Settings ▸ Clients).
@@ -843,6 +843,12 @@ function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
     for(var k in FRESH){if(!(k in sv))sv[k]=JSON.parse(JSON.stringify(FRESH[k]));}
     sv.clientId=S.clientId;S=sv;try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}
     if(typeof render==="function")render();obSetStatus("saved");}
+   else{/* back-office-drafted sending plan (domains/site/redirect default) adopts even when this browser is ahead — the client UI never edits these */
+    var chg=false;
+    if(Array.isArray(sv.domains)&&sv.domains.length&&!(Array.isArray(S.domains)&&S.domains.length)){S.domains=sv.domains;chg=true;}
+    if(sv.site&&!S.site){S.site=sv.site;chg=true;}
+    if(sv.redirect&&!(S.redirect&&S.redirect.trim())){S.redirect=sv.redirect;chg=true;}
+    if(chg){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}if(typeof render==="function")render();}}
   }).catch(function(){});}
 
 var _DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -1012,24 +1018,29 @@ function infraSenders(){
  +'<div class="ob-foot2"><button class="btn-ghost" data-go="infrastructure">← Back</button>'
  +'<button class="btn-go" data-svalidate>Looks right — next</button></div>';
 }
-function redirectTarget(){return (S.redirect&&S.redirect.trim())?S.redirect.trim():"acmecorp.com";}
+function siteFallback(){return (S.site&&S.site.trim())?S.site.trim():"acmecorp.com";}
+function redirectTarget(){return (S.redirect&&S.redirect.trim())?S.redirect.trim():siteFallback();}
+/* Per-client near-copy list drafted by the onboarding autopilot (S.domains, via
+   porkbun-domain-ideator). The acmecorp DOMAINS array is the demo fallback only. */
+function domainList(){return (Array.isArray(S.domains)&&S.domains.length)?S.domains:DOMAINS;}
 function domainOn(d){return S.domainPicks[d]!==false;}  /* default ON */
-function selectedDomains(){return DOMAINS.filter(domainOn);}
+function selectedDomains(){return domainList().filter(domainOn);}
 function selN(){return selectedDomains().length;}
 function infraDomains(){
- var picks=DOMAINS.map(function(d){var on=domainOn(d);
+ var DL=domainList();
+ var picks=DL.map(function(d){var on=domainOn(d);
   return '<button class="dpick '+(on?"on":"off")+'" data-dompick="'+d+'" role="checkbox" aria-checked="'+on+'">'
    +'<span class="cbx">'+(on?"✓":"")+'</span><span class="dn">'+d+'</span></button>';
  }).join("");
  var n=selN();
  return wizSteps(3)
  +'<div class="headline">Your <span class="date">domains</span> — pre-approved.</div>'
- +'<div class="subline">We’ve lined up '+DOMAINS.length+' near-copy domains for you. Which ones we use genuinely doesn’t matter — nobody reads the sending domain (the bit after the @), and they’re all warmed the same way. They’re all on by default; switch off any you’d rather not use.</div>'
+ +'<div class="subline">We’ve lined up '+DL.length+' near-copy domains for you. Which ones we use genuinely doesn’t matter — nobody reads the sending domain (the bit after the @), and they’re all warmed the same way. They’re all on by default; switch off any you’d rather not use.</div>'
  +'<div class="ob-body">'
   +'<p class="inplab">Where should a curious click land?</p>'
-  +'<input class="ob-inp" style="width:100%" id="redirOne" data-redir1 value="'+redirectTarget().replace(/"/g,"&quot;")+'" placeholder="acmecorp.com">'
+  +'<input class="ob-inp" style="width:100%" id="redirOne" data-redir1 value="'+redirectTarget().replace(/"/g,"&quot;")+'" placeholder="'+siteFallback().replace(/"/g,"&quot;")+'">'
   +'<p class="hintline" style="margin-top:7px">If someone clicks one of your domains, we forward them here — to your real site. Set it once; it covers every domain. We add tracking behind the scenes so visits trace back to this campaign in your reporting — nothing for you to set.</p>'
-  +'<div class="dselhead" style="margin-top:22px"><span class="cnt"><b id="dcnt">'+n+'</b> of '+DOMAINS.length+' domains on</span>'
+  +'<div class="dselhead" style="margin-top:22px"><span class="cnt"><b id="dcnt">'+n+'</b> of '+DL.length+' domains on</span>'
    +'<span class="acts"><button data-dall="1">Select all</button><button data-dall="0">Clear all</button></span></div>'
   +'<div class="dgrid">'+picks+'</div>'
  +'</div>'
@@ -1068,7 +1079,7 @@ function infraPage(){
  if(idx===1){h='Buying your domains <span class="date">quietly over 2 days</span>.';
   s='Spread out and from different places — on purpose. Nothing needed from you.';}
  else if(idx===5){h='All your domains are ready — <span class="date">'+(selN()*3)+' inboxes</span>, good to go.';
-  s='Sending as Sarah + Mike · visitors land on acmecorp.com · watched every day.';}
+  s='Sending as '+S.senders.map(function(sd){return sd.name?sd.name.split(" ")[0]:"—";}).join(" + ")+' · visitors land on '+redirectTarget()+' · watched every day.';}
  else {h='Your inboxes are warming — ready <span class="date">'+estLaunch()+'</span>.';
   s='Warming = sending friendly practice emails so inbox providers trust you. Nothing needed from you.';}
  return '<div class="headline">'+h+'</div><div class="subline">'+s+'</div>'
@@ -1550,7 +1561,7 @@ function bindAll(){
   b.setAttribute("aria-checked",on);b.querySelector(".cbx").textContent=on?"✓":"";
   var c=document.getElementById("dcnt");if(c)c.textContent=selN();});});
  qa("[data-dall]").forEach(function(b){b.addEventListener("click",function(){
-  var on=b.getAttribute("data-dall")==="1";DOMAINS.forEach(function(d){S.domainPicks[d]=on;});save();render();});});
+  var on=b.getAttribute("data-dall")==="1";domainList().forEach(function(d){S.domainPicks[d]=on;});save();render();});});
  var dv=app.querySelector("[data-dvalidate]");
  if(dv)dv.addEventListener("click",function(){
   if(selN()===0){toast("Keep at least one domain switched on");return;}
