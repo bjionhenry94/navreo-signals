@@ -2436,6 +2436,14 @@ def onboarding_draft_upsert(p: dict):
         return 400, {"ok": False, "message": "doc must be an object"}
     now = _ob_now()
     prev = _ob_record(cid) or {}
+    # Back-office-drafted sending plan (doc.domains / doc.site, written by the
+    # onboarding autopilot via porkbun-domain-ideator) must survive autosaves from
+    # browsers whose local state predates it — the client UI only toggles picks,
+    # it never edits these fields, so an empty incoming value is always stale.
+    pdoc = prev.get("doc") if isinstance(prev.get("doc"), dict) else {}
+    for _bo in ("domains", "site"):
+        if not doc.get(_bo) and pdoc.get(_bo):
+            doc[_bo] = pdoc[_bo]
     name = (str(p.get("name") or "")).strip() or (str(doc.get("clientName") or "")).strip() \
         or (str(doc.get("sigCompany") or "")).strip() or prev.get("name") or "Untitled client"
     status = (str(p.get("status") or "")).strip() or prev.get("status") or "draft"
