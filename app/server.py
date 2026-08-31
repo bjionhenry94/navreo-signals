@@ -21884,6 +21884,11 @@ AUTH_COOKIE = "navreo_session"
 AUTH_SESSION_DAYS = 30
 
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
+                    # Client onboarding hub (owner ruling 2026-08-31: the client
+                    # portal must NEVER sit behind a login wall) — the page, the
+                    # two explainer iframes it embeds, and its draft read.
+                    "/app/onboarding.html", "/app/infra-bento.html",
+                    "/app/offers-bento.html", "/api/onboarding/draft",
                     "/app/offer.html", "/app/setter-train.html", "/app/shell.js", "/app/roi-calculator.html",
                     # thread renderer for the public training portal page
                     "/app/thread-render.js",
@@ -21891,6 +21896,10 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
                     "/app/navreo-logo.png"}
 _AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email",
+                     # Onboarding hub autosave (owner ruling 2026-08-31): clients
+                     # use the hub logged-out, so the draft upsert must pass the
+                     # session gate. Body cap + id-keyed upsert live in the handler.
+                     "/api/onboarding/draft",
                      "/api/cron/pull-all", "/api/cron/heyreach-sync", "/api/cron/mailbox-sync", "/api/cron/audit-refresh",
                      "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/cron/booked-sweep",
                      # A cron path must appear in BOTH this set and the token-gate
