@@ -4012,6 +4012,11 @@ function autoSendVerdictHtml(row, terse) {
 function leadTimezoneFact(row) {
   const cls = row.classification || {};
   const tz = row.timezone || cls.timezone_guess || "";
+  // Confident = the zone came from a real signal, not the zero-signal Eastern
+  // fallback. The flag rides in guardrails.tz_confident (persisted at intake).
+  // Only treat as NOT confident when the backend explicitly says so
+  // (=== false); older rows / paths without the flag keep showing.
+  const confident = (row.guardrails || {}).tz_confident !== false;
   let shown = tz || "unknown";
   let tone = "";
   let place = "";
@@ -4025,7 +4030,7 @@ function leadTimezoneFact(row) {
       place = tzPlace(tz);
     } catch { /* bad tz name - keep the raw value */ }
   }
-  return { tz, shown, tone, place };
+  return { tz, shown, tone, place, confident };
 }
 /* The city an IANA timezone points at, as a plain place label for the Profile's
    "Personal Location" row - "Europe/London" -> "London", "America/New_York" ->
@@ -4477,8 +4482,11 @@ function companySectionHtml(row) {
   // drift. (Superseded the 08-20-morning single merged row - a place, not a
   // time, belongs under "Personal Location".)
   const tzf = leadTimezoneFact(row);
-  const personalLoc = tzf.place ? esc(tzf.place) : dash;
-  const localTime = tzf.tz
+  // Owner ruling: don't guess a location. When the zone is just the zero-signal
+  // Eastern fallback (not confident), leave both rows blank instead of showing
+  // a made-up "New York" for every unplaced lead.
+  const personalLoc = (tzf.place && tzf.confident) ? esc(tzf.place) : dash;
+  const localTime = (tzf.tz && tzf.confident)
     ? `${tzf.tone ? `<span class="lp-tz-dot ${esc(tzf.tone)}"></span>` : ""}${esc(tzf.shown)}`
     : dash;
   const desc = c.description ? String(c.description) : "";

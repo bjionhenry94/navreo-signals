@@ -5811,7 +5811,17 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     tz, tz_confident = resolve_timezone(hints, classification)
     row["timezone"] = tz
 
-    row["guardrails"] = {"lexicon_hits": lex_hits, "llm_red_flags": classification.get("red_flags") or []}
+    # tz_confident rides in the guardrails jsonb (a real, persisted, frontend-read
+    # column) rather than a bare top-level key - the setter_queue schema is frozen
+    # and an unknown top-level column dies silently on PATCH
+    # (reference_setter_queue_schema_freeze_gotcha). It records whether the zone
+    # came from a REAL signal (deterministic hint or strong model inference) vs.
+    # the zero-signal Eastern fallback. The Profile panel reads it to decide
+    # whether to SHOW Personal Location / Local time or leave them blank - owner
+    # ruling: don't guess a location, leave it blank. Slot proposal still uses the
+    # Eastern fallback (that path is unchanged); only the display honours this.
+    row["guardrails"] = {"lexicon_hits": lex_hits, "llm_red_flags": classification.get("red_flags") or [],
+                         "tz_confident": tz_confident}
 
     category = reply.get("category")
     first_touch = True
@@ -12850,7 +12860,8 @@ def _redraft_sync(payload):
         patch = {"draft_subject": d.get("subject"), "draft_body": draft_html,
                  "original_draft_body": draft_html, "slots": slots,
                  "guardrails": {**(row.get("guardrails") or {}),
-                                **slot_situation(slot_status, tz, slots, serr)}}
+                                **slot_situation(slot_status, tz, slots, serr),
+                                "tz_confident": tz_confident}}
         if fresh_classification is not None:
             # Persist what the redraft-classify learned so the UI's Intent
             # line updates and the next Regenerate doesn't re-classify.
