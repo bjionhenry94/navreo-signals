@@ -1574,6 +1574,27 @@ def lint_draft(html: str, ctx: dict):
         return False, ("The lead already asked for the call - never re-ask whether they'd "
                        "be open to one. Propose the two times directly (e.g. 'Does Monday at "
                        "10:00 or Monday at 12:00 work for you?') and confirm who should join.")
+    # NEVER-ADMIT-MISSING-WIRING (owner HARD RULE 2026-08-31, live: a
+    # stale-brain draft told one lead "My booking link isn't set up yet" and
+    # another "We don't provide a phone number, sorry" - "the AISDR should
+    # never say the booking link isn't set up"). A draft never narrates
+    # missing wiring; it answers with what it has (the two times, the
+    # placeholder rule) and zero comment about the gap.
+    _wired_noun = (r"(?:booking\s+(?:link|page|system)|scheduling\s+link|calendar\s+link"
+                   r"|phone\s+number|direct\s+(?:line|number))")
+    _gap_state = (r"(?:(?:isn'?t|is\s+not|hasn'?t\s+been|has\s+not\s+been|not)\s+"
+                  r"(?:currently\s+)?(?:yet\s+)?(?:set\s*up|wired(?:\s+up)?|available"
+                  r"|provided|ready|live|in\s+place|active|configured)"
+                  r"|unavailable|missing)")
+    if (re.search(_wired_noun + r"[^.!?]{0,60}?" + _gap_state, _low_plain)
+            or re.search(r"(?:don'?t|do\s+not|can'?t|cannot|won'?t|unable\s+to)\s+"
+                         r"(?:currently\s+)?(?:have|provide|share|give|offer)\s+"
+                         r"(?:a\s+|the\s+|any\s+)?" + _wired_noun, _low_plain)
+            or re.search(r"\bno\s+" + _wired_noun, _low_plain)):
+        return False, ("Never tell the lead a phone number or booking link is missing, "
+                       "not set up, or unavailable. Answer with what you have - propose "
+                       "the two times (using the [BOOKING LINK] placeholder rule when no "
+                       "link exists) with zero comment about the gap.")
     # ANSWER-PRICING-FIRST (owner report 2026-08-27: a bare "What's your
     # price?" got an assessment preamble as paragraph one - "tone deaf, that
     # first paragraph is irrelevant". The answer-first prompt rule keeps
@@ -1595,6 +1616,35 @@ def lint_draft(html: str, ctx: dict):
             return False, ("The lead asked about price - the first paragraph after the "
                            "greeting must BE the pricing answer, with no offer or "
                            "assessment preamble before it.")
+        # TAUGHT-PRICE PRESENCE (owner session 2026-08-31, live: after
+        # teaching "£50K-£150K", one price-question card answered with the
+        # old never-quote posture and no figure at all). When the manual's
+        # own pricing sentences state a concrete figure, a pricing reply
+        # must contain it.
+        _price_src = " ".join(
+            s for s in re.split(r"(?<=[.!?\n])",
+                                str(ctx.get("instructions") or "") + "\n"
+                                + str(ctx.get("owner_facts") or ""))
+            if re.search(r"pric|cost|fee|charge|tier", s, re.I))
+        _taught_prices = set(re.findall(r"[£$€]\s?\d[\d,]*(?:\.\d+)?\s?[km]?\b",
+                                        _price_src, re.I))
+        _plain_all_norm = re.sub(r"[\s,]", "", _TAG_RE.sub(" ", text).lower())
+        if _taught_prices and not any(
+                re.sub(r"[\s,]", "", v.lower()) in _plain_all_norm for v in _taught_prices):
+            return False, ("The lead asked about price and the instructions state a "
+                           "concrete figure (" + ", ".join(sorted(_taught_prices)[:3])
+                           + ") - state it, woven naturally into the pricing answer; "
+                           "never omit it.")
+    # BARE-VALUE PARAGRAPH (owner session 2026-08-31, live: a redraft parked
+    # "£50K-£150K" on its own line - "it doesn't look like a proper answer,
+    # it's just kind of slotted in there"). A paragraph that is nothing but a
+    # figure/range reads as pasted, not written.
+    for _p in re.split(r"<br\s*/?>|</div>|</p>", text):
+        _pt = _TAG_RE.sub(" ", _p).strip()
+        if (_pt and len(_pt) <= 30 and re.search(r"\d", _pt)
+                and re.fullmatch(r"[£$€\d\s,.km%–—-]+", _pt, re.I)):
+            return False, ("A bare figure ('" + _pt + "') sits on its own line - weave "
+                           "it into a sentence that answers the lead.")
     # LEAD-PROPOSED TIME enforcement (owner report 2026-08-27: "countless
     # times" - the drafter kept answering a lead's own proposed window with
     # the generic two-fresh-times shape plus unasked-for setup info; the
@@ -2003,6 +2053,8 @@ Rules:
 - CALL-ALREADY-REQUESTED (owner HARD RULE 2026-08-28, every SDR). When lead_requested_call is true - the lead asked for the call, asked you to propose times, asked for a setup call, or said yes to one - the call is AGREED. NEVER write "Would you be open to a call...", "would you be up for a quick chat", or any phrasing that re-asks whether they want the call they just asked for: that reads as not listening. Propose the two times DIRECTLY as the scheduling sentence ("Does Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST work for you?" - with the same per-slot links/plain-text rules as the two-times default), keep any answer to their other questions first per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, and confirm who should join when they named attendees (their CFO, their security team). Everything else about the two-times machinery (slots verbatim, fallback ladder, constraints, LEAD-PROPOSED TIME) applies unchanged - only the openness re-ask is banned.
 - NO-CALL-SELLING (owner HARD RULE 2026-08-28, every SDR). Once scheduling is agreed - the lead proposed their own time OR asked for the call - the scheduling sentence contains the times and NOTHING else: no purpose clause, no value pitch, no "where I can run through the discovery call and show what the assessment will surface for you". They already want the call; selling it again reads as scripted. Accept or counter plainly ("Unfortunately I can't make Tue morning, but I can do Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST - does either work?") and stop. Describing what the call covers is allowed ONLY when the lead themselves asked what the call is for, and then it belongs in its own answer sentence per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, never bolted onto the time proposal.
 - ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST (owner rule 2026-08-27, every SDR). The FIRST paragraph after the greeting answers the specific thing the lead's latest message asked - their access question, their timeline question, their security question, their pricing question, their "do you apply fixes or just recommend" question - in their terms. NEVER open with a stock offer, product, or process preamble ("[the deliverable] comes from our [offer/assessment/audit], which we set up on a call") before the answer: opening with anything but the answer reads as dodging the question, and repeating the same explanation sentence across replies reads as a bot. Where the reply genuinely needs to explain how the offer works, weave it in as ONE short clause AFTER the answer, never as its own opening paragraph. When the lead asked several questions, answer each briefly in the order they asked. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
+- NEVER-ADMIT-MISSING-WIRING (owner HARD RULE 2026-08-31, every SDR). Never tell the lead that a phone number, booking link, calendar, price, or any other detail is missing, not set up, not wired up, not provided, or unavailable - and never narrate that it will exist later ("once it's set up", "isn't set up yet"). The lead must never sense unfinished wiring. When you lack a booking link, follow the [BOOKING LINK] placeholder rule silently; when you lack a phone number, warmly steer to a scheduled call or keep it on email without one word about phone availability; when you lack a price, follow the instructions' pricing posture without saying a price is unavailable. State what IS true and offer what you DO have - zero meta-commentary about gaps. This rule outranks any instruction-manual line that tells you to announce a missing detail.
+- WEAVE-TAUGHT-FACTS-IN (owner HARD RULE 2026-08-31, every SDR). When the instructions or reviewer feedback supply a concrete fact the reply needs - a price range, a phone number, a link, a timeframe - it must be woven into a natural sentence that answers the lead ("Our pricing is tiered, with engagements typically in the £50K-£150K range depending on your estate."), NEVER parked on its own line or bolted on as a bare value. A paragraph that is nothing but a figure reads as pasted, not written.
 - SELF-SERVE ASSET REQUEST (owner rule 2026-08-22, every SDR, live-confirmed, OVERRIDES the two-fresh-times default). When the lead asks for your BOOKING LINK or your PHONE NUMBER - especially when they say they will book or call themselves ("what's your booking link? I'll book direct", "what's your number? I'll give you a call") - ANSWER WITH JUST THAT ASSET and STOP. For a booking-link ask, give the booking_link value and nothing else about scheduling; do NOT also propose two call times. For a phone-number ask, give the phone number EXACTLY as it appears in the instructions OR in reviewer_feedback/owner_corrections - a number the owner taught during training arrives there first, before it is folded into the instructions, so USE IT; only when NEITHER source contains a phone number do you write the literal placeholder [PHONE NUMBER] ("My number is [PHONE NUMBER]."). Never invent one - a fabricated number (for example "+44 7700 900123") is a serious error, so manufacture no digits: use the taught number if you were given one anywhere, otherwise the placeholder. Either way do NOT append the two-times "Would you be open to a call on ..." paragraph: the lead has chosen to self-serve, so a fresh call pitch talks straight past them.
 - ANSWER THE LEAD'S ACTUAL QUESTION FIRST (owner rule 2026-08-22, every SDR, live-confirmed). Before anything else, the draft must make a genuine ATTEMPT at the specific thing the lead asked. If they asked for case studies, ENGAGE the case studies - say plainly they are early-stage and give the actual anonymised outcomes or proof the instructions hold - never reply with a generic website overview and a call pitch as if they had asked "what do you do". The recipient must FEEL their question was heard and attempted, even when part of it must be deferred to a call. A reply that skips the actual question and jumps to "here is an overview, would you be open to a call" is wrong even when it is polite. Only after you have truly engaged their question may a call be offered, and only when call_ask allows it.
 - EVERY DISTINCT QUESTION GETS A VERDICT (owner rule 2026-08-30, every SDR). When the lead asks more than one thing, dispose of each one visibly, in the order they asked: the instructed answer, an honest no ("no, we do not offer that"), or the specific gap flagged with [NEED YOUR INPUT]. Never silently drop a question because the reply is getting long, meet the 150-word cap by shortening each answer, never by omitting one. A yes/no question opens with the verdict word ("Yes," / "Not quite," / "No,"), never a preamble.
@@ -14375,6 +14427,21 @@ def route_training_get(params):
             except (TypeError, ValueError):
                 generating = {**generating, "status": "idle", "stale_recovered": True}
 
+        # STRANDED-MERGE HEAL (owner session 2026-08-31): teachings queued
+        # right before a deploy/restart die with the worker thread and sit
+        # un-merged until something re-kicks - overnight, in the live case,
+        # so the next morning's pool drafted from a stale brain. The portal
+        # polls this route constantly: when queued merges exist and nothing
+        # is running or queued to run, kick the retrain now.
+        try:
+            if (doc.get("pending_merges")
+                    and str(generating.get("status")) != "running"
+                    and not (doc.get("generating") or {}).get("retrain_queued")
+                    and not _get_training_merge_lock(agent_id).locked()):
+                _kick_off_training_retrain(agent_id, redraft="pool")
+        except Exception:  # noqa: BLE001 - healing is best-effort, the poll must answer
+            pass
+
         return 200, {
             "cases": unanswered + answered, "answers": answers,
             "readiness": compute_readiness(doc),
@@ -14705,6 +14772,20 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
     used_reply_ids and never mint a fake reply_id - only the real replies
     selected above ever do that."""
     try:
+        # MERGE-FIRST (owner session 2026-08-31): a full 73-case pool was
+        # generated at 07:42 from a brain whose intake answers - taught the
+        # previous evening - still sat in pending_merges (the merge worker
+        # thread died with a deploy restart), so every fresh draft confidently
+        # asserted the pre-teach facts ("we don't provide a phone number").
+        # Never draft a single fresh case while queued teachings are waiting:
+        # drain them into the brain first, under the merge lock.
+        try:
+            if _load_training(agent_id).get("pending_merges"):
+                with _get_training_merge_lock(agent_id):
+                    _run_pending_merge_drain(agent_id)
+                agent = _load_agent(agent_id) or agent
+        except Exception:  # noqa: BLE001 - a failed drain must never block generation
+            pass
         doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])
         # Standing staged questions (owner ruling 2026-08-20, every SDR, every
@@ -16116,6 +16197,27 @@ def _drain_pending_merges(agent_id: str) -> list:
     return pending
 
 
+def _run_pending_merge_drain(agent_id: str):
+    """Pop and apply every queued pending_merge, in submission order, each via
+    merge_correction_into_instructions (edits via _merge_training_edit_entry).
+    The single shared body behind the retrain worker's merge pass AND the
+    generate worker's merge-first drain - callers must hold the per-agent
+    merge lock (_get_training_merge_lock) so concurrent instruction
+    load->saves can never clobber each other."""
+    for entry in _drain_pending_merges(agent_id):
+        merge_agent = _load_agent(agent_id)
+        if not merge_agent:
+            break
+        if (entry or {}).get("kind") == "edit":
+            _merge_training_edit_entry(merge_agent, entry)
+            continue
+        note = str((entry or {}).get("note") or "").strip()
+        if not note:
+            continue
+        merge_correction_into_instructions(
+            merge_agent, note, source=(entry or {}).get("source") or "training")
+
+
 def _training_retrain_worker(agent_id: str, redraft: bool = True):
     """Latency fix (2026-07-14, part 2): this worker's FIRST action, on
     every pass (including the very first), is persisting the "running"
@@ -16192,20 +16294,6 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                     except Exception:  # noqa: BLE001 - chaining is best-effort
                         pass
 
-            def _run_merge_drain():
-                for entry in _drain_pending_merges(agent_id):
-                    merge_agent = _load_agent(agent_id)
-                    if not merge_agent:
-                        break
-                    if (entry or {}).get("kind") == "edit":
-                        _merge_training_edit_entry(merge_agent, entry)
-                        continue
-                    note = str((entry or {}).get("note") or "").strip()
-                    if not note:
-                        continue
-                    merge_correction_into_instructions(
-                        merge_agent, note, source=(entry or {}).get("source") or "training")
-
             if redraft == "pool":
                 # DECOUPLED MERGES (owner serve-path gauntlet 2026-08-30): the
                 # share-mode loop used to run the sweep THEN the full merge
@@ -16221,11 +16309,12 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                 _mlock = _get_training_merge_lock(agent_id)
                 def _merge_bg():
                     with _mlock:
-                        _run_merge_drain()
+                        _run_pending_merge_drain(agent_id)
                 threading.Thread(target=_merge_bg, daemon=True,
                                  name=f"setter-merge-{agent_id}").start()
             else:
-                _run_merge_drain()
+                with _get_training_merge_lock(agent_id):
+                    _run_pending_merge_drain(agent_id)
 
             if redraft is True:
                 # Owner trainer (Feature B, 2026-07-14): re-run every remaining
@@ -16637,14 +16726,21 @@ def route_training_interview(payload):
             doc = _load_training(agent_id)
             interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
             latest = interviews[-1] if interviews else None
-            if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
-                # Idempotent: an unanswered set is re-served, never re-generated
-                # (a refresh mid-questionnaire must not burn tokens or shuffle
-                # the questions under the client). Banned shapes are filtered
-                # at serve time too: a question generated before a ban (or a
-                # prompt leak) must never reach the client (owner rule
-                # 2026-08-29). An all-banned set falls through to regenerate.
-                served = _drop_banned_interview_questions(latest["questions"])
+            if latest and _iv_unanswered(latest):
+                # Idempotent AND partial-answer safe: an unanswered set is
+                # re-served, never re-generated (a refresh mid-questionnaire
+                # must not burn tokens or shuffle the questions under the
+                # client). PARTIAL matters (owner session 2026-08-31):
+                # streamed answers land on the set one by one, so "has any
+                # answer" stopped meaning "consumed" - the old zero-answers
+                # guard minted FOUR fresh near-duplicate sets in 16 seconds
+                # while the owner was still typing. Any unanswered question
+                # remaining re-serves the remainder instead. Banned shapes
+                # are filtered at serve time too: a question generated before
+                # a ban (or a prompt leak) must never reach the client (owner
+                # rule 2026-08-29). An all-banned set falls through to
+                # regenerate.
+                served = _drop_banned_interview_questions(_iv_unanswered(latest))
                 if served:
                     return 200, {"questions": served, "ready": True,
                                  "asked_at": latest.get("asked_at") or ""}
@@ -16741,6 +16837,15 @@ def route_training_interview(payload):
                     _qt = by_id.get(str(_qid), "").lower()
                     if "booking" in _qt and _a:
                         _m = _URL_RE.findall(_a)
+                        if not _m:
+                            # Scheme-less answers (owner session 2026-08-31:
+                            # "www.calendly.com/discovery-test" never matched
+                            # _URL_RE, so the field stayed empty and the pin
+                            # logic saw the link as still untaught).
+                            _m = ["https://" + u for u in re.findall(
+                                r"\b(?:www\.[^\s\"'<>]+"
+                                r"|[a-z0-9][a-z0-9.-]*\.(?:com|io|ai|co|us|uk|net|org)/[^\s\"'<>]+)",
+                                _a, re.IGNORECASE)]
                         if _m:
                             booking_url_ans = _m[0].rstrip(".,;:!?)]}\"'")
                             break
@@ -16807,6 +16912,32 @@ def _iv_topic(q):
     return None  # unrecognised -> treated as unique, never dropped
 
 
+def _iv_unanswered(iv):
+    """The questions in one interview set that have no stored answer yet.
+    THE consumed-check (owner session 2026-08-31): with streamed answers a
+    set gains answers one at a time, so "answers is non-empty" never again
+    means "this set is done" - a set counts as consumed only when every
+    question in it is answered. Never raises."""
+    try:
+        ans = dict((iv or {}).get("answers") or {})
+        return [q for q in ((iv or {}).get("questions") or [])
+                if str((q or {}).get("id")) not in ans]
+    except Exception:  # noqa: BLE001
+        return []
+
+
+_IV_STOPWORDS = frozenset(
+    "a an the is are was be of to for in on at with your our you we what which "
+    "how do does did when where who i it its it's or and any that this should "
+    "would could must will can may".split())
+
+
+def _iv_question_tokens(q):
+    """Normalised content-word set for near-duplicate detection."""
+    return frozenset(w for w in re.findall(r"[a-z0-9']+", str(q or "").lower())
+                     if w not in _IV_STOPWORDS)
+
+
 def _dedupe_interview_questions(new_qs, prior_qs):
     """Deterministic anti-repeat (owner report 2026-08-22, LIVE-confirmed): the
     prompt's HARD ANTI-REPEAT leaks - the model re-asked the discovery-call
@@ -16818,13 +16949,28 @@ def _dedupe_interview_questions(new_qs, prior_qs):
     repeats. Never raises."""
     try:
         seen = set(t for q in (prior_qs or []) if (t := _iv_topic(q)))
+        prior_toks = [t for q in (prior_qs or []) if (t := _iv_question_tokens(q))]
         out = []
         for q in (new_qs or []):
             tp = _iv_topic(q)
             if tp and tp in seen:
                 continue
+            # PARAPHRASE NEAR-DUP (owner session 2026-08-31, live: SIX
+            # wordings of "what is the standard length in minutes of the
+            # short discovery call" were minted across stacked sets - the
+            # topic list has no pattern for it, so topic-dedup let every
+            # variant through). A question whose content words overlap any
+            # prior question's by >= 60% (Jaccard) IS that question reworded:
+            # drop it. Genuine follow-ups (e.g. "is the £50K-£150K range per
+            # year or per month?" after "can you share any pricing?") share
+            # only a word or two and sail through.
+            toks = _iv_question_tokens(q)
+            if toks and any(len(toks & pt) / max(1, len(toks | pt)) >= 0.6
+                            for pt in prior_toks):
+                continue
             if tp:
                 seen.add(tp)
+            prior_toks.append(toks)
             out.append(q)
         return out
     except Exception:  # noqa: BLE001
@@ -16845,8 +16991,8 @@ def _prewarm_training_interview(agent_id: str):
         doc = _load_training(agent_id)
         interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
         latest = interviews[-1] if interviews else None
-        if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
-            return  # an unanswered set is already waiting
+        if latest and _iv_unanswered(latest):
+            return  # a set with unanswered questions is already waiting
         questions_text = _generate_interview_questions(agent, doc)
         if not questions_text:
             return
@@ -16856,7 +17002,7 @@ def _prewarm_training_interview(agent_id: str):
             doc = _load_training(agent_id)
             interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
             latest = interviews[-1] if interviews else None
-            if latest and not (latest.get("answers") or {}) and (latest.get("questions") or []):
+            if latest and _iv_unanswered(latest):
                 return  # the page's own fetch beat us - keep its set
             interviews.append({"questions": questions, "answers": {}, "asked_at": at})
             doc["interviews"] = interviews[-12:]
