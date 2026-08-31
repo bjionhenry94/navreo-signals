@@ -794,7 +794,7 @@ var SCENS=[
 var FRESH={stv:2,stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
  notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},intake:{},intakeTouched:{},intakeOk:{},tw:false,mine:{},dncLists:[],dncNone:false,
  senders:[{name:"John Doe",title:"VP Sales"}],
- redirect:"",domainPicks:{},domains:[],site:""};
+ redirect:"",domainPicks:{},domains:[],domainsRev:0,site:""};
 var S=JSON.parse(JSON.stringify(FRESH));
 
 /* ---- client identity + server-side autosave (surfaced in Settings ▸ Clients).
@@ -885,9 +885,9 @@ function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
     for(var k in FRESH){if(!(k in sv))sv[k]=JSON.parse(JSON.stringify(FRESH[k]));}
     sv.clientId=S.clientId;S=sv;try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}
     if(typeof render==="function")render();obSetStatus("saved");}
-   else{/* back-office-drafted sending plan (domains/site/redirect default) adopts even when this browser is ahead — the client UI never edits these */
-    var chg=false;
-    if(Array.isArray(sv.domains)&&sv.domains.length&&!(Array.isArray(S.domains)&&S.domains.length)){S.domains=sv.domains;chg=true;}
+   else{/* back-office-drafted sending plan (domains/site/redirect default) adopts even when this browser is ahead — the client UI never edits these. domainsRev lets a REPLACED list supersede a stale local copy (picks reset with it). */
+    var chg=false,svOk=Array.isArray(sv.domains)&&sv.domains.length,mineOk=Array.isArray(S.domains)&&S.domains.length;
+    if(svOk&&(!mineOk||(sv.domainsRev||0)>(S.domainsRev||0))){S.domains=sv.domains;S.domainsRev=sv.domainsRev||0;S.domainPicks={};chg=true;}
     if(sv.site&&!S.site){S.site=sv.site;chg=true;}
     if(sv.redirect&&!(S.redirect&&S.redirect.trim())){S.redirect=sv.redirect;chg=true;}
     if(chg){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}if(typeof render==="function")render();}}
