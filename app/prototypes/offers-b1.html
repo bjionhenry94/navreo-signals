@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offers · B1 — Extremely visual</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+@font-face{font-family:"Acid Grotesk";src:url("../fonts/AcidGrotesk-Normal.otf") format("opentype");font-weight:400;font-style:normal;font-display:swap;}
+:root{
+  --orange:#FF4D00;--orange-600:#DB4100;--orange-100:#FFE4D6;--orange-700:#A83100;
+  --ink:#14110E;--ink-2:#3A332C;--ink-3:#6B6055;--brown-300:#C0B0A0;--brown-400:#A89684;
+  --bg:#FFFFFF;--sunken:#F7F7F6;--cream:#F9F0E7;--line:#ECECEA;--line-2:#DDDDDA;
+  --font-sans:"DM Sans","Helvetica Neue",system-ui,sans-serif;
+  --font-display:"Acid Grotesk","DM Sans",sans-serif;
+  --font-mono:"JetBrains Mono",ui-monospace,"SF Mono",monospace;
+  --focus:0 0 0 3px rgba(255,77,0,.32);
+}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{font-family:var(--font-sans);background:var(--bg);color:var(--ink);line-height:1.45;
+  letter-spacing:-.015em;-webkit-font-smoothing:antialiased;padding:40px 24px 64px;}
+.wrap{max-width:1000px;margin:0 auto;}
+
+.head{text-align:center;margin-bottom:26px;}
+.h1{font-family:var(--font-display);font-weight:400;font-size:clamp(32px,5.4vw,48px);letter-spacing:-.03em;line-height:1.04;}
+.h1 .o{color:var(--orange);}
+.sub{margin-top:8px;font-size:14.5px;color:var(--ink-3);}
+
+.bento{background:var(--sunken);border:1px solid var(--line);border-radius:26px;padding:16px;
+  display:grid;grid-template-columns:repeat(12,1fr);gap:16px;}
+.cs{position:relative;width:100%;text-align:left;
+  border:1px solid var(--line);border-radius:20px;overflow:hidden;min-width:0;padding:0;
+  background:#fff;display:flex;flex-direction:column;justify-content:flex-end;
+  box-shadow:0 1px 2px rgba(20,17,14,.05),0 18px 38px -26px rgba(20,17,14,.35);}
+.s7{grid-column:span 7;min-height:360px;}
+.s5{grid-column:span 5;min-height:360px;}
+.s6{grid-column:span 6;min-height:320px;}
+.s4{grid-column:span 4;min-height:320px;}
+@media(max-width:720px){.s7,.s5,.s6,.s4{grid-column:span 12;min-height:300px;}}
+
+/* the whole cell IS the image slot */
+.ph{position:absolute;inset:0;display:grid;place-items:center;}
+.ph::after{content:"";position:absolute;inset:12px;border:1.5px dashed;border-radius:14px;opacity:.55;}
+.ph .in{position:absolute;top:0;left:0;right:0;height:56%;display:flex;flex-direction:column;
+  align-items:center;justify-content:center;gap:8px;opacity:.85;}
+.ph svg{width:30px;height:30px;stroke:currentColor;}
+.ph span{font-family:var(--font-mono);font-size:9.5px;font-weight:700;letter-spacing:.13em;}
+.t-sun .ph{background:
+    radial-gradient(90% 70% at 70% 20%,#FFFFFF 0%,var(--sunken) 60%,#EFEDEA 100%);color:var(--brown-400);}
+.t-sun .ph::after{border-color:var(--line-2);}
+.t-cream .ph{background:radial-gradient(90% 70% at 30% 20%,#FDF7F0 0%,var(--cream) 55%,#F1E4D5 100%);color:var(--brown-400);}
+.t-cream .ph::after{border-color:#E3D4C3;}
+.t-dark .ph{background:radial-gradient(120% 90% at 50% 0%,#312822 0%,#1c1712 45%,#14110E 100%);color:var(--brown-300);}
+.t-dark .ph::after{border-color:rgba(255,255,255,.22);}
+.t-glow .ph{background:radial-gradient(110% 80% at 50% 0%,#3A2418 0%,#1E1510 50%,#14110E 100%);color:var(--brown-300);}
+.t-glow .ph::after{border-color:rgba(255,255,255,.22);}
+.t-glow .ph::before{content:"";position:absolute;left:50%;top:-40px;width:280px;height:170px;
+  transform:translateX(-50%);border-radius:50%;background:radial-gradient(circle,rgba(255,77,0,.35),transparent 70%);
+  filter:blur(8px);}
+
+/* overlay: three facts, told visually */
+.ov{position:relative;z-index:1;padding:18px 18px 20px;display:flex;flex-direction:column;gap:11px;align-items:flex-start;}
+.t-dark .ov,.t-glow .ov{background:linear-gradient(180deg,transparent,rgba(10,8,6,.72) 55%);}
+.t-sun .ov,.t-cream .ov{background:linear-gradient(180deg,transparent,rgba(255,255,255,.9) 55%);}
+.svc{font-family:var(--font-mono);font-size:9.5px;font-weight:700;letter-spacing:.13em;
+  text-transform:uppercase;border-radius:999px;padding:6px 12px;}
+.t-sun .svc,.t-cream .svc{background:var(--ink);color:#fff;}
+.t-dark .svc,.t-glow .svc{background:rgba(255,255,255,.12);color:#fff;border:1px solid rgba(255,255,255,.16);}
+.off{font-family:var(--font-display);font-weight:400;letter-spacing:-.025em;line-height:1.08;
+  font-size:clamp(21px,2.6vw,28px);max-width:22ch;}
+.t-dark .off,.t-glow .off{color:#fff;}
+.res{display:inline-flex;align-items:baseline;gap:8px;background:var(--orange);color:#fff;
+  border-radius:12px;padding:8px 14px;box-shadow:0 10px 22px -12px rgba(255,77,0,.8);}
+.res b{font-family:var(--font-display);font-weight:400;font-size:24px;line-height:1;letter-spacing:-.02em;}
+.res span{font-family:var(--font-mono);font-size:8.5px;font-weight:700;letter-spacing:.1em;text-transform:uppercase;}
+
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <div class="h1">Offers that <span class="o">worked</span>.</div>
+    <div class="sub">Examples from campaigns we ran — yours takes shape on your call.</div>
+  </div>
+  <div class="bento" id="bento"></div>
+</div>
+
+<script>
+// The first four are the house examples; the ten below are drawn from real member
+// offers in Client Ascension's "Agency Offer Vault" (proven-results case studies).
+var DATA=[
+ {cls:"s7 t-sun",service:"Commercial cleaning",offer:"First clean free — pay only if you keep us.",n:"23",u:"meetings · 60d"},
+ {cls:"s5 t-glow",service:"IT support",offer:"A free security teardown, keep it either way.",n:"31",u:"meetings · 90d"},
+ {cls:"s6 t-dark",service:"Freight brokerage",offer:"We beat your rate or you pay nothing.",n:"18",u:"meetings · 45d"},
+ {cls:"s6 t-cream",service:"Payroll software",offer:"No meetings in month one? Month two is free.",n:"$210k",u:"pipeline · Q1"},
+
+ {cls:"s4 t-sun",service:"Sales-leader lead gen",offer:"Pay only when a qualified call is booked.",n:"26",u:"meetings · 30d"},
+ {cls:"s4 t-dark",service:"Enterprise SaaS",offer:"A 21-day paid trial, then a retainer.",n:"$50k",u:"in a month"},
+ {cls:"s4 t-cream",service:"B2B pipeline retainer",offer:"Predictable pipeline, one flat retainer.",n:"9",u:"months kept"},
+ {cls:"s5 t-sun",service:"General B2B outbound",offer:"Small infra fee, then pay per booked call.",n:"$30k",u:"/mo · 6 months"},
+ {cls:"s7 t-glow",service:"Service-firm growth",offer:"2–5 new clients in 90 days, or you don't pay.",n:"$1.7M",u:"for clients"},
+ {cls:"s6 t-sun",service:"Real estate ads",offer:"Paid ads + lead system — we share the closings.",n:"$50k",u:"deal off ads"},
+ {cls:"s6 t-dark",service:"Real estate · Europe",offer:"Meta ads with content shot on location.",n:"€52k",u:"×2 · one week"},
+ {cls:"s4 t-cream",service:"Fund capital raising",offer:"Ads + VSL funnel — paid on capital raised.",n:"$200k",u:"raised"},
+ {cls:"s4 t-sun",service:"Wealth & local ads",offer:"Paid ads, or just pay per appointment.",n:"$3",u:"cost per lead"},
+ {cls:"s4 t-dark",service:"Venture-backed SaaS",offer:"Pay only for the qualified meetings I book.",n:"3",u:"clients · 2wk"}
+];
+var host=document.getElementById('bento');
+DATA.forEach(function(d){
+  var b=document.createElement('div');
+  b.className='cs '+d.cls;
+  b.innerHTML=
+   '<div class="ph"><div class="in"><svg viewBox="0 0 24 24" fill="none" stroke-width="1.6"><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="M3 17l5-4 4 3 5-5 4 4"/></svg><span>YOUR IMAGE</span></div></div>'
+   +'<div class="ov">'
+   +'<span class="svc">'+d.service+'</span>'
+   +'<span class="off">'+d.offer+'</span>'
+   +'<span class="res"><b>'+d.n+'</b><span>'+d.u+'</span></span>'
+   +'</div>';
+  host.appendChild(b);
+});
+</script>
+</body>
+</html>
