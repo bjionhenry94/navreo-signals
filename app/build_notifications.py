@@ -762,7 +762,10 @@ def fetch_booked_journey_labels(campaign_id) -> set:
 # `var best` block). That verdict is a journey ranking - fewest sends per
 # MEETING on the opener's best path (800-send floor preferred), falling back
 # to fewest sends per positive - which is a different rule from Section 4's
-# positives-only winner, and Section 4 is also gated to <60% completion. So
+# positives-only winner, and Section 4 is also gated to <60% completion.
+# Since 2026-08-31 the whole verdict sits behind the fair-test gate (see
+# pill_best_opener): every live Email-1 version must clear JUDGE_MIN_SENT
+# sends before anyone is crowned, so an early fluke can't move traffic. So
 # clear winners routinely showed the pill with no optimisation row (parity
 # loop 2026-08-16: 41 of 41 pill campaigns had none). This section closes the
 # gap: it reads each campaign's pill from the SAME data the tab renders
@@ -823,7 +826,15 @@ def fetch_messaging(campaign_id) -> dict | None:
 def pill_best_opener(m: dict) -> tuple:
     """Faithful port of campaigns.html's best-opener block. Returns
     (best_label|None, has_scale, evidence|None). has_scale True = the tab
-    renders the 'Send 100% of Email 1 to it' button right now."""
+    renders the 'Send 100% of Email 1 to it' button right now.
+
+    Fair-test gate (Bjion 2026-08-31, mirrored in campaigns.html and
+    optimise.html): no verdict while any live Email-1 version is still in the
+    monitor phase - every version actually competing (not deleted, not
+    switched off) must clear JUDGE_MIN_SENT sends first, the crunch's own
+    judging bar. One early positive at ~200 sends reads exactly like a winner
+    but can be pure luck, and crowning it early starves the versions that
+    never got their fair run."""
     import math
     versions = m.get("versions") or []
     meetings = m.get("meetings") or {}
@@ -845,6 +856,11 @@ def pill_best_opener(m: dict) -> tuple:
         kk = f"{v.get('step')}|{rep}"
         sent_by_rep[kk] = sent_by_rep.get(kk, 0) + (v.get("sent") or 0)
     step1 = [v for v in versions if str(v.get("step")) == "1"]
+    live1 = [v for v in step1
+             if not v.get("disabled") and not v.get("inline")
+             and v.get("label") is not None and v.get("split") != 0]
+    if not live1 or any((v.get("sent") or 0) < JUDGE_MIN_SENT for v in live1):
+        return None, False, None
     best = None
     via = None
     if paths:
