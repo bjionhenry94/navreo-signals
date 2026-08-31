@@ -405,7 +405,7 @@ textarea.ob-dnc { width:100%; box-sizing:border-box; border:1.5px solid var(--li
   border-radius:12px; background:#fff; color:var(--ink); padding:12px; font:inherit;
   font-size:14.5px; min-height:96px; resize:vertical; }
 textarea.ob-dnc:focus { outline:none; box-shadow:var(--focus); }
-/* never-email card: one row per do-not-contact list — what it is + the link, side by side */
+/* never-email card: one row per do-not-contact list — what it is + the link + add, all inline */
 .dncrows { display:grid; gap:9px; }
 .dncrow { display:flex; gap:8px; align-items:center; }
 .dncrow .ob-inp.nm { flex:1; font-weight:600; }
@@ -414,8 +414,15 @@ textarea.ob-dnc:focus { outline:none; box-shadow:var(--focus); }
   border-radius:50%; font-size:15px; cursor:pointer; flex:none; }
 .dncrow .srm:hover { color:var(--ink); }
 .dncrow .srm:focus-visible { outline:none; box-shadow:var(--focus); }
-.dnc-add { margin-top:12px; display:flex; justify-content:center; }
-@media (max-width:600px){ .dncrow { flex-wrap:wrap; } .dncrow .ob-inp.lk { flex:1 1 100%; } }
+.dnc-addbtn { font:inherit; font-size:13.5px; font-weight:600; color:var(--ink-2); background:#fff;
+  border:1.5px solid var(--line-2); border-radius:9px; padding:10px 14px; cursor:pointer;
+  flex:none; white-space:nowrap; }
+.dnc-addbtn:hover { background:var(--cream-50); }
+.dnc-addbtn:focus-visible { outline:none; box-shadow:var(--focus); }
+.dnc-foot { margin-top:6px; display:flex; justify-content:flex-end; min-height:16px; }
+a.dnc-example { display:inline-block; text-decoration:none; }
+@media (max-width:600px){ .dncrow { flex-wrap:wrap; } .dncrow .ob-inp.lk { flex:1 1 100%; }
+  .dncrow .dnc-addbtn { flex:1 1 100%; } }
 input.ob-inp { border:1.5px solid var(--line-2); border-radius:9px; background:#fff;
   color:var(--ink); padding:10px 12px; font:inherit; font-size:14px; flex:1; min-width:0; }
 input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
@@ -646,7 +653,7 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 (function(){
 "use strict";
 
-var STAGES=["Set up","First call","The plan","Your emails","Final prep","Live"];
+var STAGES=["Set up","Onboarding call","Strategy call","Your emails","Pre-launch call","Live"];
 var CARDS=[
  {id:"infrastructure",stage:0,title:"Your email addresses",time:"3 min",clock:true},
  {id:"offers",stage:0,title:"Think about your offers",time:"5 min",badge:"for your call"},
@@ -918,7 +925,7 @@ function chainHTML(){
  +'<p class="physics">Warm-up is physics — brand-new addresses must earn trust slowly. Nobody can skip it, which is why it starts the moment you approve.</p>';
 }
 function journeyHTML(){
- var lines=["Your 7 quick things — done in ~30 min","30 minutes with Jordan — bring your offers","Jordan drafts it; you two decide together","Read all 11, then approve — locks your date","What your AI can quote, teaching it, calendars","Replies land, meetings book, weekly reports"];
+ var lines=["Your 7 quick things — done in ~30 min","1 hour with Yasir — expectations + your onboarding","We present the campaign ideas; you decide together","Read all 11, then approve — locks your date","Connect your calendar, how we handle replies, then launch","Replies land, meetings book, weekly reports"];
  var out='<h2>Your whole journey</h2><p class="lead">Six stages, about two weeks. You are here:</p><div class="chain">';
  for(var i=0;i<STAGES.length;i++){
   out+='<div class="clink '+(i<S.stage?"ok":(i===S.stage?"now":""))+'"><span class="d"></span><span><b>'+STAGES[i]+'</b> — '+lines[i]+'</span><span class="o">'+(i<S.stage?"DONE":(i===S.stage?"NOW":""))+'</span></div>';
@@ -1203,7 +1210,7 @@ var PAGES={
   +'<div class="subline">3 different angles · 11 emails · about 12 minutes. Real emails to real people from your list. Changes? Every round comes back in under a day.</div>'
   +'<div class="ob-body"><div class="ob-mail"><div class="fr">'+(i+1)+' OF 11 · TO: '+e.to.toUpperCase()+' · FROM: SARAH (acmecorp-hq.com)</div><p>'+e.body+'</p>'
   +'<div>'+(S.notes[i]!==undefined
-   ?'<textarea class="ob-dnc" id="noteTxt" style="min-height:52px" placeholder="What should change?">'+(S.notes[i]||"")+'</textarea><p class="ob-note" style="text-align:left;margin-top:6px">Jordan gets this with your approval — revised version back in under a day.</p>'
+   ?'<textarea class="ob-dnc" id="noteTxt" style="min-height:52px" placeholder="What should change?">'+(S.notes[i]||"")+'</textarea><p class="ob-note" style="text-align:left;margin-top:6px">Yasir gets this with your approval — revised version back in under a day.</p>'
    :'<button class="notetog" data-note>✏️ Ask for a change on this one</button>')+'</div></div>'
   +'<div class="ob-deck"><button data-eprev '+(i===0?"disabled":"")+'>← Back</button><span class="cnt">Read '+read+' of 11</span><button data-enext '+(i===all-1?"disabled":"")+'>Next →</button></div>'
   +'<div class="ob-readbar">'+bars+'</div></div>'
@@ -1239,7 +1246,7 @@ var PAGES={
   +'<div class="ob-inprow"><input class="ob-inp" id="personInp" placeholder="Add another call-taker (name)…"><button class="btn-ghost" data-personadd>Invite</button></div></div>'
   +'<div class="ob-foot2"><button class="btn-go" data-done="calendar" '+(S.mikeOk?"":"disabled")+'>'+(S.mikeOk?"All set":"Waiting on Mike’s calendar")+'</button></div>';},
  plan:function(){return '<div class="headline">Your plan — <span class="date">tonight’s reading</span>.</div>'
-  +'<div class="subline">Who we’d email, and why. Nothing needed from you — we decide everything together on your plan call (Tue 9 Sep · 14:00). React if you like; Jordan sees it.</div>'
+  +'<div class="subline">Who we’d email, and why. Nothing needed from you — we decide everything together on your plan call (Tue 9 Sep · 14:00). React if you like; Yasir sees it.</div>'
   +'<div class="ob-body dcard">'
   +planRow("b1","Mid-size logistics firms — ops leaders","4,200 people · free teardown angle")
   +planRow("b2","Companies hiring sales reps","1,850 · “you’re scaling — here’s the playbook”")
@@ -1412,7 +1419,7 @@ function render(){
   var mv;
   if(S.stage===0){var n=undone(0).length;mv='<span class="chip you"><i></i>Your move · '+n+' thing'+(n===1?"":"s")+' left</span>';}
   else if(S.stage===1){mv='<span class="chip us"><i></i>Nothing needed until your call ('+(S.slot||"Thu 4 Sep · 10:00")+')</span>';}
-  else if(S.stage===2){mv='<span class="chip us"><i></i>Nothing needed — Jordan’s writing your plan</span>';}
+  else if(S.stage===2){mv='<span class="chip us"><i></i>Nothing needed — Yasir’s writing your plan</span>';}
   else if(S.stage===3){mv='<span class="chip you"><i></i>Your move · 1 thing (~12 min)</span>';}
   else if(S.stage===4){var u=undone(4);
    if(u.length===1&&u[0].id==="calendar"&&!S.mikeOk){mv='<span class="chip team"><i></i>Waiting on Mike — calendar invite</span>';}
@@ -1443,11 +1450,11 @@ function heroView(){
  }
  if(S.stage===1){
   return '<div class="ob-hero"><span class="ob-k">All set</span><h1>See you '+(S.slot||"Thu 4 Sep · 10:00")+'</h1>'
-   +'<p class="ob-sub">30 minutes with Jordan. Bring the offers you picked — that’s it. Calendar invite’s in your inbox ✓</p>'
+   +'<p class="ob-sub">1 hour with Yasir — we’ll run through expectations and your onboarding. Calendar invite’s in your inbox ✓</p>'
    +'<div class="ob-row"><span class="ob-t ok mono">WARM-UP · DAY '+warmDayNum()+' OF 14</span><button class="btn-ghost" data-go="infrastructure">Watch your addresses</button></div></div>';
  }
  if(S.stage===2){
-  return '<div class="ob-hero"><span class="ob-k">Nothing needed from you</span><h1>Jordan’s writing your plan</h1>'
+  return '<div class="ob-hero"><span class="ob-k">Nothing needed from you</span><h1>Yasir’s writing your plan</h1>'
    +'<p class="ob-sub">It lands Thu · 17:00, here. Peek if you’re curious — every decision gets made together on your plan call (Tue 9 Sep · 14:00). We’ll ping you in Slack the moment it’s ready.</p>'
    +'<div class="ob-row"><button class="btn-ghost" data-go="plan">Have a peek</button><span class="ob-t ok mono">WARM-UP · DAY '+warmDayNum()+' OF 14</span></div></div>';
  }
@@ -1474,7 +1481,7 @@ function listView(){
   return '<div class="ob-listwrap"><p class="ob-lh">What we’re doing</p><div class="ob-panelbox"><div class="chain">'
   +'<div class="clink now"><span class="d"></span><span>Warming your addresses</span><span class="o">DAY '+wd+' OF 14</span></div>'
   +'<div class="clink '+(S.stage===2?"ok":"")+'"><span class="d"></span><span>Building your target lists</span><span class="o">'+(S.stage===2?"DONE":"WED")+'</span></div>'
-  +'<div class="clink '+(S.stage===2?"now":"")+'"><span class="d"></span><span>Jordan — writing your plan</span><span class="o">LANDS THU · 17:00</span></div>'
+  +'<div class="clink '+(S.stage===2?"now":"")+'"><span class="d"></span><span>Yasir — writing your plan</span><span class="o">LANDS THU · 17:00</span></div>'
   +'<div class="clink"><span class="d"></span><span>Your 11 emails, 3 different angles</span><span class="o">AFTER YOUR PLAN CALL</span></div>'
   +'</div></div></div>';
  }
@@ -1630,7 +1637,7 @@ function bindAll(){
  qa("[data-ownsave]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-ownsave");var t=document.getElementById("ownEdit");if(t&&S.ideas[ix])S.ideas[ix].line=(t.value.trim()||S.ideas[ix].line);S.editOwn=undefined;save();render();toast("Wording saved ✓");});});
  qa("[data-owncancel]").forEach(function(b){b.addEventListener("click",function(){S.editOwn=undefined;render();});});
  qa("[data-owndel]").forEach(function(b){b.addEventListener("click",function(){var ix=+b.getAttribute("data-owndel");if(S.ideas[ix])S.ideas.splice(ix,1);save();render();});});
- qa("[data-react]").forEach(function(b){b.addEventListener("click",function(){var kv=b.getAttribute("data-react").split(":");S.reacts[kv[0]]=(S.reacts[kv[0]]===kv[1]?"":kv[1]);save();render();toast("Noted — Jordan sees this before your plan call");});});
+ qa("[data-react]").forEach(function(b){b.addEventListener("click",function(){var kv=b.getAttribute("data-react").split(":");S.reacts[kv[0]]=(S.reacts[kv[0]]===kv[1]?"":kv[1]);save();render();toast("Noted — Yasir sees this before your plan call");});});
  var en=app.querySelector("[data-enext]");
  if(en&&!en.disabled)en.addEventListener("click",function(){S.eIdx++;S.eRead=Math.max(S.eRead,S.eIdx+1);save();render();});
  var ep=app.querySelector("[data-eprev]");
