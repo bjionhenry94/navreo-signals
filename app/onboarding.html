@@ -666,6 +666,9 @@ var CARDS=[
  {id:"train",stage:4,title:"Teach your AI",time:"15 min"},
  {id:"calendar",stage:4,title:"Connect calendars",time:"2 min"}
 ];
+/* TEMP HIDE (Bjion 2026-08-31): ids here vanish from the hub, hero, counts and routes. Delete an id to restore it. */
+var HIDDEN_CARDS={offers:true};
+CARDS=CARDS.filter(function(c){return !HIDDEN_CARDS[c.id];});
 var DOMAINS=["acmecorp-hq.com","tryacmecorp.com","acmecorp-team.com","getacmecorp.com","acmecorp-mail.com",
  "acmecorp.co","acme-corp.com","acmecorpapp.com","hey-acmecorp.com","acmecorp-io.com","joinacmecorp.com",
  "acmecorpgroup.com","acmecorp-inc.com","withacmecorp.com","acmecorp-global.com","acmecorphq.co",
@@ -1409,6 +1412,7 @@ function render(){
  var out='<div class="ob-top"><div class="ob-brand"><img src="navreo-logo.png" alt="Navreo">'+(_cn?'<span>· '+_cn.replace(/</g,"&lt;")+'</span>':'')+'</div>'
   +'<button class="ob-date mono '+(S.locked?"locked":"")+'" data-pop="chain">🚀 <u>'+LDATE()+(S.locked?" · locked ✓":"")+'</u></button></div>';
 
+ if(r&&HIDDEN_CARDS[r]){r="";try{history.replaceState(null,"",location.pathname+location.search+"#/");}catch(_){}}
  if(r&&PAGES[r]){
   out+='<button class="ob-back" data-backhub>← Your hub</button>';
   out+='<div class="col">'+PAGES[r]()+'</div>';
