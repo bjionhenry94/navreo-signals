@@ -1940,7 +1940,7 @@ def classify(reply: dict, agent: dict, owner_hints: str = "") -> dict:
     }
     if (owner_hints or "").strip():
         payload["owner_corrections"] = owner_hints.strip()[:2000]
-    user = json.dumps(payload)
+    user = json.dumps(payload, ensure_ascii=False)
     r = _openai({"model": OPENAI_MODEL,
                  "messages": [{"role": "system", "content": CLASSIFY_SYSTEM},
                              {"role": "user", "content": user}],
@@ -2362,7 +2362,7 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         # silently discarded almost all teaching before the drafter saw it -
         # the root cause of "it keeps repeating the same mistakes".
         payload["reviewer_feedback"] = regen_feedback.strip()[:REVIEWER_FEEDBACK_CAP]
-    user = json.dumps(payload)
+    user = json.dumps(payload, ensure_ascii=False)
     r = _openai({"model": OPENAI_MODEL,
                  "messages": [{"role": "system", "content": DRAFT_SYSTEM},
                              {"role": "user", "content": user}],
@@ -4294,7 +4294,7 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                      {"Authorization": f"Bearer {key}"},
                      {"model": OPENAI_MODEL,
                       "messages": [{"role": "system", "content": MERGE_INSTRUCTIONS_SYSTEM},
-                                  {"role": "user", "content": json.dumps(payload)}],
+                                  {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                       "response_format": {"type": "json_schema", "json_schema": {
                           "name": "setter_instructions_merge", "strict": True,
                           "schema": MERGE_INSTRUCTIONS_SCHEMA}}})
@@ -4355,7 +4355,7 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                          {"Authorization": f"Bearer {key}"},
                          {"model": OPENAI_MODEL,
                           "messages": [{"role": "system", "content": CLEANUP_INSTRUCTIONS_SYSTEM},
-                                      {"role": "user", "content": json.dumps(payload)}],
+                                      {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                           "response_format": {"type": "json_schema", "json_schema": {
                               "name": "setter_instructions_cleanup", "strict": True,
                               "schema": CLEANUP_INSTRUCTIONS_SCHEMA}}})
@@ -4549,7 +4549,7 @@ def lesson_from_edit(generated_html: str, sent_html: str, context: dict | None =
                  {"Authorization": f"Bearer {key}"},
                  {"model": OPENAI_MODEL,
                   "messages": [{"role": "system", "content": LESSON_FROM_EDIT_SYSTEM},
-                              {"role": "user", "content": json.dumps(payload)}],
+                              {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                   "response_format": {"type": "json_schema", "json_schema": {
                       "name": "setter_lesson_from_edit", "strict": True,
                       "schema": LESSON_FROM_EDIT_SCHEMA}}})
@@ -13020,6 +13020,23 @@ _TRAINING_DOC_LOCKS: dict = {}
 _TRAINING_DOC_LOCKS_GUARD = threading.Lock()
 
 
+_TRAINING_MERGE_LOCKS = {}
+_TRAINING_MERGE_LOCKS_GUARD = threading.Lock()
+
+
+def _get_training_merge_lock(agent_id: str):
+    """Per-agent lock serializing background instruction-merge drains (the
+    decoupled merge worker) so two drains never interleave their agent-doc
+    load->save windows. Distinct from the doc lock on purpose: merges run
+    model calls and must never hold up answer saves."""
+    with _TRAINING_MERGE_LOCKS_GUARD:
+        lock = _TRAINING_MERGE_LOCKS.get(agent_id)
+        if lock is None:
+            lock = threading.Lock()
+            _TRAINING_MERGE_LOCKS[agent_id] = lock
+        return lock
+
+
 def _get_training_doc_lock(agent_id: str) -> threading.Lock:
     with _TRAINING_DOC_LOCKS_GUARD:
         lock = _TRAINING_DOC_LOCKS.get(agent_id)
@@ -13859,7 +13876,7 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
                  {"Authorization": f"Bearer {key}"},
                  {"model": OPENAI_MODEL,
                   "messages": [{"role": "system", "content": TRAINING_SCENARIO_SYSTEM},
-                              {"role": "user", "content": json.dumps(payload)}],
+                              {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                   "response_format": {"type": "json_schema", "json_schema": {
                       "name": "setter_training_scenarios", "strict": True,
                       "schema": TRAINING_SCENARIO_SCHEMA}}})
@@ -15276,6 +15293,33 @@ def _training_covers_at(doc: dict) -> str:
     return max((a for a in ats if a), default="")
 
 
+def _strip_draft_frame(text: str, sender_first: str = "") -> str:
+    """Drop the greeting ("Hi X,") and signoff (bare sender-name / sign-off
+    word) lines from a taught exemplar. Teaching the full rewrite verbatim
+    made the drafter reproduce the owner's frame INSIDE its own, doubling
+    greeting and signature ("Hi Chris, Hi Chris, ... Marton Marton" - live
+    serve-path gauntlet 2026-08-30). Only the body teaches; the drafter
+    already owns the frame."""
+    out = []
+    sf = (sender_first or "").strip().lower()
+    for ln in (text or "").splitlines():
+        t = ln.strip()
+        if not t:
+            out.append(ln); continue
+        tl = t.lower().rstrip(",.! ")
+        if re.match(r"^(hi|hello|hey|dear)\b", tl) and len(t) <= 40:
+            continue
+        if sf and tl == sf:
+            continue
+        if tl in ("best", "best regards", "kind regards", "regards", "thanks", "many thanks", "cheers"):
+            continue
+        if len(t.split()) <= 2 and t[:1].isupper() and re.match(r"^[A-Za-z][A-Za-z .'-]{1,25}$", t) and tl not in ("yes", "no"):
+            # a bare name-looking line at either frame edge
+            continue
+        out.append(ln)
+    return "\n".join(out).strip()
+
+
 def _merge_training_edit_entry(agent: dict, entry: dict):
     """One queued edit-as-feedback entry (see route_training_answer) merged
     into the agent's instructions. lesson_from_edit distils the diff into a
@@ -15291,7 +15335,7 @@ def _merge_training_edit_entry(agent: dict, entry: dict):
         edited = str(entry.get("edited") or "")
         rule = lesson_from_edit(original, edited, {}, instructions=_agent_instructions(agent))
         if not rule:
-            edited_text = _draft_text(edited).strip()
+            edited_text = _strip_draft_frame(_draft_text(edited), _sender_first_for(agent)).strip()
             if not edited_text:
                 return
             gist = str(entry.get("gist") or "").strip()
@@ -15515,7 +15559,7 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 6000) -> str
         # Edit-as-feedback (fastloop 2026-08-20): the rewrite itself is the
         # correction, carried here VERBATIM so a redraft that runs before the
         # slow lesson-from-edit merge lands still obeys it.
-        edited = _draft_text(str(ans.get("edited_body") or "")).strip()
+        edited = _strip_draft_frame(_draft_text(str(ans.get("edited_body") or ""))).strip()
         if note:
             note_lines.append(f"- {note}")
         if edited:
@@ -16124,19 +16168,64 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             # permanent without anyone waiting on them.
             if redraft == "pool":
                 updated = _redraft_training_pool(agent_id)
+                # SWEEP UNTIL FRESH (owner report 2026-08-30: a booking-link
+                # teach at 16:23 never reached a card generated at 16:11 that
+                # sat beyond the redraft horizon - the trainer was then SERVED
+                # that pre-teach draft, "my booking system isn't wired yet",
+                # after wiring it). One horizon window per pass is not enough:
+                # if unanswered cards beyond the window are still stale after
+                # this pass, queue another pool pass - the worker's own loop
+                # picks it up, and passes chain until every unanswered card
+                # post-dates the newest teaching. `updated > 0` guards against
+                # spinning when nothing can progress.
+                if updated > 0:
+                    try:
+                        _doc_chk = _load_training(agent_id)
+                        _cov = str(_doc_chk.get("brain_covers_at") or "")
+                        _ansk = set((_doc_chk.get("answers") or {}).keys())
+                        _stale = sum(
+                            1 for c in (_doc_chk.get("cases") or [])
+                            if str(c.get("id")) not in _ansk
+                            and str(c.get("redrafted_at") or c.get("generated_at") or "") < _cov)
+                        if _stale > 0:
+                            _flag_training_retrain_queued(agent_id, redraft="pool")
+                    except Exception:  # noqa: BLE001 - chaining is best-effort
+                        pass
 
-            for entry in _drain_pending_merges(agent_id):
-                merge_agent = _load_agent(agent_id)
-                if not merge_agent:
-                    break
-                if (entry or {}).get("kind") == "edit":
-                    _merge_training_edit_entry(merge_agent, entry)
-                    continue
-                note = str((entry or {}).get("note") or "").strip()
-                if not note:
-                    continue
-                merge_correction_into_instructions(
-                    merge_agent, note, source=(entry or {}).get("source") or "training")
+            def _run_merge_drain():
+                for entry in _drain_pending_merges(agent_id):
+                    merge_agent = _load_agent(agent_id)
+                    if not merge_agent:
+                        break
+                    if (entry or {}).get("kind") == "edit":
+                        _merge_training_edit_entry(merge_agent, entry)
+                        continue
+                    note = str((entry or {}).get("note") or "").strip()
+                    if not note:
+                        continue
+                    merge_correction_into_instructions(
+                        merge_agent, note, source=(entry or {}).get("source") or "training")
+
+            if redraft == "pool":
+                # DECOUPLED MERGES (owner serve-path gauntlet 2026-08-30): the
+                # share-mode loop used to run the sweep THEN the full merge
+                # drain inline - and with a teach on nearly every card, the
+                # gpt-5-mini merges (5-15s each, plus conflict find/cleanup)
+                # dominated the loop, so pool sweeps ran minutes apart and
+                # deep cards were SERVED 10+ minutes stale. Merges now run in
+                # their own serialized worker (per-agent lock, so concurrent
+                # instruction load->saves can never clobber each other) while
+                # the sweep loop chains back-to-back; the digest carries every
+                # teaching verbatim into redrafts long before its merge lands,
+                # so nothing is lost by not waiting.
+                _mlock = _get_training_merge_lock(agent_id)
+                def _merge_bg():
+                    with _mlock:
+                        _run_merge_drain()
+                threading.Thread(target=_merge_bg, daemon=True,
+                                 name=f"setter-merge-{agent_id}").start()
+            else:
+                _run_merge_drain()
 
             if redraft is True:
                 # Owner trainer (Feature B, 2026-07-14): re-run every remaining
@@ -16180,12 +16269,23 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                                     continue
                                 futs.append(pool.submit(_retrain_one_training_case, case, train_agent, eff, avail,
                                                        slot_status0, now, digest))
+                            _stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
                             for fut in concurrent.futures.as_completed(futs):
                                 try:
                                     fut.result()
                                     updated += 1
                                 except Exception:  # noqa: BLE001 - one bad case must never sink the pass
                                     pass
+                            # Stamp redrafted_at on the owner-path redraft too
+                            # (2026-08-30): only the pool sweep stamped it, so
+                            # a full owner redraft rewrote content while the
+                            # freshness accounting (caseFresh, the sweep-until-
+                            # fresh chain guard, staleness audits) still called
+                            # every card stale.
+                            for cid in unanswered_ids:
+                                case = cases_by_id.get(cid)
+                                if isinstance(case, dict):
+                                    case["redrafted_at"] = _stamp
 
             # Lost-update protection: reload the doc fresh right before the
             # final save. Only `cases` (when we redrafted) and `generating` are
@@ -16852,7 +16952,29 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
             out = _drop_banned_interview_questions(out)
             # A call that returns nothing NEW means the offer is already covered:
             # END the interview (empty), never pad with the static set.
-            return out[:5]
+            out = out[:5]
+            # PINNED WIRING QUESTIONS (owner report 2026-08-31: a fresh
+            # agent's first intake happened not to ask for the booking link,
+            # so the first booking-ask scenario showed the [BOOKING LINK]
+            # placeholder and read as "it didn't learn"). On the FIRST
+            # interview of an agent whose booking_link field is empty, the
+            # booking-link question is guaranteed - it leads the set so the
+            # agent is wired before the first scenario is ever rated. Same
+            # for a missing phone number, second.
+            _first_iv = not any((i or {}).get("answers") for i in (doc.get("interviews") or []) if isinstance(i, dict))
+            if _first_iv:
+                _pins = []
+                if not str(agent.get("booking_link") or "").strip() and not any("booking" in q.lower() for q in out):
+                    _pins.append("When a lead asks to schedule or asks for your booking link, which exact "
+                                 "booking link should the inbox manager send? Paste the URL (or reply 'none yet').")
+                _lowmanual = _agent_instructions(agent).lower()
+                if "phone" not in _lowmanual.replace("[phone number]", "") and not any("phone" in q.lower() for q in out):
+                    _pins.append("If a lead asks for a phone number to call, what number should the inbox "
+                                 "manager give? (or reply 'we work by email').")
+                if _pins:
+                    out = _pins + [q for q in out if q not in _pins]
+                    out = out[:5]
+            return out
     except Exception:  # noqa: BLE001 - fall through only on a genuine failure
         pass
     # Genuine failure (no key / HTTP / JSON error): seed a FIRST interview from
@@ -17028,7 +17150,7 @@ def _training_chat_llm(agent: dict, message: str, context: dict, chat_log: list)
     }
     r = _openai({"model": OPENAI_MODEL,
                  "messages": [{"role": "system", "content": TRAINING_CHAT_SYSTEM},
-                             {"role": "user", "content": json.dumps(payload)}],
+                             {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
                  "response_format": {"type": "json_schema", "json_schema": {
                      "name": "training_chat", "strict": True, "schema": TRAINING_CHAT_SCHEMA}}}, key)
     if not isinstance(r, dict):
