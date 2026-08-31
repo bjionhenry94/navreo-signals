@@ -695,7 +695,7 @@ var CARDS=[
  {id:"calendar",stage:3,title:"Connect calendars",time:"2 min"}
 ];
 /* TEMP HIDE (Bjion 2026-08-31): ids here vanish from the hub, hero, counts and routes. Delete an id to restore it. */
-var HIDDEN_CARDS={offers:true};
+var HIDDEN_CARDS={};
 CARDS=CARDS.filter(function(c){return !HIDDEN_CARDS[c.id];});
 var DOMAINS=["acmecorp-hq.com","tryacmecorp.com","acmecorp-team.com","getacmecorp.com","acmecorp-mail.com",
  "acmecorp.co","acme-corp.com","acmecorpapp.com","hey-acmecorp.com","acmecorp-io.com","joinacmecorp.com",
@@ -1451,7 +1451,7 @@ function offCard(o,idx){var star=!!o.star;var editable=(o.src!=="drafted");
  return '<div class="ofr-ownwrap">'+card+'<div class="ofr-owntools"><button data-ownedit="'+idx+'">Edit wording</button><button data-owndel="'+idx+'">Remove</button></div></div>';}
 function offersIntro(){return '<div class="ofr-kick">What makes a good offer</div>'
  +'<div class="headline">An offer they’d feel <span class="date">silly ignoring</span>.</div>'
- +'<div class="subline">An optional watch, then real examples. Nothing to fill in.</div>'
+ +'<div class="subline">An optional watch to bring to your call. Nothing to fill in.</div>'
  +'<div class="ob-body">'
  +'<div class="ob-mark" style="margin:0 0 12px"><span class="txt">This video is optional, but recommended — it’s a long one, and it’ll help you understand what it takes to succeed in this engagement.</span></div>'
  +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/5b57fed440de4de0a11273f2dc3cdfa9" title="Why your offer is so important — Bjion, Navreo" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
@@ -1459,7 +1459,7 @@ function offersIntro(){return '<div class="ofr-kick">What makes a good offer</di
  +'<div class="ofr-trip"><div class="ofr-leg"><span class="ic">'+OSVG.shield+'</span><span class="h">Feels safe</span><span class="s">Low cost, low effort, quick — easy to say yes</span></div><div class="ofr-leg"><span class="ic">'+OSVG.bolt+'</span><span class="h">Easy to deliver</span><span class="s">Templated &amp; repeatable, so it works at scale</span></div><div class="ofr-leg"><span class="ic">'+OSVG.gem+'</span><span class="h">Feels valuable</span><span class="s">Solves a real pain and looks impressive</span></div></div>'
  +'<div class="ofr-tripnote">Like a tripod — <b>all three legs</b>, or it tips over.</div>'
  +'</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">2 min without the video</span></div>';}
+ +'<div class="ob-foot2"><button class="btn-go" data-done="offers">Bring these to my call →</button><span class="ob-t clock">2 min without the video</span></div>';}
 // Showcase = the "extremely visual" bento of proven-results case studies, embedded
 // as an isolated iframe (app/offers-bento.html). View-only: clients SEE examples,
 // they do not pick. Done button completes the step.
@@ -1542,7 +1542,7 @@ function heroView(){
  if(S.stage===0){
   var c=nextCard();if(!c)return "";
   var subs={infrastructure:"Do this first — it starts the 2-week clock that sets your launch date. Your real address never gets touched.",
-   offers:"What makes a good offer, plus real examples to bring to your call.",
+   offers:"What makes a good offer — a short watch to bring to your call.",
    slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
    business:"Pre-filled from your sales calls — just check what we heard.",
    home:"One page where everything lives. Worth a star.",
