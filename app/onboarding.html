@@ -405,24 +405,53 @@ textarea.ob-dnc { width:100%; box-sizing:border-box; border:1.5px solid var(--li
   border-radius:12px; background:#fff; color:var(--ink); padding:12px; font:inherit;
   font-size:14.5px; min-height:96px; resize:vertical; }
 textarea.ob-dnc:focus { outline:none; box-shadow:var(--focus); }
-/* never-email card: one row per do-not-contact list — what it is + the link + add, all inline */
-.dncrows { display:grid; gap:9px; }
-.dncrow { display:flex; gap:8px; align-items:center; }
-.dncrow .ob-inp.nm { flex:1; font-weight:600; }
-.dncrow .ob-inp.lk { flex:1.45; }
-.dncrow .srm { border:none; background:var(--bg-sunken); color:var(--ink-3); width:32px; height:32px;
-  border-radius:50%; font-size:15px; cursor:pointer; flex:none; }
-.dncrow .srm:hover { color:var(--ink); }
-.dncrow .srm:focus-visible { outline:none; box-shadow:var(--focus); }
-.dnc-addbtn { font:inherit; font-size:13.5px; font-weight:600; color:var(--ink-2); background:#fff;
-  border:1.5px solid var(--line-2); border-radius:9px; padding:10px 14px; cursor:pointer;
-  flex:none; white-space:nowrap; }
+/* never-email card: aligned grid — one list per row (what it is + link), headers on top,
+   ✕ and the add button live in FIXED columns so rows never shift as rows come and go */
+.dncrows { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1.6fr) 32px auto;
+  gap:9px 8px; align-items:center; }
+.dnc-h { font-family:var(--font-mono); font-size:11px; color:var(--ink-3);
+  text-transform:uppercase; letter-spacing:.05em; padding-left:13px; }
+.dncrows .ob-inp.nm { font-weight:600; }
+.dncrows .ob-inp:focus { border-color:var(--orange-600); }
+.dncrows .ob-inp[aria-invalid="true"] { border-color:var(--amber); }
+.dncrows .srm { border:none; background:var(--bg-sunken); color:var(--ink-3); width:32px; height:32px;
+  border-radius:50%; font-size:15px; cursor:pointer; position:relative; }
+.dncrows .srm::after { content:""; position:absolute; inset:-6px; border-radius:50%; }
+.dncrows .srm:hover { color:#b3261e; background:#f6e4e0; }
+.dncrows .srm:focus-visible { outline:2px solid var(--orange-600); outline-offset:1px; box-shadow:var(--focus); }
+.dnc-addbtn { font:inherit; font-size:13px; font-weight:600; color:var(--ink-2); background:#fff;
+  border:1.5px solid var(--line-2); border-radius:9px; padding:10px 12px; cursor:pointer;
+  white-space:nowrap; }
 .dnc-addbtn:hover { background:var(--cream-50); }
-.dnc-addbtn:focus-visible { outline:none; box-shadow:var(--focus); }
-.dnc-foot { margin-top:6px; display:flex; justify-content:flex-end; min-height:16px; }
-a.dnc-example { display:inline-block; text-decoration:none; }
-@media (max-width:600px){ .dncrow { flex-wrap:wrap; } .dncrow .ob-inp.lk { flex:1 1 100%; }
-  .dncrow .dnc-addbtn { flex:1 1 100%; } }
+.dnc-addbtn:focus-visible { outline:2px solid var(--orange-600); outline-offset:1px; box-shadow:var(--focus); }
+.dnc-cap { display:grid; justify-items:center; gap:12px; margin:10px 0 24px;
+  font-size:12.5px; color:var(--ink-3); text-align:center; }
+a.dnc-example { display:inline-block; text-decoration:none; background:var(--orange-700); }
+a.dnc-example:hover { background:var(--orange-700); filter:brightness(1.12); }
+.dnc-foot { margin-top:8px; display:flex; justify-content:space-between; align-items:baseline;
+  gap:10px; min-height:18px; }
+#dncStatus { font-size:12.5px; color:var(--ink-2); }
+#dncStatus b.ok { color:var(--green); }
+#dncStatus .warn { color:var(--amber); font-weight:600; }
+.dnc-foot .iq-saved.draft { color:var(--ink-3); }
+.dnc-nonewrap { display:grid; justify-items:center; gap:6px; padding:18px 0 6px; }
+.dnc-nonechosen { font-size:14.5px; color:var(--ink-2); margin:0; text-align:center; }
+.dnc-nonechosen b { color:var(--green); }
+.dnc-undo { font:inherit; font-size:12.5px; color:var(--ink-3); background:none; border:0;
+  text-decoration:underline; cursor:pointer; }
+.dnc-undo:hover { color:var(--ink); }
+.dnc-undo:focus-visible { outline:none; box-shadow:var(--focus); }
+@media (max-width:600px){
+  .dncrows { grid-template-columns:minmax(0,1fr) 32px; grid-auto-flow:dense; }
+  .dncrows .ob-inp { font-size:16px; }
+  .dnc-h { display:none; }
+  .dncrows > span:empty { display:none; }
+  .dncrows .ob-inp.nm { grid-column:1; }
+  .dncrows .srm { grid-column:2; }
+  .dncrows .ob-inp.lk { grid-column:1 / -1; }
+  .dncrows .dnc-addbtn { grid-column:1 / -1; margin-top:2px; }
+  .dnc-foot { flex-direction:column; align-items:flex-start; }
+}
 input.ob-inp { border:1.5px solid var(--line-2); border-radius:9px; background:#fff;
   color:var(--ink); padding:10px 12px; font:inherit; font-size:14px; flex:1; min-width:0; }
 input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
@@ -874,6 +903,33 @@ function estLaunch(){return fmtD(launchBase());}
 function LDATE(){if(!S.slotMoves)return estLaunch();var d=launchBase();d.setDate(d.getDate()+3);return fmtD(rollWeekday(d));}
 function warmDayNum(){if(!S.done.infrastructure)return 0;return (S.stage===3&&S.done.emails)?12:[1,4,6,9,14][S.stage];}
 function noteCount(){var n=0;for(var k in S.notes){if(S.notes[k]&&String(S.notes[k]).trim())n++;}return n;}
+/* never-email card completes itself: any list with a plausible link = done (it autosaves
+   as you type); no links and no explicit “no one to avoid” = back to pending. */
+var _dncTrash=null,_dncTrashT=0;
+function dncLinkOk(u){u=String(u==null?"":u).trim();
+ return !!u&&!/\s/.test(u)&&/^(https?:\/\/\S+|\S+\.\S{2,})$/i.test(u);}
+function dncHasContent(){return (S.dncLists||[]).some(function(r){return r&&(String(r.name||"").trim()||String(r.url||"").trim());});}
+function dncCounts(){var filed=0,named=0,bad=0,badName="";
+ (S.dncLists||[]).forEach(function(r){if(!r)return;
+  var nm=String(r.name||"").trim(),u=String(r.url||"").trim();
+  if(dncLinkOk(u))filed++;else if(u){bad++;if(!badName)badName=nm;}else if(nm)named++;});
+ return {filed:filed,named:named,bad:bad,badName:badName};}
+function dncStatusHTML(){
+ if(_dncTrash)return 'Removed “'+qesc(_dncTrash.row.name||"list")+'” — <button class="dnc-undo" data-dncrestore>Undo</button>';
+ if(S.dncNone)return "";
+ var c=dncCounts();
+ var count=c.filed?'<b class="ok">'+c.filed+' list'+(c.filed===1?"":"s")+' on file ✓</b>':'';
+ var issue=c.bad?'<span class="warn">'+(c.bad>1?(c.bad+' links don’t look right'):(c.badName?'the link for “'+qesc(c.badName)+'” doesn’t look right':'That doesn’t look like a link'))+'. Paste the URL from your browser.</span>'
+  :(c.named?(c.filed?('add the link for the other'+(c.named===1?' one':'s')+' to file '+(c.named===1?'it':'them')+' too.'):(c.named>1?'Add the links — each list needs its own.':'Add the link — that’s what puts the list on file.')):'');
+ if(count&&issue)return count+' — '+issue;
+ if(count)return count+' — we check each one opens, then go through them with you 2 days before launch.';
+ return issue;
+}
+function dncSyncDone(){
+ var filed=(S.dncLists||[]).some(function(r){return r&&dncLinkOk(r.url);});
+ if(filed){S.done.block=true;S.dncNone=false;}
+ else if(!S.dncNone)delete S.done.block;
+}
 function cardsIn(st){return CARDS.filter(function(c){return c.stage===st;});}
 function undone(st){return cardsIn(st).filter(function(c){return !S.done[c.id];});}
 function nextCard(){var u=undone(S.stage);return u.length?u[0]:null;}
@@ -1214,25 +1270,33 @@ var PAGES={
   +'<div class="ob-foot2"><button class="btn-go" data-done="home">Got it</button></div>';},
  block:function(){
   if(!Array.isArray(S.dncLists))S.dncLists=[];
-  if(!S.dncLists.length)S.dncLists=[{name:"",url:""}];
+  if(!S.dncLists.length&&!S.dncNone)S.dncLists=[{name:"",url:""}];
   function av(s){return String(s==null?"":s).replace(/&/g,"&amp;").replace(/"/g,"&quot;").replace(/</g,"&lt;");}
   var n=S.dncLists.length;
-  var rows=S.dncLists.map(function(r,i){
-   return '<div class="dncrow"><input class="ob-inp nm" data-dncf="name:'+i+'" value="'+av(r.name)+'" placeholder="What it is — e.g. Current clients" aria-label="What this list is">'
-    +'<input class="ob-inp lk" data-dncf="url:'+i+'" value="'+av(r.url)+'" inputmode="url" placeholder="Paste the link to the list" aria-label="Link to this list">'
-    +(n>1?'<button class="srm" data-dncrm="'+i+'" aria-label="Remove this list">✕</button>':'')
-    +(i===n-1?'<button class="dnc-addbtn" data-dncadd>＋ Add another list</button>':'')+'</div>';
+  var EX=["e.g. Current clients","e.g. Competitors","e.g. Open deals"];
+  var cells=S.dncLists.map(function(r,i){
+   return '<input class="ob-inp nm" data-dncf="name:'+i+'" value="'+av(r.name)+'" placeholder="'+EX[i%EX.length]+'" enterkeyhint="next" aria-label="What list '+(i+1)+' is">'
+    +'<input class="ob-inp lk" data-dncf="url:'+i+'" value="'+av(r.url)+'" inputmode="url" spellcheck="false" autocapitalize="none" autocorrect="off" enterkeyhint="next" aria-describedby="dncStatus" placeholder="https://…"'+(String(r.url||"").trim()&&!dncLinkOk(r.url)?' aria-invalid="true"':'')+' aria-label="Link to list '+(i+1)+'">'
+    +(n>1?'<button class="srm" data-dncrm="'+i+'" aria-label="Remove list '+(i+1)+'">✕</button>':'<span></span>')
+    +(i===n-1?'<button class="dnc-addbtn" data-dncadd>+ Add another</button>':'<span></span>');
   }).join("");
-  return '<div class="headline">Who we should <span class="date">never email</span>.</div>'
-  +'<div class="subline">Your clients, live deals, competitors. Link us every do-not-contact list you keep — as many as you like. We’ll double-check with you 2 days before launch.</div>'
+  var body=S.dncNone
+   ? '<div class="dnc-nonewrap"><p class="dnc-nonechosen"><b>No one to avoid ✓</b> — noted. We’ll re-ask 2 days before launch, just in case.</p>'
+    +'<button class="dnc-undo" data-dncundo>Actually, we do have lists</button></div>'
+   : '<div class="dncrows">'
+    +'<span class="dnc-h" aria-hidden="true">What the list is</span><span class="dnc-h" aria-hidden="true">Link to it</span><span></span><span></span>'
+    +cells+'</div>'
+    +'<div class="dnc-foot"><span id="dncStatus" role="status" aria-live="polite">'+dncStatusHTML()+'</span><span class="iq-saved'+(dncCounts().filed?'':' draft')+'" id="dncSaved" aria-hidden="true">'+(dncCounts().filed?'Saved automatically ✓':'Draft saved')+'</span></div>';
+  return '<div class="headline" role="heading" aria-level="1" aria-label="Who we should never email.">Who we should <span class="date">never email</span>.</div>'
+  +'<div class="subline">Your clients, live deals, competitors. Link us every do-not-contact list you keep — it saves as you type, and we double-check it together 2 days before launch.</div>'
   +'<div class="ob-body">'
-  +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/9da21f5d895442ae972d0f2a298b5eec" title="Who we should never email — Bjion, Navreo" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
-  +'<p class="ob-vcap">Watch this first — what to send, and the format that makes it easy.</p>'
-  +'<div class="dncrows">'+rows+'</div>'
-  +'<div class="dnc-foot"><span class="iq-saved" id="dncSaved" aria-hidden="true">Saved automatically ✓</span></div>'
-  +'<div class="ob-res"><a class="btn-go dnc-example" href="https://docs.google.com/spreadsheets/d/1Dbuf-_q-QaNbW9dTY3w2mH6WeQjEtBP-y0XWC_ICm4k/edit" target="_blank" rel="noopener">See the example format ↗</a></div>'
+  +'<div class="ob-video"><iframe src="https://www.loom.com/embed/9da21f5d895442ae972d0f2a298b5eec" title="Who we should never email — Bjion, Navreo" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
+  +'<div class="dnc-cap"><span>Watch this first — what to send, and the format that makes it easy.</span>'
+  +'<a class="btn-go dnc-example" href="https://docs.google.com/spreadsheets/d/1Dbuf-_q-QaNbW9dTY3w2mH6WeQjEtBP-y0XWC_ICm4k/edit" target="_blank" rel="noopener">See the example format ↗</a></div>'
+  +body
   +'</div>'
-  +'<div class="ob-foot2"><button class="btn-ghost" data-dncsave>Save my lists</button><button class="btn-ghost" data-done2="block">Nobody to block</button></div>';},
+  +(S.dncNone?'':'<div class="ob-foot2"'+(dncHasContent()?' style="display:none"':'')+'><button class="btn-ghost" data-done2="block">No one to avoid</button></div>')
+  +'<p class="ob-note">'+(S.dncNone?'Only your Navreo team ever sees this page.':'Once a link’s in, you’re done — it saves on its own. Only your Navreo team sees these lists, and they’re used only to keep these people out of your sends.')+'</p>';},
  emails:function(){
   var i=S.eIdx,e=EMAILS[i],read=S.eRead,all=EMAILS.length,left=all-read;
   var bars="";for(var b=0;b<all;b++){bars+='<i class="'+(b<read?"on":"")+'"></i>';}
@@ -1435,9 +1499,12 @@ function route(){var h=location.hash.replace(/^#\/?/,"");return h||"";}
 function render(){
  var app=document.getElementById("app");
  var r=route();
+ /* set-up can now finish passively (never-email completes on autosave) — advance off
+    stage 0 on the next hub visit, with the same celebration complete() gives. */
+ if(!r&&S.stage===0&&undone(0).length===0){S.stage=1;save();toast("Set up — done. We take it from here for a bit.");}
  var _cn=(S.clientName||S.sigCompany||S.offerAudience||"").trim();
  var out='<div class="ob-top"><div class="ob-brand"><img src="navreo-logo.png" alt="Navreo">'+(_cn?'<span>· '+_cn.replace(/</g,"&lt;")+'</span>':'')+'</div>'
-  +'<button class="ob-date mono '+(S.locked?"locked":"")+'" data-pop="chain">🚀 <u>'+LDATE()+(S.locked?" · locked ✓":"")+'</u></button></div>';
+  +'<button class="ob-date mono '+(S.locked?"locked":"")+'" data-pop="chain" aria-label="Launch day" title="Launch day">🚀 <u>'+LDATE()+(S.locked?" · locked ✓":"")+'</u></button></div>';
 
  if(r&&HIDDEN_CARDS[r]){r="";try{history.replaceState(null,"",location.pathname+location.search+"#/");}catch(_){}}
  if(r&&PAGES[r]){
@@ -1474,8 +1541,8 @@ function heroView(){
    slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
    business:"Pre-filled from your sales calls — just check what we heard.",
    home:"One page where everything lives. Worth a star.",
-   block:"Clients, live deals, competitors — tell us who’s off-limits."};
-  var ctas={infrastructure:"See them",offers:"Have a think",slack:"Open my invite",home:"Have a look",business:"Check it",block:"Tell us"};
+   block:"Clients, live deals, competitors — link us the lists of who’s off-limits."};
+  var ctas={infrastructure:"See them",offers:"Have a think",slack:"Open my invite",home:"Have a look",business:"Check it",block:"Link them"};
   return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>'+c.title+'</h1><p class="ob-sub">'+subs[c.id]+'</p>'
    +'<div class="ob-row"><button class="btn-go" data-go="'+c.id+'">'+ctas[c.id]+'</button><span class="ob-t">'+c.time+'</span>'+(c.clock?'<span class="ob-t clock">⏱ starts your 2-week clock</span>':"")+'</div></div>';
  }
@@ -1589,28 +1656,42 @@ function bindAll(){
  qa("[data-done]").forEach(function(b){if(b.disabled)return;b.addEventListener("click",function(){
   var id=b.getAttribute("data-done");
   complete(id,({home:"Saved — it’s pinned in Slack too",business:"3 checked, 19 waiting whenever you fancy — thank you",offers:"Great — bring the ones you liked to your call",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
- /* never-email card: list rows (what it is + link), add/remove, validated save */
+ /* never-email card: list rows (what it is + link) — autosaves, completes itself */
  qa("[data-dncf]").forEach(function(inp){
   var kv=inp.getAttribute("data-dncf").split(":"),f=kv[0],i=+kv[1];
-  inp.addEventListener("input",function(){if(S.dncLists&&S.dncLists[i]){S.dncLists[i][f]=inp.value;save();
-   var sv=document.getElementById("dncSaved");
-   if(sv){sv.classList.add("show");clearTimeout(sv._h);sv._h=setTimeout(function(){sv.classList.remove("show");},1400);}}});});
+  inp.addEventListener("input",function(){if(S.dncLists&&S.dncLists[i]){S.dncLists[i][f]=inp.value;dncSyncDone();save();
+   if(_dncTrash){_dncTrash=null;clearTimeout(_dncTrashT);}
+   if(f==="url")inp.setAttribute("aria-invalid",(String(inp.value).trim()&&!dncLinkOk(inp.value))?"true":"false");
+   var st=document.getElementById("dncStatus");if(st)st.innerHTML=dncStatusHTML();
+   var f2=app.querySelector("[data-done2]");if(f2)f2.parentElement.style.display=dncHasContent()?"none":"";
+   var sv=document.getElementById("dncSaved"),fl=dncCounts().filed;
+   if(sv){sv.textContent=fl?"Saved automatically ✓":"Draft saved";sv.classList.toggle("draft",!fl);
+    sv.classList.add("show");clearTimeout(sv._h);sv._h=setTimeout(function(){sv.classList.remove("show");},2200);}}});
+  inp.addEventListener("keydown",function(e){if(e.key!=="Enter")return;e.preventDefault();
+   if(f==="name"){var lk2=app.querySelector('[data-dncf="url:'+i+'"]');if(lk2)lk2.focus();return;}
+   var add=app.querySelector("[data-dncadd]");
+   if(add&&dncLinkOk(inp.value))add.click();});});
  qa("[data-dncrm]").forEach(function(b){b.addEventListener("click",function(){
-  S.dncLists.splice(+b.getAttribute("data-dncrm"),1);save();render();});});
+  var ix=+b.getAttribute("data-dncrm"),gone=S.dncLists[ix];
+  S.dncLists.splice(ix,1);
+  if(gone&&(String(gone.name||"").trim()||String(gone.url||"").trim())){
+   _dncTrash={row:gone,at:ix};clearTimeout(_dncTrashT);
+   _dncTrashT=setTimeout(function(){_dncTrash=null;var st=document.getElementById("dncStatus");if(st)st.innerHTML=dncStatusHTML();},7000);}
+  dncSyncDone();save();render();
+  var add=document.querySelector("[data-dncadd]");if(add)add.focus();});});
  var dna=app.querySelector("[data-dncadd]");
  if(dna)dna.addEventListener("click",function(){S.dncLists.push({name:"",url:""});save();render();
   var ins=document.querySelectorAll('[data-dncf^="name:"]');if(ins.length)ins[ins.length-1].focus();});
- var dns=app.querySelector("[data-dncsave]");
- if(dns)dns.addEventListener("click",function(){
-  var rows=(S.dncLists||[]).map(function(r){return {name:String((r&&r.name)||"").trim(),url:String((r&&r.url)||"").trim()};})
-   .filter(function(r){return r.name||r.url;});
-  if(!rows.length){toast("Add at least one list — or tap ‘Nobody to block’");return;}
-  var miss=null;for(var mi=0;mi<rows.length;mi++){if(!rows[mi].url){miss=rows[mi];break;}}
-  if(miss){toast("Add the link for “"+miss.name+"” — the list itself is what we need");return;}
-  S.dncLists=rows;S.dncNone=false;save();
-  complete("block",rows.length===1?"Got it — your list is protected":"Got it — all "+rows.length+" lists are protected");});
+ var du=app.querySelector("[data-dncundo]");
+ if(du)du.addEventListener("click",function(){S.dncNone=false;delete S.done.block;S.dncLists=[{name:"",url:""}];save();render();
+  var fi=document.querySelector('[data-dncf="name:0"]');if(fi)fi.focus();});
+ if(!app._dncDeleg){app._dncDeleg=true;
+  app.addEventListener("click",function(e){var b=e.target&&e.target.closest?e.target.closest("[data-dncrestore]"):null;if(!b||!_dncTrash)return;
+   var t=_dncTrash;_dncTrash=null;clearTimeout(_dncTrashT);
+   var at=Math.min(t.at,S.dncLists.length);S.dncLists.splice(at,0,t.row);dncSyncDone();save();render();
+   var fi=document.querySelector('[data-dncf="name:'+at+'"]');if(fi)fi.focus();});}
  var el2=app.querySelector("[data-done2]");
- if(el2)el2.addEventListener("click",function(){S.dncNone=true;S.dncLists=[];save();complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
+ if(el2)el2.addEventListener("click",function(){if(dncHasContent())return;S.dncNone=true;S.dncLists=[];save();complete("block","Noted — no one to avoid. We’ll re-ask 2 days before launch.");});
  var sl=app.querySelector("[data-slack]");
  if(sl)sl.addEventListener("click",function(){
   if(sl.tagName!=="A"&&S.slackUrl)window.open(S.slackUrl,"_blank","noopener");
