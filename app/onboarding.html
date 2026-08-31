@@ -1094,7 +1094,7 @@ function infraIntro(){
  +'<div class="subline">Two minutes on what we buy, why your real address stays safe, and how we run it. Then three quick screens and you’re done.</div>'
  +'<div style="margin-top:26px"><div class="ob-video v43"><iframe src="https://www.loom.com/embed/ca80dd3ac1464848a5d53b3a509621fb" title="Email addresses, explained — Bjion, Navreo" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
  +'<p class="ob-note" style="margin-top:12px">Watch this. Already know how cold-email infrastructure is built? Skip straight ahead.</p></div>'
- +'<div class="ibframe"><iframe src="infra-bento.html" title="How your email sending is set up" scrolling="no" loading="lazy" style="height:1400px"></iframe></div>'
+ +'<div class="ibframe"><iframe src="'+infraBentoSrc()+'" title="How your email sending is set up" scrolling="no" loading="lazy" style="height:1400px"></iframe></div>'
  +wizFoot(null,"infra-senders","Got it — who’s sending?");
 }
 function initials(nm){var p=(nm||"").trim().split(/\s+/);return ((p[0]||"?")[0]+(p[1]?p[1][0]:"")).toUpperCase();}
@@ -1118,6 +1118,20 @@ function infraSenders(){
  +'<div class="ob-foot2"><button class="btn-ghost" data-go="infrastructure">← Back</button>'
  +'<button class="btn-go" data-svalidate>Looks right — next</button></div>';
 }
+/* Client identity for the infra-bento explainer (infra-bento.html). The bento's
+   "acme" examples are illustrative — we swap in this client's name so it reads as
+   theirs. Standard for every onboarding: derived from the live client, not hardcoded. */
+function coName(){ /* domain-safe company root, e.g. Adverio → "adverio" */
+ var nm=(S.clientName||"").trim().toLowerCase().replace(/&/g,"and").replace(/[^a-z0-9]+/g,"");
+ if(nm)return nm;
+ var s=(S.site||"").trim().toLowerCase().replace(/^https?:\/\//,"").replace(/^www\./,"").split(/[\/.]/)[0].replace(/[^a-z0-9]+/g,"");
+ return s||"acme";
+}
+function coRealDomain(){ /* the client's real address domain, e.g. "adverio.io" */
+ var s=(S.site&&S.site.trim())?S.site.trim().toLowerCase().replace(/^https?:\/\//,"").replace(/^www\./,"").replace(/\/.*$/,""):"";
+ return s||(coName()+".com");
+}
+function infraBentoSrc(){return "infra-bento.html?co="+encodeURIComponent(coName())+"&site="+encodeURIComponent(coRealDomain());}
 function siteFallback(){return (S.site&&S.site.trim())?S.site.trim():"acmecorp.com";}
 function redirectTarget(){return (S.redirect&&S.redirect.trim())?S.redirect.trim():siteFallback();}
 /* Per-client near-copy list drafted by the onboarding autopilot (S.domains, via

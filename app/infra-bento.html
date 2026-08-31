@@ -142,6 +142,25 @@ body{font-family:var(--font-sans);background:transparent;color:var(--ink);line-h
 .wbar i{display:block;width:100%;border-radius:8px 8px 4px 4px;background:linear-gradient(180deg,#FF6A2B,var(--orange));box-shadow:0 10px 22px -14px rgba(255,77,0,.8);}
 .wbar span{font-family:var(--font-mono);font-size:10px;font-weight:700;color:var(--ink-3);}
 </style>
+<script>
+/* Personalise the illustrative "acme" examples with this client's name/domain,
+   passed by the parent onboarding page as ?co=<name>&site=<real-domain>.
+   "acme.com" = the real address (→ client's real domain); every other "acme…"
+   is a look-alike example (→ client-name root). Defaults keep "acme" if unscoped. */
+(function(){
+  var q={};location.search.replace(/^\?/,"").split("&").forEach(function(kv){if(!kv)return;var i=kv.indexOf("=");var k=decodeURIComponent(i<0?kv:kv.slice(0,i));q[k]=i<0?"":decodeURIComponent(kv.slice(i+1).replace(/\+/g," "));});
+  var CO=(q.co||"acme").toLowerCase().replace(/[^a-z0-9]+/g,"")||"acme";
+  var SITE=(q.site||"acme.com").toLowerCase().replace(/^https?:\/\//,"").replace(/^www\./,"").replace(/\/.*$/,"")||"acme.com";
+  window.__ibCO=CO;window.__ibSITE=SITE;
+  window.__ibSub=function(s){return String(s).split("acme.com").join(SITE).split("acme").join(CO);};
+  function subDOM(){try{
+    var w=document.createTreeWalker(document.body,NodeFilter.SHOW_TEXT,null);
+    var nodes=[],n;while(n=w.nextNode())nodes.push(n);
+    nodes.forEach(function(t){if(t.nodeValue&&t.nodeValue.indexOf("acme")>-1)t.nodeValue=window.__ibSub(t.nodeValue);});
+  }catch(e){}}
+  if(document.readyState!=="loading")subDOM();else document.addEventListener("DOMContentLoaded",subDOM);
+})();
+</script>
 </head>
 <body>
 <div class="wrap">
@@ -274,6 +293,7 @@ body{font-family:var(--font-sans);background:transparent;color:var(--ink);line-h
     'j.doe@acmegroup.com','johnd@acmeuk.com','doe.j@tryacmeuk.com',
     'j.doe@acmeuk.com','john.d@tryacmeuk.com','johndoe@acmegroup.com'
   ];
+  if(window.__ibSub){ POOL = POOL.map(window.__ibSub); }
   var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
   var host = document.getElementById('slots');
   if(!host) return;
