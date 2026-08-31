@@ -569,6 +569,7 @@ var CARDS=[
  {id:"offers",stage:0,title:"Think about your offers",time:"5 min",badge:"for your call"},
  {id:"slack",stage:0,title:"Join us on Slack",time:"2 min"},
  {id:"home",stage:0,title:"Your home base",time:"1 min"},
+ {id:"business",stage:0,title:"About your business",time:"10 min"},
  {id:"block",stage:0,title:"Who we should never email",time:"2 min"},
  {id:"emails",stage:3,title:"Read + approve your emails",time:"12 min"},
  {id:"quote",stage:4,title:"What your AI can quote",time:"5 min"},
@@ -895,6 +896,20 @@ var PAGES={
  "infra-domains":function(){return S.done.infrastructure?infraPage():infraDomains();},
  "infra-confirm":function(){return S.done.infrastructure?infraPage():infraConfirm();},
  offers:function(){ return S.offerStep>=1?offersShowcase():offersIntro(); },
+ business:function(){
+  if(S.q>=QS.length){return '<div class="headline">About your business — <span class="date">checked</span>.</div>'
+   +'<div class="subline">3 checked · 19 pre-filled the same way. Skim the rest any time before your call — change anything, whenever.</div>'
+   +'<div class="ob-foot2"><button class="btn-go" data-done="business">All done</button><button class="linkbtn" data-qreset>Look again</button></div>';}
+  var i=S.q,item=QS[i];
+  return '<div class="headline">Your job is <span class="date">checking</span>, not typing.</div>'
+  +'<div class="subline">Pre-filled from your sales calls. Question '+(i+7)+' of 22 · saved as you go.</div>'
+  +'<div class="ob-body"><div class="pbar"><i style="width:'+Math.round(((i+7)/22)*100)+'%"></i></div>'
+  +'<div class="ob-q"><div class="q">'+item.q+'</div>'
+  +(S.editQ===i?'<textarea id="qedit">'+item.a.replace(/&/g,"&amp;")+'</textarea>':'<div class="a">'+item.a+'</div>')
+  +'<span class="frombadge">FROM YOUR SALES CALL — CHECK IT</span></div></div>'
+  +'<div class="ob-foot2">'+(S.editQ===i
+   ?'<button class="btn-go" data-qsave>Save my version →</button>'
+   :'<button class="btn-ghost" data-qok>Looks right →</button><button class="btn-ghost" data-qfix>Fix it</button>')+'</div>';},
  slack:function(){
   if(S.slackWait){return '<div class="headline">Invite opened — <span class="date">watching for you</span>…</div>'
    +'<div class="subline">We’ll spot you arrive in #acme-navreo. Nothing to tick.</div>';}
@@ -1086,14 +1101,15 @@ function offCard(o,idx){var star=!!o.star;var editable=(o.src!=="drafted");
  return '<div class="ofr-ownwrap">'+card+'<div class="ofr-owntools"><button data-ownedit="'+idx+'">Edit wording</button><button data-owndel="'+idx+'">Remove</button></div></div>';}
 function offersIntro(){return '<div class="ofr-kick">What makes a good offer</div>'
  +'<div class="headline">An offer they’d feel <span class="date">silly ignoring</span>.</div>'
- +'<div class="subline">A 2-minute watch, then real examples. Nothing to fill in.</div>'
+ +'<div class="subline">An optional watch, then real examples. Nothing to fill in.</div>'
  +'<div class="ob-body">'
- +'<button class="ofr-vid" data-loom aria-label="Play the 2-minute walkthrough"><span class="play">'+OSVG.play+'</span><span class="cap">What makes a good offer — Bjion, Navreo</span><span class="dur">2:14</span></button>'
+ +'<div class="ob-mark" style="margin:0 0 12px"><span class="txt">This video is optional, but recommended — it’s a long one, and it’ll help you understand what it takes to succeed in this engagement.</span></div>'
+ +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/5b57fed440de4de0a11273f2dc3cdfa9" title="Why your offer is so important — Bjion, Navreo" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
  +'<div class="ofr-flip"><div class="ofr-side svc"><div class="lab">A service</div><div class="txt">“I design websites.”</div></div><div class="ofr-arrow">→</div><div class="ofr-side off"><div class="lab">An offer</div><div class="txt">“I’ll build your website — pay only when you’re happy.”</div></div></div>'
  +'<div class="ofr-trip"><div class="ofr-leg"><span class="ic">'+OSVG.shield+'</span><span class="h">Feels safe</span><span class="s">Low cost, low effort, quick — easy to say yes</span></div><div class="ofr-leg"><span class="ic">'+OSVG.bolt+'</span><span class="h">Easy to deliver</span><span class="s">Templated &amp; repeatable, so it works at scale</span></div><div class="ofr-leg"><span class="ic">'+OSVG.gem+'</span><span class="h">Feels valuable</span><span class="s">Solves a real pain and looks impressive</span></div></div>'
  +'<div class="ofr-tripnote">Like a tripod — <b>all three legs</b>, or it tips over.</div>'
  +'</div>'
- +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">~2 min</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="1">Skip to the examples →</button></div>';}
+ +'<div class="ob-foot2"><button class="btn-go" data-offstep="1">See real examples →</button><span class="ob-t clock">2 min without the video</span></div>'+'<div class="ofr-skiprow"><button class="linkbtn" data-offstep="1">Skip to the examples →</button></div>';}
 // Showcase = the "extremely visual" bento of proven-results case studies, embedded
 // as an isolated iframe (app/offers-bento.html). View-only: clients SEE examples,
 // they do not pick. Done button completes the step.
@@ -1174,9 +1190,10 @@ function heroView(){
   var subs={infrastructure:"Do this first — it starts the 2-week clock that sets your launch date. Your real address never gets touched.",
    offers:"What makes a good offer, plus real examples to bring to your call.",
    slack:"One tap. Never used Slack? We’ll walk you in — or just stay on email.",
+   business:"Pre-filled from your sales calls — just check what we heard.",
    home:"One page where everything lives. Worth a star.",
    block:"Clients, live deals, competitors — tell us who’s off-limits."};
-  var ctas={infrastructure:"See them",offers:"Have a think",slack:"Open my invite",home:"Have a look",block:"Tell us"};
+  var ctas={infrastructure:"See them",offers:"Have a think",slack:"Open my invite",home:"Have a look",business:"Check it",block:"Tell us"};
   return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>'+c.title+'</h1><p class="ob-sub">'+subs[c.id]+'</p>'
    +'<div class="ob-row"><button class="btn-go" data-go="'+c.id+'">'+ctas[c.id]+'</button><span class="ob-t">'+c.time+'</span>'+(c.clock?'<span class="ob-t clock">⏱ starts your 2-week clock</span>':"")+'</div></div>';
  }
@@ -1294,7 +1311,7 @@ function bindAll(){
   go("infra-domains");});
  qa("[data-done]").forEach(function(b){if(b.disabled)return;b.addEventListener("click",function(){
   var id=b.getAttribute("data-done");
-  complete(id,({home:"Saved — it’s pinned in Slack too",offers:"Great — bring the ones you liked to your call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
+  complete(id,({home:"Saved — it’s pinned in Slack too",business:"3 checked, 19 waiting whenever you fancy — thank you",offers:"Great — bring the ones you liked to your call",block:"Got it — they’re protected",plan:"Nice — see you Tuesday",quote:"Got it all — feeding your AI",train:"Your AI sounds like you now",calendar:"Connected — bookings just appear"})[id]);});});
  var el2=app.querySelector("[data-done2]");
  if(el2)el2.addEventListener("click",function(){complete("block","Noted — nobody to block. We’ll re-ask before launch.");});
  var sl=app.querySelector("[data-slack]");
