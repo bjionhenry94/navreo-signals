@@ -2486,7 +2486,11 @@ def onboarding_draft_get(cid: str):
 def _ob_summary(rec: dict) -> dict:
     doc = rec.get("doc") if isinstance(rec.get("doc"), dict) else {}
     stage = rec.get("stage", doc.get("stage", 0)) or 0
-    pct = 100 if rec.get("status") == "submitted" else round(min(max(stage, 0), 5) / 5 * 100)
+    # Five-stage journey (stv 2, 2026-08-31): "Your emails" folded into Pre-launch.
+    # Docs saved under the old 6-stage scheme (no stv marker) shift stages 4/5 down one.
+    if doc.get("stv") != 2 and stage >= 4:
+        stage -= 1
+    pct = 100 if rec.get("status") == "submitted" else round(min(max(stage, 0), 4) / 4 * 100)
     return {
         "id": rec.get("id"), "name": rec.get("name") or "Untitled client",
         "stage": stage, "status": rec.get("status") or "draft", "progress": pct,

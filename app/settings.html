@@ -322,7 +322,14 @@ function obAgo(iso){
   if(s<86400) return Math.floor(s/3600)+"h ago";
   return Math.floor(s/86400)+"d ago";
 }
-const OB_STAGES = ["Set-up","First call","Plan","Emails","Ready","Launch"];
+// Five-stage journey (2026-08-31): "Your emails" folded into Pre-launch ("Ready").
+const OB_STAGES = ["Set-up","First call","Plan","Ready","Launch"];
+// Docs saved under the old 6-stage scheme (no stv marker) shift stages 4/5 down one.
+const obStageNum = (n, doc) => {
+  let s = Math.max(0, n||0);
+  if(doc && doc.stv !== 2 && s >= 4) s -= 1;
+  return Math.min(s, OB_STAGES.length-1);
+};
 async function obLoad(){
   const box = document.getElementById("ob-table");
   try{
@@ -344,7 +351,7 @@ async function obLoad(){
     const pill = submitted
       ? `<span class="pill on">Submitted</span>`
       : `<span class="pill off">In progress</span>`;
-    const stage = OB_STAGES[Math.min(Math.max(c.stage||0,0),5)] || "–";
+    const stage = OB_STAGES[obStageNum(c.stage)] || "–";
     return `<tr>
       <td><div class="ws-name">${obEsc(c.name)}</div><div class="ws-slug">${obEsc(c.id)}</div></td>
       <td>${obEsc(stage)} · ${c.progress||0}%</td>
@@ -372,7 +379,7 @@ async function obOpen(row){
     const j = await r.json();
     doc = (j && j.draft && j.draft.doc) || {};
   }catch(e){ /* fall back to summary only */ }
-  const stage = OB_STAGES[Math.min(Math.max(doc.stage||row.stage||0,0),5)] || "–";
+  const stage = OB_STAGES[doc.stage!=null ? obStageNum(doc.stage, doc) : obStageNum(row.stage)] || "–";
   const senders = (doc.senders||[]).map(s=>`${obEsc(s.name||"—")}${s.title?" · "+obEsc(s.title):""}`).join("<br>") || "—";
   const offerList = (doc.own||[]).map(o=>obEsc((o&&o.line)||(o&&o.name)||o)).filter(Boolean);
   const picked = Object.keys(doc.offers||{}).filter(k=>doc.offers[k]);

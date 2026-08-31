@@ -652,7 +652,7 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 (function(){
 "use strict";
 
-var STAGES=["Set up","Onboarding call","Strategy call","Your emails","Pre-launch call","Live"];
+var STAGES=["Set up","Onboarding call","Strategy call","Pre-launch call","Live"];
 var CARDS=[
  {id:"infrastructure",stage:0,title:"Your email addresses",time:"3 min",clock:true},
  {id:"offers",stage:0,title:"Think about your offers",time:"5 min",badge:"for your call"},
@@ -661,9 +661,9 @@ var CARDS=[
  {id:"business",stage:0,title:"About your business",time:"10 min"},
  {id:"block",stage:0,title:"Who we should never email",time:"2 min"},
  {id:"emails",stage:3,title:"Read + approve your emails",time:"12 min"},
- {id:"quote",stage:4,title:"What your AI can quote",time:"5 min"},
- {id:"train",stage:4,title:"Teach your AI",time:"15 min"},
- {id:"calendar",stage:4,title:"Connect calendars",time:"2 min"}
+ {id:"quote",stage:3,title:"What your AI can quote",time:"5 min"},
+ {id:"train",stage:3,title:"Teach your AI",time:"15 min"},
+ {id:"calendar",stage:3,title:"Connect calendars",time:"2 min"}
 ];
 /* TEMP HIDE (Bjion 2026-08-31): ids here vanish from the hub, hero, counts and routes. Delete an id to restore it. */
 var HIDDEN_CARDS={offers:true};
@@ -762,7 +762,7 @@ var SCENS=[
  {in:"“We already work with someone for this.”",dr:"Totally fair — most of our clients did too. If it’s ever worth a second opinion, the teardown is free and yours to keep."}
 ];
 
-var FRESH={stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
+var FRESH={stv:2,stage:0,done:{},locked:false,trained:7,slot:null,slotMoves:false,q:0,eIdx:0,eRead:1,
  notes:{},offers:{},own:[],ideas:null,ideaSeq:0,quoteObj:false,mikeOk:false,people:[],reacts:{},slackWait:false,slackUrl:"",portalUrl:"",homeLinks:{contract:"",invoice:"",recordings:"",reports:""},intake:{},intakeTouched:{},intakeOk:{},tw:false,mine:{},dncLists:[],dncNone:false,
  senders:[{name:"John Doe",title:"VP Sales"}],
  redirect:"",domainPicks:{},domains:[],site:""};
@@ -779,7 +779,11 @@ var OB_CID=(OB_Q.client||"").trim();
 var OB_SCOPED=(!!OB_CID||OB_FORCE_NEW);
 if(OB_FORCE_NEW&&!OB_CID)OB_CID=obUuid();
 var LS_KEY=OB_SCOPED?("nav_onboarding_v1:"+OB_CID):"nav_onboarding_v1";
-if(!OB_FORCE_NEW){try{var raw=localStorage.getItem(LS_KEY);if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=p;}}catch(e){}}
+/* five-stage migration (stv 2, 2026-08-31): "Your emails" is no longer its own journey
+   stage — the read+approve card now lives inside Pre-launch. Old 6-stage saves (no stv)
+   shift stages 4/5 down to 3/4; old stage 3 keeps its number (emails undone in Pre-launch). */
+function obMigrate(d){if(d&&typeof d.stage==="number"&&d.stv!==2){if(d.stage>=4)d.stage-=1;d.stv=2;}return d;}
+if(!OB_FORCE_NEW){try{var raw=localStorage.getItem(LS_KEY);if(raw){var p=JSON.parse(raw);if(p&&typeof p.stage==="number")S=obMigrate(p);}}catch(e){}}
 /* offers-section state migration: own[] may hold legacy strings; normalise to offer objects + default new fields. */
 if(!Array.isArray(S.own))S.own=[];
 S.own=S.own.map(function(o){return (o&&typeof o==="object")?o:{name:String(o),line:String(o),mech:"lead_magnet",raw:String(o),pick:true};});
@@ -814,7 +818,7 @@ var _obTimer=null,_obLast="";
 function obSetStatus(st){var el=document.getElementById("obSave");if(!el)return;
  var m={saving:"Saving…",saved:"Saved ✓",error:"Saved on this device — retrying…"};
  el.textContent=m[st]||"";el.setAttribute("data-st",st);el.style.color=(st==="saved")?"#3f9e5a":(st==="error")?"#c2683a":"#8a8378";}
-function obPayload(){return {id:S.clientId,name:(S.clientName||S.offerAudience||""),stage:S.stage,status:(S.stage>=5?"submitted":"draft"),doc:S};}
+function obPayload(){return {id:S.clientId,name:(S.clientName||S.offerAudience||""),stage:S.stage,status:(S.stage>=4?"submitted":"draft"),doc:S};}
 function obSync(){var body;try{body=JSON.stringify(obPayload());}catch(e){return;}
  if(body===_obLast){obSetStatus("saved");return;}
  obSetStatus("saving");
@@ -836,7 +840,7 @@ function save(){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}sc
 function obRestore(){if(OB_FORCE_NEW){scheduleSync();return;}
  fetch("/api/onboarding/draft?id="+encodeURIComponent(S.clientId),{cache:"no-store"})
   .then(function(r){return r.ok?r.json():null;})
-  .then(function(j){if(!j||!j.draft||!j.draft.doc)return;var sv=j.draft.doc;
+  .then(function(j){if(!j||!j.draft||!j.draft.doc)return;var sv=obMigrate(j.draft.doc);
    var pristine=(S.stage===0&&Object.keys(S.done||{}).length===0);
    if((sv.stage||0)>(S.stage||0)||pristine){
     for(var k in FRESH){if(!(k in sv))sv[k]=JSON.parse(JSON.stringify(FRESH[k]));}
@@ -858,7 +862,7 @@ function launchBase(){var d=new Date();d.setHours(0,0,0,0);d.setDate(d.getDate()
 function estLaunch(){return fmtD(launchBase());}
 /* Booking Monday's call costs 3 days; keep it weekday-safe too. */
 function LDATE(){if(!S.slotMoves)return estLaunch();var d=launchBase();d.setDate(d.getDate()+3);return fmtD(rollWeekday(d));}
-function warmDayNum(){return S.done.infrastructure?[1,4,6,9,12,14][S.stage]:0;}
+function warmDayNum(){if(!S.done.infrastructure)return 0;return (S.stage===3&&S.done.emails)?12:[1,4,6,9,14][S.stage];}
 function noteCount(){var n=0;for(var k in S.notes){if(S.notes[k]&&String(S.notes[k]).trim())n++;}return n;}
 function cardsIn(st){return CARDS.filter(function(c){return c.stage===st;});}
 function undone(st){return cardsIn(st).filter(function(c){return !S.done[c.id];});}
@@ -892,22 +896,22 @@ function intakeBar(){var IN=S.intake||{},TC=S.intakeTouched||{},OK=S.intakeOk||{
 function complete(id,msg){
  var was=S.done[id];S.done[id]=true;
  if(S.stage===0&&undone(0).length===0){S.stage=1;save();go();render();toast("Set up — done. We take it from here for a bit.");return;}
- if(S.stage===3&&S.done.emails){S.stage=4;S.locked=true;save();go();render();
-  var nn=noteCount();toast(nn?("Approved with "+nn+" change"+(nn>1?"s":"")+" — revised versions tomorrow. "+LDATE()+" locked"):("Approved — "+LDATE()+" is locked"));return;}
- if(S.stage===4&&undone(4).length===0){S.stage=5;save();go();render();
+ if(S.stage===3&&id==="emails")S.locked=true; /* approving the emails locks the date, even mid-stage */
+ if(S.stage===3&&undone(3).length===0){S.stage=4;save();go();render();
   toast("Everything’s ready. Launching "+(S.slotMoves?"Thursday":"Monday"));return;}
+ if(S.stage===3&&id==="emails"&&!was){save();go();render();
+  var nn=noteCount();toast(nn?("Approved with "+nn+" change"+(nn>1?"s":"")+" — revised versions tomorrow. "+LDATE()+" locked"):("Approved — "+LDATE()+" is locked"));return;}
  save();go();render();
  if(msg&&!was)toast(msg);
 }
 function demoSkip(){
- if(S.stage===5)return;
+ if(S.stage===4)return;
  cardsIn(S.stage).forEach(function(c){S.done[c.id]=true;});
  if(!S.slot)S.slot="Thu 4 Sep · 10:00";
  if(S.stage===0){S.stage=1;toast("Set up — done.");}
  else if(S.stage===1){S.stage=2;toast("Great first call. Your plan lands Thu · 17:00.");}
  else if(S.stage===2){S.stage=3;toast("Your emails are ready to read.");}
- else if(S.stage===3){S.stage=4;S.locked=true;toast("Approved — "+LDATE()+" locked");}
- else if(S.stage===4){S.stage=5;S.trained=12;S.mikeOk=true;toast("Everything’s ready. Launching "+(S.slotMoves?"Thursday":"Monday"));}
+ else if(S.stage===3){S.stage=4;S.locked=true;S.trained=12;S.mikeOk=true;toast("Everything’s ready. Launching "+(S.slotMoves?"Thursday":"Monday"));}
  save();go();render();
 }
 function resetAll(){var _cid=S.clientId,_cn=S.clientName;S=JSON.parse(JSON.stringify(FRESH));S.clientId=_cid||obUuid();if(_cn)S.clientName=_cn;save();go();render();toast("Demo reset");}
@@ -925,16 +929,16 @@ function chainHTML(){
  return '<h2 class="mono">'+LDATE()+' — why that date</h2>'
  +'<div class="chain">'
  +'<div class="clink '+(S.done.infrastructure?"ok":"now")+'"><span class="d"></span><span>Your addresses — '+(S.done.infrastructure?"approved + bought":"waiting on you")+'</span><span class="o">'+(S.done.infrastructure?"DONE":"3 MIN")+'</span></div>'
- +'<div class="clink '+(S.stage>=5?"ok":(S.done.infrastructure?"now":""))+'"><span class="d"></span><span>Warm-up — 14 days of good behaviour</span><span class="o">'+(S.done.infrastructure?(S.stage>=5?"DONE — 14 OF 14":"DAY "+wd+" OF 14"):"STARTS THE DAY YOU APPROVE")+'</span></div>'
+ +'<div class="clink '+(S.stage>=4?"ok":(S.done.infrastructure?"now":""))+'"><span class="d"></span><span>Warm-up — 14 days of good behaviour</span><span class="o">'+(S.done.infrastructure?(S.stage>=4?"DONE — 14 OF 14":"DAY "+wd+" OF 14"):"STARTS THE DAY YOU APPROVE")+'</span></div>'
  +'<div class="clink '+(S.done.emails?"ok":"")+'"><span class="d"></span><span>Your emails — approved</span><span class="o">'+(S.done.emails?"DONE":"UP AHEAD")+'</span></div>'
- +'<div class="clink '+(S.stage>=5?"now":"")+'"><span class="d"></span><span>Launch</span><span class="o">'+LDATE().toUpperCase()+' '+(S.locked?"· LOCKED":"· +2 SPARE DAYS")+'</span></div>'
+ +'<div class="clink '+(S.stage>=4?"now":"")+'"><span class="d"></span><span>Launch</span><span class="o">'+LDATE().toUpperCase()+' '+(S.locked?"· LOCKED":"· +2 SPARE DAYS")+'</span></div>'
  +'</div>'
  +(S.slotMoves?'<p class="mutline">You picked Monday’s call — that’s the move from Sep 15 to Sep 18.</p>':"")
  +'<p class="physics">Warm-up is physics — brand-new addresses must earn trust slowly. Nobody can skip it, which is why it starts the moment you approve.</p>';
 }
 function journeyHTML(){
- var lines=["Your 7 quick things — done in ~30 min","1 hour with Yasir — expectations + your onboarding","We present the campaign ideas; you decide together","Read all 11, then approve — locks your date","Connect your calendar, how we handle replies, then launch","Replies land, meetings book, weekly reports"];
- var out='<h2>Your whole journey</h2><p class="lead">Six stages, about two weeks. You are here:</p><div class="chain">';
+ var lines=["Your 7 quick things — done in ~30 min","1 hour with Yasir — expectations + your onboarding","We present the campaign ideas; you decide together","Connect your calendar, how we handle replies, then launch","Replies land, meetings book, weekly reports"];
+ var out='<h2>Your whole journey</h2><p class="lead">Five stages, about two weeks. You are here:</p><div class="chain">';
  for(var i=0;i<STAGES.length;i++){
   out+='<div class="clink '+(i<S.stage?"ok":(i===S.stage?"now":""))+'"><span class="d"></span><span><b>'+STAGES[i]+'</b> — '+lines[i]+'</span><span class="o">'+(i<S.stage?"DONE":(i===S.stage?"NOW":""))+'</span></div>';
  }
@@ -947,7 +951,7 @@ function infraStageIdx(){
  if(!S.done.infrastructure)return 0;
  if(S.stage===0)return 1;              /* just approved — buying */
  if(S.stage===1)return 3;              /* warming d4 */
- if(S.stage>=5)return 5;               /* ready */
+ if(S.stage>=4)return 5;               /* ready */
  return 3;                              /* warming through plan/emails/prep */
 }
 function trackerHTML(cur){
@@ -1430,19 +1434,18 @@ function render(){
   out+='<button class="ob-stgbtn" data-pop="journey" aria-label="See your whole journey">'
    +'<span class="ob-dots" aria-hidden="true">';
   for(var i=0;i<STAGES.length;i++){out+='<span class="ob-dot '+(i<S.stage?"done":(i===S.stage?"now":""))+'"></span>';}
-  out+='</span><span class="ob-snow"><span><b>'+STAGES[S.stage]+'</b> · '+(S.stage+1)+' of 6 · <u>see all</u></span></span></button>';
+  out+='</span><span class="ob-snow"><span><b>'+STAGES[S.stage]+'</b> · '+(S.stage+1)+' of '+STAGES.length+' · <u>see all</u></span></span></button>';
   var mv;
   if(S.stage===0){var n=undone(0).length;mv='<span class="chip you"><i></i>Your move · '+n+' thing'+(n===1?"":"s")+' left</span>';}
   else if(S.stage===1){mv='<span class="chip us"><i></i>Nothing needed until your call ('+(S.slot||"Thu 4 Sep · 10:00")+')</span>';}
   else if(S.stage===2){mv='<span class="chip us"><i></i>Nothing needed — Yasir’s writing your plan</span>';}
-  else if(S.stage===3){mv='<span class="chip you"><i></i>Your move · 1 thing (~12 min)</span>';}
-  else if(S.stage===4){var u=undone(4);
+  else if(S.stage===3){var u=undone(3);
    if(u.length===1&&u[0].id==="calendar"&&!S.mikeOk){mv='<span class="chip team"><i></i>Waiting on Mike — calendar invite</span>';}
    else if(u.length){mv='<span class="chip you"><i></i>Your move · '+u.length+' thing'+(u.length===1?"":"s")+' left</span>';}
    else{mv='<span class="chip us"><i></i>Final checks — nothing needed</span>';}}
   else{mv='<span class="chip live"><i></i>You’re live · Sarah’s on both replies</span>';}
   out+='<div class="ob-move">'+mv+'</div>';
-  if(S.stage===5){out+=liveView();}
+  if(S.stage===4){out+=liveView();}
   else{out+=heroView();out+=listView();}
   out+='<p class="ob-help">Stuck or curious? Message us in Slack — a human answers.</p>';
  }
@@ -1474,17 +1477,13 @@ function heroView(){
    +'<div class="ob-row"><button class="btn-ghost" data-go="plan">Have a peek</button><span class="ob-t ok mono">WARM-UP · DAY '+warmDayNum()+' OF 14</span></div></div>';
  }
  if(S.stage===3){
-  return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>Read + approve your emails</h1>'
-   +'<p class="ob-sub">3 different angles · 11 emails · about 12 minutes. You’ll see every one before anything locks.</p>'
-   +'<div class="ob-row"><button class="btn-go" data-go="emails">Read them</button><span class="ob-t">12 min</span></div></div>';
- }
- if(S.stage===4){
   var c2=nextCard();
   if(!c2)return '<div class="ob-hero"><span class="ob-k">Almost</span><h1>Final checks on our side</h1><p class="ob-sub">Launching '+(S.slotMoves?"Thursday":"Monday")+' ('+LDATE()+'). Nothing needed from you.</p></div>';
-  var subs2={quote:"Case studies, pricing, objection answers — everything your AI can quote.",
+  var subs2={emails:"3 different angles · 11 emails · about 12 minutes. You’ll see every one before anything locks.",
+   quote:"Case studies, pricing, objection answers — everything your AI can quote.",
    train:S.trained+" of 12 practice replies good enough to send — nearly there.",
    calendar:"Connect once. Bookings just appear in the right diary."};
-  var ctas2={quote:"Add files",train:"Keep teaching",calendar:"Connect"};
+  var ctas2={emails:"Read them",quote:"Add files",train:"Keep teaching",calendar:"Connect"};
   return '<div class="ob-hero"><span class="ob-k">Your next thing</span><h1>'+c2.title+'</h1><p class="ob-sub">'+subs2[c2.id]+'</p>'
    +'<div class="ob-row"><button class="btn-go" data-go="'+c2.id+'">'+ctas2[c2.id]+'</button><span class="ob-t">'+c2.time+'</span></div></div>';
  }
@@ -1502,8 +1501,7 @@ function listView(){
  }
  var cs,title;
  if(S.stage===0){cs=cardsIn(0);title="Everything · do the top one first";}
- else if(S.stage===3){cs=cardsIn(3);title="This week";}
- else {cs=cardsIn(4);title="Last three things";}
+ else {cs=cardsIn(3);title="Last four things";}
  if(!cs.length)return "";
  var nc=nextCard();
  var out='<div class="ob-listwrap"><p class="ob-lh">'+title+'</p><div class="ob-list">';
