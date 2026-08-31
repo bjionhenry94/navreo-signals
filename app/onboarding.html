@@ -1173,7 +1173,7 @@ var PAGES={
  "infra-senders":function(){return S.done.infrastructure?infraPage():infraSenders();},
  "infra-domains":function(){return S.done.infrastructure?infraPage():infraDomains();},
  "infra-confirm":function(){return S.done.infrastructure?infraPage():infraConfirm();},
- offers:function(){ return S.offerStep>=1?offersShowcase():offersIntro(); },
+ offers:function(){ return offersIntro(); },
  business:function(){
   var IN=S.intake||{}, TC=S.intakeTouched||{}, OK=S.intakeOk||{};
   function val(q){return String(IN[q.id]||"");}
