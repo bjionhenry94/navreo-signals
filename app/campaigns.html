@@ -5201,7 +5201,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
           title: "Back Version " + lab + " with 80% of Email " + step + "?",
           sub: (c.name || "Campaign " + c.id) + " · campaign " + c.id,
           lines: [["Version " + lab + " share", vawChangeV(split + "%", "80%")],
-                  [lagTxt + " (still testing)", vawChangeV("their shares", "20% shared")],
+                  [lagTxt + " (still under the judging bar)", vawChangeV("their shares", "20% shared")],
                   ["Every other version on Email " + step, vawChangeV("their shares", "0% (kept, not deleted)")],
                   ["Copy / subject", "untouched"]],
           idnote: VAW_IDNOTE, token: "BACK", danger: false,
@@ -5715,7 +5715,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       var testing = sk === '1' && liveVs('1').length > 1 && e1Mode === 'none';
       var band = '<tr class="vp-band"><td class="vp-l" colspan="7">Email ' + esc(sk) +
         ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') +
-        (testing ? ' &middot; still testing &mdash; a best opener is only called once every live version has ' + fmtInt(e1Bar) + ' sends' +
+        (testing ? ' &middot; a best opener is only called once every live version has ' + fmtInt(e1Bar) + ' sends' +
           (e1Bar === 300 ? ' (small list &mdash; bar lowered from 800)' : '') : '') +
         '</span></td></tr>';
       /* an inline (step-level) counter row can coexist with real versions of
@@ -5809,14 +5809,9 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
             '" data-laggards="' + esc(JSON.stringify(e1Laggards)) +
             '" title="' + esc(e1Laggards.join(', ')) + ' still under the ' + e1Bar + '-send judging bar &mdash; they keep 20% collectively' +
             '"><span class="vp-best">BEST</span> Send 80% of Email ' + esc(String(sk)) + ' to it<span class="vaw-arr" aria-hidden="true">&rarr;</span></button>';
-        /* a live version still under the judging bar shows its progress */
-        var lagChip = (sk === '1' && !v.disabled && !v.inline && v.label != null && v.split !== 0 &&
-            (v.sent || 0) < e1Bar && (byStep['1'] || []).length > 1)
-          ? ' <span class="ring-caption" title="still accruing its fair test &mdash; no verdict is passed on a version under the judging bar">testing &middot; ' + fmtInt(v.sent || 0) + '/' + fmtInt(e1Bar) + '</span>'
-          : '';
         return '<tr>' +
           '<td data-label="Version">' + esc(label) + stateCell +
-            ((isBest && !hasScale) ? ' <span class="vp-best">best</span>' : '') + scaleBtn + lagChip + '</td>' +
+            ((isBest && !hasScale) ? ' <span class="vp-best">best</span>' : '') + scaleBtn + '</td>' +
           /* a deleted variant's counters were PURGED by Smartlead, not zero —
              '—' with the why, never a false 'Sent 0' (audit #8) */
           (v.stats_purged
