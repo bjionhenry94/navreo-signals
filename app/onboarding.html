@@ -298,6 +298,7 @@ body { background:var(--bg); }
 .ob-video { position:relative; border-radius:14px; overflow:hidden; border:1px solid var(--line);
   aspect-ratio:16/9; background:#000; }
 .ob-video iframe { position:absolute; inset:0; width:100%; height:100%; border:0; }
+.ob-video.v43 { aspect-ratio:4/3; }
 .ob-vcap { font-size:12.5px; color:var(--ink-3); text-align:center; margin:10px 0 22px; }
 .ob-res { margin-top:18px; display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
 .ob-rlink { font-size:13px; font-weight:600; color:var(--ink-2); text-decoration:none;
@@ -923,7 +924,7 @@ var PAGES={
   return '<div class="headline">Your <span class="date">home base</span>.</div>'
   +'<div class="subline">Contracts, invoices, recordings, weekly reports — one page, always up to date. Nothing to install.</div>'
   +'<div class="ob-body">'
-  +'<button class="ofr-vid" data-loom aria-label="Play the home base tour"><span class="play">'+OSVG.play+'</span><span class="cap">Your home base — the quick tour</span></button>'
+  +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/51ee8db330024f218026eef43485ecf9" title="Navreo: Client Portal Introduction" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
   +'<div class="ob-mark"><span class="txt"><span class="star">★</span> Bookmark this page — it’s where everything lives.</span><button class="ob-copy" data-copy-portal>Copy my portal link</button></div>'
   +'<div class="dcard">'
   +hrow("contract","Contract",'<b class="ok">Filed ✓</b>')
