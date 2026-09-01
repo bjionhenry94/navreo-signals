@@ -479,13 +479,26 @@ function teachTopics(text) {
    on every card. A teaching with no recognisable topic is global too
    (behaviour/style notes shape every reply). Persisted per share scope. */
 let TEACHINGS = [];
-try { TEACHINGS = JSON.parse(SS.get("trainTeachings") || "[]") || []; } catch { TEACHINGS = []; }
-function recordTeaching(at, srcText, topicsOverride) {
+try {
+  TEACHINGS = JSON.parse(SS.get("trainTeachings") || "[]") || [];
+  // Deferred flags never survive a reload - a crashed sitting's filler
+  // answers activate immediately on the next visit.
+  TEACHINGS.forEach((x) => { delete x.d; });
+} catch { TEACHINGS = []; }
+function recordTeaching(at, srcText, topicsOverride, deferred) {
   if (!at) return;
   const topics = (Array.isArray(topicsOverride) && topicsOverride.length)
     ? [...new Set(topicsOverride)] : teachTopics(srcText);
   const global = topics.length === 0 || topics.includes("booking") || topics.includes("phone");
-  TEACHINGS.push({ at, topics, global });
+  const entry = { at, topics, global };
+  // FILLER PIPELINING (owner ask 2026-09-01): answers given while a hold
+  // is on screen are DEFERRED - they must never extend the hold they were
+  // given during. They activate when the next round composes, so the round
+  // in progress plays on the previous batch's training while these sweep
+  // in the background, and the round AFTER opens on scenarios already
+  // redrafted with them.
+  if (deferred) entry.d = true;
+  TEACHINGS.push(entry);
   if (TEACHINGS.length > 60) TEACHINGS = TEACHINGS.slice(-60);
   try { SS.set("trainTeachings", JSON.stringify(TEACHINGS)); } catch { /* ignore */ }
 }
@@ -511,7 +524,9 @@ function caseFresh(c) {
   if (stamp && stamp >= lastFeedbackAt) return true;
   // A sitting whose ledger predates this feature (or was lost) falls back
   // to one global teaching at the clock - the plain timestamp gate.
-  const ledger = TEACHINGS.length ? TEACHINGS : [{ at: lastFeedbackAt, topics: [], global: true }];
+  const base = TEACHINGS.length ? TEACHINGS : [{ at: lastFeedbackAt, topics: [], global: true }];
+  const ledger = base.filter((t) => !t.d); // deferred filler answers gate the NEXT round
+  if (!ledger.length) return true;
   const ct = cardTopics(c);
   return !ledger.some((t) => t.at > stamp
     && (t.global || (t.topics || []).some((k) => ct.includes(k))));
@@ -999,6 +1014,15 @@ function beginRoundIfNeeded() {
   // caller shows the personalising wait and the short-round poll grows the
   // round card-by-card as the background redraft lands (convergence is
   // warranted server-side - route_training_get re-kicks a dead sweep).
+  // Activate any deferred filler answers NOW (owner ask 2026-09-01): the
+  // round being composed is the first one they should gate - by this point
+  // the background sweep has usually redrafted for them already, so the
+  // next batch of scenarios is ready the moment the questions are done.
+  if (TEACHINGS.some((x) => x.d)) {
+    TEACHINGS.forEach((x) => { delete x.d; });
+    try { SS.set("trainTeachings", JSON.stringify(TEACHINGS)); } catch { /* ignore */ }
+  }
+  FILLER_TRIED = false; // each hold gets at most ONE filler set (max two question rounds per transition)
   ROUND_IDS = currentUnanswered().filter((c) => caseFresh(c)).slice(0, ROUND_SIZE).map((c) => c.id);
   let n = 0, sitting = 0;
   try {
@@ -1502,7 +1526,8 @@ function render() {
   // when none is fresh, hold on the live-training wait - the poll opens
   // the stream the moment a redraft lands, and the server's stale heal
   // warrants that it does.
-  if (SHARE_MODE && unanswered[idx] && !caseFresh(unanswered[idx])) {
+  if (SHARE_MODE && unanswered[idx] && String(unanswered[idx].id) !== DISPLAYED_CASE_ID
+      && !caseFresh(unanswered[idx])) {
     const jf = unanswered.findIndex((c) => caseFresh(c));
     if (jf >= 0) {
       idx = jf;
@@ -1747,7 +1772,7 @@ function stopShortRoundPoll() {
 }
 function startShortRoundPoll() {
   stopShortRoundPoll();
-  const deadline = Date.now() + 150000;
+  let deadline = Date.now() + 150000;
   shortRoundPollHandle = setInterval(async () => {
     // Keep polling while the round is short OR any unanswered round card is
     // still pre-teaching (instant-open 2026-08-28: swaps land behind the
@@ -1758,8 +1783,13 @@ function startShortRoundPoll() {
       const c = CASES.find((x) => String(x.id) === String(id));
       return c && !caseFresh(c);
     });
-    if (!ROUND_IDS || Date.now() > deadline
-        || (ROUND_IDS.length >= ROUND_SIZE && !roundStale)) {
+    if (fillerFormActive() && Date.now() > deadline - 60000) {
+      // The trainer is mid-questions - never yank the form for a timeout
+      // or an open; the round opens right after they submit or skip.
+      deadline = Date.now() + 120000;
+    }
+    if (!ROUND_IDS || (Date.now() > deadline && !fillerFormActive())
+        || (!fillerFormActive() && ROUND_IDS.length >= ROUND_SIZE && !roundStale)) {
       stopShortRoundPoll();
       if (view === "shortwait") {
         // Open the round instead of bouncing to the round-done screen when
@@ -1782,7 +1812,7 @@ function startShortRoundPoll() {
     // Open from the wait ONLY once the round itself holds a (fresh) card -
     // an empty waiting round must not open on the unscoped stale backlog
     // (serve gate 2026-08-31).
-    if (view === "shortwait" && ROUND_IDS && ROUND_IDS.length
+    if (view === "shortwait" && !fillerFormActive() && ROUND_IDS && ROUND_IDS.length
         && currentUnanswered().some((c) => caseFresh(c))) {
       view = "stream";
       DISPLAYED_CASE_ID = null;
@@ -1796,29 +1826,71 @@ function shortRoundHolding() {
 }
 let waitBarTimer = null;
 let waitBarStart = 0;
+let FILLER_TRIED = false; // one filler question set per hold, max (owner rule 2026-09-01)
+function startWaitBar() {
+  waitBarStart = Date.now();
+  if (waitBarTimer) clearInterval(waitBarTimer);
+  waitBarTimer = setInterval(() => {
+    const f = document.getElementById("waitBarFill");
+    if (!f) { clearInterval(waitBarTimer); waitBarTimer = null; return; }
+    const sec = (Date.now() - waitBarStart) / 1000;
+    f.style.width = Math.min(95, 100 * (1 - Math.exp(-sec / 11))).toFixed(1) + "%";
+  }, 600);
+}
+function paintPlainWaitBar() {
+  const el = document.getElementById("trainApp");
+  if (!el) return;
+  el.innerHTML = `<div class="empty-flow"><div id="shortRoundWaitMsg" style="max-width:520px;margin:0 auto">`
+    + `<div style="margin-bottom:12px;font-weight:500">Live-training the AI based on your feedback, please allow ~20-30 seconds…</div>`
+    + `<div class="rp-bar-track" style="overflow:hidden"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
+  startWaitBar();
+}
+function fillerFormActive() {
+  return view === "shortwait" && !!document.querySelector("#shortRoundWaitMsg #ivForm");
+}
+async function maybeOfferFillerQuestions() {
+  // FILLER PIPELINING (owner ask 2026-09-01: "use a round of questions as
+  // something to do whilst the previous round is being learned"). During a
+  // hold, offer the pending follow-up question set instead of a bare timer.
+  // Hard caps against the never-ending-questions loop: at most ONE filler
+  // set per hold (so max TWO question rounds per transition, the staged set
+  // plus this one), skip drops straight to the timer, and the interview
+  // generator's own session-wide ceilings still apply on top. Answers given
+  // here are DEFERRED teachings - they can never extend this hold.
+  if (FILLER_TRIED || !SHARE_MODE) return;
+  FILLER_TRIED = true;
+  try {
+    const iv = await fetchInterviewQuestions();
+    const qs = ((iv && iv.questions) || []).slice(0, 5);
+    if (!qs.length || view !== "shortwait" || !document.getElementById("shortRoundWaitMsg")) return;
+    const el = document.getElementById("trainApp");
+    if (!el) return;
+    el.innerHTML = `<div class="empty-flow"><div id="shortRoundWaitMsg" style="max-width:560px;margin:0 auto">`
+      + interviewFormHtml({ questions: qs }, {
+          title: "While that trains - a few more quick questions",
+          sub: "Answer these and the next scenarios are usually ready the moment you finish. Skipping just shows the timer.",
+          cta: "Send answers", skip: "Skip - just wait" })
+      + `<div class="rp-bar-track" style="overflow:hidden;margin-top:16px"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
+    startWaitBar();
+    const backToBar = () => { if (view === "shortwait") paintPlainWaitBar(); };
+    const sb = document.getElementById("ivSubmitBtn");
+    const sk = document.getElementById("ivSkipBtn");
+    if (sb) sb.addEventListener("click", () => submitInterviewAnswers({ questions: qs }, backToBar));
+    if (sk) sk.addEventListener("click", backToBar);
+  } catch { /* filler is best-effort - the timer stands */ }
+}
 function renderShortRoundWait() {
   view = "shortwait";
   const el = document.getElementById("trainApp");
   if (!el || document.getElementById("shortRoundWaitMsg")) return;
   // Empty waiting round = the serve gate is holding for the FIRST card
   // redrafted with the trainer's answers. Owner ask 2026-08-31: a progress
-  // bar with honest live-training copy, not a spinner. The bar eases
-  // asymptotically toward full over the expected 20-30s and the view
-  // switches the moment the first fresh card lands (the interval cleans
-  // itself up when the bar leaves the DOM). A short round mid-top-up keeps
-  // the original one-line spinner.
+  // bar with honest live-training copy, not a spinner - and, since
+  // 2026-09-01, the pending follow-up questions render over it so the wait
+  // does double duty. A short round mid-top-up keeps the one-line spinner.
   if (ROUND_IDS && ROUND_IDS.length === 0) {
-    el.innerHTML = `<div class="empty-flow"><div id="shortRoundWaitMsg" style="max-width:520px;margin:0 auto">`
-      + `<div style="margin-bottom:12px;font-weight:500">Live-training the AI based on your feedback, please allow ~20-30 seconds…</div>`
-      + `<div class="rp-bar-track" style="overflow:hidden"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
-    waitBarStart = Date.now();
-    if (waitBarTimer) clearInterval(waitBarTimer);
-    waitBarTimer = setInterval(() => {
-      const f = document.getElementById("waitBarFill");
-      if (!f) { clearInterval(waitBarTimer); waitBarTimer = null; return; }
-      const sec = (Date.now() - waitBarStart) / 1000;
-      f.style.width = Math.min(95, 100 * (1 - Math.exp(-sec / 11))).toFixed(1) + "%";
-    }, 600);
+    paintPlainWaitBar();
+    maybeOfferFillerQuestions();
     return;
   }
   el.innerHTML = `<div class="empty-flow"><div class="round-updating" id="shortRoundWaitMsg">`
@@ -1911,6 +1983,7 @@ function streamOneInterviewAnswer(inp) {
   // pool: "I had given it in the first entry... I've told you this maybe
   // 10, 15 times").
   pendingFeedbackSync++;
+  const _defer = (view === "shortwait"); // filler answers defer (owner ask 2026-09-01)
   fetchJson("/api/setter/training/interview", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -1919,7 +1992,7 @@ function streamOneInterviewAnswer(inp) {
     if (res && res.ok) {
       const at = (res.data && res.data.at) || "";
       bumpLastFeedbackAt(at);
-      recordTeaching(at, q.q + " " + val);
+      recordTeaching(at, q.q + " " + val, null, _defer);
     } else delete IV_STREAM_SENT[qid]; /* retried by the final Save */
   }).catch(() => {
     pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
@@ -1987,6 +2060,7 @@ async function submitInterviewAnswers(iv, onDone) {
   iv.answers = answers;
   LEARNED_CHIP = { kind: "interview", text: "we'll use these answers in every reply from now on", pending: true };
   clearError();
+  const _defer = (view === "shortwait"); // filler answers defer (owner ask 2026-09-01)
   if (onDone) onDone();
   pendingFeedbackSync++;
   fetchJson("/api/setter/training/interview", {
@@ -1996,7 +2070,7 @@ async function submitInterviewAnswers(iv, onDone) {
     if (res && res.ok) {
       bumpLastFeedbackAt((res.data && res.data.at) || "");
       (sentQuestions || []).forEach((sq) => {
-        if (unsent[sq.id] !== undefined) recordTeaching((res.data && res.data.at) || "", sq.q + " " + unsent[sq.id]);
+        if (unsent[sq.id] !== undefined) recordTeaching((res.data && res.data.at) || "", sq.q + " " + unsent[sq.id], null, _defer);
       });
       if (LEARNED_CHIP && LEARNED_CHIP.kind === "interview") LEARNED_CHIP.pending = false;
     } else {
