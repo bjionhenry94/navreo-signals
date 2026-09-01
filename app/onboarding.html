@@ -879,7 +879,7 @@ if(OB_FORCE_NEW){if(OB_Q.name)S.clientName=OB_Q.name;if(OB_Q.company&&!S.clientN
    Unscoped demo previews keep the old behavior (local copy is their truth). */
 var _obTimer=null,_obLast="",_obReady=OB_LOCAL;
 function obSetStatus(st){var el=document.getElementById("obSave");if(!el)return;
- var m={saving:"Saving…",saved:"Saved ✓",error:"Saved on this device — retrying…"};
+ var m={saving:"Saving…",saved:"Saved ✓",error:OB_LOCAL?"Saved on this device — retrying…":"Not saved yet — retrying…"};
  el.textContent=m[st]||"";el.setAttribute("data-st",st);el.style.color=(st==="saved")?"#3f9e5a":(st==="error")?"#c2683a":"#8a8378";}
 function obPayload(){return {id:S.clientId,name:(S.clientName||S.offerAudience||""),stage:S.stage,status:(S.stage>=4?"submitted":"draft"),doc:S};}
 function obSync(){if(!_obReady)return;var body;try{body=JSON.stringify(obPayload());}catch(e){return;}
@@ -891,7 +891,11 @@ function obSync(){if(!_obReady)return;var body;try{body=JSON.stringify(obPayload
   .catch(function(){obSetStatus("error");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,4000);});}
 function scheduleSync(){if(!_obReady)return;obSetStatus("saving");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,700);}
 function obFlush(){if(!_obReady)return;try{var body=JSON.stringify(obPayload());if(body===_obLast)return;
- if(navigator.sendBeacon&&navigator.sendBeacon("/api/onboarding/draft",new Blob([body],{type:"application/json"}))){_obLast=body;return;}}catch(e){}
+ /* sendBeacon only QUEUES the request — the server may still refuse it (the
+    degraded-store 503). Never mark it as delivered (_obLast), or a refused
+    flush cancels obSync's retry loop and the state is silently lost; the
+    upsert is idempotent, so a duplicate POST later is harmless. */
+ if(navigator.sendBeacon&&navigator.sendBeacon("/api/onboarding/draft",new Blob([body],{type:"application/json"})))return;}catch(e){}
  obSync();}
 window.addEventListener("pagehide",obFlush);
 document.addEventListener("visibilitychange",function(){if(document.visibilityState==="hidden")obFlush();});
@@ -906,8 +910,14 @@ function obRestore(){if(OB_FORCE_NEW){_obReady=true;scheduleSync();return;}
  fetch("/api/onboarding/draft?id="+encodeURIComponent(S.clientId),{cache:"no-store"})
   .then(function(r){return r.ok?r.json():null;})
   .then(function(j){
-   if(!j){setTimeout(obRestore,3000);return;} /* server hiccup — retry, keep gate closed */
-   if(!j.draft||!j.draft.doc){_obReady=true;scheduleSync();return;} /* brand-new client: FRESH is correct, create the record */
+   if(!j){setTimeout(obRestore,3000);return;} /* server hiccup (incl. the 503 degraded-store answer) — retry, keep gate closed */
+   if(!j.draft||!j.draft.doc){
+    /* Only an EXPLICIT exists:false from the server means brand-new. A missing
+       draft without that marker is ambiguous (degraded store, old server, odd
+       body) — creating FRESH here is how a mid-deploy load wiped a real client
+       (obtest-harborline, 2026-09-01). Keep the write gate closed and retry. */
+    if(j.exists===false){_obReady=true;scheduleSync();return;}
+    setTimeout(obRestore,3000);return;}
    var sv=obMigrate(j.draft.doc);
    var pristine=(S.stage===0&&Object.keys(S.done||{}).length===0);
    /* Back-office reset: when the server issues a newer resetRev than this browser
