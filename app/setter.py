@@ -2512,7 +2512,14 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     # agent's instructions, swap the digits for a visible [PHONE NUMBER] token
     # the client fills in - the sentence stays ("My number is [PHONE NUMBER]").
     try:
-        _instr_digits = re.sub(r"\D", "", _agent_instructions(agent) or "")
+        # Taught-number sources (client-readiness audit 2026-09-01): the
+        # DRAFT_SYSTEM self-serve rule tells the model to use a phone number
+        # taught via reviewer_feedback BEFORE its merge lands - this repair
+        # then erased exactly that number back to [PHONE NUMBER] because it
+        # only trusted digits already in the instructions. Digits from the
+        # digest count as taught too.
+        _instr_digits = re.sub(r"\D", "", (_agent_instructions(agent) or "")
+                               + (regen_feedback or ""))
         def _fix_num(m):
             num = m.group(1)
             digs = re.sub(r"\D", "", num)
