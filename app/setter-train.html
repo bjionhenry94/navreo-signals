@@ -453,8 +453,14 @@ function poolFresh() {
    timestamp gate, never add one. */
 const TEACH_TOPIC_RES = [
   ["pricing", /\bpric\w*|\bcost\w*|\bcharg\w*|\bfee\b|\bfees\b|\bbudget\b|how much|\bballpark\b|\bband\b|\bbands\b|\btier\w*|\brate\b|\bquote\b|\bexpensive\b/i],
-  ["booking", /\bbooking\b|book (a|the|in|direct)|\bcalendly\b|\bschedul\w*|calendar link|link to book/i],
-  ["phone", /\bphone\b|\bmobile\b|direct (line|number)|give .{0,12}(a )?(ring|call)\b|\bcall (me|us)\b|\bnumber\b.{0,20}\bcall\b|\bcall\b.{0,20}\bnumber\b/i],
+  // Precision fixes (live gauntlet 2026-08-31): "book/booking/booked" appear
+  // in countless non-link contexts ("before a call is booked", "when
+  // booking"), and "call ... number" collides with "before a call ... what
+  // exact number" - both wrongly escalated topical intake answers to GLOBAL
+  // and re-created the pointless hold. Booking is LINK-centric; phone keys
+  // on phone/mobile/ring words only.
+  ["booking", /booking (link|page)|book in direct|\bcalendly\b|scheduling link|calendar link|link to book/i],
+  ["phone", /\bphone\b|\bmobile\b|direct (line|number)|give .{0,12}(a )?(ring|call)\b|\bcall (me|us)\b|\bring (me|us)\b/i],
   ["proof", /case stud\w*|\bproof\b|\bresults\b|\bexamples?\b|\breference\w*|success stor\w*|customer (result|outcome)|\btestimonial\w*/i],
   ["security", /\bsecurity\b|\bcomplian\w*|\bgdpr\b|data residen\w*|\bsovereign\w*|\bprivacy\b|air.?gap\w*/i],
   ["attendees", /\battend\w*|who (else )?should (come|join|be)|join the call|be on the call|\bbring\b.{0,24}\bcall\b/i],
