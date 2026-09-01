@@ -1002,6 +1002,17 @@ function setupChartTooltip(wrap) {
     var realRaw = ci(cap.client_caps_daily, name);
     var real = (Array.isArray(realRaw) && realRaw.some(function (v) { return v != null; })) ? realRaw : null;
     var nav = cap.capacity.navreo, cur = ci(cap.client_caps, name), est = null;
+    // client_caps is today's LIVE per-client sweep — it can be empty {} when the
+    // restore sweep hasn't warmed (or is degraded), which strands the est scaling
+    // and drops the whole shared-client series to nulls on any un-recorded day.
+    // The 24H view reads ONE snapshot day, so a single missing cap-day there =
+    // "—" for every shared client (own-workspace clients are immune: they read
+    // capacity[wsKey], always complete). Fall back to the client's own latest
+    // RECORDED daily cap so est still fires and un-recorded days inherit a scaled
+    // navreo-pool cap. No-op when client_caps has the client (healthy state).
+    if (cur == null && Array.isArray(realRaw)) {
+      for (var ci2 = realRaw.length - 1; ci2 >= 0; ci2--) if (realRaw[ci2] != null) { cur = realRaw[ci2]; break; }
+    }
     if (Array.isArray(nav) && cur != null) {
       var navCur = null;
       for (var i = nav.length - 1; i >= 0; i--) if (nav[i] != null) { navCur = nav[i]; break; }
