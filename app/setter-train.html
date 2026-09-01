@@ -1860,8 +1860,20 @@ async function maybeOfferFillerQuestions() {
   if (FILLER_TRIED || !SHARE_MODE) return;
   FILLER_TRIED = true;
   try {
+    // Never re-ask what was just typed (live-verify 2026-09-01: the filler
+    // fetched while the intake's streamed answers were still in flight, so
+    // the server re-served the "unanswered" remainder of the set the
+    // trainer had JUST filled in). Wait for in-flight answers to land, then
+    // drop anything the local answered-ledger already covers.
+    for (let w = 0; w < 16 && pendingFeedbackSync > 0; w++) {
+      await new Promise((res) => setTimeout(res, 500));
+    }
+    if (view !== "shortwait") return;
     const iv = await fetchInterviewQuestions();
-    const qs = ((iv && iv.questions) || []).slice(0, 5);
+    const qs = ((iv && iv.questions) || [])
+      .filter((q) => !ANSWERED_IV_LOCAL.ids.has(String(q.id))
+        && !ANSWERED_IV_LOCAL.texts.has(String(q.q || "").trim().toLowerCase()))
+      .slice(0, 5);
     if (!qs.length || view !== "shortwait" || !document.getElementById("shortRoundWaitMsg")) return;
     const el = document.getElementById("trainApp");
     if (!el) return;
