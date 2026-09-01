@@ -441,13 +441,66 @@ function poolFresh() {
   if (pendingFeedbackSync > 0) return false;
   return !lastFeedbackAt || (BRAIN_COVERS_AT && BRAIN_COVERS_AT >= lastFeedbackAt);
 }
+/* ── Relevance-gated freshness (owner feedback 2026-08-31) ────────────────
+   "Only make me wait if you clearly know you're going to use what I just
+   taught in the upcoming scenarios." A teaching only STALES the cards it is
+   topically relevant to: each teaching's source text and each card's lead
+   message are classified with the same deterministic topic regexes, and a
+   card is held back only when a newer teaching is global (wiring answers,
+   style/behaviour notes with no recognisable topic) or shares a topic with
+   it. Irrelevant teachings never block a round - the background sweep still
+   redrafts every card regardless. This can only REMOVE waits vs the plain
+   timestamp gate, never add one. */
+const TEACH_TOPIC_RES = [
+  ["pricing", /\bpric\w*|\bcost\w*|\bcharg\w*|\bfee\b|\bfees\b|\bbudget\b|how much|\bballpark\b|\bband\b|\bbands\b|\btier\w*|\brate\b|\bquote\b|\bexpensive\b/i],
+  ["booking", /\bbooking\b|book (a|the|in|direct)|\bcalendly\b|\bschedul\w*|calendar link|link to book/i],
+  ["phone", /\bphone\b|\bmobile\b|direct (line|number)|give .{0,12}(a )?(ring|call)\b|\bcall (me|us)\b|\bnumber\b.{0,20}\bcall\b|\bcall\b.{0,20}\bnumber\b/i],
+  ["proof", /case stud\w*|\bproof\b|\bresults\b|\bexamples?\b|\breference\w*|success stor\w*|customer (result|outcome)|\btestimonial\w*/i],
+  ["security", /\bsecurity\b|\bcomplian\w*|\bgdpr\b|data residen\w*|\bsovereign\w*|\bprivacy\b|air.?gap\w*/i],
+  ["attendees", /\battend\w*|who (else )?should (come|join|be)|join the call|be on the call|\bbring\b.{0,24}\bcall\b/i],
+  ["call-length", /\b(call|meeting)\b.{0,30}\b(length|long|minutes|duration)|\b(length|long|minutes|duration)\b.{0,30}\b(call|meeting)\b/i],
+  ["deliverables", /\bdeliverab\w*|what (do|will) (i|we) (get|receive)|\breceive\b|\bdashboards?\b|\breports?\b|\bfiles\b|\bincluded\b|what's included/i],
+];
+function teachTopics(text) {
+  const t = String(text || "");
+  return TEACH_TOPIC_RES.filter(([, re]) => re.test(t)).map(([k]) => k);
+}
+/* This sitting's teachings ledger: {at, topics, global}. Wiring answers
+   (booking link / phone) are global - they change the times/links machinery
+   on every card. A teaching with no recognisable topic is global too
+   (behaviour/style notes shape every reply). Persisted per share scope. */
+let TEACHINGS = [];
+try { TEACHINGS = JSON.parse(SS.get("trainTeachings") || "[]") || []; } catch { TEACHINGS = []; }
+function recordTeaching(at, srcText) {
+  if (!at) return;
+  const topics = teachTopics(srcText);
+  const global = topics.length === 0 || topics.includes("booking") || topics.includes("phone");
+  TEACHINGS.push({ at, topics, global });
+  if (TEACHINGS.length > 60) TEACHINGS = TEACHINGS.slice(-60);
+  try { SS.set("trainTeachings", JSON.stringify(TEACHINGS)); } catch { /* ignore */ }
+}
+const CARD_TOPIC_CACHE = {};
+function cardTopics(c) {
+  const id = String((c && c.id) || "");
+  if (id && CARD_TOPIC_CACHE[id]) return CARD_TOPIC_CACHE[id];
+  const tp = teachTopics(String(((c && c.inbound) || {}).body || ""));
+  if (id) CARD_TOPIC_CACHE[id] = tp;
+  return tp;
+}
 /* A single case is fresh when it was drafted (or re-drafted) after my last
-   teaching - or when the whole pool has been swept since. */
+   teaching, when the whole pool has been swept since - or when every
+   teaching newer than its draft is IRRELEVANT to it (relevance gate). */
 function caseFresh(c) {
   if (pendingFeedbackSync > 0) return false;
   if (!lastFeedbackAt) return true;
   const stamp = String((c && (c.redrafted_at || c.generated_at)) || "");
-  return (stamp && stamp >= lastFeedbackAt) || poolFresh();
+  if ((stamp && stamp >= lastFeedbackAt) || poolFresh()) return true;
+  // A sitting whose ledger predates this feature (or was lost) falls back
+  // to one global teaching at the clock - the plain timestamp gate.
+  const ledger = TEACHINGS.length ? TEACHINGS : [{ at: lastFeedbackAt, topics: [], global: true }];
+  const ct = cardTopics(c);
+  return !ledger.some((t) => t.at > stamp
+    && (t.global || (t.topics || []).some((k) => ct.includes(k))));
 }
 
 /* ── Background-generation polling state ──────────────────────────────────
@@ -1687,18 +1740,35 @@ function startShortRoundPoll() {
 function shortRoundHolding() {
   return SHARE_MODE && !!shortRoundPollHandle && !!ROUND_IDS && ROUND_IDS.length < ROUND_SIZE;
 }
+let waitBarTimer = null;
+let waitBarStart = 0;
 function renderShortRoundWait() {
   view = "shortwait";
   const el = document.getElementById("trainApp");
   if (!el || document.getElementById("shortRoundWaitMsg")) return;
   // Empty waiting round = the serve gate is holding for the FIRST card
-  // redrafted with the trainer's answers; a short round mid-top-up keeps
-  // the original copy.
-  const txt = (ROUND_IDS && ROUND_IDS.length === 0)
-    ? "Personalising your scenarios with your answers…"
-    : "Nice - your next scenario is just landing…";
+  // redrafted with the trainer's answers. Owner ask 2026-08-31: a progress
+  // bar with honest live-training copy, not a spinner. The bar eases
+  // asymptotically toward full over the expected 20-30s and the view
+  // switches the moment the first fresh card lands (the interval cleans
+  // itself up when the bar leaves the DOM). A short round mid-top-up keeps
+  // the original one-line spinner.
+  if (ROUND_IDS && ROUND_IDS.length === 0) {
+    el.innerHTML = `<div class="empty-flow"><div id="shortRoundWaitMsg" style="max-width:520px;margin:0 auto">`
+      + `<div style="margin-bottom:12px;font-weight:500">Live-training the AI based on your feedback, please allow ~20-30 seconds…</div>`
+      + `<div class="rp-bar-track" style="overflow:hidden"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
+    waitBarStart = Date.now();
+    if (waitBarTimer) clearInterval(waitBarTimer);
+    waitBarTimer = setInterval(() => {
+      const f = document.getElementById("waitBarFill");
+      if (!f) { clearInterval(waitBarTimer); waitBarTimer = null; return; }
+      const sec = (Date.now() - waitBarStart) / 1000;
+      f.style.width = Math.min(95, 100 * (1 - Math.exp(-sec / 11))).toFixed(1) + "%";
+    }, 600);
+    return;
+  }
   el.innerHTML = `<div class="empty-flow"><div class="round-updating" id="shortRoundWaitMsg">`
-    + `<span class="spin"></span><span>${txt}</span></div></div>`;
+    + `<span class="spin"></span><span>Nice - your next scenario is just landing…</span></div></div>`;
 }
 
 function growRoundIfShort() {
@@ -1792,8 +1862,11 @@ function streamOneInterviewAnswer(inp) {
     body: JSON.stringify(body),
   }).then((res) => {
     pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
-    if (res && res.ok) bumpLastFeedbackAt((res.data && res.data.at) || "");
-    else delete IV_STREAM_SENT[qid]; /* retried by the final Save */
+    if (res && res.ok) {
+      const at = (res.data && res.data.at) || "";
+      bumpLastFeedbackAt(at);
+      recordTeaching(at, q.q + " " + val);
+    } else delete IV_STREAM_SENT[qid]; /* retried by the final Save */
   }).catch(() => {
     pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
     delete IV_STREAM_SENT[qid]; /* retried by the final Save */
@@ -1868,6 +1941,9 @@ async function submitInterviewAnswers(iv, onDone) {
     pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
     if (res && res.ok) {
       bumpLastFeedbackAt((res.data && res.data.at) || "");
+      (sentQuestions || []).forEach((sq) => {
+        if (unsent[sq.id] !== undefined) recordTeaching((res.data && res.data.at) || "", sq.q + " " + unsent[sq.id]);
+      });
       if (LEARNED_CHIP && LEARNED_CHIP.kind === "interview") LEARNED_CHIP.pending = false;
     } else {
       showError("Couldn't save those answers - " + ((res && res.error) || "please retry") + " (your scenarios are unaffected).");
@@ -2843,10 +2919,19 @@ function submitAndAdvance(c) {
         bumpLastFeedbackAt(res.data.at);
         taught = true;
       }
-      // A teaching makes the round's unreached cards stale (serve gate
+      // Relevance ledger (owner feedback 2026-08-31): classify what was
+      // just taught. A note/edit with a recognisable topic only stales
+      // matching cards; a bare wrong-mark or style note is global.
+      if (taught) recordTeaching(res.data.at || "",
+        (answerBody.note || "") + " " + (answerBody.edited_body || ""));
+      // A teaching stales the round's unreached RELEVANT cards (serve gate
       // 2026-08-31): restart the swap-poll so their redrafts land behind
-      // the reading - it stops itself the moment the round is fresh again.
-      if (taught && ROUND_IDS && ROUND_IDS.some((id) => !isAnswered(id))) startShortRoundPoll();
+      // the reading - but only when some card is actually staled by it.
+      if (taught && ROUND_IDS && ROUND_IDS.some((id) => {
+        if (isAnswered(id)) return false;
+        const rc = CASES.find((x) => String(x.id) === String(id));
+        return rc && !caseFresh(rc);
+      })) startShortRoundPoll();
     }
 
     // Feature B: ANY feedback (a note, an edit, or a "No") kicks off a
