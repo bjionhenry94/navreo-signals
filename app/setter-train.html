@@ -480,9 +480,10 @@ function teachTopics(text) {
    (behaviour/style notes shape every reply). Persisted per share scope. */
 let TEACHINGS = [];
 try { TEACHINGS = JSON.parse(SS.get("trainTeachings") || "[]") || []; } catch { TEACHINGS = []; }
-function recordTeaching(at, srcText) {
+function recordTeaching(at, srcText, topicsOverride) {
   if (!at) return;
-  const topics = teachTopics(srcText);
+  const topics = (Array.isArray(topicsOverride) && topicsOverride.length)
+    ? [...new Set(topicsOverride)] : teachTopics(srcText);
   const global = topics.length === 0 || topics.includes("booking") || topics.includes("phone");
   TEACHINGS.push({ at, topics, global });
   if (TEACHINGS.length > 60) TEACHINGS = TEACHINGS.slice(-60);
@@ -2949,8 +2950,22 @@ function submitAndAdvance(c) {
       // Relevance ledger (owner feedback 2026-08-31): classify what was
       // just taught. A note/edit with a recognisable topic only stales
       // matching cards; a bare wrong-mark or style note is global.
-      if (taught) recordTeaching(res.data.at || "",
-        (answerBody.note || "") + " " + (answerBody.edited_body || ""));
+      if (taught) {
+        // Edit teachings classify by what CHANGED plus the card's own topic
+        // (audit 2026-09-01: the full edited draft always carries the
+        // calendly fallback line, so every edit classified booking -> GLOBAL
+        // and forced a needless hold on the next round).
+        let src = answerBody.note || "";
+        if (answerBody.edited_body) {
+          const strip = (h) => String(h || "").replace(/<[^>]+>/g, " ").toLowerCase();
+          const before = new Set(strip(c.draft_html).split(/[^a-z0-9\u00a3$\u20ac']+/));
+          const added = strip(answerBody.edited_body).split(/[^a-z0-9\u00a3$\u20ac']+/)
+            .filter((w) => w.length > 2 && !before.has(w));
+          src += " " + added.join(" ");
+        }
+        recordTeaching(res.data.at || "", src,
+          teachTopics(src).concat(answerBody.edited_body ? cardTopics(c) : []));
+      }
       // A teaching stales the round's unreached RELEVANT cards (serve gate
       // 2026-08-31): restart the swap-poll so their redrafts land behind
       // the reading - but only when some card is actually staled by it.
