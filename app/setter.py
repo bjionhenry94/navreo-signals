@@ -3750,6 +3750,28 @@ _CAL_EVENT_TYPE_CACHE = {}
 _CAL_EVENT_TYPE_TTL = 3600.0
 
 
+def normalize_call_intent(classification: dict) -> dict:
+    """Owner report 2026-09-01 ("it drifted again"): the classifier marks a
+    lead who is merely ACCEPTING the offered video/resource ("sure", "send it
+    over", "please send that video and pricing over", "open to a call") as
+    lead_requested_call=true. That routes the drafter into CALL-ALREADY-
+    REQUESTED, which proposes bare direct times ("Would <day> or <day> work
+    for you?") and drops the video/resource template's mandated opener and its
+    "where I could share some of the other ideas I had for you" value clause.
+
+    A resource/video acceptance with no lead-proposed time is a resource send,
+    not a booking - clear lead_requested_call so the resource/video template
+    (opener + where-clause) is used. Untouched when the lead named their own
+    time (lead_proposed_time) or when the reply carries no send_resource
+    intent (a genuine "let's book a call" with nothing to send)."""
+    c = classification or {}
+    if (c.get("lead_requested_call")
+            and "send_resource" in (c.get("all_intents") or [])
+            and not c.get("lead_proposed_time")):
+        return {**c, "lead_requested_call": False}
+    return c
+
+
 def get_calendly_availability(agent: dict, settings: dict, now_utc):
     """Returns (slot_status, avail_iso_list, error). slot_status in
     {ok, not_configured, none_available, error}. Caches the resolved Calendly
@@ -5874,6 +5896,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             "rationale": f"classification failed: {type(e).__name__}",
         }
         row["error"] = row.get("error") or f"classify failed: {type(e).__name__}"
+    classification = normalize_call_intent(classification)
     row["classification"] = classification
 
     tz, tz_confident = resolve_timezone(hints, classification)
@@ -12828,6 +12851,13 @@ def _redraft_sync(payload):
         # Owner ruling 2026-08-15: an old stored row may still carry no
         # timezone (and a classify outage skips the re-resolve above) -
         # assume Eastern rather than skip the slot build. tz_unknown is dead.
+        # Resource/video acceptance is not a call request (owner report
+        # 2026-09-01) - see normalize_call_intent. Apply before slots/draft so
+        # the resource/video template (opener + where-clause) is used, and
+        # persist the normalized verdict so the UI Intent line matches.
+        classification = normalize_call_intent(classification)
+        if fresh_classification is not None:
+            fresh_classification = classification
         tz = tz or "America/New_York"
         time_plan = time_feedback_plan(feedback_text, tz, now) or lead_time_plan(
             clean_body(row.get("reply_body") or ""), classification, tz, now)
