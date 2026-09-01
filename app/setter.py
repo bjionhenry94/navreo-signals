@@ -3772,6 +3772,33 @@ def normalize_call_intent(classification: dict) -> dict:
     return c
 
 
+_VIDEO_WHERE_CLAUSE = "where I could share some of the other ideas I had for you"
+_VIDEO_OPENING_RE = re.compile(r"here is the video i recorded for you", re.I)
+# The house two-times question, from its fixed opener to the closing "?".
+_TWO_TIMES_Q_RE = re.compile(r"(Would you be open to a call on\b.*?)(\s*\?)", re.I | re.S)
+
+
+def ensure_video_where_clause(html: str) -> str:
+    """Deterministic backstop for the LOOM VIDEO template's mandated value
+    clause (owner report 2026-09-01, "it drifted again"): on busy multi-intent
+    replies the drafter keeps ending the two-times question at the second time
+    ("...work?" / "...EDT?") and dropping "where I could share some of the
+    other ideas I had for you", and a lint-feedback redraft doesn't reliably
+    coax it back. When the draft is unmistakably the video template (its fixed
+    opening line is present) and the two-times question carries no "where ..."
+    clause, splice the fixed clause in before the "?". Tightly scoped to the
+    video opening so no other agent/template is touched; idempotent."""
+    try:
+        if not html or not _VIDEO_OPENING_RE.search(html):
+            return html
+        m = _TWO_TIMES_Q_RE.search(html)
+        if not m or " where " in m.group(1).lower():
+            return html
+        return html[:m.start()] + m.group(1) + " " + _VIDEO_WHERE_CLAUSE + m.group(2) + html[m.end():]
+    except Exception:  # noqa: BLE001 - a repair must never break the draft
+        return html
+
+
 def get_calendly_availability(agent: dict, settings: dict, now_utc):
     """Returns (slot_status, avail_iso_list, error). slot_status in
     {ok, not_configured, none_available, error}. Caches the resolved Calendly
@@ -6020,6 +6047,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
                 # Second sweep (owner brief 2026-07-14): proofread the draft
                 # BEFORE lint_draft below, so lint checks the final text.
                 draft_body, _proofread_changed = proofread_draft(draft_body, sender_first, _booking_link(agent))
+                draft_body = ensure_video_where_clause(draft_body)
         except Exception as e:  # noqa: BLE001 - a draft outage falls back to no draft -> lint fails -> review
             if not row.get("error"):
                 row["error"] = f"draft failed: {type(e).__name__}"
@@ -12951,6 +12979,7 @@ def _redraft_sync(payload):
             _t = _time.time()
             draft_html, _proofread_changed = proofread_draft(
                 draft_html, sender_first, _booking_link(agent), timeout=REGEN_PROOFREAD_TIMEOUT)
+            draft_html = ensure_video_where_clause(draft_html)
             _stage("proofread", _t)
         # One-shot lint-feedback redraft (parity with the training builder,
         # owner report 2026-08-27). The interactive Regenerate used to draft
@@ -12991,6 +13020,7 @@ def _redraft_sync(payload):
                     if _h2:
                         _h2, _ = proofread_draft(_h2, sender_first, _booking_link(agent),
                                                  timeout=REGEN_PROOFREAD_TIMEOUT)
+                        _h2 = ensure_video_where_clause(_h2)
                         _rd_ctx2 = dict(_rd_lint_ctx); _rd_ctx2["subject"] = d2.get("subject")
                         _rd_ok2, _ = lint_draft(_h2, _rd_ctx2)
                         if _rd_ok2:
@@ -14307,6 +14337,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                     # both real (_build_training_case) and synthetic
                     # (_build_synthetic_training_case) cases.
                     draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent), _booking_link(agent))
+                    draft_html = ensure_video_where_clause(draft_html)
                 _lint_ctx["subject"] = d.get("subject")
                 lint_ok, lint_reason = lint_draft(draft_html, _lint_ctx)
                 if lint_ok:
