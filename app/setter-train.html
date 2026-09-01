@@ -437,10 +437,6 @@ function bumpLastFeedbackAt(at) {
   lastFeedbackAt = at;
   try { SS.set("trainLastFeedbackAt", at); } catch { /* ignore */ }
 }
-function poolFresh() {
-  if (pendingFeedbackSync > 0) return false;
-  return !lastFeedbackAt || (BRAIN_COVERS_AT && BRAIN_COVERS_AT >= lastFeedbackAt);
-}
 /* ── Relevance-gated freshness (owner feedback 2026-08-31) ────────────────
    "Only make me wait if you clearly know you're going to use what I just
    taught in the upcoming scenarios." A teaching only STALES the cards it is
@@ -494,13 +490,17 @@ function cardTopics(c) {
   return tp;
 }
 /* A single case is fresh when it was drafted (or re-drafted) after my last
-   teaching, when the whole pool has been swept since - or when every
-   teaching newer than its draft is IRRELEVANT to it (relevance gate). */
+   teaching - or when every teaching newer than its draft is IRRELEVANT to
+   it (relevance gate). The old `|| poolFresh()` escape is GONE (live
+   gauntlet 2026-08-31): brain_covers_at is stamped when the MERGES land -
+   after the sweep's first horizon pass, not after every card is redrafted
+   - so it declared the whole pool fresh while dozens of cards still
+   carried pre-teaching drafts. A card's own stamp is the only truth. */
 function caseFresh(c) {
   if (pendingFeedbackSync > 0) return false;
   if (!lastFeedbackAt) return true;
   const stamp = String((c && (c.redrafted_at || c.generated_at)) || "");
-  if ((stamp && stamp >= lastFeedbackAt) || poolFresh()) return true;
+  if (stamp && stamp >= lastFeedbackAt) return true;
   // A sitting whose ledger predates this feature (or was lost) falls back
   // to one global teaching at the clock - the plain timestamp gate.
   const ledger = TEACHINGS.length ? TEACHINGS : [{ at: lastFeedbackAt, topics: [], global: true }];
