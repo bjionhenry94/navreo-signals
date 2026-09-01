@@ -3028,6 +3028,25 @@ def _visible_digit_runs(html: str) -> set:
     return set(re.findall(r"\d+", plain))
 
 
+_CTRL_MAP = {"\u0018": "'", "\u0019": "'", "\u001c": '"', "\u001d": '"'}
+
+
+def _scrub_control_chars(html: str) -> str:
+    """Strip C0 control characters a model occasionally emits in place of
+    smart punctuation (audit 2026-09-01, live: "Here\u0019s" rendered as a
+    broken glyph on a served card). Common apostrophe/quote forms map to
+    their intended character; everything else below 0x20 except newline,
+    tab and carriage return is dropped."""
+    out = []
+    for ch in (html or ""):
+        o = ord(ch)
+        if o >= 32 or ch in "\n\t\r":
+            out.append(ch)
+        elif ch in _CTRL_MAP:
+            out.append(_CTRL_MAP[ch])
+    return "".join(out)
+
+
 def proofread_draft(html: str, sender_first: str = "", booking_link: str = "", *, timeout: float = None):
     """Second sweep (owner brief 2026-07-14: "drafts need a second sweep so
     they read correctly without errors") - one extra gpt-5-mini call that
@@ -3048,7 +3067,7 @@ def proofread_draft(html: str, sender_first: str = "", booking_link: str = "", *
     only when the (guard-passed) result actually differs from the input."""
     _repaired = strip_wiring_admissions(strip_deadend_ask(destack_same_block(destack_call_ask(
         standardize_backup_link(humanize_availability_fallback(normalize_call_ask_opener(repair_timeless_ask(repair_here_is_graft(
-            dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(html or ""))))))))))))
+            dedupe_label_echo(repair_markdown_links(repair_rtf_escapes(_scrub_control_chars(html)))))))))))))
     _repaired = hyperlink_backup_phrase(_repaired, booking_link)
     original = dedupe_adjacent_blocks(normalize_greeting(_repaired, sender_first))
     if not original.strip():
@@ -14491,7 +14510,7 @@ def route_training_get(params):
         # relies on this as its convergence warranty. 90s dampener so a
         # sweep that genuinely cannot progress doesn't thrash workers.
         try:
-            _cov = str(doc.get("brain_covers_at") or "")
+            _cov = _training_newest_teaching_at(doc)
             _stale_n = sum(
                 1 for c in cases
                 if not _is_case_answered(c.get("id"), answers)
@@ -15537,6 +15556,14 @@ def _redraft_training_pool(agent_id: str) -> int:
     round only once brain_covers_at has caught up with its own last
     feedback answer. Returns the number of cases rewritten. Never raises."""
     try:
+        # INPUT-FLOOR STAMP (audit 2026-09-01): redrafted_at must reflect the
+        # moment this pass's INPUTS (brain + doc + digest) were fixed, not
+        # when the redraft finished - stamping at completion made cards look
+        # newer than teachings that landed mid-pass, so the sweep chain and
+        # the serve gate both called them fresh while their content was
+        # pre-teaching ("Our number is [PHONE NUMBER]" a minute after the
+        # number was taught).
+        stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
         agent = _load_agent(agent_id)
         if not agent:
             return 0
@@ -15588,7 +15615,7 @@ def _redraft_training_pool(agent_id: str) -> int:
             slot_status0, avail, _serr = get_calendly_availability(train_agent, eff, now)
             if slot_status0 != "ok":
                 avail, slot_status0 = _synthetic_training_avail(now), "ok"
-            stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            # (stamp = input floor, taken above before the doc/agent loads)
 
             # Staggered landing (owner ask 2026-08-26): persist each
             # redrafted case the moment it completes, merged into the FRESH
@@ -16240,6 +16267,54 @@ def route_training_recheck(payload):
         return 500, {"error": str(e)[:300]}
 
 
+def _merge_cases_freshest(fresh_cases, ours):
+    """Per-id merge keeping whichever copy carries the newer redraft stamp -
+    a worker's final save must never roll back cases a concurrent sweep or
+    generate landed while it ran (client-readiness audit 2026-09-01: a
+    worker save reverted a just-redrafted card to its pre-teaching draft,
+    which then showed a [PHONE NUMBER] placeholder AFTER the number was
+    taught)."""
+    def _st(c):
+        return str((c or {}).get("redrafted_at") or (c or {}).get("generated_at") or "")
+    ours_by = {str(c.get("id")): c for c in (ours or []) if isinstance(c, dict)}
+    out, seen = [], set()
+    for fc in (fresh_cases or []):
+        cid = str((fc or {}).get("id"))
+        seen.add(cid)
+        oc = ours_by.get(cid)
+        out.append(oc if (oc is not None and _st(oc) >= _st(fc)) else fc)
+    for cid, oc in ours_by.items():
+        if cid not in seen:
+            out.append(oc)
+    return out
+
+
+def _training_newest_teaching_at(doc: dict) -> str:
+    """Newest teaching timestamp across answers, interviews and queued
+    merges - the serve-side staleness clock. brain_covers_at alone lags a
+    teaching that lands mid-pass (audit 2026-09-01: a 1-second race left
+    round candidates stale with the server convinced everything was fresh,
+    so neither the sweep chain nor the poll heal ever re-kicked)."""
+    doc = doc or {}
+    stamps = [str(doc.get("brain_covers_at") or "")]
+    for a in (doc.get("answers") or {}).values():
+        if isinstance(a, dict) and (a.get("note") or a.get("edited_body")
+                                    or a.get("decision_ok") is False or a.get("reply_ok") is False):
+            stamps.append(str(a.get("at") or ""))
+    for iv in (doc.get("interviews") or []):
+        if isinstance(iv, dict) and (iv.get("answers") or {}):
+            stamps.append(str(iv.get("answered_at") or iv.get("asked_at") or ""))
+    for m in (doc.get("pending_merges") or []):
+        if isinstance(m, dict):
+            stamps.append(str(m.get("at") or ""))
+    return max((s for s in stamps if s), default="")
+
+
+# Per-agent consecutive no-progress sweep counter (in-memory; resets on
+# restart, which is harmless - it only bounds the stale-reflag chain).
+_SWEEP_NOPROG: dict = {}
+
+
 def _drain_pending_merges(agent_id: str) -> list:
     """Latency fix (2026-07-14): route_training_answer no longer merges a
     "remember" note into the agent's instructions inline - it queues
@@ -16377,19 +16452,25 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                 # picks it up, and passes chain until every unanswered card
                 # post-dates the newest teaching. `updated > 0` guards against
                 # spinning when nothing can progress.
-                if updated > 0:
-                    try:
-                        _doc_chk = _load_training(agent_id)
-                        _cov = str(_doc_chk.get("brain_covers_at") or "")
-                        _ansk = set((_doc_chk.get("answers") or {}).keys())
-                        _stale = sum(
-                            1 for c in (_doc_chk.get("cases") or [])
-                            if str(c.get("id")) not in _ansk
-                            and str(c.get("redrafted_at") or c.get("generated_at") or "") < _cov)
-                        if _stale > 0:
-                            _flag_training_retrain_queued(agent_id, redraft="pool")
-                    except Exception:  # noqa: BLE001 - chaining is best-effort
-                        pass
+                try:
+                    _doc_chk = _load_training(agent_id)
+                    _cov = _training_newest_teaching_at(_doc_chk)
+                    _ansk = set((_doc_chk.get("answers") or {}).keys())
+                    _stale = sum(
+                        1 for c in (_doc_chk.get("cases") or [])
+                        if str(c.get("id")) not in _ansk
+                        and str(c.get("redrafted_at") or c.get("generated_at") or "") < _cov)
+                    # Re-flag whenever stale cards remain - a pass that made
+                    # no progress no longer strands them (audit 2026-09-01:
+                    # updated==0 ended the chain with the round candidates
+                    # still stale, holding the trainer until the deadline
+                    # bounce). The in-memory no-progress counter bounds spin.
+                    _noprog = 0 if updated > 0 else _SWEEP_NOPROG.get(agent_id, 0) + 1
+                    _SWEEP_NOPROG[agent_id] = _noprog
+                    if _stale > 0 and _noprog < 4:
+                        _flag_training_retrain_queued(agent_id, redraft="pool")
+                except Exception:  # noqa: BLE001 - chaining is best-effort
+                    pass
 
             if redraft == "pool":
                 # DECOUPLED MERGES (owner serve-path gauntlet 2026-08-30): the
@@ -16418,6 +16499,7 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                 # NOT rewrite the round's other cards under the trainer's eyes -
                 # the improved brain shows up in the NEXT round instead, carried
                 # by its session digest and the merged instructions.
+                _stamp_floor = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
                 agent = _load_agent(agent_id)
                 if agent:
                     train_agent = {**agent, "mode": "autopilot", "enabled": True}
@@ -16451,7 +16533,7 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                                     continue
                                 futs.append(pool.submit(_retrain_one_training_case, case, train_agent, eff, avail,
                                                        slot_status0, now, digest))
-                            _stamp = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+                            _stamp = _stamp_floor  # input floor (audit 2026-09-01)
                             for fut in concurrent.futures.as_completed(futs):
                                 try:
                                     fut.result()
@@ -16477,7 +16559,10 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             with _get_training_doc_lock(agent_id):
                 fresh = _load_training(agent_id)
                 if cases is not None:
-                    fresh["cases"] = cases
+                    # Freshest-wins per-id merge, never wholesale (audit
+                    # 2026-09-01): this snapshot predates any sweep/generate
+                    # landings that happened while the pass ran.
+                    fresh["cases"] = _merge_cases_freshest(fresh.get("cases"), cases)
                 queued = bool((fresh.get("generating") or {}).get("retrain_queued"))
                 # A generate queued while THIS retrain held the lock must survive
                 # the marker overwrite (fastloop live-verify bug 2026-08-20: the

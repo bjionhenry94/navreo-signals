@@ -1497,6 +1497,21 @@ function render() {
   }
   if (idx >= unanswered.length) idx = unanswered.length - 1;
   if (idx < 0) idx = 0;
+  // PAINT-TIME SERVE GATE (audit 2026-09-01): whatever path led here, a
+  // pre-teaching card must never be painted. Prefer the first fresh card;
+  // when none is fresh, hold on the live-training wait - the poll opens
+  // the stream the moment a redraft lands, and the server's stale heal
+  // warrants that it does.
+  if (SHARE_MODE && unanswered[idx] && !caseFresh(unanswered[idx])) {
+    const jf = unanswered.findIndex((c) => caseFresh(c));
+    if (jf >= 0) {
+      idx = jf;
+    } else {
+      renderShortRoundWait();
+      startShortRoundPoll();
+      return;
+    }
+  }
   DISPLAYED_CASE_ID = unanswered[idx] ? String(unanswered[idx].id) : null;
   renderCase(unanswered, idx);
   maybeStartTutorial(); // no-op once seen; waits for the first real card
@@ -1746,7 +1761,18 @@ function startShortRoundPoll() {
     if (!ROUND_IDS || Date.now() > deadline
         || (ROUND_IDS.length >= ROUND_SIZE && !roundStale)) {
       stopShortRoundPoll();
-      if (view === "shortwait") { view = "done"; render(); }
+      if (view === "shortwait") {
+        // Open the round instead of bouncing to the round-done screen when
+        // playable fresh cards exist (audit 2026-09-01: the stop branch won
+        // the race against the open branch, so the trainer clicked Start,
+        // waited, and landed back where they started).
+        if (ROUND_IDS && ROUND_IDS.length && currentUnanswered().some((c) => caseFresh(c))) {
+          DISPLAYED_CASE_ID = null;
+          idx = 0;
+          view = "stream";
+          render();
+        } else { view = "done"; render(); }
+      }
       return;
     }
     try {
@@ -1756,7 +1782,8 @@ function startShortRoundPoll() {
     // Open from the wait ONLY once the round itself holds a (fresh) card -
     // an empty waiting round must not open on the unscoped stale backlog
     // (serve gate 2026-08-31).
-    if (view === "shortwait" && ROUND_IDS && ROUND_IDS.length && currentUnanswered().length) {
+    if (view === "shortwait" && ROUND_IDS && ROUND_IDS.length
+        && currentUnanswered().some((c) => caseFresh(c))) {
       view = "stream";
       DISPLAYED_CASE_ID = null;
       idx = 0;
