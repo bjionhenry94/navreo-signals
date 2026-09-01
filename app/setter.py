@@ -14848,8 +14848,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # drain them into the brain first, under the merge lock.
         try:
             if _load_training(agent_id).get("pending_merges"):
-                with _get_training_merge_lock(agent_id):
-                    _run_pending_merge_drain(agent_id)
+                _run_pending_merge_drain(agent_id)  # per-entry merge lock inside
                 agent = _load_agent(agent_id) or agent
         except Exception:  # noqa: BLE001 - a failed drain must never block generation
             pass
@@ -16264,25 +16263,56 @@ def _drain_pending_merges(agent_id: str) -> list:
     return pending
 
 
+def _pop_one_pending_merge(agent_id: str):
+    """Pop the OLDEST queued pending_merge (or None), persisting the shrunk
+    list immediately. One-at-a-time replaces the old pop-everything drain
+    (client-readiness audit 2026-09-01): a worker killed mid-drain used to
+    lose EVERY popped-but-unapplied teaching; now at most the in-flight one
+    is at risk, and concurrent drains interleave instead of one holding the
+    whole queue."""
+    with _get_training_doc_lock(agent_id):
+        doc = _load_training(agent_id)
+        pending = list(doc.get("pending_merges") or [])
+        if not pending:
+            return None
+        entry = pending.pop(0)
+        doc["pending_merges"] = pending
+        _save_training(agent_id, doc)
+    return entry
+
+
 def _run_pending_merge_drain(agent_id: str):
-    """Pop and apply every queued pending_merge, in submission order, each via
+    """Apply queued pending_merges in submission order, each via
     merge_correction_into_instructions (edits via _merge_training_edit_entry).
-    The single shared body behind the retrain worker's merge pass AND the
-    generate worker's merge-first drain - callers must hold the per-agent
-    merge lock (_get_training_merge_lock) so concurrent instruction
-    load->saves can never clobber each other."""
-    for entry in _drain_pending_merges(agent_id):
-        merge_agent = _load_agent(agent_id)
-        if not merge_agent:
-            break
-        if (entry or {}).get("kind") == "edit":
-            _merge_training_edit_entry(merge_agent, entry)
-            continue
-        note = str((entry or {}).get("note") or "").strip()
-        if not note:
-            continue
-        merge_correction_into_instructions(
-            merge_agent, note, source=(entry or {}).get("source") or "training")
+    LOCK-CONVOY FIX (client-readiness audit 2026-09-01, live: a founder sim
+    wedged the whole agent for 8+ minutes): the merge lock is taken PER
+    ENTRY, never across the loop - a drain of several slow multi-model-call
+    merges used to hold the lock for minutes while the generate worker
+    blocked on it holding the GEN lock, stalling sweeps, resets and rounds
+    behind it. Waiters now interleave between entries. Callers must NOT hold
+    the merge lock."""
+    mlock = _get_training_merge_lock(agent_id)
+    while True:
+        if not mlock.acquire(timeout=120):
+            return  # another drain is mid-entry and slow - it will finish the queue
+        try:
+            entry = _pop_one_pending_merge(agent_id)
+            if entry is None:
+                return
+            merge_agent = _load_agent(agent_id)
+            if not merge_agent:
+                return
+            if (entry or {}).get("kind") == "edit":
+                _merge_training_edit_entry(merge_agent, entry)
+            else:
+                note = str((entry or {}).get("note") or "").strip()
+                if note:
+                    merge_correction_into_instructions(
+                        merge_agent, note, source=(entry or {}).get("source") or "training")
+        except Exception:  # noqa: BLE001 - one bad merge must never stall the queue
+            pass
+        finally:
+            mlock.release()
 
 
 def _training_retrain_worker(agent_id: str, redraft: bool = True):
@@ -16373,15 +16403,11 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                 # the sweep loop chains back-to-back; the digest carries every
                 # teaching verbatim into redrafts long before its merge lands,
                 # so nothing is lost by not waiting.
-                _mlock = _get_training_merge_lock(agent_id)
-                def _merge_bg():
-                    with _mlock:
-                        _run_pending_merge_drain(agent_id)
-                threading.Thread(target=_merge_bg, daemon=True,
+                threading.Thread(target=_run_pending_merge_drain, args=(agent_id,),
+                                 daemon=True,
                                  name=f"setter-merge-{agent_id}").start()
             else:
-                with _get_training_merge_lock(agent_id):
-                    _run_pending_merge_drain(agent_id)
+                _run_pending_merge_drain(agent_id)
 
             if redraft is True:
                 # Owner trainer (Feature B, 2026-07-14): re-run every remaining
