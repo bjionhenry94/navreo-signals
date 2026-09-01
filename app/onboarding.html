@@ -1315,7 +1315,7 @@ var PAGES={
    return '<a class="drow" href="'+(url||"#")+'"'+(url?' target="_blank" rel="noopener"':' data-ph')+'>'
    +'<span class="name">'+label+'</span><span class="status">'+status+'<span class="go">Open ↗</span></span></a>';}
   return '<div class="headline">Your <span class="date">Client Portal</span>.</div>'
-  +'<div class="subline">Contracts, invoices, recordings, weekly reports — one page, always up to date. Nothing to install.</div>'
+  +'<div class="subline">Contracts, invoices, recordings, files — one page, always up to date. Nothing to install.</div>'
   +'<div class="ob-body">'
   +'<div class="ob-video v43"><iframe src="https://www.loom.com/embed/51ee8db330024f218026eef43485ecf9" title="Navreo: Client Portal Introduction" loading="lazy" allow="autoplay; fullscreen; picture-in-picture" allowfullscreen></iframe></div>'
   +'<div class="ob-mark"><span class="txt"><span class="star">★</span> Bookmark this page — it’s where everything lives.</span><button class="ob-copy" data-copy-portal>Copy my portal link</button></div>'
@@ -1323,7 +1323,7 @@ var PAGES={
   +hrow("contract","Contract","")
   +hrow("invoice","Invoice","")
   +hrow("recordings","Call recordings","")
-  +hrow("reports","Weekly reports","")
+  +hrow("reports","Files","")  /* key stays "reports" for stored-doc compat; the value now points at the portal's Files page (owner ruling 2026-09-01) */
   +'</div></div>'
   +'<div class="ob-foot2"><button class="btn-go" data-done="home">Got it</button></div>';},
  block:function(){
@@ -1602,14 +1602,14 @@ function render(){
   out+='</span><span class="ob-snow"><span><b>'+STAGES[S.stage]+'</b> · '+(S.stage+1)+' of '+STAGES.length+' · <u>see all</u></span></span></button>';
   var mv;
   if(S.stage===0){var n=undone(0).length;mv='<span class="chip you"><i></i>Your move · '+n+' thing'+(n===1?"":"s")+' left</span>';}
-  else if(S.stage===1){mv='<span class="chip us"><i></i>Nothing needed until your call ('+(S.slot||"Thu 4 Sep · 10:00")+')</span>';}
+  else if(S.stage===1){mv='';}
   else if(S.stage===2){mv='<span class="chip us"><i></i>Nothing needed — Yasir’s writing your plan</span>';}
   else if(S.stage===3){var u=undone(3);
    if(u.length===1&&u[0].id==="calendar"&&!S.mikeOk){mv='<span class="chip team"><i></i>Waiting on Mike — calendar invite</span>';}
    else if(u.length){mv='<span class="chip you"><i></i>Your move · '+u.length+' thing'+(u.length===1?"":"s")+' left</span>';}
    else{mv='<span class="chip us"><i></i>Final checks — nothing needed</span>';}}
   else{mv='<span class="chip live"><i></i>You’re live · Sarah’s on both replies</span>';}
-  out+='<div class="ob-move">'+mv+'</div>';
+  if(mv)out+='<div class="ob-move">'+mv+'</div>';
   if(S.stage===4){out+=liveView();}
   else{out+=heroView();out+=listView();}
   out+='<p class="ob-help">Stuck or curious? Message us in Slack — a human answers.</p>';
@@ -1632,9 +1632,8 @@ function heroView(){
    +'<div class="ob-row"><button class="btn-go" data-go="'+c.id+'">'+ctas[c.id]+'</button><span class="ob-t">'+c.time+'</span>'+(c.clock?'<span class="ob-t clock">⏱ starts your 2-week clock</span>':"")+'</div></div>';
  }
  if(S.stage===1){
-  return '<div class="ob-hero"><span class="ob-k">All set</span><h1>See you '+(S.slot||"Thu 4 Sep · 10:00")+'</h1>'
-   +'<p class="ob-sub">1 hour with Yasir — we’ll run through expectations and your onboarding. Calendar invite’s in your inbox ✓</p>'
-   +'<div class="ob-row"><span class="ob-t ok mono">WARM-UP · DAY '+warmDayNum()+' OF 14</span><button class="btn-ghost" data-go="infrastructure">Watch your addresses</button></div></div>';
+  return '<div class="ob-hero"><span class="ob-k">All set</span><h1>Estimate launch date '+(S.launchEst||LDATE())+'</h1>'
+   +'<p class="ob-sub">Next steps: Onboarding Call — 1 hour with Yasir — we’ll run through expectations and your onboarding. Calendar invite’s in your inbox ✓</p></div>';
  }
  if(S.stage===2){
   return '<div class="ob-hero"><span class="ob-k">Nothing needed from you</span><h1>Yasir’s writing your plan</h1>'
@@ -1658,10 +1657,9 @@ function listView(){
  if(S.stage===1||S.stage===2){
   var wd=warmDayNum();
   return '<div class="ob-listwrap"><p class="ob-lh">What we’re doing</p><div class="ob-panelbox"><div class="chain">'
-  +'<div class="clink now"><span class="d"></span><span>Warming your addresses</span><span class="o">DAY '+wd+' OF 14</span></div>'
-  +'<div class="clink '+(S.stage===2?"ok":"")+'"><span class="d"></span><span>Building your target lists</span><span class="o">'+(S.stage===2?"DONE":"WED")+'</span></div>'
-  +'<div class="clink '+(S.stage===2?"now":"")+'"><span class="d"></span><span>Yasir — writing your plan</span><span class="o">LANDS THU · 17:00</span></div>'
-  +'<div class="clink"><span class="d"></span><span>Your 11 emails, 3 different angles</span><span class="o">AFTER YOUR PLAN CALL</span></div>'
+  +'<div class="clink now"><span class="d"></span><span>Building your email infrastructure</span></div>'
+  +'<div class="clink '+(S.stage===2?"ok":"")+'"><span class="d"></span><span>Researching your industry for winning offers</span></div>'
+  +'<div class="clink '+(S.stage===2?"now":"")+'"><span class="d"></span><span>Yasir is studying your onboarding call answers</span></div>'
   +'</div></div></div>';
  }
  var cs,title;
