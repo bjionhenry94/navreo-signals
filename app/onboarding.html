@@ -617,6 +617,16 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 .ofr-card:hover .ofr-starbtn { color:var(--amber); }
 .ofr-card.picked .ofr-starbtn { color:#fff; background:var(--green); }
 .ofr-card .yours.idea { color:var(--orange-700); }
+.ofr-card.ofr-ro { cursor:default; padding-right:16px; }
+.ofr-more { margin-top:4px; }
+.ofr-more summary { list-style:none; cursor:pointer; display:inline-flex; align-items:center; gap:6px;
+  font-size:12.5px; font-weight:700; color:#2b5f9e; user-select:none; }
+.ofr-more summary::-webkit-details-marker { display:none; }
+.ofr-more summary::before { content:"\25B8"; font-size:10px; transition:transform .15s ease; }
+.ofr-more[open] summary::before { transform:rotate(90deg); }
+.ofr-more summary:hover { text-decoration:underline; }
+.ofr-full { margin-top:8px; font-size:13px; line-height:1.5; color:var(--ink-2);
+  background:var(--bg-sunken); border-radius:8px; padding:11px 13px; white-space:pre-wrap; }
 .ofr-shortbar { display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap;
   margin-top:18px; padding:13px 16px; border:1px solid var(--line); border-radius:12px; background:var(--cream-50); }
 .ofr-shortn { font-size:13.5px; color:var(--ink-2); }
@@ -697,13 +707,16 @@ var CARDS=[
 /* TEMP HIDE (Bjion 2026-08-31): ids here vanish from the hub, hero, counts and routes. Delete an id to restore it. */
 var HIDDEN_CARDS={};
 CARDS=CARDS.filter(function(c){return !HIDDEN_CARDS[c.id];});
-var DOMAINS=["acmecorp-hq.com","tryacmecorp.com","acmecorp-team.com","getacmecorp.com","acmecorp-mail.com",
- "acmecorp.co","acme-corp.com","acmecorpapp.com","hey-acmecorp.com","acmecorp-io.com","joinacmecorp.com",
- "acmecorpgroup.com","acmecorp-inc.com","withacmecorp.com","acmecorp-global.com","acmecorphq.co",
- "acmecorp-labs.com","meetacmecorp.com","acmecorp-now.com","acmecorpmail.co","acmecorp-live.com",
- "useacmecorp.com","acmecorp-partners.com","acmecorp.us","theacmecorp.com","acmecorp-direct.com",
- "acmecorp-online.com","acmecorpteam.co","acmecorp-support.com","goacmecorp.com","acmecorp-reach.com",
- "acmecorphq.io","acmecorp-sales.com","acmecorp-connect.com","acmecorp.net","acmecorp-mailer.com"];
+/* Demo/fallback stand-ins only (shown when a client has no drafted domains yet).
+   Framework: NO hyphens, .info only, generic-word joined forms — same rules the
+   per-client list follows, so the fallback never contradicts the standard. */
+var DOMAINS=["acmecorpleads.info","getacmecorp.info","acmecorpgrowth.info","tryacmecorp.info","acmecorpsales.info",
+ "useacmecorp.info","acmecorpreach.info","goacmecorp.info","acmecorpteam.info","meetacmecorp.info",
+ "acmecorphq.info","joinacmecorp.info","acmecorppartners.info","withacmecorp.info","acmecorpgroup.info",
+ "heyacmecorp.info","acmecorpmedia.info","theacmecorp.info","acmecorpdirect.info","acmecorpagency.info",
+ "acmecorpconnect.info","myacmecorp.info","acmecorpoutreach.info","acmecorpengine.info","acmecorpresults.info",
+ "salesacmecorp.info","growthacmecorp.info","acmecorpscale.info","acmecorpboost.info","acmecorplabs.info",
+ "acmecorppro.info","reachacmecorp.info","acmecorphub.info","acmecorpnow.info","getacmecorpleads.info","acmecorpglobal.info"];
 var EMAILS=[
  {to:"Dana Reeve — VP Ops, Northgate 3PL",body:"Hi Dana — noticed Northgate opened two new DCs this year. We wrote a 5-page teardown of where mid-size 3PLs leak margin during exactly that kind of scale-up — want a copy?"},
  {to:"Dana Reeve — follow-up, day 3",body:"Bumping this in case it got buried, Dana — the teardown takes 6 minutes to read and covers the three leaks we see most. Shall I send it over?"},
@@ -1348,7 +1361,7 @@ var PAGES={
   var nn=noteCount();
   return '<div class="headline">Read + approve <span class="date">your emails</span>.</div>'
   +'<div class="subline">3 different angles · 11 emails · about 12 minutes. Real emails to real people from your list. Changes? Every round comes back in under a day.</div>'
-  +'<div class="ob-body"><div class="ob-mail"><div class="fr">'+(i+1)+' OF 11 · TO: '+e.to.toUpperCase()+' · FROM: SARAH (acmecorp-hq.com)</div><p>'+e.body+'</p>'
+  +'<div class="ob-body"><div class="ob-mail"><div class="fr">'+(i+1)+' OF 11 · TO: '+e.to.toUpperCase()+' · FROM: SARAH (acmecorphq.info)</div><p>'+e.body+'</p>'
   +'<div>'+(S.notes[i]!==undefined
    ?'<textarea class="ob-dnc" id="noteTxt" style="min-height:52px" placeholder="What should change?">'+(S.notes[i]||"")+'</textarea><p class="ob-note" style="text-align:left;margin-top:6px">Yasir gets this with your approval — revised version back in under a day.</p>'
    :'<button class="notetog" data-note>✏️ Ask for a change on this one</button>')+'</div></div>'
@@ -1489,16 +1502,30 @@ function offCard(o,idx){var star=!!o.star;var editable=(o.src!=="drafted");
  if(!editable)return card;
  if(S.editOwn===idx)return '<div class="ofr-ownwrap"><textarea class="ob-dnc" id="ownEdit" style="min-height:68px">'+oesc(o.line)+'</textarea><div class="ofr-owntools"><button data-ownsave="'+idx+'">Save wording</button><button data-owncancel>Cancel</button></div></div>';
  return '<div class="ofr-ownwrap">'+card+'<div class="ofr-owntools"><button data-ownedit="'+idx+'">Edit wording</button><button data-owndel="'+idx+'">Remove</button></div></div>';}
+/* Strip merge tokens ({{company}} etc.) so the client never sees a raw variable. */
+function deTag(s){return String(s||"")
+ .replace(/\{\{\s*compan(?:y|ies)\s*\}\}/gi,"you")
+ .replace(/\{\{\s*(?:first[_ ]?name|firstname|name)\s*\}\}/gi,"there")
+ .replace(/\{\{[^}]*\}\}/g,"")
+ .replace(/\s{2,}/g," ").replace(/\s+([.,?!])/g,"$1").trim();}
 /* Offer ideas generated by Claude at portal-creation (onboard-client step 6e) and
    written to doc.ideas. Embedded read-here on the offers page — the client puts in
-   NOTHING; the CSM signs them off. Empty when a client has no drafted ideas yet, so
-   the offers page is just the teaching intro until Claude drafts them. Star = an
-   optional shortlist to bring to the call, never a required input. */
+   NOTHING; the CSM signs them off. Each card carries a dropdown with the full copy
+   we'd likely say. Empty when a client has no drafted ideas yet (page shows just the
+   teaching intro until Claude drafts them). */
 function offersDrafted(){
  if(!Array.isArray(S.ideas)||!S.ideas.length)return "";
- var cards=S.ideas.map(function(o,idx){return offCard(o,idx);}).join("");
+ var cards=S.ideas.map(function(o){
+  var full=deTag(o.full||"");
+  var more=full?('<details class="ofr-more"><summary>See the full message</summary><div class="ofr-full">'+oesc(full)+'</div></details>'):'';
+  return '<div class="ofr-card ofr-ro">'
+   +'<div class="top"><span class="ofr-badge '+oesc(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+'</div>'
+   +'<div class="nm">'+oesc(deTag(o.name))+'</div>'
+   +'<div class="ln">'+oesc(deTag(o.line))+'</div>'
+   +more+'</div>';
+ }).join("");
  return '<div class="ofr-kick" style="margin-top:64px">Offer ideas we drafted for you</div>'
-  +'<div class="subline">Generated from your business — nothing to fill in. Star any you like to bring to your call.</div>'
+  +'<div class="subline">Generated from your business — nothing to fill in. Open any to see the full message we’d send.</div>'
   +'<div class="ob-body"><div class="ofr-cards">'+cards+'</div></div>';
 }
 function offersIntro(){return '<div class="ofr-kick">What makes a good offer</div>'
