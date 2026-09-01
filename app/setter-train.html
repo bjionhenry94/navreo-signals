@@ -369,6 +369,13 @@ const REVIEW_TEACH = {};
 
 let view = "loading"; // loading | no_agents | empty | stream | done | review
 let idx = 0;
+// DISPLAYED-CARD PIN (client-readiness audit 2026-09-01): the stream view
+// used to track the open card by INDEX over a list any background snapshot
+// can reorder - a poll landing mid-read re-rendered a DIFFERENT card in
+// place, and the trainer's verdict recorded against a card they never saw.
+// The open card is pinned by ID; explicit navigation (advance, prev, round
+// open, restore) clears the pin, and an answered card clears it naturally.
+let DISPLAYED_CASE_ID = null;
 let generating = false; // guards the POST /training/generate and /training/recheck calls
 
 /* ── Client training portal state (share mode only) ───────────────────────
@@ -592,6 +599,7 @@ function restoreViewAfterRefresh(prevCaseId) {
   const unanswered = currentUnanswered();
   if (!unanswered.length) { view = "done"; render(); return; }
   const found = prevCaseId ? unanswered.findIndex((c) => c.id === prevCaseId) : -1;
+  DISPLAYED_CASE_ID = null;
   idx = found >= 0 ? found : 0;
   view = "stream";
   render();
@@ -820,6 +828,7 @@ function renderCasesOrEmpty() {
   // A short (or freshness-trimmed restored) round keeps the swap-poll
   // running so it grows to ROUND_SIZE as redrafts land.
   if (SHARE_MODE && ROUND_IDS && ROUND_IDS.length < ROUND_SIZE) startShortRoundPoll();
+  DISPLAYED_CASE_ID = null;
   idx = 0;
   view = "stream";
   render();
@@ -1441,6 +1450,7 @@ if (!SHARE_MODE) {
     rLink.style.display = "";
     if (!res.ok) { showError("Couldn't reset training: " + res.error); return; }
     clearError();
+    DISPLAYED_CASE_ID = null;
     idx = 0;
     await loadTraining();
   });
@@ -1476,8 +1486,17 @@ function render() {
     if (shortRoundHolding()) { renderShortRoundWait(); return; }
     view = "done"; renderDone(); return;
   }
+  // DISPLAYED-CARD PIN: keep painting the card the trainer is reading even
+  // when a background snapshot reorders the list under it. An answered or
+  // removed card drops the pin, so advancing stays natural.
+  if (DISPLAYED_CASE_ID) {
+    const j = unanswered.findIndex((c) => String(c.id) === String(DISPLAYED_CASE_ID));
+    if (j >= 0) idx = j;
+    else DISPLAYED_CASE_ID = null;
+  }
   if (idx >= unanswered.length) idx = unanswered.length - 1;
   if (idx < 0) idx = 0;
+  DISPLAYED_CASE_ID = unanswered[idx] ? String(unanswered[idx].id) : null;
   renderCase(unanswered, idx);
   maybeStartTutorial(); // no-op once seen; waits for the first real card
 }
@@ -1738,6 +1757,7 @@ function startShortRoundPoll() {
     // (serve gate 2026-08-31).
     if (view === "shortwait" && ROUND_IDS && ROUND_IDS.length && currentUnanswered().length) {
       view = "stream";
+      DISPLAYED_CASE_ID = null;
       idx = 0;
       render();
     }
@@ -2300,6 +2320,7 @@ async function startNextRoundOrGenerate() {
         return;
       }
       if (ROUND_IDS && ROUND_IDS.length < ROUND_SIZE) startShortRoundPoll();
+      DISPLAYED_CASE_ID = null;
       idx = 0;
       view = "stream";
       render();
@@ -2706,7 +2727,7 @@ function wireCaseEvents(c, unanswered, i) {
     const noteEl = document.getElementById("trNote");
     if (noteEl) noteEl.addEventListener("input", () => { p.note = noteEl.value; });
     const prevBtn = document.getElementById("trPrevBtn");
-    if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
+    if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; DISPLAYED_CASE_ID = null; render(); } });
     const skipBtn = document.getElementById("trSkipBtn");
     if (skipBtn) skipBtn.addEventListener("click", () => skipAndAdvance(c));
     const midGenBtn = document.getElementById("midGenerateBtn");
@@ -2764,7 +2785,7 @@ function wireCaseEvents(c, unanswered, i) {
   });
 
   const prevBtn = document.getElementById("trPrevBtn");
-  if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; render(); } });
+  if (prevBtn) prevBtn.addEventListener("click", () => { if (idx > 0) { idx--; DISPLAYED_CASE_ID = null; render(); } });
   const midGenBtn = document.getElementById("midGenerateBtn");
   if (midGenBtn && i === unanswered.length - 1) {
     midGenBtn.style.display = "";
