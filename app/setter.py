@@ -1737,6 +1737,34 @@ def lint_draft(html: str, ctx: dict):
             if not (anchor_hrefs & allowed_urls):
                 return False, "The draft doesn't link a calendar for the lead to pick a time."
 
+    # TWO-TIMES OPENER + "WHERE ..." CLAUSE (owner report 2026-09-01, "it
+    # drifted again"): regenerated video-reply drafts proposed two times but
+    # opened with "Would <day> or <day> work for you?" and stopped the
+    # question at the second time - dropping BOTH the mandated opener and the
+    # required "where ..." value clause. Enforce the house shape whenever the
+    # agent's own brain mandates that opener (auto-scopes to agents that
+    # adopted the Shared SDR rule; agents that don't are untouched) and this
+    # draft is a fresh two-times proposal (real slot links present). Scoped
+    # OUT of the bare-time cases the NO-CALL-SELLING rule owns: a lead who
+    # proposed their own time or asked for the call gets bare times, no clause.
+    _instr_low = str(ctx.get("instructions") or "").lower()
+    if ("would you be open to a call on" in _instr_low
+            and ctx.get("slot_status") == "ok" and (ctx.get("slot_links") or [])
+            and not ctx.get("lead_proposed_time")
+            and not ctx.get("lead_requested_call")
+            and ctx.get("call_ask") != "avoid"):
+        _cl_low = _TAG_RE.sub(" ", text).lower()
+        if "would you be open to a call on" not in _cl_low:
+            return False, ("A two-times call ask must open exactly 'Would you be open to a call "
+                           "on ...' - never 'Would <day> or <day> work for you?' or any other "
+                           "opener.")
+        _cl_m = re.search(r"would you be open to a call on\b(.*?)(?:\?|$)", _cl_low, re.S)
+        if _cl_m and " where " not in _cl_m.group(1):
+            return False, ("The two-times question is missing its required 'where ...' value "
+                           "clause - end it with a short clause positioning the call (for a "
+                           "recorded-video reply, exactly 'where I could share some of the other "
+                           "ideas I had for you'), never stop the question at the second time.")
+
     allowed_text = " ".join([
         str(ctx.get("instructions") or ""),
         str(ctx.get("thread_text") or ""),
@@ -3840,7 +3868,21 @@ def get_calendly_availability(agent: dict, settings: dict, now_utc):
             else:
                 chunk_errors.append(str(data)[:150])
         if chunk_errors and not avail:
-            return "error", [], f"Calendly availability lookup failed: {chunk_errors[0]}"
+            # One serial retry before degrading (owner report 2026-09-01): a
+            # transient chunk error dropped the draft into the no-slots
+            # fallback, which loses the two-times template and its "where ..."
+            # clause. Errors are never cached, so this re-fetches at full price
+            # only on the failure path, and only when the concurrent pass got
+            # nothing at all.
+            for win in windows:
+                data = _fetch_window(win)
+                if isinstance(data, dict) and isinstance(data.get("collection"), list):
+                    for slot in data["collection"]:
+                        st = slot.get("start_time")
+                        if st:
+                            avail.append(st)
+            if not avail:
+                return "error", [], f"Calendly availability lookup failed: {chunk_errors[0]}"
         # Only real answers are cached - errors keep retrying at full price.
         result = ("none_available", [], "") if not avail else ("ok", avail, "")
         _CAL_AVAIL_CACHE[cache_key] = (_time.time() + _CAL_AVAIL_TTL, result,
@@ -12880,6 +12922,51 @@ def _redraft_sync(payload):
             draft_html, _proofread_changed = proofread_draft(
                 draft_html, sender_first, _booking_link(agent), timeout=REGEN_PROOFREAD_TIMEOUT)
             _stage("proofread", _t)
+        # One-shot lint-feedback redraft (parity with the training builder,
+        # owner report 2026-08-27). The interactive Regenerate used to draft
+        # exactly once, so a draft that dropped a required shape - most often
+        # the two-times opener and its "where ..." value clause when Calendly
+        # slots were present - shipped to the reviewer uncorrected (owner
+        # report 2026-09-01, the "it drifted again" no-where-clause drafts).
+        # Feed the lint reason back through the drafter once before we build
+        # the patch, and adopt the retry only when it actually lints clean.
+        if draft_html:
+            _rd_lint_ctx = {
+                "subject": d.get("subject"), "first_name": row.get("lead_first_name"),
+                "needs_resource_link": "send_resource" in (classification.get("all_intents") or []),
+                "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
+                "slot_labels": [s.get("label") for s in slots],
+                "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
+                "thread_text": f"{redraft_body_text} {thread_text}",
+                "slots_fallback": slot_status != "ok",
+                "needs_availability_ask": "scheduling" in (classification.get("all_intents") or []),
+                "call_ask": call_ask,
+                "lead_proposed_time": bool(classification.get("lead_proposed_time")),
+                "reply_body": redraft_body_text,
+                "primary_intent": classification.get("primary_intent") or "",
+                "lead_requested_call": bool(classification.get("lead_requested_call")),
+                "owner_facts": combined_feedback,
+            }
+            try:
+                _rd_ok, _rd_reason = lint_draft(draft_html, _rd_lint_ctx)
+                if not _rd_ok:
+                    d2 = draft_reply(
+                        {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
+                         "body": row.get("reply_body"), "first_outbound": row.get("first_outbound") or "",
+                         "thread": row.get("thread"), "thread_text": thread_text, "call_ask": call_ask},
+                        agent, classification, slots, slot_status, sender_first=sender_first,
+                        regen_feedback=(combined_feedback
+                                        + "\n\nREVIEWER FEEDBACK (fix exactly this): " + _rd_reason).strip())
+                    _h2 = d2.get("html")
+                    if _h2:
+                        _h2, _ = proofread_draft(_h2, sender_first, _booking_link(agent),
+                                                 timeout=REGEN_PROOFREAD_TIMEOUT)
+                        _rd_ctx2 = dict(_rd_lint_ctx); _rd_ctx2["subject"] = d2.get("subject")
+                        _rd_ok2, _ = lint_draft(_h2, _rd_ctx2)
+                        if _rd_ok2:
+                            d, draft_html = d2, _h2
+            except Exception:  # noqa: BLE001 - retry is best-effort; keep the first draft on any failure
+                pass
         # Re-stamped, not preserved: the baseline for an Approve-time diff is
         # the LATEST thing the agent wrote, not its first attempt. Edits the
         # reviewer makes after this regenerate are measured against this draft.
