@@ -36,7 +36,7 @@ paragraphs, concrete numbers as proof, a little self-deprecation. Openers VARY
 the same canned line twice. There is almost always a middle "It includes.../We
 use..." elaboration line. CTAs vary and are warm ("Should I send it over?",
 "Can I share it?", "Would you be open to a short video on how we'd do it for
-[Company]?"). No em-dashes.
+[Company]?"). No em-dashes, and never a hyphen or dash standing in for a comma (write "nothing needed from you, we build it", never "nothing needed from you - we build it"); use commas.
 
 Real examples (learn the FEEL, never copy the wording):
 

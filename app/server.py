@@ -22252,9 +22252,18 @@ def _offer_fetch_site(url: str, deep: bool = True):
 
 
 def _offer_scrub(s: str) -> str:
-    """Backstop the style laws: no em-dashes, and normalise the fullwidth pound
-    sign gpt-5-mini sometimes emits."""
-    return re.sub(r"\s*[—–]\s*", " - ", str(s or "")).replace("￡", "£").strip()
+    """Backstop the style laws: never an em-dash, and never a hyphen standing in
+    for a comma (Navreo writes with commas, not dashes), plus normalise the
+    fullwidth pound sign gpt-5-mini sometimes emits. Horizontal-whitespace only so
+    paragraph breaks (\\n\\n) are never collapsed; unspaced hyphens in compounds
+    (cash-runway, 48-hour, co-founder) and numeric ranges (2-20) are left alone."""
+    s = str(s or "")
+    s = re.sub(r"[ \t]*[—–][ \t]*", ", ", s)          # em / en dash -> comma
+    s = re.sub(r"[ \t]+-[ \t]+", ", ", s)              # spaced hyphen used as a dash -> comma
+    s = re.sub(r"\bP\.?[ \t]?S\.?,[ \t]*", "P.S. ", s)  # tidy a "P.S," back to "P.S."
+    s = re.sub(r",[ \t]*,", ", ", s)                    # collapse any double comma
+    s = re.sub(r"[ \t]*,[ \t]*([.?!;:])", r"\1", s)     # drop a comma that butts end punctuation
+    return s.replace("￡", "£").strip()
 
 
 def _offer_sense_sweep(key: str, brief: dict, audience: str, offers: list):
@@ -22407,7 +22416,7 @@ HARD RULES:
 - WHO THE EMAIL GOES TO: cold email is business-to-business. If this business sells to consumers, aim every offer at business buyers instead (retailers who could stock the product, distributors, corporate accounts, partners), never at individual consumers.
 - LOW-RISK CTA: the example opener must offer to SEND something small, named in three plain words or fewer ("the details", "a short breakdown", "a short Loom") - never "book a call" or "hop on a call". NEVER describe what the artifact shows or contains: "a one-page plan showing the campaigns we would run" or "an offer sheet showing the terms" reads as a SECOND free offer stacked on the first. "Can I send over the details?" is the model. (lead_magnet offers are the exception - there the free thing IS the offer, name it properly.)
 - STIPULATION: each offer includes one fair condition that protects the seller (e.g. "leads must match an agreed target list", "guarantee starts after onboarding is complete", "capped at N per month").
-- PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned words and phrases: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. Say it the way a shop owner would: "your ideal customers", "a salesperson", "steady flow of new deals". A 12-year-old should understand every sentence. NEVER use an em-dash anywhere.
+- PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned words and phrases: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. Say it the way a shop owner would: "your ideal customers", "a salesperson", "steady flow of new deals". A 12-year-old should understand every sentence. NEVER use an em-dash anywhere, and NEVER use a hyphen or dash in place of a comma (write "nothing needed from you, we build it" NOT "nothing needed from you - we build it"). Use commas.
 - ENGLISH ONLY: every single word in every field is English. Numbers in names must match the numbers in the body of the offer. Never leave a placeholder like "X days" or "N leads" - always pick a real, sensible number.
 - The opener is ONE sentence, 20 words or fewer, written as the first line of a cold email from this business to its buyer. Use {{{{company}}}} where the prospect's company name would go.
 - why_cold_email: one or two plain sentences explaining to a beginner WHY this offer works on cold strangers (e.g. it removes their risk, it asks for a tiny yes, it names their exact problem).
