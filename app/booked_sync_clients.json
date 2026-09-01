@@ -151,5 +151,23 @@
     "scorecard_client": "Grout",
     "supabase_client_id": "grout",
     "call_booked_category_id": null
+  },
+  "remission": {
+    "display": "Remission Medical",
+    "notion_database_id": "a656e75598d9824abece87da39c7962c",
+    "forward_map": {
+      "Meeting-Ready": 2,
+      "Meeting-Booked": 83039,
+      "No-Showed": 83039,
+      "Call Attended": 83039,
+      "Paid": 83039,
+      "Contact in the future": 86206,
+      "Disqualified": 84259
+    },
+    "smartlead_key_env": "SMARTLEAD_API_KEY",
+    "smartlead_client_id": null,
+    "scorecard_client": "Remission Medical",
+    "supabase_client_id": "remission",
+    "call_booked_category_id": 83039
   }
 }
