@@ -18956,6 +18956,7 @@ def _client_win_build():
     # the tooltip matches Smartlead's own name-filtered view to the digit
     # (Bjion: "we don't need to guess it, it's right here").
     nav_key = ws_key("navreo")
+    _shared_client_keys = []   # scoped-series clients, for the systemic gate below
     if nav_key:
         # Scoped series span EVERY scorecard campaign of the client except
         # DRAFTED (never sent) — NOT the sweep's status filter: a campaign
@@ -18974,13 +18975,31 @@ def _client_win_build():
             if cl == _CLIENT_UNASSIGNED or _client_hidden(cl):
                 continue
             ids_by_client.setdefault(cl, []).append(str(r.get("smartlead_campaign_id")))
-        for cl, ids in ids_by_client.items():
-            try:
-                out_series[cl] = _daywise_series(
-                    nav_key, days_out, start30.isoformat(), end.isoformat(), campaign_ids=ids)
-            except Exception as e:  # noqa: BLE001 — fall back to the estimate below
-                daywise_errs.append(f"day-wise client {cl}: {type(e).__name__}: {str(e)[:100]}")
-                print(f"[client-win] day-wise client {cl} failed: {e}", file=sys.stderr)
+        _shared_client_keys = list(ids_by_client)
+        # Same retry shape as the workspace loop above: the sweep's 589-call
+        # burst can leave Smartlead 429ing right as this loop starts, and one
+        # un-retried pass lost EVERY shared client's daily line for a whole TTL
+        # (seen live 2026-09-01: Navreo/Amplifyy/Arnic/Altius/TouchPoint/
+        # ThunderBird all 429'd; page drew ~0 sent for the day while capacity
+        # showed 18.8k). Pass 2 waits longer than the workspace loop's 5s —
+        # by this point in the build the burst is bigger.
+        for attempt in (1, 2, 3):
+            failed_cl = []
+            for cl, ids in ids_by_client.items():
+                if cl in out_series:
+                    continue
+                try:
+                    out_series[cl] = _daywise_series(
+                        nav_key, days_out, start30.isoformat(), end.isoformat(), campaign_ids=ids)
+                except Exception as e:  # noqa: BLE001 — fall back to the estimate below
+                    failed_cl.append(cl)
+                    if attempt == 3:
+                        daywise_errs.append(f"day-wise client {cl}: {type(e).__name__}: {str(e)[:100]}")
+                    print(f"[client-win] day-wise client {cl} failed (attempt {attempt}): {e}",
+                          file=sys.stderr)
+            if not failed_cl:
+                break
+            time.sleep(10 * attempt)   # 429 back-off: 10s then 20s
     # Navreo-workspace daily series still exposed under a reserved key as the
     # estimate fallback (used only if a shared client's scoped call above failed).
     if "navreo" in series:
@@ -19208,6 +19227,16 @@ def _client_win_build():
             gated = True
             daywise_errs.append(f"series {k} missing entirely")
             print(f"[client-win] daily series {k} missing — build gated", file=sys.stderr)
+    # Shared-name clients individually fall back to the apportioned estimate,
+    # but EVERY scoped line missing at once is a systemic 429 event, not a
+    # legitimate fallback — that build persisted over the last good blob on
+    # 2026-09-01 and the page showed 11 sent against an 18.8k capacity bar.
+    shared_expected = [k for k in _shared_client_keys
+                      if (w30.get(k) or {}).get("sent")]
+    if shared_expected and not any(k in out_series for k in shared_expected):
+        gated = True
+        daywise_errs.append(f"all {len(shared_expected)} shared-client series missing — build gated")
+        print(f"[client-win] all shared-client daily series missing — build gated", file=sys.stderr)
     data = {"days": days_out, "series": out_series, "windows": windows,
             "_series_gated": gated, "first_touch": first_touch,
             "campaigns": campaigns, "ws_labels": ws_labels,
