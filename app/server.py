@@ -2418,12 +2418,28 @@ def _ob_id_ok(cid: str) -> bool:
     return bool(cid) and len(cid) <= 128 and re.fullmatch(r"[A-Za-z0-9._:-]+", cid) is not None
 
 
-def _ob_record(cid: str) -> dict | None:
+def _ob_record2(cid: str) -> tuple[dict | None, bool]:
+    """(record, degraded). degraded=True means Supabase is configured but this
+    read FAILED and the local file has no copy either — the caller must treat
+    the client's existence as UNKNOWN, never as absent. The distinction is what
+    stops the deploy-window wipe (2026-09-01, obtest-harborline): a page that
+    loaded while the store was unreachable read "no draft", took the brand-new
+    branch, and autosaved a FRESH doc over the client's real record."""
     if _ob_sb_on():
         rows = sb("GET", f"onboarding_drafts?id=eq.{urllib.parse.quote(cid, safe='')}&select=doc")
         if isinstance(rows, list):
-            return rows[0]["doc"] if rows and isinstance(rows[0], dict) and rows[0].get("doc") else None
-    return _ob_file_read().get(cid)
+            rec = rows[0]["doc"] if rows and isinstance(rows[0], dict) and rows[0].get("doc") else None
+            if rec is not None:
+                return rec, False
+            # Confirmed absent in Supabase — but an earlier outage may have
+            # stranded a file-fallback write on this instance; that copy is
+            # newer than "nothing" and is the record until a save heals it.
+            return _ob_file_read().get(cid), False
+        # Supabase errored: a local file copy (from a fallback write) still
+        # counts as a real read; nothing anywhere = existence unknown.
+        rec = _ob_file_read().get(cid)
+        return rec, rec is None
+    return _ob_file_read().get(cid), False
 
 
 def onboarding_draft_upsert(p: dict):
@@ -2435,7 +2451,16 @@ def onboarding_draft_upsert(p: dict):
     if not isinstance(doc, dict):
         return 400, {"ok": False, "message": "doc must be an object"}
     now = _ob_now()
-    prev = _ob_record(cid) or {}
+    prev, _degraded = _ob_record2(cid)
+    # Refuse to save while the store can't be read: every guard below (resetRev,
+    # domains/links preserve, domainsRev) protects the STORED copy — with prev
+    # unreadable they protect nothing, and accepting the write is how a fresh
+    # doc from a mid-outage page overwrites a real client. The hub's autosave
+    # already retries on any non-200 (obSync error path), so nothing is lost.
+    if _degraded:
+        return 503, {"ok": False, "degraded": True,
+                     "message": "Saving is paused for a moment — retrying automatically."}
+    prev = prev or {}
     # Back-office-drafted sending plan (doc.domains / doc.site, written by the
     # onboarding autopilot via porkbun-domain-ideator) must survive autosaves from
     # browsers whose local state predates it — the client UI only toggles picks,
@@ -2507,9 +2532,27 @@ def onboarding_draft_upsert(p: dict):
         ok = sb("POST", "onboarding_drafts?on_conflict=id",
                 [{"id": cid, "doc": rec}],
                 prefer="resolution=merge-duplicates,return=minimal")
-        if ok is not None:
+        # STRICT success only: with return=minimal a genuine PostgREST success
+        # parses to exactly {} (http_json's empty-body guard). A 4xx with a JSON
+        # body (rotated key, paused project, mid-migration table) comes back as
+        # the parsed ERROR DICT, not None — treating that as success both lied
+        # "saved" to the hub AND (with the heal below) would delete the only
+        # surviving file copy. Anything other than {} falls to the file fallback.
+        if ok == {}:
             wrote = "supabase"
+            # Heal any stranded file-fallback copy from an earlier outage —
+            # leaving it behind makes reads alternate between two stores. Safe
+            # only because the Supabase write above STRICTLY succeeded.
+            try:
+                d = _ob_file_read()
+                if cid in d:
+                    del d[cid]; _ob_file_write(d)
+            except OSError:
+                pass
         else:
+            if ok is not None:
+                print(f"[ob] WARNING draft POST for {cid} got a JSON error body "
+                      f"from Supabase — writing file-fallback instead", file=sys.stderr)
             d = _ob_file_read(); d[cid] = rec; _ob_file_write(d)
             wrote = "file-fallback"
     else:
@@ -2522,7 +2565,15 @@ def onboarding_draft_get(cid: str):
     cid = str(cid or "").strip()
     if not _ob_id_ok(cid):
         return 400, {"ok": False, "message": "a valid client id is required"}
-    return 200, {"ok": True, "draft": _ob_record(cid)}
+    rec, degraded = _ob_record2(cid)
+    if degraded:
+        # Existence unknown — a 503 makes the hub's obRestore retry with its
+        # write gate closed, instead of minting a FRESH doc over a real client.
+        return 503, {"ok": False, "degraded": True,
+                     "message": "Store unavailable — retry shortly."}
+    # exists:false is the EXPLICIT brand-new confirmation the hub requires
+    # before it may create a record (belt to the 503 braces above).
+    return 200, {"ok": True, "draft": rec, "exists": rec is not None}
 
 
 def _ob_summary(rec: dict) -> dict:
