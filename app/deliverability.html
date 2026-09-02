@@ -1065,8 +1065,21 @@ function capacityDailyAligned() {
 // THE capacity-used figure for the current client + range, with the numbers
 // behind it (see NavreoCapacity.usedDetail): weekday sends / weekday capacity.
 // The chart's "Hide weekends" toggle does NOT change it.
+//
+// It is computed on client-windows' OWN day axis, NOT the chart axis. The chart
+// axis comes from /api/analytics-hub, whose day list can START a day later than
+// the sweep's, and one extra Monday inside a 30-day window is worth a whole
+// percentage point — enough to print 86% here beside 87% for the same fleet on
+// the Fleet heat map, which reads the sweep's axis. Same inputs, same helper,
+// same number on both pages. The chart axis is only the fallback, for a client
+// with no daily line of its own (its sent bars are an apportioned split then).
 function capacityUsedDetail() {
   if (!CAP || !window.NavreoCapacity) return null;
+  var cs = CW && CW.series && CW.series[ckey()];
+  if (cs && cs.sent && CW.days && CW.days.length) {
+    return NavreoCapacity.usedDetail({ sent: cs.sent, sentDays: CW.days, cap: CAP,
+                                       name: state.client, wsKey: capWsKey(), days: state.range });
+  }
   var sent = sentDailyFull(), axis = chartAxisDays();
   if (!sent || !axis.length) return null;
   return NavreoCapacity.usedDetail({ sent: sent, sentDays: axis, cap: CAP,
