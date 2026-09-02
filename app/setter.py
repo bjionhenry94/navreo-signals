@@ -4850,17 +4850,25 @@ def _row_same_instant(workspace: str, campaign_id, email: str, rtime, own_id):
         return None
 
 
+_SENT_MARKER_FLAGS = ("followup", "approve_send")
+
+
 def _preserve_followup_entries(old_thread, new_thread):
-    """Follow-up markers must survive every thread overwrite (panel critical
-    2026-08-01): the hydrator rebuilds `thread` from Smartlead, which knows
-    the follow-up email as a plain SENT entry with no `followup` flag — so a
-    wholesale overwrite erased the recency gate's only durable record within
-    one conversation open. Where the new thread carries a SENT entry with the
-    same body, the flag is grafted onto it; otherwise the marker is appended.
-    Applied centrally in _apply_patch so every writer — hydrate, intake,
-    reply-sync, future ones — preserves the record."""
+    """Our-own-send markers must survive every thread overwrite (panel
+    critical 2026-08-01): the hydrator rebuilds `thread` from Smartlead, which
+    knows the email as a plain SENT entry with no flag — so a wholesale
+    overwrite erased the recency gate's only durable record within one
+    conversation open. Where the new thread carries a SENT entry with the same
+    body, the flag is grafted onto it; otherwise the marker is appended.
+    Both marker flags are preserved by identical rules: `followup` (the
+    follow-up recency source) and `approve_send` (the first reply's durable
+    copy, 2026-09-02), so an approved reply stays in the rendered conversation
+    until Smartlead's own copy is ingested — and after it, because the flag is
+    grafted onto that copy instead of duplicating it. Applied centrally in
+    _apply_patch so every writer — hydrate, intake, reply-sync, future ones —
+    preserves the record."""
     olds = [m for m in (old_thread or [])
-            if isinstance(m, dict) and m.get("followup")
+            if isinstance(m, dict) and any(m.get(f) for f in _SENT_MARKER_FLAGS)
             and str(m.get("type") or "").upper() == "SENT"]
     if not olds:
         return new_thread
@@ -4871,14 +4879,18 @@ def _preserve_followup_entries(old_thread, new_thread):
 
     for marker in olds:
         mb = _norm(marker.get("body"))
+        flags = [f for f in _SENT_MARKER_FLAGS if marker.get(f)]
         grafted = False
         for m in out:
             if (isinstance(m, dict) and str(m.get("type") or "").upper() == "SENT"
-                    and not m.get("followup") and _norm(m.get("body")) == mb):
-                m["followup"] = True
+                    and not any(m.get(f) for f in _SENT_MARKER_FLAGS)
+                    and _norm(m.get("body")) == mb):
+                for f in flags:
+                    m[f] = True
                 grafted = True
                 break
-        if not grafted and not any(isinstance(m, dict) and m.get("followup")
+        if not grafted and not any(isinstance(m, dict)
+                                   and any(m.get(f) for f in _SENT_MARKER_FLAGS)
                                    and _norm(m.get("body")) == mb for m in out):
             out.append(marker)
     out.sort(key=lambda m: str((m or {}).get("time") or ""))
@@ -5097,6 +5109,19 @@ def _followup_thread_entry(html_body: str, now: str) -> dict:
     return {"type": "SENT", "time": now, "body": html_body, "followup": True}
 
 
+def _approve_thread_entry(html_body: str, now: str) -> dict:
+    """The durable record of a FIRST reply (Approve), mirroring
+    _followup_thread_entry so the reply is visible in the rendered
+    conversation immediately AND across reloads, before Smartlead's copy is
+    ingested. Without it the stored thread held no copy of the reply until
+    the rehydrate landed (still `stale` six minutes later, live 2026-09-02),
+    so a reload showed the conversation "Up to date" with our reply missing
+    and reviewers re-sent. Deliberately NOT flagged `followup`: that flag
+    feeds _own_row_last_send and the "Sent without follow-up" tray, which
+    must keep reading a first reply as a send still awaiting its follow-up."""
+    return {"type": "SENT", "time": now, "body": html_body, "approve_send": True}
+
+
 def _own_row_last_send(row: dict):
     """Newest send evidence on THIS row: sent_at, or a later follow-up entry
     in the thread. PARSED comparison, not a string max (panel fix
@@ -5142,8 +5167,14 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
         if followup:
             thread = list(row.get("thread") or [])[-49:] + [_followup_thread_entry(html_body, now)]
             return {"status": success_status, "error": None, "thread": thread}
+        # A first send appends its own durable thread entry too (live fix
+        # 2026-09-02): status/sent_at alone left the stored `thread` without
+        # the reply until Smartlead's rehydrate landed, so every reload
+        # rendered the conversation complete but missing our send.
+        thread = list(row.get("thread") or [])[-49:] + [_approve_thread_entry(html_body, now)]
         return {"status": success_status, "sent_at": now, "sent_body": html_body,
-                "error": None, "draft_subject": subject, "draft_body": html_body}
+                "error": None, "draft_subject": subject, "draft_body": html_body,
+                "thread": thread}
 
     # Monitor-only backstop: a non-navreo (federation-monitor) row can NEVER
     # hit Smartlead, by any caller (manual, auto, async). The send-action
