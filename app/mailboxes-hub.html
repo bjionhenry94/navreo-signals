@@ -485,8 +485,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // "missing a signature" item is now its own manager tab. buildFixItems()
   // is kept only because the "Inbox issues" KPI + verdict headline count it.
 
-  function heatCell(tone, big, small) {
-    return '<td><div class="hcell h-' + tone + '">' + big + (small ? '<small>' + small + '</small>' : '') + '</div></td>';
+  function heatCell(tone, big, small, title) {
+    return '<td' + (title ? ' title="' + esc(title) + '"' : '') + '><div class="hcell h-' + tone + '">' +
+      big + (small ? '<small>' + small + '</small>' : '') + '</div></td>';
   }
   // Aggregate "All clients" total row — reconciles from RAW totals (not an
   // average of per-client percentages): reply/bounce from the __all window
@@ -590,7 +591,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // ("12% of total sending capacity"; "in warm-up" while the % is unknown).
       var warmVal = null, warmSub = null;
       if (r.warmCap != null) {
-        warmVal = n(r.warmCap) + "/day";
+        // "~" because this is Sigma(resting mailboxes x provider default), not a
+        // Smartlead-reported volume — printing it bare read as a measurement.
+        warmVal = "~" + n(r.warmCap) + "/day";
         // A real-but-tiny share rounds to 0 (e.g. 102/day of a 23k fleet =
         // 0.44%): print "<1%" so a non-zero volume never reads "0%".
         warmSub = r.warmPct != null
@@ -603,7 +606,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         : (r.warmPct <= 20 ? "g1" : r.warmPct < 30 ? "a1" : "r1");
       // Until the warm-up feed lands for this row, show the lazy-load pulsing
       // skeleton (owner 2026-08-24) rather than a dash that reads like a value.
-      tds += (r.warmCap == null) ? '<td><div class="hcell sk"></div></td>' : heatCell(warmTn, warmVal, warmSub);
+      tds += (r.warmCap == null) ? '<td><div class="hcell sk"></div></td>'
+        : heatCell(warmTn, warmVal, warmSub,
+                   "Estimated: resting mailboxes \u00d7 provider default (Outlook 2 \u00b7 Gmail 20 \u00b7 Maildoso 15 \u00b7 SMTP 15 per day)");
       // Actively sending: the % on top, and underneath it the capacity THAT %
       // WAS MEASURED AGAINST — the same day (24H) or the same window (7/14/30),
       // never today's live cap. Pairing the window % with today's cap was how a
