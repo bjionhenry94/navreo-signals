@@ -788,11 +788,16 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     return s;
   }
   // Canonical resting domain list — shared by the Resting tab and its badge so
-  // both count the same thing. Returns [{dom, rs, dueTs}] sorted soonest-due
-  // first, or null while the views are still loading. Merges inwarmup+rested
-  // mailbox rows (deduped), drops high-bounce-paused domains (they live in the
-  // High bounce-rate tab only), and synthesizes a domain-only entry for any
-  // ledger domain with no held-box rows in either view.
+  // both count the same thing. Returns [{dom, rs, boxes, hb, dueTs}] sorted
+  // soonest-due first, or null while the views are still loading. Merges
+  // inwarmup+rested mailbox rows (deduped) and synthesizes a domain-only entry
+  // for any ledger domain with no held-box rows in either view.
+  //
+  // A high-bounce domain is NOT dropped here (it used to be). Resting and high
+  // bounce are two different facts about one domain and both are true at once:
+  // hiding the overlap made KRG's Resting badge read 2 when 21 of its domains
+  // were genuinely resting with 1,089 mailboxes held. The domain stays in the
+  // High bounce-rate tab too and carries hb:true so the row can say so.
   function restingDomainEntries() {
     var iw = bundleView("inwarmup"), rv = bundleView("rested");
     if (iw == null && rv == null) return null;
@@ -801,13 +806,18 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var k = String(m.email || m.id || (m.domain + "#" + rows.length)).toLowerCase();
       if (seen[k]) return; seen[k] = 1; rows.push(m);
     });
-    var hb = highbList() || []; var hbSet = {}; hb.forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
-    rows = rows.filter(function (m) { return !hbSet[m.domain]; });
+    var hbSet = {}; (highbList() || []).forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
     var gr = groupByDomain(rows);
     var order = gr.order.slice(), inList = {};
     order.forEach(function (d) { inList[d] = true; });
     var rd = (S.bundle && S.bundle.restDue) || {};
-    Object.keys(rd).forEach(function (d) { if (d && !inList[d] && !hbSet[d]) { order.push(d); gr.g[d] = gr.g[d] || []; } });
+    Object.keys(rd).forEach(function (d) { if (d && !inList[d]) { order.push(d); gr.g[d] = gr.g[d] || []; } });
+    // Mailbox count: the audit backend truncates each view at 2,000 rows, so
+    // counting held rows can undercount a big domain. liveZeroCap is the
+    // census-complete per-domain count of cap-0 (sends-paused) mailboxes across
+    // the whole fleet — take whichever is larger, so the number is never a
+    // truncation artefact (see memory deliverability-count-truth-fix).
+    var lz = (S.bundle && S.bundle.liveZeroCap) || {};
     var entries = order.map(function (dom) {
       var rs = gr.g[dom] || [];
       var dueTs = rd[dom] || null;
@@ -815,7 +825,8 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
         dueTs = due.length ? Math.min.apply(null, due) : (Date.now() + 7 * 864e5);
       }
-      return { dom: dom, rs: rs, dueTs: dueTs };
+      return { dom: dom, rs: rs, boxes: Math.max(rs.length, Number(lz[dom]) || 0),
+               hb: !!hbSet[dom], dueTs: dueTs };
     });
     entries.sort(function (a, b) { return a.dueTs - b.dueTs; });
     return entries;
@@ -905,19 +916,24 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   function mgrInWarmup() {
     var doms = restingEntriesC(); if (doms == null) return null;
     if (!doms.length) return '<div class="mgr-empty">None right now — nothing is resting.</div>';
-    var mbxTotal = 0;
+    var mbxTotal = 0, hbCount = 0;
     var body = doms.map(function (e) {
       var dom = e.dom, rs = e.rs, dueTs = e.dueTs, md = rs.some(function (r) { return r.maildoso; });
-      mbxTotal += rs.length;
-      var mbx = rs.length ? (' <span class="t-mut">· ' + rs.length + ' mbx</span>') : '';
-      return '<tr><td class="mono">' + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
-        '<td class="num">' + (rs.length || '—') + '</td>' +
+      mbxTotal += e.boxes;
+      if (e.hb) hbCount++;
+      var mbx = e.boxes ? (' <span class="t-mut">· ' + e.boxes + ' mbx</span>') : '';
+      return '<tr><td class="mono">' + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') +
+        // resting AND over the bounce floor — the domain is listed in both tabs
+        (e.hb ? ' <span class="pill a">also high bounce</span>' : '') + '</td>' +
+        '<td class="num">' + (e.boxes || '—') + '</td>' +
         '<td>' + dueChip(dueTs) + '</td>' +
         '<td>' + pill("n", "warming — sends held") + '</td>' +
         '<td style="text-align:right">' + actBtn("reactivate", dom, null, "Restore", dueTs != null && dueTs <= Date.now()) + '</td></tr>';
     }).join("");
     return tableWrap('<th>Domain / mailbox</th><th class="num">Mailboxes</th><th>Due back</th><th>Status</th><th style="text-align:right">Action</th>', body, null,
-      doms.length + ' domain(s) resting' + (mbxTotal ? ' · ' + mbxTotal + ' mailbox(es)' : '') + '. None are sending while they warm (normal). Restore returns a whole domain to sending.');
+      doms.length + ' domain(s) resting' + (mbxTotal ? ' · ' + mbxTotal + ' mailbox(es)' : '') +
+      (hbCount ? ' · ' + hbCount + ' also over the ' + BOUNCE_HOT + '% bounce floor' : '') +
+      '. None are sending while they warm (normal). Restore returns a whole domain to sending.');
   }
   // ---- Repeat parks: domains parked 2+ times in the trailing 6 weeks --------
   // The rest conveyor is healthy for a one-off park (7 days, auto-restore), but
