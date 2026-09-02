@@ -1026,17 +1026,16 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // countdown, not a cycle. 3+ completed cycles = retire candidate.
   function parkPrompt(rows) {
     var list = rows.map(function (r) {
-      return "- " + r.domain + " (" + (r.cycles || 0) + " completed rest cycle(s), " + (r.orders || r.parks) +
-        " park orders, " + (r.broken || 0) + " park(s) that never held, last ordered " + (r.last_parked || "?") +
-        (r.resting_now ? ", resting now" + (r.resting_days ? " (day " + r.resting_days + ")" : "") : ", live") +
-        (r.boxes ? ", " + r.boxes + " mailboxes" : "") + ")";
+      return "- " + r.domain + " (" + (r.cycles || 0) + " completed rest cycle(s) in the window, " + (r.cycles_all || r.cycles || 0) +
+        " all time, last ordered " + (r.last_parked || "?") +
+        (r.reply_rate_30d != null ? ", reply rate 30d " + r.reply_rate_30d.toFixed(2) + "% on " + (r.sent_30d || 0) + " sent" : ", no 30d sends") +
+        (r.resting_now ? ", resting now" + (r.resting_days ? " (day " + r.resting_days + ")" : "") : ", live") + ")";
     }).join("\n");
     return "These sending domains keep completing a rest cycle and failing again — see the Repeat parks tab in " +
       "the Inbox & Domain Manager. 'Completed rest cycle' = the park landed, the domain's mailboxes stayed at cap 0 " +
       "for a real rest, and it came back to sending (verified against the daily cap snapshots, not the activity log). " +
-      "'Park orders' = days the engine ordered a park; 'never held' = parks undone before a rest was served. " +
       "A domain that keeps earning parks after every full rest is dead weight: every cycle burns a rest window plus restore sends.\n\n" +
-      "For each domain below, check its trailing-30d reply rate and decide: RETIRE it (park it and " +
+      "For each domain below, weigh its trailing-30d reply rate and decide: RETIRE it (park it and " +
       "dismiss it from auto-restore so it stops cycling, and detach its mailboxes from campaigns) " +
       "or give it one last cycle if there is a concrete reason it might recover. Queue replacement " +
       "domains for whatever capacity is retired. Report what you did per domain.\n\nDomains:\n" + list;
@@ -1044,52 +1043,53 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   function mgrParkChurn() {
     var rows = parkChurnListC(); if (rows == null) return null;
     var days = (S.parkchurn && S.parkchurn.days) || 42;
-    var minp = (S.parkchurn && S.parkchurn.min_parks) || 2;
-    if (!rows.length) return '<div class="mgr-empty">✓ No domain has completed ' + minp + '+ rest cycles or taken ' + minp + '+ park orders in the last ' + days + ' days.</div>';
-    // Trailing-30d reply rate joined from the same domain-health rows the
-    // Below-reply-floor tab reads — context for the retire call, not a filter.
+    var sinceAll = (S.parkchurn && S.parkchurn.snapshots_since) || "2026-07-08";
+    if (!rows.length) return '<div class="mgr-empty">✓ No domain has completed a verified rest cycle since ' + esc(sinceAll) + '.</div>';
+    // Reply rate (30d) comes from the same row: the server sums Smartlead's
+    // rolling sent_30d / replies_30d over every mailbox on the domain from
+    // the latest daily snapshot. The old join to the audit backend's
+    // domain-health rows read "—" for most flagged domains (its inventory
+    // never knew them) — kept only as a fallback.
     var dh = dhRows() || []; var rrByDom = {};
     dh.forEach(function (d) { if (d.domain) rrByDom[d.domain] = d; });
     var restDue = (S.bundle && S.bundle.restDue) || {};
-    var retire = 0, pingpong = 0, cycTotal = 0, brokenTotal = 0;
+    var retire = 0, cycTotal = 0, cycAllTotal = 0;
     var body = rows.slice(0, MGR_CAP).map(function (r) {
-      var cyc = r.cycles || 0, ord = r.orders || r.parks || 0, brk = r.broken || 0;
-      cycTotal += cyc; brokenTotal += brk;
-      var bad = cyc >= 3; if (bad) retire++;
-      if (r.rest_not_holding) pingpong++;
-      var d = rrByDom[r.domain];
-      var rr = (d && d.reply_rate != null)
-        ? d.reply_rate.toFixed(2) + '% <span class="t-mut">(' + comma(d.sent || 0) + ' sent)</span>'
-        : '<span class="t-mut">—</span>';
+      var cyc = r.cycles || 0, cycAll = r.cycles_all != null ? r.cycles_all : cyc;
+      cycTotal += cyc; cycAllTotal += cycAll;
+      var bad = cycAll >= 3; if (bad) retire++;
+      var rr;
+      if (r.reply_rate_30d != null) rr = r.reply_rate_30d.toFixed(2) + '% <span class="t-mut">(' + comma(r.sent_30d || 0) + ' sent)</span>';
+      else { var d = rrByDom[r.domain];
+        rr = (d && d.reply_rate != null) ? d.reply_rate.toFixed(2) + '% <span class="t-mut">(' + comma(d.sent || 0) + ' sent)</span>'
+          : '<span class="t-mut">no sends in 30d</span>'; }
       var status = r.resting_now
         ? pill("n", "resting now" + (r.resting_days ? " · day " + r.resting_days : "")) + (restDue[r.domain] ? ' ' + dueChip(restDue[r.domain]) : '')
         : pill("g", "live — sending");
-      var verdict = bad ? pill("r", "retire candidate") : cyc >= 2 ? pill("a", "watch") : pill("n", "monitor");
-      if (r.rest_not_holding) verdict += ' ' + pill("r", "rest not holding");
+      var verdict = bad ? pill("r", "retire candidate") : cycAll >= 2 ? pill("a", "watch") : pill("n", "monitor");
       var spans = Array.isArray(r.cycle_spans) && r.cycle_spans.length
         ? ' title="' + esc(r.cycle_spans.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
+      var spansAll = Array.isArray(r.cycle_spans_all) && r.cycle_spans_all.length
+        ? ' title="' + esc(r.cycle_spans_all.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
       return '<tr><td class="mono">' + esc(r.domain) +
         (r.workspace && r.workspace !== "navreo" ? ' <span class="pill n">' + esc(r.workspace) + '</span>' : '') + '</td>' +
         '<td class="num" style="font-weight:700"' + spans + '>' + cyc + '×</td>' +
-        '<td class="num">' + ord + '</td>' +
-        '<td class="num">' + (brk ? '<span style="color:var(--red,#c0392b)">' + brk + '</span>' : '<span class="t-mut">0</span>') + '</td>' +
+        '<td class="num" style="font-weight:700"' + spansAll + '>' + cycAll + '×</td>' +
         '<td class="num">' + esc(r.last_parked || "—") + '</td>' +
         '<td class="num">' + rr + '</td>' +
-        '<td class="num">' + (r.boxes || '—') + '</td>' +
         '<td>' + status + '</td>' +
         '<td>' + verdict + '</td></tr>';
     }).join("");
+    var asOf = S.parkchurn && S.parkchurn.stats_as_of;
     var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + " domains. " : "") +
-      rows.length + " domain(s) with " + minp + "+ completed rest cycles or " + minp + "+ park orders in the last " + days + " days · " +
-      cycTotal + " completed rest cycle(s) in total, " + brokenTotal + " park(s) that never held. " +
-      "<b>Completed rest cycles</b> = the park landed, the mailboxes stayed at cap 0 for a full rest, and the domain came back to sending — " +
-      "verified against the daily cap snapshots (hover the number for the dates). <b>Park orders</b> = days a park was ordered. " +
-      "<b>Never held</b> = parks undone before a rest was served (the park↔restore ping-pong) — these are NOT counted as cycles. " +
+      rows.length + " domain(s) with a verified rest cycle · " + cycTotal + " completed in the last " + days + " days, " + cycAllTotal + " all time (since " + esc(sinceAll) + ", when daily cap snapshots began). " +
+      "<b>Completed rest cycle</b> = the park landed, the mailboxes stayed at cap 0 for a full rest, and the domain came back to sending — " +
+      "verified against the daily cap snapshots (hover a number for the dates). Park orders that were undone before a rest was served are NOT counted. " +
       "A rest still in progress shows as a countdown and is not a cycle until the domain is back. " +
-      (pingpong ? pingpong + " domain(s) flagged “rest not holding” (2+ parks that never held). " : "") +
+      "<b>Reply rate (30d)</b> = Smartlead's rolling 30-day replies ÷ sent across every mailbox on the domain" + (asOf ? ", snapshot " + esc(asOf) : "") + ". " +
       "A domain at 3+ completed cycles keeps failing after every real rest: retire or replace it. " +
       (retire ? '<button class="btn sm primary" data-act="copy-park-prompt-all">Copy a retire prompt for the ' + retire + ' candidate(s)</button> — paste it into Claude Code to work through them.' : '');
-    return tableWrap('<th>Domain</th><th class="num">Completed rest cycles</th><th class="num">Park orders (' + days + 'd)</th><th class="num">Never held</th><th class="num">Last ordered</th><th class="num">Reply rate (30d)</th><th class="num">Mailboxes</th><th>Status</th><th>Verdict</th>', body, null, foot);
+    return tableWrap('<th>Domain</th><th class="num">Completed rest cycles (' + days + 'd)</th><th class="num">All time</th><th class="num">Last ordered</th><th class="num">Reply rate (30d)</th><th>Status</th><th>Verdict</th>', body, null, foot);
   }
   // ---- Not warming (old flow "notwarming"): Domain / mailbox·Batch·Warmup·Action(Re-enable)
   function mgrWarmupOff() {
@@ -1310,7 +1310,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     if (act === "copy-park-prompt-all") {
       // Retire candidates (3+ completed rest cycles) first; fall back to every flagged domain.
       var pcAll = parkChurnListC() || [];
-      var pcRows = pcAll.filter(function (r) { return (r.cycles || 0) >= 3; });
+      var pcRows = pcAll.filter(function (r) { return ((r.cycles_all != null ? r.cycles_all : r.cycles) || 0) >= 3; });
       if (!pcRows.length) pcRows = pcAll;
       if (!pcRows.length) return;
       var pcOld = b.textContent;
