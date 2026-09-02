@@ -113,8 +113,12 @@ def _sl_pause(cid, lead_id, key) -> bool:
 
 def _last_watermark() -> str | None:
     rows = server.sb("GET", "app_activity_log?action=eq.intake_gate&select=payload"
-                            "&order=ts.desc&limit=1") or []
-    if rows and isinstance(rows[0].get("payload"), dict):
+                            "&order=ts.desc&limit=1")
+    # A PostgREST error comes back as a dict, and dict[0] raised KeyError(0) on
+    # the very first live call (2026-09-02 08:24, logged as error "0"). Falling
+    # back to the 1h default is safe: already-judged leads are skipped by
+    # _already_judged, so a watermark that steps back never double-pauses.
+    if isinstance(rows, list) and rows and isinstance(rows[0].get("payload"), dict):
         return rows[0]["payload"].get("watermark")
     return None
 
