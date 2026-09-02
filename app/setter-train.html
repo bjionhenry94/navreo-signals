@@ -621,18 +621,23 @@ function restoreViewAfterRefresh(prevCaseId) {
   render();
 }
 
+let _pollRetrainBusy = false; // re-entrancy guard (stability review F1): setInterval never waits for the last tick
 async function pollRetrainOnce() {
-  const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
-  if (!res.ok) {
-    if (SHARE_MODE && res.status === 401) { stopRetrainNotice(); renderShareExpired(); return; }
-    return; // transient fetch error - just try again on the next tick
-  }
-  const gen = (res.data && res.data.generating) || { status: "idle" };
-  if (gen.status === "running") return; // still working - keep polling
-  stopRetrainNotice();
-  const prevCaseId = currentCaseId();
-  applyCasesSnapshot(res.data);
-  restoreViewAfterRefresh(prevCaseId);
+  if (_pollRetrainBusy) return;
+  _pollRetrainBusy = true;
+  try {
+    const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
+    if (!res.ok) {
+      if (SHARE_MODE && res.status === 401) { stopRetrainNotice(); renderShareExpired(); return; }
+      return; // transient fetch error - just try again on the next tick
+    }
+    const gen = (res.data && res.data.generating) || { status: "idle" };
+    if (gen.status === "running") return; // still working - keep polling
+    stopRetrainNotice();
+    const prevCaseId = currentCaseId();
+    applyCasesSnapshot(res.data);
+    restoreViewAfterRefresh(prevCaseId);
+  } finally { _pollRetrainBusy = false; }
 }
 
 /* ── Fetch helper (same shape as setter.html) ────────────────────────────── */
@@ -754,6 +759,12 @@ async function loadTraining() {
   stopRetrainNotice();
   stopTransitionPoll();
   stopChipPoll();
+  // Timer hygiene (stability review F2): the short-round, prefetch,
+  // first-interview repeek and wait-bar timers must not outlive a reload.
+  stopShortRoundPoll();
+  stopPrefetchPoll();
+  stopFirstIvRepeek();
+  if (waitBarTimer) { clearInterval(waitBarTimer); waitBarTimer = null; }
   view = "loading"; render();
   const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
   if (!res.ok) {
@@ -900,8 +911,12 @@ async function renderFirstInterview() {
   // Not ready - fail CLOSED to the static message, never into the threads.
   el.innerHTML = firstInterviewBuildingHtml();
   let tries = 0;
+  let repeekBusy = false; // F1
   firstIvRepeekHandle = setInterval(async () => {
     if (view !== "interview") { stopFirstIvRepeek(); return; }
+    if (repeekBusy) return;
+    repeekBusy = true;
+    try {
     tries += 1;
     const again = await fetchInterviewQuestions({ peek: true });
     if (again && again.ready && (again.questions || []).length) {
@@ -910,6 +925,7 @@ async function renderFirstInterview() {
     } else if (tries >= 12) {
       stopFirstIvRepeek(); // give up quietly; the static message remains
     }
+    } finally { repeekBusy = false; }
   }, 5000);
 }
 
@@ -1099,12 +1115,18 @@ function endGeneratingPoll() {
   pollRestores = [];
 }
 
+let _pollGenBusy = false; // F1
 async function pollGeneratingOnce() {
   if (Date.now() > pollDeadline) {
     endGeneratingPoll();
     showError("Still working in the background - refresh in a minute.");
     return;
   }
+  if (_pollGenBusy) return;
+  _pollGenBusy = true;
+  try { await _pollGeneratingOnceBody(); } finally { _pollGenBusy = false; }
+}
+async function _pollGeneratingOnceBody() {
   const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
   if (!res.ok) {
     if (SHARE_MODE && res.status === 401) { endGeneratingPoll(); renderShareExpired(); return; }
@@ -1201,12 +1223,18 @@ function endReviewPoll() {
   reviewPollRestores = [];
 }
 
+let _pollReviewBusy = false; // F1
 async function pollReviewOnce() {
   if (Date.now() > reviewPollDeadline) {
     endReviewPoll();
     showError("Still reviewing in the background - refresh in a minute.");
     return;
   }
+  if (_pollReviewBusy) return;
+  _pollReviewBusy = true;
+  try { await _pollReviewOnceBody(); } finally { _pollReviewBusy = false; }
+}
+async function _pollReviewOnceBody() {
   const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
   if (!res.ok) {
     if (SHARE_MODE && res.status === 401) { endReviewPoll(); renderShareExpired(); return; }
@@ -1316,6 +1344,7 @@ function displayScore(s) {
   return Math.min(100, Math.round(((Number(s) || 0) * 100) / 90));
 }
 
+let lastReadinessSig = ""; // P6
 function renderReadinessPanel(animate) {
   const host = document.getElementById("readinessPanelHost");
   const score = Number(READINESS.score) || 0;
@@ -1357,6 +1386,14 @@ function renderReadinessPanel(animate) {
   const reviewLink = (answeredCount && view !== "review")
     ? `<div class="rp-review-link"><a id="panelReviewBtn" role="button">Review what we've learned &rarr;</a></div>`
     : "";
+  // Skip the innerHTML rebuild when nothing rendered would change
+  // (stability review P6): every poll tick called this with animate:false
+  // and re-created the panel (collapsing the owner accordion). A landed
+  // answer (animate:true) or an emptied host always repaints.
+  const _sig = [SHARE_MODE, view === "review", score, ready, decisionPct, replyPct, coveragePct, nAnswers,
+    READINESS.explanation || "", changes.length, changes[0] ? changes[0].at : "", answeredCount > 0].join("|");
+  if (!animate && _sig === lastReadinessSig && host.firstElementChild) return;
+  lastReadinessSig = _sig;
 
   // Owner ruling 2026-08-17: the CLIENT portal shows just the running
   // score - no formula, no stat tiles, no memory accordion. The full
@@ -1675,6 +1712,7 @@ function stopTransitionPoll() {
 function startTransitionPoll() {
   if (transitionPollHandle) return;
   transitionStartedAt = Date.now();
+  let transitionBusy = false;
   transitionPollHandle = setInterval(async () => {
     if (view !== "done") { stopTransitionPoll(); return; }
     // Hard cap (2026-08-21): never spin more than 12s. If the brain never
@@ -1688,6 +1726,9 @@ function startTransitionPoll() {
       else { unlockRoundDoneButton(); } // let them start with what exists
       return;
     }
+    if (transitionBusy) return; // F1: never stack in-flight GETs
+    transitionBusy = true;
+    try {
     const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
     if (!res.ok) {
       if (SHARE_MODE && res.status === 401) { stopTransitionPoll(); renderShareExpired(); }
@@ -1699,6 +1740,7 @@ function startTransitionPoll() {
     // redraft is done - no point waiting for a freshness that won't come).
     const idleNow = !(GENERATING && GENERATING.status === "running");
     if (freshSpares.length || idleNow) { stopTransitionPoll(); if (view === "done") unlockRoundDoneButton(); }
+    } finally { transitionBusy = false; }
   }, 1000);
 }
 
@@ -1753,11 +1795,10 @@ function mergeCasesSnapshot(data, opts) {
   growRoundIfShort();
 }
 
-/* Mid-round growth (fastloop): a round that had to open short (the pool was
-   still filling) absorbs freshly-landed cases up to ROUND_SIZE, so 1-card
-   rounds stop existing. Never rerenders - the progress line catches up on
-   the next natural render. */
 /* ── Short-round top-up (staggered open, owner ask 2026-08-26) ────────────
+   (Also the mid-round growth path: a round that opened short absorbs
+   freshly-landed cases up to ROUND_SIZE via growRoundIfShort - it never
+   rerenders; the progress line catches up on the next natural render.)
    A round opened on its FIRST fresh card keeps polling while the trainer
    reads: each poll merges the server snapshot (incremental landings from
    the generate/redraft workers) and growRoundIfShort appends fresh cards
@@ -1773,6 +1814,7 @@ function stopShortRoundPoll() {
 function startShortRoundPoll() {
   stopShortRoundPoll();
   let deadline = Date.now() + 150000;
+  let shortBusy = false; // F1
   shortRoundPollHandle = setInterval(async () => {
     // Keep polling while the round is short OR any unanswered round card is
     // still pre-teaching (instant-open 2026-08-28: swaps land behind the
@@ -1805,10 +1847,13 @@ function startShortRoundPoll() {
       }
       return;
     }
+    if (shortBusy) return;
+    shortBusy = true;
     try {
       const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
       if (res.ok) mergeCasesSnapshot(res.data, { replaceUnanswered: true });
     } catch { /* transient - next tick retries, deadline bounds the wait */ }
+    finally { shortBusy = false; }
     // Open from the wait ONLY once the round itself holds a (fresh) card -
     // an empty waiting round must not open on the unscoped stale backlog
     // (serve gate 2026-08-31).
@@ -2348,7 +2393,7 @@ function maybePrefetchNextRound() {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify(SHARE_MODE ? { agent_id: selectedAgentId, action: "questions", share: SHARE_TOKEN }
                                     : { agent_id: selectedAgentId, action: "questions" }),
-  }).catch(() => { /* prewarm only - round-done fetch is the real read */ });
+  });  // fetchJson never rejects (H4) - prewarm only, the round-done fetch is the real read
   const inRound = new Set(ROUND_IDS.map(String));
   const spares = CASES.filter((c) => !isAnswered(c.id) && !inRound.has(String(c.id))).length;
   if (spares >= ROUND_SIZE) return;                        // next round already waiting
@@ -2369,8 +2414,12 @@ function startPrefetchPoll() {
   if (prefetchPollHandle) return;
   const deadline = Date.now() + POLL_MAX_MS;
   let appended = 0;
+  let prefetchBusy = false; // F1
   prefetchPollHandle = setInterval(async () => {
     if (Date.now() > deadline) { stopPrefetchPoll(); return; }
+    if (prefetchBusy) return;
+    prefetchBusy = true;
+    try {
     const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
     if (!res.ok || !prefetchPollHandle) return;
     const before = CASES.length;
@@ -2386,6 +2435,7 @@ function startPrefetchPoll() {
       // it so "Start round N+1" opens the freshly-landed batch instantly.
       if (view === "done") render();
     }
+    } finally { prefetchBusy = false; }
   }, POLL_INTERVAL_MS);
 }
 
@@ -2449,8 +2499,7 @@ async function startNextRoundOrGenerate() {
     if (freshSpare.length >= ROUND_SIZE) {
       openRound();
       fetchJson(`/api/setter/training?${trainingQS()}`)
-        .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); })
-        .catch(() => { /* background refresh only */ });
+        .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); }); // background refresh only
       return;
     }
     // STAGGERED OPEN (owner HARD RULE 2026-08-31, replacing 2026-08-28's
@@ -2462,8 +2511,7 @@ async function startNextRoundOrGenerate() {
     if (localSpare.length) {
       openRound();
       fetchJson(`/api/setter/training?${trainingQS()}`)
-        .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); })
-        .catch(() => { /* background refresh only */ });
+        .then((snap) => { if (snap.ok) mergeCasesSnapshot(snap.data, { replaceUnanswered: true }); }); // background refresh only
       return;
     }
     // Not enough locally: give the click INSTANT feedback, then check the
@@ -2501,7 +2549,7 @@ function kickoffFirstBatchEarly() {
   fetchJson("/api/setter/training/generate", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ agent_id: selectedAgentId, batch_size: ROUND_SIZE, share: SHARE_TOKEN }),
-  }).catch(() => {});
+  });  // fetchJson never rejects (H4)
 }
 
 async function generateMore() {
@@ -3136,8 +3184,12 @@ function maybeUpgradeChipFromEdits() {
 function startChipPoll() {
   stopChipPoll();
   const deadline = Date.now() + 90 * 1000;
+  let chipBusy = false; // F1
   chipPollHandle = setInterval(async () => {
     if (!LEARNED_CHIP || !LEARNED_CHIP.pending || Date.now() > deadline) { stopChipPoll(); return; }
+    if (chipBusy) return;
+    chipBusy = true;
+    try {
     const res = await fetchJson(`/api/setter/training?${trainingQS()}`);
     if (!res.ok) return;
     const edits = (res.data && res.data.instruction_edits) || [];
@@ -3148,6 +3200,7 @@ function startChipPoll() {
       renderLearnedChip();
       stopChipPoll();
     }
+    } finally { chipBusy = false; }
   }, 3000);
 }
 function stopChipPoll() {
