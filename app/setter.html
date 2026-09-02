@@ -6145,9 +6145,21 @@ async function doSend(btn) {
   const sentBody = draftEl ? draftEl.innerHTML : (row && row.draft_body) || "";
   const originalDraft = (row && row.original_draft_body) || "";
   const prev = row ? { status: row.status, sent_at: row.sent_at, sent_body: row.sent_body } : null;
+  // Owner report 2026-09-02: Approve sent the email but the conversation never
+  // showed it. Approve now grafts the sent message onto the thread exactly the
+  // way Send follow-up does, so the send is visible the instant it is clicked.
+  // mergeOptimisticSents retires this placeholder once the server's real SENT
+  // copy lands on a refresh; a failed send removes it again below.
+  let grafted = null;
   if (row && prev) {
     const now = new Date().toISOString();
     [qRow, aRow].forEach((r) => { if (r) { r.status = "sent"; r.sent_at = now; r.sent_body = sentBody; } });
+    grafted = { type: "SENT", time: now, body: sentBody, _optimistic: true };
+    // One graft object, appended once per DISTINCT row object (row is qRow or
+    // aRow, so a naive loop would double-post it into the same thread).
+    const graftTargets = [];
+    [qRow, aRow, row].forEach((r) => { if (r && graftTargets.indexOf(r) === -1) graftTargets.push(r); });
+    graftTargets.forEach((r) => { r.thread = (r.thread || []).concat([grafted]); });
     row._sendState = "inflight";   // in-pane state, not just a toast (2026-08-01)
     // Shield: a stale queue payload arriving mid-send must not resurrect
     // this row under Needs review — but the reply must still appear under
@@ -6158,6 +6170,7 @@ async function doSend(btn) {
     bumpCounts(row, prev.status, "sent");
     renderKpis(); renderQueueFilters(); renderQueue();
     if (String(selectedRowId) === String(id)) renderDetail(row);
+    if (String(selectedRowId) === String(id)) scrollSentIntoView(id);
   }
   const res = await runSendJob(payload, null);
   btn.disabled = false;
@@ -6172,6 +6185,9 @@ async function doSend(btn) {
       delete ROW_OVERRIDES[String(id)];
       delete row._sendState;
       [qRow, aRow].forEach((r) => { if (r) { r.status = prev.status; r.sent_at = prev.sent_at; r.sent_body = prev.sent_body; } });
+      // Remove exactly the object that was grafted (filter is idempotent, so
+      // the repeat when row === qRow/aRow costs nothing).
+      [qRow, aRow, row].forEach((r) => { if (r) r.thread = (r.thread || []).filter((m) => m !== grafted); });
       if (qRow && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
         QUEUE_ROWS.splice(Math.min(Math.max(qIdx, 0), QUEUE_ROWS.length), 0, qRow);
       }
