@@ -1526,6 +1526,21 @@ def strip_wiring_admissions(html: str) -> str:
         return html or ""
 
 
+# lint_draft patterns hoisted to module level (stability review H2) - the
+# pattern text is byte-identical to the former inline literals; lint
+# acceptance semantics are frozen.
+_LINT_SELL_RE = re.compile(
+    r"(where|so that|so) (i|we) (can|could|will|'ll|’ll)\s+(run|walk|show|take|go|talk|cover|explain|demo)"
+    r"|to (run|walk) (you )?through|where (i|we) (can|could) (run|walk|show|cover|explain)", re.I)
+_LINT_TIME_RE = re.compile(
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|\d{1,2}:\d{2}|\d{1,2}\s?(am|pm))\b", re.I)
+_LINT_REASK_RE = re.compile(
+    r"would you be (open|up) for? ?(to)? ?a (quick |short |brief )?(call|chat)"
+    r"|would you be open to a call|open to a quick call|interested in a call", re.I)
+_LINT_PRICE_RE = re.compile(r"[£$€]\s?\d[\d,]*(?:\.\d+)?\s?[km]?\b", re.I)
+_LINT_BARE_VALUE_RE = re.compile(r"[£$€\d\s,.km%–—-]+", re.I)
+
+
 def lint_draft(html: str, ctx: dict):
     """Deterministic pre-send checks. Returns (ok, reason)."""
     ctx = ctx or {}
@@ -1600,13 +1615,8 @@ def lint_draft(html: str, ctx: dict):
     # sentences that carry a time/day so a genuine answer to "what happens
     # on the call?" elsewhere in the reply stays legal.
     if ctx.get("lead_proposed_time") or ctx.get("lead_requested_call"):
-        _sell_re = re.compile(
-            r"(where|so that|so) (i|we) (can|could|will|'ll|’ll)\s+(run|walk|show|take|go|talk|cover|explain|demo)"
-            r"|to (run|walk) (you )?through|where (i|we) (can|could) (run|walk|show|cover|explain)", re.I)
-        _time_re = re.compile(
-            r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|\d{1,2}:\d{2}|\d{1,2}\s?(am|pm))\b", re.I)
         for _sent in re.split(r"(?<=[.?!])\s+", _TAG_RE.sub(" ", text)):
-            if _time_re.search(_sent) and _sell_re.search(_sent):
+            if _LINT_TIME_RE.search(_sent) and _LINT_SELL_RE.search(_sent):
                 return False, ("The call is already agreed - the scheduling sentence must be "
                                "times only ('I can do X or Y - does either work?'). Drop the "
                                "clause selling what the call will cover ('where I can run "
@@ -1616,10 +1626,7 @@ def lint_draft(html: str, ctx: dict):
     # open to a call on..." - re-pitching a call they already asked for
     # "should never happen"). When the lead requested the call, the draft
     # must propose times DIRECTLY, never re-ask openness.
-    if ctx.get("lead_requested_call") and re.search(
-            r"would you be (open|up) for? ?(to)? ?a (quick |short |brief )?(call|chat)"
-            r"|would you be open to a call|open to a quick call|interested in a call",
-            _TAG_RE.sub(" ", text), re.I):
+    if ctx.get("lead_requested_call") and _LINT_REASK_RE.search(_TAG_RE.sub(" ", text)):
         return False, ("The lead already asked for the call - never re-ask whether they'd "
                        "be open to one. Propose the two times directly (e.g. 'Does Monday at "
                        "10:00 or Monday at 12:00 work for you?') and confirm who should join.")
@@ -1667,8 +1674,7 @@ def lint_draft(html: str, ctx: dict):
                                 str(ctx.get("instructions") or "") + "\n"
                                 + str(ctx.get("owner_facts") or ""))
             if re.search(r"pric|cost|fee|charge|tier", s, re.I))
-        _taught_prices = set(re.findall(r"[£$€]\s?\d[\d,]*(?:\.\d+)?\s?[km]?\b",
-                                        _price_src, re.I))
+        _taught_prices = set(_LINT_PRICE_RE.findall(_price_src))
         _plain_all_norm = re.sub(r"[\s,]", "", _TAG_RE.sub(" ", text).lower())
         if _taught_prices and not any(
                 re.sub(r"[\s,]", "", v.lower()) in _plain_all_norm for v in _taught_prices):
@@ -1683,7 +1689,7 @@ def lint_draft(html: str, ctx: dict):
     for _p in re.split(r"<br\s*/?>|</div>|</p>", text):
         _pt = _TAG_RE.sub(" ", _p).strip()
         if (_pt and len(_pt) <= 30 and re.search(r"\d", _pt)
-                and re.fullmatch(r"[£$€\d\s,.km%–—-]+", _pt, re.I)):
+                and _LINT_BARE_VALUE_RE.fullmatch(_pt)):
             return False, ("A bare figure ('" + _pt + "') sits on its own line - weave "
                            "it into a sentence that answers the lead.")
     # LEAD-PROPOSED TIME enforcement (owner report 2026-08-27: "countless
@@ -3066,20 +3072,17 @@ def _visible_digit_runs(html: str) -> set:
 _CTRL_MAP = {"\u0018": "'", "\u0019": "'", "\u001c": '"', "\u001d": '"'}
 
 
+_CTRL_TABLE = {i: None for i in range(32) if chr(i) not in "\n\t\r"}
+_CTRL_TABLE.update({ord(k): v for k, v in _CTRL_MAP.items()})
+
+
 def _scrub_control_chars(html: str) -> str:
     """Strip C0 control characters a model occasionally emits in place of
     smart punctuation (audit 2026-09-01, live: "Here\u0019s" rendered as a
     broken glyph on a served card). Common apostrophe/quote forms map to
     their intended character; everything else below 0x20 except newline,
     tab and carriage return is dropped."""
-    out = []
-    for ch in (html or ""):
-        o = ord(ch)
-        if o >= 32 or ch in "\n\t\r":
-            out.append(ch)
-        elif ch in _CTRL_MAP:
-            out.append(_CTRL_MAP[ch])
-    return "".join(out)
+    return (html or "").translate(_CTRL_TABLE)  # identical mapping, C-speed (P4)
 
 
 def proofread_draft(html: str, sender_first: str = "", booking_link: str = "", *, timeout: float = None):
@@ -13314,6 +13317,24 @@ def _get_training_merge_lock(agent_id: str):
         return lock
 
 
+_TRAINING_IV_LOCKS: dict = {}
+_TRAINING_IV_LOCKS_GUARD = threading.Lock()
+
+
+def _get_training_iv_lock(agent_id: str):
+    """Per-agent lock serializing interview-set GENERATION (stability
+    review C3/R3): the questions route and the prewarm could each mint a
+    set while the other's model call was in flight, stacking duplicate
+    unanswered sets. Held across the one model call on purpose - it guards
+    generation only, never the doc."""
+    with _TRAINING_IV_LOCKS_GUARD:
+        lock = _TRAINING_IV_LOCKS.get(agent_id)
+        if lock is None:
+            lock = threading.Lock()
+            _TRAINING_IV_LOCKS[agent_id] = lock
+        return lock
+
+
 def _get_training_doc_lock(agent_id: str) -> threading.Lock:
     with _TRAINING_DOC_LOCKS_GUARD:
         lock = _TRAINING_DOC_LOCKS.get(agent_id)
@@ -13410,7 +13431,12 @@ def _resolve_share_scope(agent_id, share_token: str, public: bool = False):
     return agent_id, None
 
 
-def _load_training(agent_id: str) -> dict:
+def _load_training(agent_id: str, *, strict: bool = False) -> dict:
+    """strict=True (stability review 2026-09-01, blocker C1): a writer's
+    load->save window must never turn a Supabase read FAILURE into the
+    default empty doc and then persist it - that silently wiped a whole
+    training doc during an outage. strict raises on a failed read; the
+    success path and the genuinely-absent-row path are unchanged."""
     default = {"cases": [], "answers": {}, "used_reply_ids": [], "readiness_history": [],
                "generating": {"status": "idle"}, "pending_merges": [],
                "created_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
@@ -13418,6 +13444,8 @@ def _load_training(agent_id: str) -> dict:
         return default
     try:
         rows = _SB("GET", f"{AGENTS_TABLE}?id=eq.{_training_doc_id(agent_id)}&select=doc")
+        if rows is None and strict:
+            raise RuntimeError("training doc read failed")
         if isinstance(rows, list) and rows:
             doc = dict(rows[0].get("doc") or {})
             doc.setdefault("cases", [])
@@ -13435,7 +13463,8 @@ def _load_training(agent_id: str) -> dict:
             doc.setdefault("created_at", default["created_at"])
             return doc
     except Exception:  # noqa: BLE001
-        pass
+        if strict:
+            raise
     return default
 
 
@@ -14678,7 +14707,9 @@ def route_training_get(params):
                     and str(generating.get("status")) != "running"
                     and not _gen_raw.get("retrain_queued")
                     and not _get_training_merge_lock(agent_id).locked()
-                    and (doc.get("pending_merges") or not _recent or _recent < _cutoff)):
+                    and (doc.get("pending_merges") or not _recent or _recent < _cutoff)
+                    and (_time.monotonic() - _HEAL_KICK_AT.get(agent_id, 0.0)) >= 10.0):
+                _HEAL_KICK_AT[agent_id] = _time.monotonic()
                 _kick_off_training_retrain(agent_id, redraft="pool")
         except Exception:  # noqa: BLE001 - healing is best-effort, the poll must answer
             pass
@@ -14887,7 +14918,7 @@ def _finish_training_generation(agent_id: str, status: str, error: str | None = 
         # route and every other writer so a client answer committed between
         # this load and save is never clobbered (pure dict work + one save).
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             marker = {"status": status, "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")}
             if error is not None:
                 marker["error"] = error
@@ -15020,13 +15051,14 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # asserted the pre-teach facts ("we don't provide a phone number").
         # Never draft a single fresh case while queued teachings are waiting:
         # drain them into the brain first, under the merge lock.
+        doc = _load_training(agent_id)
         try:
-            if _load_training(agent_id).get("pending_merges"):
+            if doc.get("pending_merges"):
                 _run_pending_merge_drain(agent_id)  # per-entry merge lock inside
                 agent = _load_agent(agent_id) or agent
+                doc = _load_training(agent_id)  # post-drain copy (P2: one load on the common path)
         except Exception:  # noqa: BLE001 - a failed drain must never block generation
             pass
-        doc = _load_training(agent_id)
         existing_cases = list(doc.get("cases") or [])
         # Standing staged questions (owner ruling 2026-08-20, every SDR, every
         # campaign) take priority within the batch: seed the ones this agent
@@ -15243,7 +15275,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                 return
             try:
                 with _get_training_doc_lock(agent_id):
-                    fd = _load_training(agent_id)
+                    fd = _load_training(agent_id, strict=True)
                     have = {str(x.get("id")) for x in (fd.get("cases") or [])}
                     if str(case.get("id")) not in have:
                         fd["cases"] = list(fd.get("cases") or []) + [case]
@@ -15361,7 +15393,7 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # across a model call. Serializing just this window is enough to keep
         # an answer that landed while the batch built from being clobbered.
         with _get_training_doc_lock(agent_id):
-            fresh_doc = _load_training(agent_id)
+            fresh_doc = _load_training(agent_id, strict=True)
             # Most real/synthetic cases already landed incrementally above -
             # append only what hasn't (recycled cases, or landings that
             # failed), keyed by id so nothing ever duplicates.
@@ -15471,7 +15503,7 @@ def _flag_training_retrain_queued(agent_id: str, redraft=True):
     under the client's eyes. Never raises out of a background thread."""
     try:
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             gen = dict(doc.get("generating") or {})
             gen["retrain_queued"] = "pool" if redraft == "pool" else True
             doc["generating"] = gen
@@ -15569,7 +15601,7 @@ def _maybe_run_queued_generate(agent_id):
         # Flag read+clear under the doc lock so a concurrent answer written
         # between this load and save is never clobbered.
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             gen = dict(doc.get("generating") or {})
             queued = gen.get("generate_queued")
             if not queued:
@@ -15585,7 +15617,7 @@ def _maybe_run_queued_generate(agent_id):
         # The running-marker write is a full-doc save too - same lock, its own
         # short window.
         with _get_training_doc_lock(agent_id):
-            marker_doc = _load_training(agent_id)
+            marker_doc = _load_training(agent_id, strict=True)
             gen0 = dict(marker_doc.get("generating") or {})
             gen0.pop("kind", None)
             marker_doc["generating"] = _merge_running_marker(
@@ -15760,6 +15792,7 @@ def _redraft_training_pool(agent_id: str) -> int:
             # order rounds will consume.
             pool = pool[:TRAINING_REDRAFT_HORIZON]
         updated = 0
+        _landed = set()  # ids persisted by _land_redraft (stability review C2/P3)
         if pool:
             digest = _prefix_latest_rules(_latest_owner_rules(train_agent, doc),
                                           _training_session_feedback_digest(doc))
@@ -15781,13 +15814,14 @@ def _redraft_training_pool(agent_id: str) -> int:
             def _land_redraft(case):
                 try:
                     with _get_training_doc_lock(agent_id):
-                        fresh = _load_training(agent_id)
+                        fresh = _load_training(agent_id, strict=True)
                         fcases = list(fresh.get("cases") or [])
                         for j, fc in enumerate(fcases):
                             if str(fc.get("id")) == str(case.get("id")):
                                 fcases[j] = case
                                 fresh["cases"] = fcases
                                 _save_training(agent_id, fresh)
+                                _landed.add(str(case.get("id")))
                                 return
                 except Exception:  # noqa: BLE001 - best-effort; the final save reconciles
                     pass
@@ -15813,17 +15847,31 @@ def _redraft_training_pool(agent_id: str) -> int:
         # this sweep ran). Doc lock wraps ONLY this reload→save window,
         # never the redraft loop above (which runs the model).
         with _get_training_doc_lock(agent_id):
-            fresh = _load_training(agent_id)
+            fresh = _load_training(agent_id, strict=True)
             if updated:
+                # Only re-apply landings that FAILED, and never over a copy a
+                # concurrent worker stamped newer than this pass (stability
+                # review C2/P3: the old unconditional rewrite could roll a
+                # later redraft back and cost a second full-doc write).
+                _st = lambda c: str((c or {}).get("redrafted_at") or (c or {}).get("generated_at") or "")
                 redrafted = {str(c.get("id")): c for c in cases
-                             if str(c.get("redrafted_at") or "") == stamp}
-                fcases = list(fresh.get("cases") or [])
-                fresh["cases"] = [redrafted.get(str(fc.get("id")), fc) for fc in fcases]
+                             if str(c.get("redrafted_at") or "") == stamp and str(c.get("id")) not in _landed}
+                if redrafted:
+                    fcases = list(fresh.get("cases") or [])
+                    fresh["cases"] = [redrafted[str(fc.get("id"))]
+                                      if (str(fc.get("id")) in redrafted and _st(fc) <= stamp) else fc
+                                      for fc in fcases]
             if covers_at:
                 fresh["brain_covers_at"] = max(covers_at, str(fresh.get("brain_covers_at") or ""))
             _save_training(agent_id, fresh)
         return updated
-    except Exception:  # noqa: BLE001 - never raise out of a background thread
+    except Exception as e:  # noqa: BLE001 - never raise out of a background thread
+        if _LOG:  # R2: a crashed sweep is not "nothing to redraft"
+            try:
+                _LOG("/api/setter/training/retrain:pool_sweep_failed",
+                     {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+            except Exception:  # noqa: BLE001
+                pass
         return 0
 
 
@@ -15841,7 +15889,7 @@ def _maybe_run_queued_retrain(agent_id):
         # for its own saves and runs the model) is called OUTSIDE the lock so
         # the lock is never nested nor held across a model call.
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             gen = dict(doc.get("generating") or {})
             flag = gen.get("retrain_queued")
             if flag:
@@ -16468,29 +16516,13 @@ def _training_newest_teaching_at(doc: dict) -> str:
 # Per-agent consecutive no-progress sweep counter (in-memory; resets on
 # restart, which is harmless - it only bounds the stale-reflag chain).
 _SWEEP_NOPROG: dict = {}
-
-
-def _drain_pending_merges(agent_id: str) -> list:
-    """Latency fix (2026-07-14): route_training_answer no longer merges a
-    "remember" note into the agent's instructions inline - it queues
-    {note, source, at} onto the training doc's own `pending_merges` list
-    instead (see route_training_answer). This is the other half: reloads
-    the training doc fresh, pops every queued entry, and persists the empty
-    list immediately (before any of the actual gpt-5-mini merge calls run)
-    so a note is never double-applied and a fresh "remember" answer that
-    lands mid-drain just queues its own new entry for the NEXT pass to pick
-    up. Only `pending_merges` is ours to write here - reloading right before
-    saving mirrors the same lost-update discipline the worker's own final
-    save already uses, so an answer/cases write that lands concurrently is
-    never clobbered. Returns the popped entries in submission order (empty
-    list if nothing was queued)."""
-    with _get_training_doc_lock(agent_id):
-        doc = _load_training(agent_id)
-        pending = list(doc.get("pending_merges") or [])
-        if pending:
-            doc["pending_merges"] = []
-            _save_training(agent_id, doc)
-    return pending
+# Per-agent monotonic stamp of the last poll-heal kick (stability review
+# C4): up to four pollers per open page hit route_training_get, and the
+# retrain worker only writes its "running" marker a few hundred ms after
+# being kicked, so the pending-merges path could kick several times in
+# that window. 10s is longer than the marker window, shorter than any
+# legitimate re-heal.
+_HEAL_KICK_AT: dict = {}
 
 
 def _pop_one_pending_merge(agent_id: str):
@@ -16501,7 +16533,7 @@ def _pop_one_pending_merge(agent_id: str):
     is at risk, and concurrent drains interleave instead of one holding the
     whole queue."""
     with _get_training_doc_lock(agent_id):
-        doc = _load_training(agent_id)
+        doc = _load_training(agent_id, strict=True)
         pending = list(doc.get("pending_merges") or [])
         if not pending:
             return None
@@ -16526,7 +16558,10 @@ def _run_pending_merge_drain(agent_id: str):
         if not mlock.acquire(timeout=120):
             return  # another drain is mid-entry and slow - it will finish the queue
         try:
-            entry = _pop_one_pending_merge(agent_id)
+            try:
+                entry = _pop_one_pending_merge(agent_id)
+            except Exception:  # noqa: BLE001 - a failed read must never spin the loop (C1 strict)
+                return
             if entry is None:
                 return
             merge_agent = _load_agent(agent_id)
@@ -16539,8 +16574,15 @@ def _run_pending_merge_drain(agent_id: str):
                 if note:
                     merge_correction_into_instructions(
                         merge_agent, note, source=(entry or {}).get("source") or "training")
-        except Exception:  # noqa: BLE001 - one bad merge must never stall the queue
-            pass
+        except Exception as e:  # noqa: BLE001 - one bad merge must never stall the queue
+            if _LOG:  # a dropped teaching leaves a trace (stability review R1)
+                try:
+                    _LOG("/api/setter/training/merge:entry_failed",
+                         {"agent_id": agent_id, "kind": (entry or {}).get("kind") or "note",
+                          "source": (entry or {}).get("source") or "", "error": str(e)[:200]},
+                         actor="system")
+                except Exception:  # noqa: BLE001
+                    pass
         finally:
             mlock.release()
 
@@ -16550,7 +16592,8 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
     every pass (including the very first), is persisting the "running"
     marker itself - _kick_off_training_retrain no longer writes it from the
     request thread. Only THEN does it drain and merge any queued
-    pending_merges (see _drain_pending_merges) - in submission order, each
+    pending_merges (see _run_pending_merge_drain; in share mode that drain
+    runs on its own thread, one entry per merge-lock hold) - in submission order, each
     via merge_correction_into_instructions, which already does its own safe
     agent reload/save and always falls back to a dumb append on any
     failure, so a bad merge never blocks the retrain below. THEN reloads
@@ -16574,7 +16617,7 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             # pending-merge model calls and the retrain loop below each lock
             # independently (or run the model) and must NOT be held under it.
             with _get_training_doc_lock(agent_id):
-                marker_doc = _load_training(agent_id)
+                marker_doc = _load_training(agent_id, strict=True)
                 # MERGE into the existing generating dict, never replace it: a
                 # generate_queued flag written by the route's flagger milliseconds
                 # earlier must survive this pass (live-verify race 2026-08-20 -
@@ -16712,7 +16755,7 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
             # exactly as the fresh reload shows, so an answer that landed on any
             # case while classify/draft round trips were in flight is never lost.
             with _get_training_doc_lock(agent_id):
-                fresh = _load_training(agent_id)
+                fresh = _load_training(agent_id, strict=True)
                 if cases is not None:
                     # Freshest-wins per-id merge, never wholesale (audit
                     # 2026-09-01): this snapshot predates any sweep/generate
@@ -16736,12 +16779,18 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                 break
             # else: more feedback landed while this pass ran - loop again
             # with the fresher digest.
-    except Exception:  # noqa: BLE001 - a background thread must never raise
+    except Exception as e:  # noqa: BLE001 - a background thread must never raise
+        if _LOG:  # a crashed pass must be distinguishable from an idle one (R2)
+            try:
+                _LOG("/api/setter/training/retrain:worker_failed",
+                     {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+            except Exception:  # noqa: BLE001
+                pass
         try:
             # Any inner doc-lock `with` above has already released by the time
             # this handler runs, so re-taking it here doesn't nest.
             with _get_training_doc_lock(agent_id):
-                doc = _load_training(agent_id)
+                doc = _load_training(agent_id, strict=True)
                 gen = dict(doc.get("generating") or {})
                 gen["status"] = "idle"
                 gen["finished_at"] = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
@@ -17091,15 +17140,24 @@ def route_training_interview(payload):
                 threading.Thread(target=_prewarm_training_interview,
                                  args=(agent_id,), daemon=True).start()
                 return 200, {"questions": [], "ready": False}
-            questions_text = _generate_interview_questions(agent, doc)
-            questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in questions_text]
-            with _get_training_doc_lock(agent_id):
+            # Serialize generation per agent (stability review C3): a caller
+            # that waited behind another's model call re-checks for the set
+            # that call minted and returns it instead of minting a duplicate.
+            with _get_training_iv_lock(agent_id):
                 doc = _load_training(agent_id)
                 interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
-                interviews.append({"questions": questions, "answers": {}, "asked_at": at})
-                doc["interviews"] = interviews[-12:]
-                _save_training(agent_id, doc)
-            return 200, {"questions": questions, "asked_at": at}
+                latest = interviews[-1] if interviews else None
+                if latest and _iv_unanswered(latest):
+                    served = _drop_banned_interview_questions(_iv_unanswered(latest))
+                    if served:
+                        return 200, {"questions": served, "ready": True,
+                                     "asked_at": latest.get("asked_at") or ""}
+                questions_text = _generate_interview_questions(agent, doc)
+                questions, at2, reused = _append_interview_set(agent_id, questions_text)
+            if reused:
+                served = _drop_banned_interview_questions(questions)
+                return 200, {"questions": served, "ready": True, "asked_at": at2}
+            return 200, {"questions": questions, "asked_at": at2}
 
         if action == "answers":
             raw = payload.get("answers")
@@ -17107,7 +17165,7 @@ def route_training_interview(payload):
                 return 400, {"error": "answers is required"}
             qa_lines = []
             with _get_training_doc_lock(agent_id):
-                doc = _load_training(agent_id)
+                doc = _load_training(agent_id, strict=True)
                 has_cases = bool(doc.get("cases"))
                 interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
                 # Rotation hardening (2026-08-24): if the training doc was
@@ -17201,7 +17259,7 @@ def route_training_interview(payload):
             # so the redraft's agent snapshot (and every future draft) fills the
             # [BOOKING LINK] placeholder from the field. Partial save merges onto
             # the stored doc, so nothing else on the agent is touched.
-            if booking_url_ans and booking_url_ans != str((_load_agent(agent_id) or {}).get("booking_link") or "").strip():
+            if booking_url_ans and booking_url_ans != str(agent.get("booking_link") or "").strip():
                 try:
                     _save_agent({"id": agent_id, "booking_link": booking_url_ans})
                 except Exception:  # noqa: BLE001 - never fail the answer save on this
@@ -17314,6 +17372,28 @@ def _dedupe_interview_questions(new_qs, prior_qs):
         return list(new_qs or [])
 
 
+def _append_interview_set(agent_id: str, questions_text):
+    """Mint ids and append ONE interview set under the doc lock, unless an
+    unanswered set already exists at append time (re-checked under the
+    lock). Returns (questions, asked_at, reused) - reused=True means an
+    existing unanswered set was returned instead. The single body behind
+    the questions route and the prewarm (stability review H3)."""
+    at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+    questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in (questions_text or [])]
+    with _get_training_doc_lock(agent_id):
+        doc = _load_training(agent_id, strict=True)
+        interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+        latest = interviews[-1] if interviews else None
+        if latest and _iv_unanswered(latest):
+            return _iv_unanswered(latest), str(latest.get("asked_at") or ""), True
+        if not questions:
+            return [], at, False
+        interviews.append({"questions": questions, "answers": {}, "asked_at": at})
+        doc["interviews"] = interviews[-12:]
+        _save_training(agent_id, doc)
+    return questions, at, False
+
+
 def _prewarm_training_interview(agent_id: str):
     """Pre-generate the first offer-interview question set in the background
     (owner ask 2026-08-25: the portal's 'Getting your questions ready'
@@ -17321,6 +17401,9 @@ def _prewarm_training_interview(agent_id: str):
     share-mint / duplicate / reset time makes launch instant). The questions
     route re-serves an unanswered set idempotently, so the page just finds
     these waiting. Never stacks a second unanswered set; never raises."""
+    _ivlock = _get_training_iv_lock(agent_id)
+    if not _ivlock.acquire(blocking=False):
+        return  # a generation is already in flight for this agent (R3)
     try:
         agent = _load_agent(agent_id)
         if not agent:
@@ -17333,19 +17416,16 @@ def _prewarm_training_interview(agent_id: str):
         questions_text = _generate_interview_questions(agent, doc)
         if not questions_text:
             return
-        questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in questions_text]
-        at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
-        with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
-            interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
-            latest = interviews[-1] if interviews else None
-            if latest and _iv_unanswered(latest):
-                return  # the page's own fetch beat us - keep its set
-            interviews.append({"questions": questions, "answers": {}, "asked_at": at})
-            doc["interviews"] = interviews[-12:]
-            _save_training(agent_id, doc)
-    except Exception:  # noqa: BLE001
-        pass
+        _append_interview_set(agent_id, questions_text)  # re-checks under the doc lock
+    except Exception as e:  # noqa: BLE001
+        if _LOG:
+            try:
+                _LOG("/api/setter/training/interview:prewarm_failed",
+                     {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        _ivlock.release()
 
 
 # Banned interview shapes (owner rule 2026-08-29, live-confirmed leak): the
@@ -17415,12 +17495,13 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
         covered_topics = {t for q in answered_qs if (t := _iv_topic(q))}
         if len(covered_topics) >= 7 or answered_rounds >= 3:
             return []
+        _manual = _agent_instructions(agent)  # once (H5)
         r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
                  {"Authorization": f"Bearer {key}"},
                  {"model": OPENAI_MODEL,
                   "messages": [{"role": "system", "content": TRAINING_INTERVIEW_SYSTEM},
                               {"role": "user", "content": json.dumps({
-                                  "instruction_manual": _agent_instructions(agent)[:8000],
+                                  "instruction_manual": _manual[:8000],
                                   "already_asked": prior[-40:],
                                   "recent_feedback": _training_session_feedback_digest(doc, 1200)})}],
                   "response_format": {"type": "json_schema", "json_schema": {
@@ -17450,7 +17531,7 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
                 if not str(agent.get("booking_link") or "").strip() and not any("booking" in q.lower() for q in out):
                     _pins.append("When a lead asks to schedule or asks for your booking link, which exact "
                                  "booking link should the inbox manager send? Paste the URL (or reply 'none yet').")
-                _lowmanual = _agent_instructions(agent).lower()
+                _lowmanual = _manual.lower()
                 if "phone" not in _lowmanual.replace("[phone number]", "") and not any("phone" in q.lower() for q in out):
                     _pins.append("If a lead asks for a phone number to call, what number should the inbox "
                                  "manager give? (or reply 'we work by email').")
@@ -17483,8 +17564,8 @@ def _prebuild_training_pool(agent_id: str):
             return
         camp = [str(c) for c in (agent.get("campaign_ids") or [])]
         lock = _get_training_gen_lock(agent_id)
+        doc = _load_training(agent_id)
         for _ in range(7):
-            doc = _load_training(agent_id)
             have = len(doc.get("cases") or [])
             if have >= TRAINING_BANK_MAX:
                 break
@@ -17495,7 +17576,8 @@ def _prebuild_training_pool(agent_id: str):
                 _training_generate_worker(agent_id, agent, camp, need, is_share_mode=True)
             finally:
                 lock.release()
-            if len(_load_training(agent_id).get("cases") or []) <= have:
+            doc = _load_training(agent_id)  # one load per batch (P5): growth check + next iteration
+            if len(doc.get("cases") or []) <= have:
                 break  # pool stopped growing (no more unique scenarios) - stop
         # Drain any retrain/generate flag queued WHILE this prebuild held the
         # gen lock (fastloop fix 2026-08-29). This worker is called directly
@@ -17505,8 +17587,13 @@ def _prebuild_training_pool(agent_id: str):
         # on pre-interview drafts. The sweep runs the queued redraft now that
         # the lock is free, exactly like every threadmain's own tail.
         _sweep_orphaned_training_flags(agent_id)
-    except Exception:  # noqa: BLE001 - background pre-build never raises
-        pass
+    except Exception as e:  # noqa: BLE001 - background pre-build never raises
+        if _LOG:  # R2
+            try:
+                _LOG("/api/setter/training/generate:prebuild_failed",
+                     {"agent_id": agent_id, "error": str(e)[:200]}, actor="system")
+            except Exception:  # noqa: BLE001
+                pass
 
 
 def route_training_share(payload):
