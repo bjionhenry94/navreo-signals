@@ -18329,6 +18329,8 @@ _PARK_CHURN_CACHE: dict = {}
 _PARK_CHURN_TTL_S = 600
 PARK_CHURN_DAYS = 42       # trailing window (owner spec: "last 6 weeks")
 PARK_CHURN_MIN = 2         # flag at 2+ parks; the UI escalates 3+ to "retire"
+PARK_CYCLE_MIN_DAYS = 5    # a held run this long (through snapshot gaps) = a real 7-day rest
+PARK_CYCLE_SAMPLE = 5      # boxes per domain read from mailbox_stats_daily
 
 
 def rest_enforce(mode: str = "preview") -> dict:
@@ -18484,36 +18486,107 @@ def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
             order_days.setdefault(d, set()).add(day)
             if landed:
                 landed_days.setdefault(d, set()).add(day)
-    flagged = sorted(d for d, ds in order_days.items() if len(ds) >= min_parks)
+    # ── Verified rest cycles (owner audit 2026-09-02) ───────────────────
+    # "Landed" park days are NOT rests: the cap-history audit found the tab
+    # crediting 288 "cycles" across 125 domains while the daily cap snapshots
+    # (mailbox_stats_daily.message_per_day, per box per day) showed only 55
+    # rests that actually ran their course — getnavreo.biz read 7 cycles and
+    # had its caps at 0 for exactly ONE day. A cycle now means: the park
+    # landed, the domain's boxes STAYED at cap 0 for a real rest, and the
+    # domain came back to sending. Counted from the snapshots, not the log:
+    #   held day   = >= 80% of the sampled boxes at message_per_day 0
+    #   run        = consecutive held snapshots (the sync skips days, so a
+    #                calendar gap with no snapshot in between does not break it)
+    #   completed  = the run is followed by a live snapshot (it came BACK) and
+    #                spans >= PARK_CYCLE_MIN_DAYS (5 — a 7-day rest read through
+    #                snapshot gaps); a run still held today is `resting_days`,
+    #                not a cycle; a run shorter than that which ended is a park
+    #                that never held (`broken`).
+    # Up to PARK_CYCLE_SAMPLE boxes per domain keep the read bounded (a park
+    # zeroes the whole domain, so a handful of boxes is representative).
+    candidates = sorted(order_days)
     ledger = {str(r.get("domain") or "").lower()
               for r in (sb_get_all("deliverability_resting_ledger?select=domain"
                                    "&dismissed=is.false&order=domain.asc") or [])}
     boxes: dict = {}
     ws: dict = {}
-    for i in range(0, len(flagged), 40):
-        for b in (sb_get_all("mailboxes?select=domain,workspace&order=smartlead_id.asc"
-                             "&domain=in.(%s)" % ",".join(flagged[i:i + 40])) or []):
+    sample: dict = {}
+    for i in range(0, len(candidates), 40):
+        for b in (sb_get_all("mailboxes?select=smartlead_id,domain,workspace&order=smartlead_id.asc"
+                             "&domain=in.(%s)" % ",".join(candidates[i:i + 40])) or []):
             d = str(b.get("domain") or "").lower()
             boxes[d] = boxes.get(d, 0) + 1
             ws.setdefault(d, b.get("workspace") or "navreo")
+            if len(sample.setdefault(d, [])) < PARK_CYCLE_SAMPLE:
+                sample[d].append(int(b["smartlead_id"]))
+    dom_of = {sid: d for d, sids in sample.items() for sid in sids}
+    ids = sorted(dom_of)
+    # Look back a rest-length before the window so a cycle that ENDS inside
+    # the window is seen whole.
+    snap_since = (datetime.now(timezone.utc) - timedelta(days=days + 14)).date().isoformat()
+    cap: dict = {}   # domain -> day -> [zero, total]
+    for i in range(0, len(ids), 150):
+        for r in (sb_get_all("mailbox_stats_daily?select=smartlead_id,stat_date,message_per_day"
+                             f"&stat_date=gte.{snap_since}&order=smartlead_id.asc,stat_date.asc"
+                             "&smartlead_id=in.(%s)" % ",".join(str(x) for x in ids[i:i + 150])) or []):
+            d = dom_of.get(r.get("smartlead_id"))
+            if not d:
+                continue
+            c = cap.setdefault(d, {}).setdefault(str(r.get("stat_date") or "")[:10], [0, 0])
+            c[1] += 1
+            if int(r.get("message_per_day") or 0) == 0:
+                c[0] += 1
+    today = datetime.now(timezone.utc).date()
+
+    def _cycles(d: str) -> dict:
+        runs, cur = [], None
+        for day in sorted(cap.get(d) or {}):
+            z, t = cap[d][day]
+            held = t > 0 and z / t >= 0.8
+            if held:
+                cur = [day, day] if cur is None else [cur[0], day]
+            elif cur:
+                runs.append((cur[0], cur[1], False))
+                cur = None
+        if cur:
+            runs.append((cur[0], cur[1], True))
+        done, broken, resting_days = [], 0, 0
+        for a, b, ongoing in runs:
+            if ongoing:
+                resting_days = (today - datetime.fromisoformat(a).date()).days
+                continue
+            span = (datetime.fromisoformat(b).date() - datetime.fromisoformat(a).date()).days
+            if span >= PARK_CYCLE_MIN_DAYS:
+                if b >= since:
+                    done.append((a, b))
+            elif a >= since:
+                broken += 1
+        return {"cycles": len(done), "cycle_spans": done, "broken": broken,
+                "resting_days": resting_days}
+
     rows = []
-    for d in flagged:
+    for d in candidates:
         ds = sorted(order_days[d])
-        resting = d in ledger
-        cycles = len(landed_days.get(d) or ())
-        if resting and cycles == 0:
-            cycles = 1  # it IS parked — at least one park landed, however it got there
         orders = len(ds)
-        rows.append({"domain": d, "orders": orders, "cycles": cycles,
+        cy = _cycles(d)
+        landed = len(landed_days.get(d) or ())
+        if orders < min_parks and cy["cycles"] < min_parks:
+            continue
+        rows.append({"domain": d, "orders": orders,
+                     "cycles": cy["cycles"],            # VERIFIED completed rests
+                     "cycle_spans": cy["cycle_spans"],
+                     "landed": landed,                  # park days that zeroed boxes (old "cycles")
+                     "broken": cy["broken"],            # parks that never held a rest
+                     "resting_days": cy["resting_days"],
                      "parks": orders,  # legacy alias — clients before the cycles split
-                     "rest_not_holding": (orders - cycles) >= 3,
+                     "rest_not_holding": cy["broken"] >= 2,
                      "first_parked": ds[0], "last_parked": ds[-1],
-                     "resting_now": resting,
+                     "resting_now": (d in ledger) or cy["resting_days"] > 0,
                      "boxes": boxes.get(d, 0),
                      "workspace": ws.get(d, "navreo")})
     rows.sort(key=lambda r: r["last_parked"], reverse=True)   # ties: newest first
     rows.sort(key=lambda r: r["orders"], reverse=True)        # stable
-    rows.sort(key=lambda r: r["cycles"], reverse=True)        # true cycles first
+    rows.sort(key=lambda r: r["cycles"], reverse=True)        # verified cycles first
     out = {"ok": True, "days": days, "min_parks": min_parks, "rows": rows,
            "generated_at": datetime.now(timezone.utc).isoformat()}
     _PARK_CHURN_CACHE[key] = {"data": out, "ts": time.time()}
