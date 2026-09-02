@@ -18330,7 +18330,8 @@ _PARK_CHURN_TTL_S = 600
 PARK_CHURN_DAYS = 42       # trailing window (owner spec: "last 6 weeks")
 PARK_CHURN_MIN = 2         # flag at 2+ parks; the UI escalates 3+ to "retire"
 PARK_CYCLE_MIN_DAYS = 5    # a held run this long (through snapshot gaps) = a real 7-day rest
-PARK_CYCLE_SAMPLE = 5      # boxes per domain read from mailbox_stats_daily
+PARK_CYCLE_SAMPLE = 8      # boxes per domain read from mailbox_stats_daily
+PARK_SNAPSHOT_EPOCH = "2026-07-01"  # mailbox_stats_daily starts 2026-07-08: "all time" = since then
 
 
 def rest_enforce(mode: str = "preview") -> dict:
@@ -18444,8 +18445,10 @@ def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
     # Date-only bound: a full ISO timestamp carries "+00:00", whose "+" decodes
     # to a space in the query string and 400s the PostgREST read.
     since = (datetime.now(timezone.utc) - timedelta(days=days)).date().isoformat()
+    # All-time read (the log starts 2026-07-11): the window only scopes the
+    # per-row counts, "All time" cycles need every domain ever ordered parked.
     events = sb_get_all("app_activity_log?select=ts,action,payload"
-                        f"&ts=gte.{since}&action=in.(warmup_pause,reply-caps)"
+                        f"&ts=gte.{PARK_SNAPSHOT_EPOCH}&action=in.(warmup_pause,reply-caps)"
                         "&order=id.asc")
     if not isinstance(events, list):
         if hit:  # transient log hiccup — stale beats a broken tab
@@ -18511,19 +18514,22 @@ def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
     boxes: dict = {}
     ws: dict = {}
     sample: dict = {}
+    all_ids: dict = {}   # smartlead_id -> domain, EVERY box (30d reply rate below)
     for i in range(0, len(candidates), 40):
         for b in (sb_get_all("mailboxes?select=smartlead_id,domain,workspace&order=smartlead_id.asc"
                              "&domain=in.(%s)" % ",".join(candidates[i:i + 40])) or []):
             d = str(b.get("domain") or "").lower()
             boxes[d] = boxes.get(d, 0) + 1
             ws.setdefault(d, b.get("workspace") or "navreo")
+            all_ids[int(b["smartlead_id"])] = d
             if len(sample.setdefault(d, [])) < PARK_CYCLE_SAMPLE:
                 sample[d].append(int(b["smartlead_id"]))
     dom_of = {sid: d for d, sids in sample.items() for sid in sids}
     ids = sorted(dom_of)
-    # Look back a rest-length before the window so a cycle that ENDS inside
+    # Whole snapshot history (from PARK_SNAPSHOT_EPOCH): the window count and
+    # the "All time" count read the same runs, and a cycle that ENDS inside
     # the window is seen whole.
-    snap_since = (datetime.now(timezone.utc) - timedelta(days=days + 14)).date().isoformat()
+    snap_since = PARK_SNAPSHOT_EPOCH
     cap: dict = {}   # domain -> day -> [zero, total]
     for i in range(0, len(ids), 150):
         for r in (sb_get_all("mailbox_stats_daily?select=smartlead_id,stat_date,message_per_day"
@@ -18537,12 +18543,43 @@ def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
             if int(r.get("message_per_day") or 0) == 0:
                 c[0] += 1
     today = datetime.now(timezone.utc).date()
+    # Trailing-30d reply rate per domain from the LATEST mirror snapshot over
+    # every box on the domain (owner 2026-09-02: the audit backend's
+    # domain-health rows only cover the domains its inventory knows — 91 of
+    # 129 flagged domains had no row in ANY window, so the tab read "—").
+    # mailbox_stats_daily.sent_30d / replies_30d are Smartlead's own rolling
+    # counters, so this covers parked domains too (their last 30 days of
+    # sends before the park).
+    rr: dict = {}   # domain -> [sent_30d, replies_30d]
+    try:
+        latest = (sb_get_all("mailbox_stats_daily?select=stat_date"
+                             "&order=stat_date.desc&limit=1") or [{}])[0].get("stat_date")
+    except Exception:  # noqa: BLE001 — rate is context, never a 502
+        latest = None
+    if latest:
+        aid = sorted(all_ids)
+        for i in range(0, len(aid), 200):
+            for r in (sb_get_all("mailbox_stats_daily?select=smartlead_id,sent_30d,replies_30d"
+                                 f"&stat_date=eq.{str(latest)[:10]}&order=smartlead_id.asc"
+                                 "&smartlead_id=in.(%s)" % ",".join(str(x) for x in aid[i:i + 200])) or []):
+                d = all_ids.get(r.get("smartlead_id"))
+                if not d:
+                    continue
+                a = rr.setdefault(d, [0, 0])
+                a[0] += int(r.get("sent_30d") or 0)
+                a[1] += int(r.get("replies_30d") or 0)
 
     def _cycles(d: str) -> dict:
         runs, cur = [], None
         for day in sorted(cap.get(d) or {}):
             z, t = cap[d][day]
-            held = t > 0 and z / t >= 0.8
+            share = (z / t) if t else 0
+            # A run STARTS at >= 80% of boxes on cap 0 and only ENDS once the
+            # majority is live again (< 50% still at 0): a restore in flight
+            # (a few boxes woken, the rest still parked) is still the same rest,
+            # not "came back" — the 5-box sample misread krgglobaladvisors.info
+            # (44/52 at 0 on the day of the read) as a completed cycle.
+            held = t > 0 and (share >= 0.8 or (cur is not None and share >= 0.5))
             if held:
                 cur = [day, day] if cur is None else [cur[0], day]
             elif cur:
@@ -18550,44 +18587,55 @@ def park_churn_get(days: int = PARK_CHURN_DAYS, min_parks: int = PARK_CHURN_MIN,
                 cur = None
         if cur:
             runs.append((cur[0], cur[1], True))
-        done, broken, resting_days = [], 0, 0
+        done, done_all, broken, resting_days = [], [], 0, 0
         for a, b, ongoing in runs:
             if ongoing:
                 resting_days = (today - datetime.fromisoformat(a).date()).days
                 continue
             span = (datetime.fromisoformat(b).date() - datetime.fromisoformat(a).date()).days
             if span >= PARK_CYCLE_MIN_DAYS:
+                done_all.append((a, b))
                 if b >= since:
                     done.append((a, b))
             elif a >= since:
                 broken += 1
-        return {"cycles": len(done), "cycle_spans": done, "broken": broken,
-                "resting_days": resting_days}
+        return {"cycles": len(done), "cycle_spans": done,
+                "cycles_all": len(done_all), "cycle_spans_all": done_all,
+                "broken": broken, "resting_days": resting_days}
 
     rows = []
     for d in candidates:
-        ds = sorted(order_days[d])
+        ds = sorted(day for day in order_days[d] if day >= since)
         orders = len(ds)
         cy = _cycles(d)
         landed = len(landed_days.get(d) or ())
-        if orders < min_parks and cy["cycles"] < min_parks:
+        # Owner 2026-09-02: a row = a domain with at least one VERIFIED rest
+        # ever; park orders alone no longer earn a row (they're not rests).
+        if cy["cycles_all"] < 1:
             continue
+        sent30, rep30 = rr.get(d, [0, 0])
         rows.append({"domain": d, "orders": orders,
-                     "cycles": cy["cycles"],            # VERIFIED completed rests
+                     "cycles": cy["cycles"],            # VERIFIED completed rests in window
                      "cycle_spans": cy["cycle_spans"],
+                     "cycles_all": cy["cycles_all"],    # VERIFIED completed rests since snapshots began
+                     "cycle_spans_all": cy["cycle_spans_all"],
+                     "sent_30d": sent30, "replies_30d": rep30,
+                     "reply_rate_30d": (round(rep30 * 100.0 / sent30, 2) if sent30 else None),
+                     "stats_as_of": latest,
                      "landed": landed,                  # park days that zeroed boxes (old "cycles")
                      "broken": cy["broken"],            # parks that never held a rest
                      "resting_days": cy["resting_days"],
                      "parks": orders,  # legacy alias — clients before the cycles split
                      "rest_not_holding": cy["broken"] >= 2,
-                     "first_parked": ds[0], "last_parked": ds[-1],
+                     "first_parked": ds[0] if ds else None, "last_parked": ds[-1] if ds else None,
                      "resting_now": (d in ledger) or cy["resting_days"] > 0,
                      "boxes": boxes.get(d, 0),
                      "workspace": ws.get(d, "navreo")})
-    rows.sort(key=lambda r: r["last_parked"], reverse=True)   # ties: newest first
-    rows.sort(key=lambda r: r["orders"], reverse=True)        # stable
-    rows.sort(key=lambda r: r["cycles"], reverse=True)        # verified cycles first
+    rows.sort(key=lambda r: r["last_parked"] or "", reverse=True)   # ties: newest first
+    rows.sort(key=lambda r: r["cycles_all"], reverse=True)          # stable
+    rows.sort(key=lambda r: r["cycles"], reverse=True)              # window cycles first
     out = {"ok": True, "days": days, "min_parks": min_parks, "rows": rows,
+           "snapshots_since": PARK_SNAPSHOT_EPOCH, "stats_as_of": latest,
            "generated_at": datetime.now(timezone.utc).isoformat()}
     _PARK_CHURN_CACHE[key] = {"data": out, "ts": time.time()}
     return out, 200
