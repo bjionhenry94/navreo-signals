@@ -1947,36 +1947,49 @@ function renderNC() {
 }
 
 /* ── lane 3: landing + weekday ── */
-// Fleet reply rate, day by day. A quiet day is not a rate — under WK_MIN_SENT
-// the day is a gap in the line, not a zero.
-var WK_MIN_SENT = 200;
+// Fleet reply rate, day by day. A quiet day is not a rate — below the gate the
+// day is a gap in the line, not a zero.
+//
+// The gate is RELATIVE to the window on screen, not a fixed number of sends.
+// A flat 200 was a tiny fraction of a normal 34k weekday, so a 234-send Sunday
+// cleared it and plotted a rate computed on 0.7% of a day's volume — which then
+// set the chart's scale and buried the weekday line the reader came for. 15% of
+// the window's typical (median non-zero) day keeps a genuinely quiet weekday
+// readable while a weekend or an outage day drops out, at any client scale.
+// The floor of 50 stops a near-dead window from gating nothing at all.
+function wkMinSent(sends) {
+  var v = sends.filter(function (x) { return x > 0; }).sort(function (a, b) { return a - b; });
+  if (!v.length) return 50;
+  var m = v.length >> 1;
+  var med = v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+  return Math.max(50, 0.15 * med);
+}
 function weekSeries(n) {
   // Per-client daily rate when a true series exists (All / Asteri / KRG via
   // client-windows); the fleet trends line is the fallback — renderWeek says
   // which one is on screen so a client view never silently reads fleet-wide.
   var out = { days: [], rate: [], sent: [], scope: "fleet" };
   var cs = cwTrusted(state.client === "All" ? "__all" : state.client);
+  var from0, i;
   if (cs && CW.days && CW.days.length) {
-    var min = state.client === "All" ? WK_MIN_SENT : 50;
-    var from0 = Math.max(0, CW.days.length - n);
-    for (var j = from0; j < CW.days.length; j++) {
-      var sj = cs.sent[j] || 0;
-      out.days.push(CW.days[j]);
-      out.sent.push(sj);
-      out.rate.push(sj < min ? null : Math.round((cs.replied[j] || 0) * 10000 / sj) / 100);
-    }
+    from0 = Math.max(0, CW.days.length - n);
+    for (i = from0; i < CW.days.length; i++) { out.days.push(CW.days[i]); out.sent.push(cs.sent[i] || 0); }
+    var minC = wkMinSent(out.sent);
+    out.sent.forEach(function (sj, k) {
+      out.rate.push(sj < minC ? null : Math.round((cs.replied[from0 + k] || 0) * 10000 / sj) / 100);
+    });
     out.scope = state.client === "All" ? "all" : state.client;
     return out;
   }
   var s = TRENDS && TRENDS.series;
   if (!s || !s.days || !s.days.length) return out;
-  var from = Math.max(0, s.days.length - n);
-  for (var i = from; i < s.days.length; i++) {
-    var sent = s.sent[i] || 0, rp = s.reply_pct[i];
-    out.days.push(s.days[i]);
-    out.sent.push(sent);
-    out.rate.push(rp == null || sent < WK_MIN_SENT ? null : rp);
-  }
+  from0 = Math.max(0, s.days.length - n);
+  for (i = from0; i < s.days.length; i++) { out.days.push(s.days[i]); out.sent.push(s.sent[i] || 0); }
+  var minF = wkMinSent(out.sent);
+  out.sent.forEach(function (sent, k) {
+    var rp = s.reply_pct[from0 + k];
+    out.rate.push(rp == null || sent < minF ? null : rp);
+  });
   return out;
 }
 var WK = null;
