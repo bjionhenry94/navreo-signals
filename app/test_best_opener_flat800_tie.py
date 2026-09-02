@@ -96,5 +96,50 @@ for tag, vs, exp in CASES:
     ok = got == exp
     print(f"  {'ok  ' if ok else 'FAIL'}  {tag:26s} {'' if ok else 'expected ' + str(exp) + '  got ' + str(got)}")
     fails += 0 if ok else 1
-print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'} ({len(CASES)} cases)")
+
+# ── Step-4 engine fixes (2026-09-02) ────────────────────────────────────────
+# (1) has_scale must ALSO be true when a DROPPED label still holds traffic —
+#     the winner sitting at its cap is not the whole story.
+# (2) build_pill_row must render a TIE as an even split, never "to Version
+#     None"; action_type stays scale_winner and the shape rides in `evidence`.
+EXTRA = []
+
+
+def _x(name, cond, detail=""):
+    EXTRA.append((name, bool(cond), detail))
+
+
+def RAW(label, sent, positives, split):
+    return {"step": 1, "label": label, "sent": sent, "positives": positives,
+            "meetings": 0, "inline": False, "disabled": False, "split": split}
+
+
+_m = M([RAW("A", 1000, 10, 100), RAW("B", 900, 2, 5)])
+_lab, _hs, _ev = bn.pill_best_opener(_m)
+_x("dropped leftover -> has_scale", _lab == "A" and _ev["mode"] == "full"
+   and "B" in _ev["dropped"] and _hs is True, (_lab, _hs, _ev))
+
+_m2 = M([RAW("A", 1000, 10, 100), RAW("B", 900, 2, 0)])
+_lab2, _hs2, _ev2 = bn.pill_best_opener(_m2)
+_x("dropped at zero -> no move", _lab2 == "A" and _hs2 is False, (_lab2, _hs2))
+
+_ctx = {"cid": "1", "name": "c", "client": "Navreo", "client_id": None,
+        "sent": 1, "positives": 1, "replies": 1, "completion_pct": 1,
+        "reply_rate": 1.0, "impact_score": None, "impact_reason": None,
+        "meetings": None}
+_tie = M([V("A", 1000, 10), V("B", 1000, 10)])
+_row = bn.build_pill_row(_ctx, _tie)
+_x("tie title is an even split",
+   _row and _row["title"] == "Split Email 1 evenly across Versions A and B", _row)
+_x("tie row keeps scale_winner + carries evidence",
+   _row and _row["action_type"] == "scale_winner"
+   and (_row.get("evidence") or {}).get("mode") == "tie"
+   and (_row.get("evidence") or {}).get("leaders") == ["A", "B"]
+   and "None" not in _row["title"] and "None" not in _row["detail"], _row)
+
+for _n, _ok, _d in EXTRA:
+    print(f"  {'ok  ' if _ok else 'FAIL'}  {_n:26s} {'' if _ok else str(_d)}")
+    fails += 0 if _ok else 1
+
+print(f"\n{'ALL PASS' if not fails else str(fails) + ' FAILED'} ({len(CASES) + len(EXTRA)} cases)")
 raise SystemExit(1 if fails else 0)

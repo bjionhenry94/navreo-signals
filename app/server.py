@@ -10612,8 +10612,10 @@ def _cockpit_messaging(cid) -> dict:
     SUPABASE-FIRST: the archive's stamped rows answer on the request thread;
     Smartlead message-history crawls happen only in the cron (vpath_backfill).
     Rows with a null seq_variant_id are inline step counters: kept only when
-    they actually sent. Counters reset on sequence re-save, so the payload
-    carries the standing since-relaunch note."""
+    they actually sent. CORRECTED 2026-09-02 (variant-auto-mover Step 2, proven
+    live on campaign 3445988): an ID-INTACT save via save_sequence_ids_intact
+    PRESERVES these counters — only a save that drops variant ids resets them —
+    so the payload's since-relaunch note covers relaunches, not our own writes."""
     try:
         n = int(str(cid).strip())
     except Exception:  # noqa: BLE001
@@ -10879,7 +10881,9 @@ def _email_html_to_text(html: str) -> str:
 def _cockpit_sequence_copy(cid) -> dict:
     """The ACTUAL live sequence copy — subject + body for every step and
     variant, straight from GET /campaigns/{id}/sequences. READ-ONLY: never a
-    sequences save (that resets Smartlead's variant counters)."""
+    sequences save. CORRECTED 2026-09-02 (variant-auto-mover Step 2, proven live
+    on campaign 3445988): an id-intact save via save_sequence_ids_intact keeps
+    the variant counters — this reader stays read-only for latency, not safety."""
     try:
         n = int(str(cid).strip())
     except Exception:  # noqa: BLE001
@@ -19006,6 +19010,759 @@ def api_auto_mover_moves(limit: int = 50, issues_only: bool = False) -> dict:
     return {"ok": True, "moves": rows, "count": len(rows)}
 
 
+# ── Notion Client Tasks — one helper, factored from sync_booked.py's REST ────
+# Data source 2776e755-98d9-806a-88af-000b091e215e ("Client Tasks"). Property
+# keys are exact and fussy: `Client ` carries a TRAILING SPACE, Status is a
+# status property, Due Date is a date. Notion-Version 2025-09-03 is the one
+# that accepts a data_source_id parent (memory notion-api-key-rest-recipe).
+NOTION_API_BASE = "https://api.notion.com/v1"
+NOTION_TASKS_VERSION = "2025-09-03"
+NOTION_CLIENT_TASKS_DS = "2776e755-98d9-806a-88af-000b091e215e"
+# Touchpoint's select option is spelled "Touchpoint PPC" — a plain "Touchpoint"
+# silently creates a SECOND option nobody filters on.
+_NOTION_CLIENT_ALIASES = {"touchpoint": "Touchpoint PPC"}
+
+
+def _notion_task_headers() -> dict:
+    key = KEYS.get("NOTION_API_KEY") or os.environ.get("NOTION_API_KEY") or ""
+    if not key:
+        raise RuntimeError("NOTION_API_KEY is not configured on this host")
+    return {"Authorization": f"Bearer {key}", "Notion-Version": NOTION_TASKS_VERSION}
+
+
+def notion_client_option(client: str) -> str:
+    c = str(client or "").strip() or "MISC."
+    return _NOTION_CLIENT_ALIASES.get(c.lower(), c)
+
+
+def _working_days_from(days: int) -> str:
+    """today + N WORKING days (Mon-Fri), ISO date."""
+    from datetime import date, timedelta
+    d = date.today()
+    left = max(0, int(days or 0))
+    while left > 0:
+        d += timedelta(days=1)
+        if d.weekday() < 5:
+            left -= 1
+    return d.isoformat()
+
+
+def _notion_task_blocks(body: str) -> list:
+    """Markdown-ish body -> Notion blocks. `## X` becomes a heading, `- x` a
+    bullet, everything else a paragraph. Blank lines are dropped."""
+    out = []
+    for raw in str(body or "").splitlines():
+        line = raw.rstrip()
+        if not line.strip():
+            continue
+        if line.startswith("## "):
+            out.append({"object": "block", "type": "heading_2",
+                        "heading_2": {"rich_text": [{"type": "text",
+                                                     "text": {"content": line[3:][:1900]}}]}})
+        elif line.lstrip().startswith("- "):
+            out.append({"object": "block", "type": "bulleted_list_item",
+                        "bulleted_list_item": {"rich_text": [{"type": "text",
+                                                              "text": {"content": line.lstrip()[2:][:1900]}}]}})
+        else:
+            out.append({"object": "block", "type": "paragraph",
+                        "paragraph": {"rich_text": [{"type": "text",
+                                                     "text": {"content": line[:1900]}}]}})
+    return out[:90]
+
+
+def notion_open_task_with_marker(marker: str) -> str:
+    """The URL of an OPEN Client Task whose title carries `marker`, or "".
+    The dedupe gate: one open task per (campaign, issue kind), never two."""
+    data = http_json("POST", f"{NOTION_API_BASE}/data_sources/{NOTION_CLIENT_TASKS_DS}/query",
+                     _notion_task_headers(),
+                     {"page_size": 25,
+                      "filter": {"and": [
+                          {"property": "Name", "title": {"contains": marker}},
+                          {"property": "Status", "status": {"does_not_equal": "Done"}}]}})
+    if not isinstance(data, dict) or data.get("object") == "error":
+        raise RuntimeError(f"Notion query failed: {str(data)[:250]}")
+    for r in (data.get("results") or []):
+        if isinstance(r, dict) and not r.get("archived"):
+            return str(r.get("url") or r.get("id") or "")
+    return ""
+
+
+def notion_create_task(title: str, client: str, body: str, priority: str,
+                       due_days: int = 2, marker: str = "") -> dict:
+    """Create ONE Client Task. Returns {ok, url, id, skipped, reason}.
+
+    `marker` (e.g. "[auto-mover:3445988:flap]") is appended to the title and is
+    the dedupe key: if an open task already carries it, nothing is created."""
+    title = str(title or "").strip()[:180]
+    if marker:
+        if marker not in title:
+            title = f"{title} {marker}"
+        try:
+            existing = notion_open_task_with_marker(marker)
+        except Exception as e:  # noqa: BLE001 — a query blip must not double-file
+            return {"ok": False, "skipped": True, "reason": f"dedupe check failed: {str(e)[:200]}"}
+        if existing:
+            return {"ok": True, "skipped": True, "reason": "already open",
+                    "url": existing}
+    props = {
+        "Name": {"title": [{"text": {"content": title}}]},
+        "Client ": {"select": {"name": notion_client_option(client)}},
+        "Status": {"status": {"name": "Not started"}},
+        "Due Date": {"date": {"start": _working_days_from(due_days)}},
+    }
+    if priority:
+        props["Priority"] = {"select": {"name": str(priority)}}
+    data = http_json("POST", f"{NOTION_API_BASE}/pages", _notion_task_headers(),
+                     {"parent": {"type": "data_source_id",
+                                 "data_source_id": NOTION_CLIENT_TASKS_DS},
+                      "properties": props,
+                      "children": _notion_task_blocks(body)})
+    if not isinstance(data, dict) or data.get("object") == "error":
+        raise RuntimeError(f"Notion page create failed: {str(data)[:250]}")
+    return {"ok": True, "skipped": False, "id": data.get("id") or "",
+            "url": data.get("url") or ""}
+
+
+# ── Variant Auto-Mover — the runner ─────────────────────────────────────────
+# THE ONE DESIGN RULE: this runner contains NO judging logic. Per campaign it
+# calls server._cockpit_messaging(cid) and build_notifications.pill_best_opener(m)
+# and does exactly what the returned evidence says. It never re-implements a
+# bar, a metric, a winner pick or a share. If the engine changes, the mover
+# follows on the next tick with zero code change here.
+AUTO_MOVER_ACTOR = "auto-mover@navreo.ai"
+_AUTO_MOVE_LOCK = threading.Lock()
+_AM_STEP = 1                     # the engine only ever judges the opener step
+_AM_MAX_MOVES_RUN = 10           # R8
+_AM_MAX_MOVES_DAY = 60           # R8
+_AM_SPACING_S = 20.0             # R8
+_AM_MAX_CONSEC_FAILS = 2         # R8 — abort the run
+_AM_BREAKER_FAILS = 3            # R8 — trip the breaker
+_AM_HUMAN_OWNED_DAYS = 14        # R4
+_AM_FLAP_HOURS = 48              # R2
+_AM_THIN_EVIDENCE_MIN = 2        # R3 — a ledger FLAG only, never a gate
+_AM_POLL_TIMEOUT_S = 240.0
+# R12: the hard-coded allowlist. Mode -> (door action, confirm token). Anything
+# the engine could ever return that is not one of these three is refused.
+_AM_ACTION_BY_MODE = {"full": ("scale_winner", "SCALE"),
+                      "partial": ("back_winner", "BACK"),
+                      "tie": ("split_leaders", "SPLITLEADERS")}
+
+
+def _am_iso() -> str:
+    return _dtmod.datetime.now(_dtmod.timezone.utc).isoformat()
+
+
+def _am_breaker_tripped() -> dict:
+    b = _ui_prefs(force=True).get("auto_mover_breaker") or {}
+    return b if isinstance(b, dict) and b.get("tripped") else {}
+
+
+def _am_trip_breaker(reason: str) -> dict:
+    """R1/R8: kill the whole thing — breaker tripped AND the global switch off.
+    Clears only by hand on Settings -> General."""
+    blob = {"tripped": True, "reason": str(reason)[:250], "at": _am_iso()}
+    try:
+        _ui_prefs_set({"auto_mover_breaker": blob, "auto_mover_enabled": False})
+    except Exception as e:  # noqa: BLE001 — a write miss must still stop the run
+        print(f"[auto-mover] breaker write failed: {e}", file=sys.stderr)
+    return blob
+
+
+def _am_meta(cid: str) -> dict:
+    """{name, client, workspace, status} for one campaign, or {}."""
+    try:
+        rows = sb("GET", f"campaign_scorecard?smartlead_campaign_id=eq.{cid}"
+                         "&select=name,client,workspace,status&limit=1") or []
+    except Exception:  # noqa: BLE001
+        rows = []
+    return rows[0] if rows else {}
+
+
+def _am_splits(cid: str) -> dict:
+    """{label: pct} for the opener step, FRESH from Smartlead (never a cache).
+    Pure transport: it reads the distribution, it never decides one."""
+    data = _smartlead_json("GET", f"/campaigns/{cid}/sequences", timeout=20, attempts=2)
+    steps = data if isinstance(data, list) else (data or {}).get("data") or []
+    out: dict = {}
+    for s in steps:
+        if not isinstance(s, dict) or str(s.get("seq_number")) != str(_AM_STEP):
+            continue
+        for v in (s.get("sequence_variants") or []):
+            lab = v.get("variant_label")
+            if lab is None or v.get("is_deleted"):
+                continue
+            try:
+                out[str(lab)] = int(v.get("variant_distribution_percentage") or 0)
+            except (TypeError, ValueError):
+                out[str(lab)] = 0
+    return out
+
+
+def _am_counters(cid: str) -> dict:
+    """{"<step>|<label>": {sent, replies, positives}} for EVERY version, fresh
+    from variant-statistics. The R1 evidence: compared before vs after a move."""
+    data = _smartlead_json("GET", f"/campaigns/{cid}/variant-statistics",
+                           timeout=20, attempts=2)
+    rows = data.get("data") if isinstance(data, dict) else None
+    out: dict = {}
+    for r in (rows or []):
+        if not isinstance(r, dict) or r.get("seq_variant_id") is None:
+            continue
+        key = f"{r.get('seq_number')}|{r.get('variant_label')}"
+        out[key] = {"sent": int(r.get("sent_count") or 0),
+                    "replies": int(r.get("reply_count") or 0),
+                    "positives": int(r.get("positive_reply_count") or 0)}
+    return out
+
+
+def _am_counter_drop(before: dict, after: dict) -> str:
+    """R1: "" when every version held its ground, else the offending version."""
+    for key, b in (before or {}).items():
+        a = (after or {}).get(key)
+        if a is None:
+            return f"{key}: version disappeared after the save"
+        for metric in ("sent", "replies", "positives"):
+            if int(a.get(metric) or 0) < int(b.get(metric) or 0):
+                return (f"{key}: {metric} {b.get(metric)} -> {a.get(metric)}")
+    return ""
+
+
+def _am_candidates() -> list:
+    """Campaign ids carrying a LIVE 'move traffic to the winner' recommendation:
+    the union of open scale_winner notification rows and live scale-winner
+    cards. Candidates ONLY — the fresh engine call is the verdict (R7)."""
+    out: dict = {}
+    try:
+        rows = sb("GET", "optimiser_notifications?action_type=eq.scale_winner"
+                         "&status=in.(new,acknowledged,approved)"
+                         "&select=id,campaign_id,status,created_at"
+                         "&order=created_at.desc&limit=400") or []
+    except Exception:  # noqa: BLE001
+        rows = []
+    for r in (rows if isinstance(rows, list) else []):
+        cid = str(r.get("campaign_id") or "")
+        if cid and cid not in out:
+            out[cid] = {"campaign_id": cid, "notification_id": str(r.get("id") or ""),
+                        "source": "notification"}
+    try:
+        cards = sb("GET", "campaign_insights?insight_key=eq.scale-winner"
+                          "&status=eq.live&select=scope&limit=400") or []
+    except Exception:  # noqa: BLE001
+        cards = []
+    for r in (cards if isinstance(cards, list) else []):
+        cid = str(r.get("scope") or "")
+        if cid and cid not in out:
+            out[cid] = {"campaign_id": cid, "notification_id": "", "source": "card"}
+    return list(out.values())
+
+
+def _am_dismissed(cid: str) -> bool:
+    """R5: a dismissed notification row, or a `dismiss` assignment on the
+    campaign's scale-winner key, bars the mover for the life of that key."""
+    from urllib.parse import quote
+    try:
+        rows = sb("GET", "optimiser_notifications?action_type=eq.scale_winner"
+                         f"&campaign_id=eq.{quote(str(cid), safe='')}"
+                         "&status=eq.dismissed&select=id&limit=1") or []
+        if rows:
+            return True
+    except Exception:  # noqa: BLE001
+        pass
+    key = f"{cid}::scale-winner"
+    try:
+        rows = sb("GET", "cockpit_action_assignments?action_key=eq."
+                  + quote(key, safe="") + "&select=state&limit=1") or []
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(rows) and str(rows[0].get("state") or "").lower() == "dismiss"
+
+
+def _am_is_active(cid: str) -> bool:
+    """R6: fresh Smartlead status must read ACTIVE. Same live-status helper
+    /api/cockpit/live-status serves from."""
+    try:
+        payload = _COCKPIT_LIVE_STATUS_SWR.get(str(cid))
+    except Exception:  # noqa: BLE001 — unknown status is never ACTIVE
+        return False
+    rec = ((payload or {}).get("campaigns") or {}).get(str(cid)) or {}
+    return str(rec.get("status") or "").upper() == "ACTIVE"
+
+
+def _am_moves_today() -> int:
+    """R8 daily cap — today's ledger rows that actually moved traffic."""
+    day = _dtmod.datetime.now(_dtmod.timezone.utc).date().isoformat()
+    try:
+        rows = sb("GET", "auto_mover_moves?outcome=eq.moved"
+                         f"&created_at=gte.{day}T00:00:00&select=id&limit=200") or []
+    except Exception:  # noqa: BLE001 — an unreadable ledger is treated as full
+        return _AM_MAX_MOVES_DAY
+    return len(rows)
+
+
+def _am_recent_ledger(cid: str, step: int, hours: float) -> dict:
+    """The newest ledger row for this campaign+step inside `hours`, or {}."""
+    from urllib.parse import quote
+    since = (_dtmod.datetime.now(_dtmod.timezone.utc)
+             - _dtmod.timedelta(hours=hours)).isoformat()
+    try:
+        rows = sb("GET", "auto_mover_moves?campaign_id=eq." + quote(str(cid), safe="")
+                  + f"&step=eq.{int(step)}&outcome=eq.moved&created_at=gte.{since}"
+                    "&select=id,winner,mode,pcts_after,created_at"
+                    "&order=created_at.desc&limit=1") or []
+    except Exception:  # noqa: BLE001
+        rows = []
+    return rows[0] if rows else {}
+
+
+def _am_human_owned(cid: str, step: int, splits: dict) -> dict:
+    """R4 "last human writer wins": if the step's CURRENT distribution differs
+    from what the mover itself last wrote (and it wrote inside the 14-day
+    window), a human has taken the wheel — skip and raise it once."""
+    row = _am_recent_ledger(cid, step, _AM_HUMAN_OWNED_DAYS * 24)
+    if not row:
+        return {}
+    ours = row.get("pcts_after")
+    if not isinstance(ours, dict) or not ours:
+        return {}
+    now = {str(k): int(v or 0) for k, v in (splits or {}).items()}
+    mine = {str(k): int(v or 0) for k, v in ours.items()}
+    if now == mine:
+        return {}
+    return {"since": row.get("created_at"), "ours": mine, "theirs": now}
+
+
+def _am_ledger(row: dict) -> None:
+    try:
+        sb("POST", "auto_mover_moves", row, prefer="return=minimal")
+    except Exception as e:  # noqa: BLE001 — a ledger miss must be loud, not fatal
+        print(f"[auto-mover] ledger write failed: {e}", file=sys.stderr)
+
+
+def _am_notion(cid: str, kind: str, title: str, client: str, body: str,
+               priority: str) -> str:
+    """File ONE Notion Client Task per (campaign, kind) while one is open."""
+    marker = f"[auto-mover:{cid}:{kind}]"
+    try:
+        res = notion_create_task(title=title, client=client or "MISC.", body=body,
+                                 priority=priority, due_days=2, marker=marker)
+        return str(res.get("url") or "")
+    except Exception as e:  # noqa: BLE001 — Notion must never sink a run
+        print(f"[auto-mover] notion task failed ({marker}): {e}", file=sys.stderr)
+        return ""
+
+
+def _am_issue_body(cid: str, name: str, what: str, why: str, how: str) -> str:
+    return ("## What\n" + what
+            + "\n\n## Why\n" + why
+            + "\n\n## Where\n"
+            + f"- Campaign: {name or cid} (Smartlead id {cid})\n"
+            + f"- Smartlead: https://app.smartlead.ai/app/email-campaign/{cid}/analytics\n"
+            + f"- Tool task page: {_am_base_url()}/app/optimise.html?c={cid}\n"
+            + f"- Auto-mover log: {_am_base_url()}/app/general.html\n"
+            + "\n## How\n" + how)
+
+
+def _am_base_url() -> str:
+    return os.environ.get("SIGNALS_BASE_URL", "https://app.navreo.ai").rstrip("/")
+
+
+def _am_poll(job_id: str) -> tuple:
+    """Block until the queued door write resolves. (ok, status, body)."""
+    deadline = time.time() + _AM_POLL_TIMEOUT_S
+    body: dict = {}
+    while time.time() < deadline:
+        code, out = api_campaign_variant_action_status(job_id)
+        if code == 404:
+            return False, "unknown", {"message": "job expired before it was read"}
+        if str(out.get("status")) != "running":
+            body = out.get("body") if isinstance(out.get("body"), dict) else {}
+            sc = out.get("status_code")
+            ok = bool(body.get("ok")) and isinstance(sc, int) and sc // 100 == 2
+            return ok, str(out.get("status")), body
+        time.sleep(2.0)
+    return False, "timeout", {"message": "the queued write did not resolve in time"}
+
+
+def auto_move_run(campaign_id=None, max_moves=None,
+                  actor: str = AUTO_MOVER_ACTOR) -> dict:
+    """One auto-mover tick. Returns
+    {ok, started, disposition: [{campaign_id, client, action, before, after,
+                                 outcome, reason}], …}.
+
+    Order of gates, all of them cheap-before-expensive:
+      lock (R9) -> global switch + breaker (R11/R1) -> candidates ->
+      per-campaign switch (R11) -> dismissed (R5) -> ACTIVE (R6) ->
+      fresh engine verdict (R2/R7) -> human-owned (R4) -> fresh re-verdict
+      right before the enqueue (R9) -> door -> counters (R1) -> ledger +
+      task states + surfaces (R13) -> issues (R14) -> caps (R8).
+    """
+    if not _AUTO_MOVE_LOCK.acquire(blocking=False):
+        return {"ok": True, "started": False, "busy": True, "reason": "already_running",
+                "disposition": []}
+    try:
+        if _CRON_LOCK.locked():          # R9: never race the batch pull
+            return {"ok": True, "started": False, "busy": True,
+                    "reason": "cron_running", "disposition": []}
+        if not auto_mover_enabled(force=True):     # R11: fresh, every run
+            return {"ok": True, "started": False, "reason": "global_off",
+                    "disposition": []}
+        breaker = _am_breaker_tripped()
+        if breaker:
+            return {"ok": True, "started": False, "reason": "breaker_tripped",
+                    "breaker": breaker, "disposition": []}
+
+        one = str(campaign_id).strip() if campaign_id not in (None, "") else ""
+        cands = ([{"campaign_id": one, "notification_id": "", "source": "explicit"}]
+                 if one else _am_candidates())
+        try:
+            cap_run = int(max_moves) if max_moves not in (None, "") else _AM_MAX_MOVES_RUN
+        except (TypeError, ValueError):
+            cap_run = _AM_MAX_MOVES_RUN
+        cap_run = max(0, cap_run)
+
+        run_job = None
+        try:
+            run_job = _new_job("auto_mover", f"Auto-mover: reviewing {len(cands)} campaigns",
+                               None, auto_remove=True)
+            _job_started(run_job)
+        except Exception:  # noqa: BLE001 — the panel mirror never blocks the run
+            run_job = None
+
+        disposition: list = []
+        moved = consec_fail = save_fail = 0
+        day_used = _am_moves_today()
+        stop_reason = ""
+
+        for cand in cands:
+            cid = str(cand["campaign_id"])
+            meta = _am_meta(cid)
+            client = meta.get("client") or ""
+            name = meta.get("name") or f"Campaign {cid}"
+
+            def _say(outcome, reason, **extra):
+                disposition.append({"campaign_id": cid, "client": client,
+                                    "campaign": name, "action": extra.pop("action", None),
+                                    "before": extra.pop("before", None),
+                                    "after": extra.pop("after", None),
+                                    "outcome": outcome, "reason": reason, **extra})
+
+            if moved >= cap_run:
+                stop_reason = "run_cap"
+                _say("skipped", "run_cap")
+                continue
+            if day_used + moved >= _AM_MAX_MOVES_DAY:
+                stop_reason = "daily_cap"
+                _say("skipped", "daily_cap")
+                continue
+
+            mode_pref = auto_mover_campaign_mode(cid)      # R11 — off beats on
+            if mode_pref == "off":
+                _say("skipped", "per_campaign_off")
+                continue
+            if mode_pref != "on" and not auto_mover_enabled(force=True):
+                _say("skipped", "global_off")
+                continue
+            if _am_dismissed(cid):                          # R5
+                _say("skipped", "dismissed")
+                continue
+            if not _am_is_active(cid):                      # R6
+                _say("skipped", "not_active")
+                continue
+
+            # ── THE ALGORITHM. Imported lazily: build_notifications imports us.
+            import build_notifications as _bn
+            m = _cockpit_messaging(cid)
+            if not isinstance(m, dict) or m.get("degraded"):
+                _say("skipped", "messaging_unavailable")
+                continue
+            lab, has_scale, ev = _bn.pill_best_opener(m)
+            if not has_scale or ev is None:                 # R2/R7
+                _say("skipped", "no_move")
+                continue
+            verdict = str(ev.get("mode") or "")
+            if verdict not in _AM_ACTION_BY_MODE:           # R12
+                _say("skipped", f"unsupported_mode:{verdict}")
+                continue
+            if verdict != "tie" and not lab:                # input validation
+                _say("skipped", "winner_label_missing")
+                continue
+
+            try:
+                before = _am_splits(cid)
+            except Exception as e:  # noqa: BLE001
+                _say("skipped", f"splits_unreadable:{str(e)[:120]}")
+                continue
+
+            owned = _am_human_owned(cid, _AM_STEP, before)  # R4
+            if owned:
+                url = _am_notion(
+                    cid, "human_owned",
+                    f"Auto-mover paused on {name}: someone set the split by hand",
+                    client,
+                    _am_issue_body(
+                        cid, name,
+                        "Decide whether the auto-mover should keep managing Email 1 on "
+                        "this campaign, then either leave it (it stays paused for 14 "
+                        "days) or set the campaign switch back to inherit.",
+                        f"The mover last wrote {owned['ours']} on {owned['since']}. "
+                        f"The step now reads {owned['theirs']}, so a human changed it "
+                        "afterwards. Last human writer wins: the mover has stood down "
+                        "on this step rather than overwrite that decision.",
+                        "- Look at the campaign's Messaging tab and decide the intended split.\n"
+                        "- If the hand-set split should stand, leave it - the mover stays off "
+                        "this step for 14 days.\n"
+                        "- If the mover should take over again, set the split back or flip the "
+                        "campaign switch on the campaign page."),
+                    "Medium")
+                _am_ledger({"campaign_id": cid, "step": _AM_STEP, "action": None,
+                            "winner": lab, "mode": verdict, "via": ev.get("via"),
+                            "pcts_before": before, "evidence": ev, "actor": actor,
+                            "outcome": "skipped", "issue_kind": "human_owned",
+                            "notion_task_url": url or None})
+                _say("skipped", "human_owned", notion_task_url=url or None, before=before)
+                continue
+
+            # R9: the freshest possible verdict, right before the enqueue. If
+            # the traffic already sits where the engine wants it, has_scale has
+            # gone False on its own - that IS "already at target", derived from
+            # the engine, never from arithmetic in here.
+            m2 = _cockpit_messaging(cid)
+            if not isinstance(m2, dict) or m2.get("degraded"):
+                _say("skipped", "messaging_unavailable")
+                continue
+            lab, has_scale, ev = _bn.pill_best_opener(m2)
+            if not has_scale or ev is None:
+                if cand.get("notification_id"):
+                    try:
+                        update_notification_status(cand["notification_id"], "actioned")
+                    except Exception:  # noqa: BLE001
+                        pass
+                try:
+                    cockpit_set_assignment({"action_key": f"{cid}::scale-winner",
+                                            "campaign_id": cid,
+                                            "insight_key": "scale-winner",
+                                            "state": "done"}, actor)
+                except Exception:  # noqa: BLE001
+                    pass
+                _say("noop", "already_at_target", before=before, after=before)
+                continue
+            verdict = str(ev.get("mode") or "")
+            if verdict not in _AM_ACTION_BY_MODE:
+                _say("skipped", f"unsupported_mode:{verdict}")
+                continue
+            if verdict != "tie" and not lab:
+                _say("skipped", "winner_label_missing")
+                continue
+            if not auto_mover_enabled(force=True) and mode_pref != "on":  # R11
+                _say("skipped", "global_off")
+                continue
+            if _am_breaker_tripped():
+                stop_reason = "breaker_tripped"
+                _say("skipped", "breaker_tripped")
+                break
+
+            action, confirm = _AM_ACTION_BY_MODE[verdict]
+            payload = {"action": action, "email": _AM_STEP, "confirm": confirm}
+            if verdict == "full":
+                payload["variant_label"] = lab
+            elif verdict == "partial":
+                payload["variant_label"] = lab
+                payload["laggards"] = list(ev.get("laggards") or [])
+            else:
+                payload["leaders"] = list(ev.get("leaders") or [])
+                payload["laggards"] = list(ev.get("laggards") or [])
+
+            # R2: a reversal on the same step inside 48h still runs — it is
+            # flagged, not blocked ("react to the latest data all the time").
+            prev = _am_recent_ledger(cid, _AM_STEP, _AM_FLAP_HOURS)
+            flap = bool(prev and (prev.get("winner") or None) != (lab or None))
+
+            move_job = None
+            try:
+                move_label = (f"Moved Email {_AM_STEP} to Version {lab} - {name}" if lab
+                              else f"Split Email {_AM_STEP} evenly - {name}")
+                move_job = _new_job("auto_mover_move", move_label, cid)
+                _job_started(move_job)
+            except Exception:  # noqa: BLE001
+                move_job = None
+
+            try:
+                counters_before = _am_counters(cid)
+            except Exception:  # noqa: BLE001 — no baseline means no R1 proof
+                if move_job:
+                    _job_finished(move_job, "failed", "counter snapshot failed")
+                _say("skipped", "counters_unreadable", before=before)
+                continue
+
+            code, resp = api_campaign_variant_action_async(cid, payload)
+            if code != 202 or not resp.get("job"):
+                save_fail += 1
+                consec_fail += 1
+                if move_job:
+                    _job_finished(move_job, "failed", str(resp.get("message") or "")[:200])
+                _am_ledger({"campaign_id": cid, "step": _AM_STEP, "action": action,
+                            "winner": lab, "mode": verdict, "via": ev.get("via"),
+                            "laggards": list(ev.get("laggards") or []),
+                            "leaders": list(ev.get("leaders") or []),
+                            "dropped": list(ev.get("dropped") or []),
+                            "pcts_before": before, "counters_before": counters_before,
+                            "evidence": ev, "actor": actor, "outcome": "failed",
+                            "issue_kind": "enqueue_rejected"})
+                _say("failed", str(resp.get("message") or "enqueue rejected")[:200],
+                     action=action, before=before)
+            else:
+                ok, jstatus, jbody = _am_poll(resp["job"])
+                if not ok:
+                    save_fail += 1
+                    consec_fail += 1
+                    why = str(jbody.get("message") or jstatus)[:200]
+                    if move_job:
+                        _job_finished(move_job, "failed", why)
+                    url = _am_notion(
+                        cid, "save_failed",
+                        f"Auto-mover could not move Email {_AM_STEP} on {name}",
+                        client,
+                        _am_issue_body(cid, name,
+                                       "Apply the recommended split by hand on the "
+                                       "campaign's Messaging tab, or say why it should "
+                                       "not be applied.",
+                                       f"The mover asked for {action} and the save did "
+                                       f"not land: {why}",
+                                       "- Open the campaign's Messaging tab and use the "
+                                       "1-click button there.\n- If it fails again, the "
+                                       "problem is upstream at Smartlead, not the split."),
+                        "High")
+                    _am_ledger({"campaign_id": cid, "step": _AM_STEP, "action": action,
+                                "winner": lab, "mode": verdict, "via": ev.get("via"),
+                                "laggards": list(ev.get("laggards") or []),
+                                "leaders": list(ev.get("leaders") or []),
+                                "dropped": list(ev.get("dropped") or []),
+                                "pcts_before": before, "counters_before": counters_before,
+                                "evidence": ev, "actor": actor, "outcome": "failed",
+                                "issue_kind": "save_failed", "notion_task_url": url or None})
+                    _say("failed", why, action=action, before=before,
+                         notion_task_url=url or None)
+                else:
+                    consec_fail = 0
+                    moved += 1
+                    try:
+                        after = _am_splits(cid)
+                    except Exception:  # noqa: BLE001
+                        after = {}
+                    try:
+                        counters_after = _am_counters(cid)
+                    except Exception:  # noqa: BLE001
+                        counters_after = {}
+                    drop = _am_counter_drop(counters_before, counters_after) \
+                        if counters_after else ""
+                    thin = int(ev.get("positives") or 0) < _AM_THIN_EVIDENCE_MIN
+                    issue_kind = ("counter_drop" if drop else
+                                  "flap" if flap else
+                                  "thin_evidence" if thin else None)
+                    notion_url = ""
+                    if drop:
+                        b = _am_trip_breaker(f"counter drop on campaign {cid} - {drop}")
+                        notion_url = _am_notion(
+                            cid, "counter_drop",
+                            f"Auto-mover STOPPED: a counter dropped on {name}",
+                            client,
+                            _am_issue_body(cid, name,
+                                           "Check the version counters on this campaign, "
+                                           "then decide whether the auto-mover can be "
+                                           "switched back on.",
+                                           f"After the mover's {action} save, {drop}. The "
+                                           "whole feedback loop depends on those counters "
+                                           "surviving our own writes, so the breaker has "
+                                           "tripped and the global switch is OFF.",
+                                           "- Compare the version table against Smartlead.\n"
+                                           "- The breaker clears only by hand on Settings "
+                                           "-> General."),
+                            "High")
+                    elif flap:
+                        notion_url = _am_notion(
+                            cid, "flap",
+                            f"Auto-mover reversed itself on {name}",
+                            client,
+                            _am_issue_body(cid, name,
+                                           "Sanity-check the version data on this campaign - "
+                                           "the winner keeps changing.",
+                                           f"The mover last crowned {prev.get('winner')} on "
+                                           f"{prev.get('created_at')} and has now moved to "
+                                           f"{lab or 'an even split'} within "
+                                           f"{_AM_FLAP_HOURS} hours. That is allowed (the "
+                                           "mover always follows the latest data) but a "
+                                           "rapid reversal usually means the versions are "
+                                           "too close to separate.",
+                                           "- Look at the Messaging tab: are the versions "
+                                           "genuinely neck and neck?\n- If so, consider "
+                                           "leaving the split alone until more data lands."),
+                            "Medium")
+                    if move_job:
+                        _job_finished(move_job, "done")
+                    _am_ledger({"campaign_id": cid, "step": _AM_STEP, "action": action,
+                                "winner": lab, "mode": verdict, "via": ev.get("via"),
+                                "laggards": list(ev.get("laggards") or []),
+                                "leaders": list(ev.get("leaders") or []),
+                                "dropped": list(ev.get("dropped") or []),
+                                "pcts_before": before, "pcts_after": after,
+                                "counters_before": counters_before,
+                                "counters_after": counters_after,
+                                "notification_id": cand.get("notification_id") or None,
+                                "evidence": ev, "actor": actor, "outcome": "moved",
+                                "issue_kind": issue_kind,
+                                "notion_task_url": notion_url or None})
+                    try:
+                        log_activity("/api/cron/auto-move",
+                                     payload={"campaign_id": cid, "action": action,
+                                              "winner": lab, "mode": verdict,
+                                              "before": before, "after": after,
+                                              "issue_kind": issue_kind},
+                                     actor=actor, action="auto_move", entity="campaigns")
+                    except Exception:  # noqa: BLE001
+                        pass
+                    if cand.get("notification_id"):          # R13
+                        try:
+                            update_notification_status(cand["notification_id"], "actioned")
+                        except Exception:  # noqa: BLE001
+                            pass
+                    try:
+                        cockpit_set_assignment({"action_key": f"{cid}::scale-winner",
+                                                "campaign_id": cid,
+                                                "insight_key": "scale-winner",
+                                                "state": "done"}, actor)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    _say("moved", issue_kind or "ok", action=action,
+                         before=before, after=after, flap=flap,
+                         thin_evidence=thin,
+                         notion_task_url=notion_url or None)
+                    if drop:
+                        stop_reason = "breaker_tripped"
+                        break
+
+            if save_fail >= _AM_BREAKER_FAILS:               # R8
+                _am_trip_breaker(f"{save_fail} failed saves in one run")
+                stop_reason = "breaker_tripped"
+                break
+            if consec_fail >= _AM_MAX_CONSEC_FAILS:          # R8
+                stop_reason = "consecutive_failures"
+                break
+            if moved < cap_run and moved:
+                time.sleep(_AM_SPACING_S)                    # R8 spacing
+
+        if run_job:
+            try:
+                with JOBS_LOCK:
+                    run_job["counts"] = {"reviewed": len(cands), "moved": moved}
+                _job_finished(run_job, "done")
+            except Exception:  # noqa: BLE001
+                pass
+        return {"ok": True, "started": True, "reviewed": len(cands), "moved": moved,
+                "stopped": stop_reason or None, "disposition": disposition}
+    finally:
+        _AUTO_MOVE_LOCK.release()
+
+
 # ── Optimisation Queue (morning task routine) — config + daily run log ───────
 # Single source of truth for the team's morning optimisation routine (Settings →
 # Task Queue). Each person's Claude routine READS its kinds + client exclusions
@@ -20352,6 +21109,44 @@ def _campaign_launches(camp_ids: list, camp_names: dict,
     return {"launches": launches, "additions": additions}
 
 
+def _report_auto_moves(camp_ids: list, camp_names: dict,
+                       start_iso: str, end_iso: str) -> list:
+    """The auto-mover's traffic moves inside [start,end], as plain-English
+    events for the report's "What happened this week?" lane — beside the
+    launches and the prospect additions. Ledger only: nothing is recomputed."""
+    ids = [str(c) for c in (camp_ids or [])][:200]
+    if not ids:
+        return []
+    inlist = ",".join(urllib.parse.quote(f'"{i}"') for i in ids)
+    try:
+        rows = sb("GET", "auto_mover_moves?select=campaign_id,winner,mode,leaders,"
+                  "pcts_after,created_at&outcome=eq.moved"
+                  f"&campaign_id=in.({inlist})"
+                  f"&created_at=gte.{start_iso}&created_at=lt.{end_iso}T23:59:59"
+                  "&order=created_at.desc&limit=100") or []
+    except Exception:  # noqa: BLE001 — the lane simply omits the events
+        return []
+    out = []
+    for r in (rows if isinstance(rows, list) else []):
+        mode = str(r.get("mode") or "")
+        win = r.get("winner")
+        leads = [str(x) for x in (r.get("leaders") or [])]
+        if mode == "tie" and leads:
+            txt = ("Split Email 1 evenly across Versions "
+                   + (", ".join(leads[:-1]) + " and " + leads[-1] if len(leads) > 1
+                      else leads[0]))
+        elif mode == "partial" and win:
+            txt = f"Backed Version {win} with 80% of Email 1"
+        elif win:
+            txt = f"Moved all of Email 1 to the best-performing version ({win})"
+        else:
+            continue
+        out.append({"campaign": camp_names.get(str(r.get("campaign_id"))) or "",
+                    "date": str(r.get("created_at") or "")[:10],
+                    "text": txt})
+    return out
+
+
 def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
                          start_iso: str, end_iso: str, launch_ids: list) -> dict:
     """The "What happened this week?" lane (P5 quote-timeline, picked
@@ -20359,12 +21154,13 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
     report range, plus the campaigns that launched (started sending) in it.
     Cheap PostgREST reads, 10-min cached per client|range; reply text is
     cleaned server-side so raw HTML never reaches a client."""
-    key = f"v5|{client}|{start_iso}|{end_iso}"   # v5: + prospects-added events
+    key = f"v6|{client}|{start_iso}|{end_iso}"   # v6: + auto-mover traffic moves
     with _REPORT_REPLIED_LOCK:
         ent = _REPORT_REPLIED_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _REPORT_REPLIED_TTL_S:
             return {"rows": ent["rows"], "launches": ent["launches"],
-                    "additions": ent.get("additions") or []}
+                    "additions": ent.get("additions") or [],
+                    "moves": ent.get("moves") or []}
     pos = ",".join(urllib.parse.quote(c) for c in _AH_POSITIVE_CATS)
     ids = ",".join(urllib.parse.quote(f'"{i}"') for i in camp_ids)
     raw = sb_get_all(
@@ -20456,12 +21252,15 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
     rows = _report_positive_gate(rows)
     activity = _campaign_launches(launch_ids, camp_names, start_iso, end_iso)
     launches, additions = activity["launches"], activity["additions"]
+    moves = _report_auto_moves(camp_ids, camp_names, start_iso, end_iso)
     with _REPORT_REPLIED_LOCK:
         _REPORT_REPLIED_CACHE[key] = {"rows": rows, "launches": launches,
-                                      "additions": additions, "ts": time.time()}
+                                      "additions": additions, "moves": moves,
+                                      "ts": time.time()}
         if len(_REPORT_REPLIED_CACHE) > 200:
             _REPORT_REPLIED_CACHE.pop(next(iter(_REPORT_REPLIED_CACHE)))
-    return {"rows": rows, "launches": launches, "additions": additions}
+    return {"rows": rows, "launches": launches, "additions": additions,
+            "moves": moves}
 
 
 def _report_range_stats(client: str, start_iso: str, end_iso: str,
@@ -20779,7 +21578,7 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
                                        "combos", "combo_named", "size_order", "asof")}
     else:
         who = None
-    replied = {"rows": [], "launches": [], "additions": []}
+    replied = {"rows": [], "launches": [], "additions": [], "moves": []}
     if sc:
         try:
             # launch/addition detection is capped, so feed it the campaigns most
@@ -20795,7 +21594,7 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
                 s_d.isoformat(), e_d.isoformat(),
                 ordered)
         except Exception:  # noqa: BLE001 - the lane hides itself; never sink the report
-            replied = {"rows": [], "launches": [], "additions": []}
+            replied = {"rows": [], "launches": [], "additions": [], "moves": []}
     return {"ok": True, "client": client, "start": s_d.isoformat(), "end": e_d.isoformat(),
             "window_days": n_win, "range_days": len(rdays), "days": axis,
             "series": {"sent": sent, "replies": replies,
@@ -20817,6 +21616,7 @@ def report_data_get(client: str, start: str, end: str) -> tuple[dict, int]:
             "scorecard": sc, "offer": offer, "who": who,
             "who_replied": replied["rows"], "launches": replied["launches"],
             "additions": replied.get("additions") or [],
+            "moves": replied.get("moves") or [],
             "asof": {"cw": cw.get("asof"), "hub": hub.get("asof")}}, 200
 
 
@@ -22560,6 +23360,9 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
                      "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
                      "/api/cron/maildoso-reply-caps",
                      "/api/cron/intake-gate",
+                     # Variant Auto-Mover tick (0 */4 * * *) — token-guarded, and
+                     # listed in the do_POST tuple below as well or it is dead.
+                     "/api/cron/auto-move",
                      "/api/notify/positive-card",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
@@ -24220,7 +25023,12 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/settings/ui":
             # respect the 30s TTL (hot path); the Settings save POST busts it
             # via _ui_prefs_set, so a toggle still shows on the next read
-            return self._json({"ok": True, **_ui_prefs()})
+            # notion_configured is a PRESENCE boolean, never the key: the
+            # auto-mover files every issue as a Notion Client Task, so Settings
+            # → General must be able to say plainly when that channel is dead.
+            return self._json({"ok": True, **_ui_prefs(),
+                               "notion_configured": bool(KEYS.get("NOTION_API_KEY")
+                                                         or os.environ.get("NOTION_API_KEY"))})
         if path == "/api/optiqueue/config":
             # Settings → Task Queue: who receives which optimisation kinds, and
             # each person's client exclusions. The team's morning routines read
@@ -24605,6 +25413,7 @@ class Handler(SimpleHTTPRequestHandler):
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
         "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/notify/positive-card",
         "/api/cron/booked-sweep", "/api/cron/intake-gate",
+        "/api/cron/auto-move", "/api/auto-mover/run",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
         "/api/warmup-live",  # read-only Smartlead read — must not nuke SWR caches
         # act-state clicks touch only cockpit_action_assignments (whose GET is
@@ -24881,7 +25690,7 @@ class Handler(SimpleHTTPRequestHandler):
                    # moves all came from the laptop-side scripts. Added 07-29.
                    "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
                    "/api/cron/maildoso-reply-caps",
-                   "/api/cron/intake-gate",
+                   "/api/cron/intake-gate", "/api/cron/auto-move",
                    "/api/notify/positive-card"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
@@ -25146,6 +25955,38 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, actor="cron", action="booked_sweep_start", entity="campaigns")
                 threading.Thread(target=_booked_sweep_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
+            if path == "/api/cron/auto-move":
+                # Variant Auto-Mover tick. ?campaign=<id> scopes the run to one
+                # campaign and answers INLINE with its disposition (that is the
+                # skip-proof path, and it is short); a full sweep can take
+                # minutes with the 20s spacing, so it backgrounds and acks.
+                from urllib.parse import parse_qs, urlparse
+                _q = parse_qs(urlparse(self.path).query)
+                _one = (_q.get("campaign") or [""])[0].strip()
+                _max = (_q.get("max") or [""])[0].strip()
+                log_activity(path, actor="cron", action="auto_move",
+                             entity="campaigns", payload={"campaign": _one or None})
+                if _one:
+                    return self._json(auto_move_run(campaign_id=_one,
+                                                    max_moves=_max or None), 200)
+                if _AUTO_MOVE_LOCK.locked():
+                    return self._json({"ok": True, "started": False, "busy": True}, 200)
+
+                def _auto_move_bg(_m=_max or None):
+                    try:
+                        r = auto_move_run(max_moves=_m)
+                        log_activity("/api/cron/auto-move",
+                                     payload={"reviewed": r.get("reviewed"),
+                                              "moved": r.get("moved"),
+                                              "stopped": r.get("stopped")},
+                                     actor="cron", action="auto_move_done",
+                                     entity="campaigns")
+                    except Exception as e:  # noqa: BLE001 - a failed run must be visible
+                        log_activity("/api/cron/auto-move",
+                                     payload={"error": str(e)[:200]}, actor="cron",
+                                     action="auto_move_failed", entity="campaigns")
+                threading.Thread(target=_auto_move_bg, daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/reply-sync":
                 # Backstop: pull the master inbox and feed unseen replies to the
                 # categoriser hook. Runs longer than pg_net's timeout under a
@@ -25235,6 +26076,19 @@ class Handler(SimpleHTTPRequestHandler):
         # draft-challenger|add-variant). All three sit behind the session gate
         # above; the two writers additionally demand their typed confirm token
         # and route through save_sequence_ids_intact (the one sequences door).
+        if path == "/api/auto-mover/run":
+            # Settings -> General "Run now". Same function as the cron tick,
+            # session-gated instead of token-gated, and always inline so the
+            # page can show the disposition it just produced.
+            from urllib.parse import parse_qs, urlparse
+            _q = parse_qs(urlparse(self.path).query)
+            _one = (_q.get("campaign") or [""])[0].strip()
+            _max = (_q.get("max") or [""])[0].strip()
+            _who = self._authed_email() or "app"
+            log_activity(path, {"campaign": _one or None}, actor=_who,
+                         action="auto_move_run", entity="campaigns")
+            return self._json(auto_move_run(campaign_id=_one or None,
+                                            max_moves=_max or None), 200)
         if path.startswith("/api/campaigns/"):
             _va_rest = path[len("/api/campaigns/"):]
             if _va_rest.endswith("/auto-move") and len(_va_rest) > len("/auto-move"):

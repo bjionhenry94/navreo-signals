@@ -98,6 +98,10 @@ table.ws tr:last-child td { border-bottom: none; }
         <span>Auto-move traffic to the winning version</span>
       </label>
       <span class="hint" id="am-hint">Loading…</span>
+      <div style="margin-top:14px">
+        <button id="am-run" class="demo-toggle" style="cursor:pointer;font:inherit;padding:7px 14px;border-radius:9px;border:1px solid var(--line);background:var(--card)">Run now</button>
+        <span class="hint" id="am-run-hint"></span>
+      </div>
     </section>
 
     <section class="section" id="issues-section">
@@ -191,6 +195,11 @@ async function loadPrefs(){
     var b = await r.json();
     paintSwitch(b.auto_mover_enabled);
     paintBreaker(b.auto_mover_breaker);
+    if (b.notion_configured === false) {
+      document.getElementById("issues-section").querySelector(".sub").innerHTML +=
+        ' <strong style="color:var(--red)">NOTION_API_KEY is not set on this server, ' +
+        'so issues are logged here but no Notion task is created.</strong>';
+    }
   } catch (e) {
     amHint.textContent = "Couldn't read the switch — reload the page.";
   }
@@ -283,6 +292,23 @@ async function loadIssues(){
       '<div class="empty">Couldn\'t load issues.</div>';
   }
 }
+
+document.getElementById("am-run").addEventListener("click", async function(){
+  var btn = this, hint = document.getElementById("am-run-hint");
+  btn.disabled = true; hint.textContent = "Running…";
+  try {
+    var r = await fetch("/api/auto-mover/run", { method: "POST" });
+    var b = await r.json();
+    hint.textContent = b.started
+      ? ("Reviewed " + (b.reviewed || 0) + ", moved " + (b.moved || 0) +
+         (b.stopped ? " (stopped: " + b.stopped + ")" : ""))
+      : ("Nothing ran — " + (b.reason || "unknown"));
+  } catch (e) {
+    hint.textContent = "Couldn't run.";
+  }
+  btn.disabled = false;
+  loadIssues(); loadMoves();
+});
 
 loadPrefs();
 loadIssues();

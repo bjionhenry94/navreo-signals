@@ -1000,7 +1000,14 @@ def pill_best_opener(m: dict) -> tuple:
         # early-crowned meeting leader. Nothing is dropped in a partial.
         mode, cap, laggards, dropped = "partial", 80, [v["label"] for v in others], []
     split = w.get("split")
-    has_scale = split is not None and 0 < split < cap
+    # has_scale: the winner is not yet at its cap, OR (mirroring the tie branch,
+    # 2026-09-02) a DROPPED label still holds live traffic. Without the second
+    # clause a campaign whose winner already sits at 100 but whose dropped
+    # loser still carries a stray share read as "nothing to do" and the
+    # leftover traffic never got swept up.
+    cur_all = {v["label"]: v.get("split") for v in eligible}
+    has_scale = (split is not None and 0 < split < cap) \
+        or any((cur_all.get(d) or 0) > 0 for d in dropped)
     return lab, has_scale, dict(base_ev, mode=mode, split=split, laggards=laggards,
                                 dropped=dropped, override=override,
                                 sent=w.get("sent") or 0, positives=_pos(w))
@@ -1017,7 +1024,31 @@ def build_pill_row(ctx: dict, m: dict) -> dict | None:
            "meetings-per-send": "it books the most meetings per email sent",
            "sends-per-positive": "it needs the fewest sends per positive reply",
            }.get(ev["via"], "it is the proven best opener")
-    if ev.get("mode") == "partial":
+    if ev.get("mode") == "tie":
+        # TIE (v3, wording fixed 2026-09-02): there is no single winner, so the
+        # row must never render "to Version None". Co-leaders share the step
+        # evenly; action_type stays scale_winner so every existing reader (the
+        # card mirror, the cockpit, the auto-mover's candidate scan) keeps
+        # working — the tie shape rides in `evidence`.
+        leads = [str(x) for x in (ev.get("leaders") or [])]
+        lead_txt = (", ".join(leads[:-1]) + " and " + leads[-1]) if len(leads) > 1 else (leads[0] if leads else "")
+        share = ev.get("lead_share")
+        lag = [str(x) for x in (ev.get("laggards") or [])]
+        drop = [str(x) for x in (ev.get("dropped") or [])]
+        title = f"Split Email 1 evenly across Versions {lead_txt}"
+        detail = (f"The Messaging tab cannot separate Version{'s' if len(leads) > 1 else ''} "
+                  f"{lead_txt} - {why}, and they are an exact dead heat on it, so no "
+                  f"single version can be crowned. The fair move is an even split: "
+                  f"{share}% of Email 1 each"
+                  + (f", with {', '.join(lag)} keeping the remaining 20% until "
+                     f"{'they reach' if len(lag) > 1 else 'it reaches'} the "
+                     f"{ev['bar']}-send judging bar" if lag else "")
+                  + (f". Version{'s' if len(drop) > 1 else ''} {', '.join(drop)} "
+                     f"{'have' if len(drop) > 1 else 'has'} been judged and "
+                     f"{'lose' if len(drop) > 1 else 'loses'} {'their' if len(drop) > 1 else 'its'} share"
+                     if drop else "")
+                  + ". The 1-click button on the Messaging tab sets exactly that.")
+    elif ev.get("mode") == "partial":
         # Partial verdict (Bjion 2026-08-31): laggard versions are still under
         # the judging bar, so the fair move is 80% to the winner with 20% kept
         # on the test - never 100%. Title on stable identifiers so the row key
@@ -1043,6 +1074,12 @@ def build_pill_row(ctx: dict, m: dict) -> dict | None:
             "title": title,
             "detail": clean_text(detail),
             "suggested_action": title,
+            # the verdict shape, so a reader never has to parse the title back
+            # into a mode (above all a TIE, whose winner label is None)
+            "evidence": {"mode": ev.get("mode"), "leaders": ev.get("leaders") or [],
+                         "winner": lab, "laggards": ev.get("laggards") or [],
+                         "dropped": ev.get("dropped") or [], "via": ev.get("via"),
+                         "bar": ev.get("bar"), "lead_share": ev.get("lead_share")},
             "sent": ev["sent"], "positive": ev["positives"],
             "sent_pos_ratio": ratio(ev["sent"], ev["positives"])}
 
@@ -1416,6 +1453,10 @@ def row_base(ctx: dict) -> dict:
         # reject mixed-key chunks (PGRST102), so non-section-7 rows send
         # variants explicitly as null rather than omitting the key
         "variants": None,
+        # The verdict shape behind an actionable row (today: the variant_call
+        # pill's mode/leaders/laggards). Null on every other row — the key must
+        # exist on ALL of them or PostgREST rejects the mixed-key chunk.
+        "evidence": None,
         # Impact Score (see compute_impact): the digest's sort key everywhere.
         # Null when total_leads was unavailable - such rows sort last.
         "impact_score": ctx.get("impact_score"),
