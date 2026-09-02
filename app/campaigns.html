@@ -1117,6 +1117,28 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
      competing for space in the topbar. */
   .cstat-bar { display: inline-flex; align-items: center; gap: 14px; }
   #cstat-controls { display: inline-flex; align-items: center; }
+  /* Auto-move switch (auto-mover Step 3): a compact three-state segmented
+     control that sits beside the status chip and borrows its type + pill
+     geometry, so the topbar keeps one visual language. */
+  #automove-controls { display: inline-flex; align-items: center; }
+  .am-ctl { display: inline-flex; align-items: center; gap: 9px; }
+  .am-label { font-size: 0.7rem; font-weight: 700; letter-spacing: 0.05em;
+    text-transform: uppercase; color: var(--fg-subtle); white-space: nowrap; }
+  .am-seg { display: inline-flex; border: 1px solid var(--border-strong);
+    border-radius: var(--r-pill); background: var(--bg); overflow: hidden; }
+  .am-seg button {
+    font: inherit; font-size: 0.75rem; font-weight: 600; cursor: pointer;
+    padding: 5px 11px; border: 0; background: none; color: var(--fg-subtle);
+    white-space: nowrap;
+  }
+  .am-seg button + button { border-left: 1px solid var(--border); }
+  .am-seg button:hover { color: var(--fg); }
+  .am-seg button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .am-seg button[aria-pressed="true"] {
+    background: var(--chip-active-bg); color: var(--chip-active-fg);
+  }
+  .am-seg button:disabled { opacity: 0.55; cursor: default; }
+  .am-last { font-size: 0.72rem; color: var(--fg-subtle); white-space: nowrap; }
   .cstat-ctl { position: relative; display: inline-flex; }
   .cstat-btn {
     font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap;
@@ -4021,6 +4043,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       '<a href="#/" class="back-link">&larr; Campaigns</a>' +
       '<span class="cstat-bar"><span id="cstat-sr" class="cstat-sr" aria-live="polite"></span>' +
       '<span id="cstat-controls"></span>' +
+      '<span id="automove-controls"></span>' +
       '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a></span>' +
       "</div>");
     /* The dial always renders when ANY completion source can answer — a
@@ -7326,6 +7349,101 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     applyTheme(currentTheme());
     wireActionCards(pr);
     hydrateStatusControls(c);
+    hydrateAutoMoveControl(c);
+  }
+
+  /* ── The per-campaign auto-move switch ───────────────────────────────────
+     Three states, no dropdown: Inherit (follow Settings → General — the
+     default), On, Off. Off ALWAYS beats the global switch; On never overrides
+     a global off, so the control never promises more than the server does.
+     Reads/writes /api/campaigns/{cid}/auto-move and shows when the mover last
+     touched this campaign. */
+  function amAgo(iso) {
+    if (!iso) return "";
+    var t = Date.parse(iso); if (!t) return "";
+    var s = Math.max(0, (Date.now() - t) / 1000);
+    if (s < 60) return "just now";
+    if (s < 3600) return Math.round(s / 60) + "m ago";
+    if (s < 86400) return Math.round(s / 3600) + "h ago";
+    return Math.round(s / 86400) + "d ago";
+  }
+
+  function hydrateAutoMoveControl(c) {
+    var root = document.getElementById("automove-controls");
+    if (!root || c.ghost || !/^\d+$/.test(String(c.id))) return;
+    var MODES = [["inherit", "Inherit"], ["on", "On"], ["off", "Off"]];
+    var busy = false;
+
+    function paint(state) {
+      /* async landings must never cross campaigns (same guard as the status
+         control): a slow response for campaign A can arrive on campaign B. */
+      if (!onPage(c.id)) return;
+      root.innerHTML = "";
+      var ctl = document.createElement("span");
+      ctl.className = "am-ctl";
+
+      var lab = document.createElement("span");
+      lab.className = "am-label";
+      lab.textContent = "Auto-move";
+      ctl.appendChild(lab);
+
+      var seg = document.createElement("span");
+      seg.className = "am-seg";
+      seg.setAttribute("role", "group");
+      seg.setAttribute("aria-label",
+        "Automatically move Email 1 traffic to the winning version");
+      MODES.forEach(function (m) {
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = m[1];
+        b.disabled = busy;
+        b.setAttribute("aria-pressed", state.mode === m[0] ? "true" : "false");
+        b.title = m[0] === "inherit"
+          ? "Follow the tool-wide auto-mover switch (Settings → General)"
+          : (m[0] === "on"
+             ? "Auto-move this campaign whenever the tool-wide switch is on"
+             : "Never auto-move this campaign, even when the tool-wide switch is on");
+        b.addEventListener("click", function () { save(m[0], state); });
+        seg.appendChild(b);
+      });
+      ctl.appendChild(seg);
+
+      var last = document.createElement("span");
+      last.className = "am-last";
+      var lm = state.last_auto_move;
+      last.textContent = lm && lm.created_at
+        ? "last auto-move: " + amAgo(lm.created_at) : "";
+      ctl.appendChild(last);
+
+      root.appendChild(ctl);
+    }
+
+    function save(mode, state) {
+      if (busy || mode === state.mode) return;
+      busy = true;
+      paint(Object.assign({}, state, { mode: mode })); /* optimistic */
+      fetch("/api/campaigns/" + encodeURIComponent(c.id) + "/auto-move", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: mode })
+      }).then(function (r) {
+        return r.json().then(function (b) { return { ok: r.ok, b: b }; });
+      }).then(function (res) {
+        busy = false;
+        if (!res.ok || !res.b.ok) throw new Error(res.b.message || "save failed");
+        paint(res.b);
+      }).catch(function () {
+        busy = false;
+        paint(state); /* put the old state back — never claim an unsaved change */
+      });
+    }
+
+    paint({ mode: "inherit", last_auto_move: null });
+    fetch("/api/campaigns/" + encodeURIComponent(c.id) + "/auto-move",
+          { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (b) { if (b && b.ok) paint(b); })
+      .catch(function () { /* keep the inherit default on a read miss */ });
   }
 
   /* ── The status control ──────────────────────────────────────────────────

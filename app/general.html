@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>General · Settings · Navreo</title>
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* settings-general-v1 — Variant Auto-Mover controls + move log.
+   Shell, submenu column and section/table conventions copied from settings.html
+   so the two pages read as one Settings surface. */
+.page-head { display: flex; align-items: baseline; gap: 14px; margin: 26px 0 6px; }
+.page-head h1 { font-size: 22px; font-weight: 700; color: var(--ink); margin: 0; }
+.section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; margin-top: 18px; max-width: 1180px; }
+.section h2 { font-size: 15px; font-weight: 600; color: var(--ink); margin: 0 0 6px; }
+.section .sub { font-size: 12.5px; color: var(--ink-3); line-height: 1.55; margin: 0 0 14px; max-width: 72ch; }
+table.ws { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.ws th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--ink-3); font-weight: 600; padding: 8px 10px; border-bottom: 1px solid var(--line-2); }
+table.ws td { padding: 11px 10px; border-bottom: 1px solid var(--line); color: var(--ink-2); vertical-align: middle; }
+table.ws tr:last-child td { border-bottom: none; }
+.ws-name { font-weight: 600; color: var(--ink); }
+.ws-slug { font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 11px; color: var(--ink-3); }
+.pill { display: inline-block; font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 999px; }
+.pill.on { color: var(--green); background: var(--green-bg); border: 1px solid var(--green-line); }
+.pill.off { color: var(--ink-3); background: var(--bg-sunken); border: 1px solid var(--line-2); }
+.pill.bad { color: var(--red); background: var(--bg-sunken); border: 1px solid var(--line-2); }
+.empty, .loading { padding: 22px 10px; color: var(--ink-3); font-size: 13px; }
+.hint { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
+/* the splits column: "A 80% · B 20%  →  A 100% · B 0%" */
+.splits { font-family: var(--font-mono, "JetBrains Mono", monospace); font-size: 11.5px; white-space: nowrap; }
+.splits .arrow { color: var(--ink-3); padding: 0 6px; }
+/* breaker banner — the loudest thing on the page when it is up */
+.breaker { display: none; margin-top: 18px; max-width: 1180px; border-radius: 14px; padding: 16px 20px;
+  background: var(--bg-sunken); border: 1px solid var(--red); }
+.breaker.up { display: block; }
+.breaker h2 { margin: 0 0 6px; font-size: 15px; font-weight: 700; color: var(--red); }
+.breaker p { margin: 0 0 6px; font-size: 12.5px; color: var(--ink-2); line-height: 1.55; max-width: 72ch; }
+.breaker .when { font-size: 11.5px; color: var(--ink-3); }
+/* toast (same as settings.html) */
+.toast { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%);
+  background: var(--ink); color: var(--cream); font-size: 12.5px; font-weight: 500;
+  padding: 10px 18px; border-radius: 999px; z-index: 95; max-width: calc(100vw - 32px);
+  box-shadow: 0 8px 24px rgba(20,17,14,.25); }
+.toast.hidden { display: none; }
+/* settings sub-menu column */
+.settings-cols { display: flex; flex: 1; min-width: 0; }
+.submenu { width: 208px; flex: 0 0 208px; background: var(--cream-50, #FCF7F1);
+  border-right: 1px solid var(--line); }
+.submenu h2 { font-size: 13px; font-weight: 600; color: var(--ink-3); text-transform: uppercase;
+  letter-spacing: .06em; padding: 22px 18px 10px; margin: 0; }
+.submenu .items { padding: 0 10px; }
+.submenu a { display: block; font-size: 13.5px; padding: 9px 18px; border-radius: 8px;
+  text-decoration: none; color: var(--ink-2); border: 1px solid transparent; }
+.submenu a:hover { background: var(--cream); }
+.submenu a.active { background: #fff; border: 1px solid var(--line-2); font-weight: 600;
+  color: var(--ink); box-shadow: 0 1px 2px rgba(20,17,14,.06); }
+.tablewrap { overflow-x: auto; }
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <div class="settings-cols">
+  <nav class="submenu">
+    <h2>Settings</h2>
+    <div class="items">
+      <a href="settings.html">Clients</a>
+      <a href="general.html" class="active">General</a>
+      <a href="infrastructure.html">Email Infrastructure</a>
+      <a href="lists.html">All prospect lists</a>
+      <a href="optiqueue.html">Task Queue</a>
+    </div>
+  </nav>
+  <main class="main">
+    <div class="page-head"><h1>General</h1></div>
+
+    <div class="breaker" id="breaker">
+      <h2>Auto-mover stopped itself</h2>
+      <p id="breaker-reason">Something went wrong on a move.</p>
+      <p class="when" id="breaker-when"></p>
+      <p class="hint">The global switch has been turned off and nothing will move
+      until someone clears this. Check the open issues below, then turn the switch
+      back on when the cause is understood.</p>
+    </div>
+
+    <section class="section" id="switch-section">
+      <h2>Variant auto-mover</h2>
+      <p class="sub">Six times a day the auto-mover reviews every campaign's
+      Email&nbsp;1 versions and moves traffic to the proven winner — exactly what
+      the optimiser already recommends, done automatically instead of by hand.
+      It only changes the percentage split between versions: it never sends,
+      pauses, adds or deletes anything. Off by default. A campaign can opt out on
+      its own page; a campaign's <strong>Off</strong> always beats this switch,
+      and a campaign's <strong>On</strong> never overrides this switch being off.</p>
+      <label class="demo-toggle">
+        <input type="checkbox" id="am-switch">
+        <span>Auto-move traffic to the winning version</span>
+      </label>
+      <span class="hint" id="am-hint">Loading…</span>
+    </section>
+
+    <section class="section" id="issues-section">
+      <h2>Open issues</h2>
+      <p class="sub">Anything the auto-mover flagged rather than quietly did — a
+      counter that dropped, a save that failed, a campaign a human had already
+      taken over, or a winner that flipped back on itself. Each one is also filed
+      as a Notion task.</p>
+      <div class="tablewrap"><div id="issues-table"><div class="loading">Loading issues…</div></div></div>
+    </section>
+
+    <section class="section" id="moves-section">
+      <h2>Last 50 moves</h2>
+      <p class="sub">Every traffic move the auto-mover made, newest first, with
+      the split before and after so you can see exactly what changed.</p>
+      <div class="tablewrap"><div id="moves-table"><div class="loading">Loading moves…</div></div></div>
+    </section>
+  </main>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script src="shell.js"></script>
+<script>
+document.getElementById("rail").outerHTML = renderRail("settings");
+
+/* ── small shared helpers (mirrors settings.html) ───────────────────────── */
+function gEsc(s){ return (typeof esc === "function") ? esc(String(s ?? "")) :
+  String(s ?? "").replace(/[&<>"]/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]; }); }
+var toastEl = document.getElementById("toast");
+var toastT = null;
+function toast(msg){
+  toastEl.textContent = msg;
+  toastEl.classList.remove("hidden");
+  clearTimeout(toastT);
+  toastT = setTimeout(function(){ toastEl.classList.add("hidden"); }, 3200);
+}
+function gAgo(iso){
+  if (!iso) return "–";
+  var t = Date.parse(iso); if (!t) return "–";
+  var s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "just now";
+  if (s < 3600) return Math.round(s / 60) + "m ago";
+  if (s < 86400) return Math.round(s / 3600) + "h ago";
+  return Math.round(s / 86400) + "d ago";
+}
+/* {"A":80,"B":20} → "A 80% · B 20%" */
+function gSplits(o){
+  if (!o || typeof o !== "object") return "–";
+  var ks = Object.keys(o).sort();
+  if (!ks.length) return "–";
+  return ks.map(function(k){ return gEsc(k) + " " + o[k] + "%"; }).join(" · ");
+}
+function gWinner(row){
+  if (row.winner) return gEsc(row.winner);
+  var l = row.leaders;
+  if (Array.isArray(l) && l.length) return l.map(gEsc).join(" + ");
+  return "–";
+}
+function gCampaign(cid){
+  if (!cid) return "–";
+  return '<a class="ws-name" href="campaigns.html#/c/' + encodeURIComponent(cid) +
+         '">' + gEsc(cid) + "</a>";
+}
+
+/* ── the global switch ─────────────────────────────────────────────────── */
+var amSwitch = document.getElementById("am-switch");
+var amHint = document.getElementById("am-hint");
+var breakerEl = document.getElementById("breaker");
+
+function paintSwitch(on){
+  amSwitch.checked = !!on;
+  amHint.textContent = on
+    ? "On — the auto-mover moves traffic on every run."
+    : "Off — nothing moves. Campaign switches are ignored while this is off.";
+}
+function paintBreaker(b){
+  var tripped = !!(b && b.tripped);
+  breakerEl.classList.toggle("up", tripped);
+  if (!tripped) return;
+  document.getElementById("breaker-reason").textContent =
+    b.reason || "A move looked unsafe, so the auto-mover stopped.";
+  document.getElementById("breaker-when").textContent =
+    b.at ? "Stopped " + gAgo(b.at) : "";
+}
+async function loadPrefs(){
+  try {
+    var r = await fetch("/api/settings/ui", { cache: "no-store" });
+    var b = await r.json();
+    paintSwitch(b.auto_mover_enabled);
+    paintBreaker(b.auto_mover_breaker);
+  } catch (e) {
+    amHint.textContent = "Couldn't read the switch — reload the page.";
+  }
+}
+amSwitch.addEventListener("change", async function(){
+  var on = amSwitch.checked;
+  try {
+    var r = await fetch("/api/settings/ui", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ auto_mover_enabled: on })
+    });
+    var b = await r.json();
+    if (!r.ok || !b.ok) throw new Error(b.message || ("HTTP " + r.status));
+    paintSwitch(b.auto_mover_enabled);
+    paintBreaker(b.auto_mover_breaker);
+    toast(on ? "Auto-mover on." : "Auto-mover off.");
+  } catch (e) {
+    paintSwitch(!on);
+    toast("Couldn't save: " + String(e.message || e));
+  }
+});
+
+/* ── the two tables ────────────────────────────────────────────────────── */
+function movesTable(rows){
+  if (!rows.length) return '<div class="empty">No moves yet.</div>';
+  var h = ['<table class="ws"><thead><tr>',
+    "<th>Campaign</th><th>Step</th><th>Action</th><th>Winner</th>",
+    "<th>Before &rarr; after</th><th>Actor</th><th>Outcome</th><th>When</th>",
+    "</tr></thead><tbody>"];
+  rows.forEach(function(r){
+    var bad = r.outcome === "issue" || r.outcome === "failed" || r.issue_kind;
+    h.push("<tr>",
+      "<td>", gCampaign(r.campaign_id), "</td>",
+      "<td>", r.step == null ? "–" : "Email " + gEsc(r.step), "</td>",
+      '<td class="ws-slug">', gEsc(r.action || "–"), "</td>",
+      "<td>", gWinner(r), "</td>",
+      '<td class="splits">', gSplits(r.pcts_before),
+        '<span class="arrow">&rarr;</span>', gSplits(r.pcts_after), "</td>",
+      "<td>", gEsc(r.actor || "–"), "</td>",
+      '<td><span class="pill ', (bad ? "bad" : "on"), '">',
+        gEsc(r.issue_kind || r.outcome || "moved"), "</span></td>",
+      "<td>", gEsc(gAgo(r.created_at)), "</td>",
+      "</tr>");
+  });
+  h.push("</tbody></table>");
+  return h.join("");
+}
+function issuesTable(rows){
+  if (!rows.length)
+    return '<div class="empty">No open issues — every move went through cleanly.</div>';
+  var h = ['<table class="ws"><thead><tr>',
+    "<th>Campaign</th><th>Issue</th><th>Step</th><th>Action</th>",
+    "<th>Notion task</th><th>When</th>",
+    "</tr></thead><tbody>"];
+  rows.forEach(function(r){
+    h.push("<tr>",
+      "<td>", gCampaign(r.campaign_id), "</td>",
+      '<td><span class="pill bad">', gEsc(r.issue_kind || r.outcome || "issue"),
+        "</span></td>",
+      "<td>", r.step == null ? "–" : "Email " + gEsc(r.step), "</td>",
+      '<td class="ws-slug">', gEsc(r.action || "–"), "</td>",
+      "<td>", r.notion_task_url
+        ? '<a href="' + gEsc(r.notion_task_url) +
+          '" target="_blank" rel="noopener">Open task</a>'
+        : "–", "</td>",
+      "<td>", gEsc(gAgo(r.created_at)), "</td>",
+      "</tr>");
+  });
+  h.push("</tbody></table>");
+  return h.join("");
+}
+async function loadMoves(){
+  try {
+    var r = await fetch("/api/auto-mover/moves?limit=50", { cache: "no-store" });
+    var b = await r.json();
+    document.getElementById("moves-table").innerHTML = movesTable(b.moves || []);
+  } catch (e) {
+    document.getElementById("moves-table").innerHTML =
+      '<div class="empty">Couldn\'t load moves.</div>';
+  }
+}
+async function loadIssues(){
+  try {
+    var r = await fetch("/api/auto-mover/moves?limit=20&issues=1", { cache: "no-store" });
+    var b = await r.json();
+    document.getElementById("issues-table").innerHTML = issuesTable(b.moves || []);
+  } catch (e) {
+    document.getElementById("issues-table").innerHTML =
+      '<div class="empty">Couldn\'t load issues.</div>';
+  }
+}
+
+loadPrefs();
+loadIssues();
+loadMoves();
+</script>
+</body>
+</html>
