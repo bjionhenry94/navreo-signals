@@ -261,6 +261,9 @@
 .ah .databar{display:none;font-size:12px;color:var(--ink-2);background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:9px;padding:8px 14px;margin-bottom:14px}
 .ah .databar.show{display:flex;align-items:center;gap:12px}
 .ah .databar button{margin-left:auto}
+/* inline "Retry" inside a card's own subline, for reads that fail per-card
+   (who-replies) rather than at boot */
+.ah a.who-retry{color:var(--orange-700);font-weight:600;text-decoration:underline}
 
 .ah .moved-note{margin-top:14px;font-size:12.5px;color:var(--ink-3)}
 .ah .moved-note a{color:var(--ink-2);font-weight:600;text-decoration:none}
@@ -724,6 +727,26 @@ function jShared(url) {
 }
 
 var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null, CW = null, COLL = null;
+// Which boot reads FAILED, by the plain-English name of what they feed. Every
+// failure used to be swallowed by an empty rejection handler: a 503 on
+// /api/sources left lane 2 rendering a confident runway with nothing on screen
+// to say a read had died, and the databar only ever appeared when BOTH the hub
+// and the scorecard were gone. Anything in here is named in the databar.
+var DEGRADED = {};
+function markDegraded(what, failed) {
+  if (failed) DEGRADED[what] = 1; else delete DEGRADED[what];
+  renderDataBar();
+}
+function renderDataBar() {
+  var bar = $("ah-databar"), msg = $("ah-databar-msg");
+  if (!bar || !msg) return;
+  var names = Object.keys(DEGRADED);
+  if (!names.length) { bar.classList.remove("show"); return; }
+  msg.textContent = names.length === 1
+    ? names[0] + " could not be loaded."
+    : "Live data unavailable: " + names.join(", ") + ".";
+  bar.classList.add("show");
+}
 var CAP = null;   // /api/fleet-capacity — per-day sending capacity per workspace (P1 headroom bars)
 // Bounce-Rate defaults OFF: it's a % on the right axis now (it no longer
 // flattens anything), but the landing card owns the bounce story and the
@@ -734,8 +757,10 @@ var CAP = null;   // /api/fleet-capacity — per-day sending capacity per worksp
 // sent defaults ON now — it renders as faint BARS (its own scale), so it no
 // longer flattens the reply/meeting lines the way the old sent LINE did, and
 // per-day sent is the thing Bjion most wants to see (2026-07-28).
-// hideWeekends: drop Sat/Sun from the day-by-day chart (weekends are ~0 sends
-// and flatten the weekday rhythm).
+// hideWeekends: a CHART-ONLY toggle — drop Sat/Sun from the day-by-day bars and
+// lines (weekends are ~0 sends and flatten the weekday rhythm). It does NOT
+// touch the Capacity-used figure, which is always weekday-only (owner ruling
+// 2026-09-02); see NavreoCapacity in shell.js.
 var state = { client: "All", range: 30, hideWeekends: false,
               on: { sent: true, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 try {
@@ -825,7 +850,7 @@ var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 
-function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} aligned to HUB.days, from trends
+function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} on the chart axis, from trends
   var out = { sent: [], bounces: [], bounceN: [], rate: [] };
   if (!HUB) return out;
   var map = {};
@@ -841,7 +866,7 @@ function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} aligned 
                  r: (rp == null || s < 1000 ? null : rp) };
     });
   }
-  HUB.days.forEach(function (d) {
+  chartAxisDays().forEach(function (d) {   // trimmed axis: the fleet line ends yesterday too
     var m = map[d];
     out.sent.push(m ? m.s : 0);
     out.bounces.push(m ? m.b : null);   // bounce-rate %, right axis — gap on quiet days
@@ -868,7 +893,33 @@ function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} aligned 
 // strictly before CW.asof are trusted from client-windows. Without this a stale
 // cache would draw yesterday from its own partial morning snapshot (e.g. 9 sends
 // instead of ~18,600).
-function chartAxisDays() { return (HUB && HUB.days) || (CW && CW.days) || []; }
+// "Today" in UTC, because every axis the server stamps is a UTC date. A LOCAL
+// date compare is wrong for a viewer ahead of UTC: between their local midnight
+// and UTC midnight, local "today" is already tomorrow's date, so the real
+// today's bucket stops being trimmed and its near-empty partial day leaks back
+// into the chart, the legend sums and the capacity figure.
+function todayUTC() { return new Date().toISOString().slice(0, 10); }
+// Trim an axis to the last date STRICTLY BEFORE today. Windows end yesterday
+// (owner ruling 2026-09-02) — today is a partial, still-ramping bucket. The
+// analytics-hub RPC still stamps its day list to today, so the cut is made here
+// on the front end, once, and EVERY series the chart plots is index-aligned to
+// this axis: trim the axis and the whole page moves with it.
+function axisEndingYesterday(days) {
+  if (!Array.isArray(days) || !days.length) return [];
+  var t = todayUTC();
+  for (var i = days.length - 1; i >= 0; i--) {
+    if (String(days[i] || "").slice(0, 10) < t) return days.slice(0, i + 1);
+  }
+  return [];
+}
+function chartAxisDays() { return axisEndingYesterday((HUB && HUB.days) || (CW && CW.days) || []); }
+// A raw analytics-hub series is keyed to HUB.days, which still runs to today.
+// Cut it to the chart axis so index i always describes axis day i.
+function hubAligned(arr) {
+  if (!Array.isArray(arr)) return arr;
+  var n = chartAxisDays().length;
+  return arr.length > n ? arr.slice(0, n) : arr;
+}
 function cwAsofDate() { return (CW && CW.asof) ? String(CW.asof).slice(0, 10) : null; }
 function alignDaily(srcArr, srcDays, fill, fb) {
   var ax = chartAxisDays();
@@ -997,31 +1048,31 @@ function capEstimated() {
   if (state.client === "All" || capWsKey() || clientCapValue() == null) return false;
   return clientCapRealDaily() == null;
 }
-function capacityDailyFull() {   // full 30-day capacity array for the client, or null
-  if (!CAP || !CAP.capacity || !CAP.days) return null;
-  var k = capWsKey();
-  if (k) return alignCap(CAP.capacity[k], CAP.days);          // All + own-workspace: exact per-day
-  // shared navreo-workspace client. Prefer the REAL per-day series the daily cap
-  // crons record (client_caps_daily); fall back per-day to scaling the navreo
-  // series to the client's current cap where a real value isn't recorded yet, so
-  // the line stays continuous and converges to fully-real as history accrues
-  // (Bjion 2026-08-21 capacity audit — replaces the borrowed fleet shape).
-  var real = clientCapRealDaily();
-  var navCap = alignCap(CAP.capacity.navreo, CAP.days), clientCur = clientCapValue();
-  var est = null;
-  if (navCap && clientCur != null) {
-    var navCur = null;
-    for (var i = navCap.length - 1; i >= 0; i--) if (navCap[i] != null) { navCur = navCap[i]; break; }
-    if (navCur) { var ratio = clientCur / navCur; est = navCap.map(function (v) { return v == null ? null : Math.round(v * ratio); }); }
-  }
-  if (!real) return est;
-  return real.map(function (v, i) { return v != null ? v : (est ? est[i] : null); });
+// The client's per-day capacity on the CHART axis. ONE definition, shared with
+// the Fleet heat map: NavreoCapacity.capSeries (shell.js) picks the exact
+// own-workspace/__all series or builds the shared-client series from
+// client_caps_daily + a scaled navreo pool. This page used to carry its own
+// copy of that logic, which then missed the latest-recorded-cap fallback and
+// drifted from the heat map — never fork it again.
+function capacityDailyAligned() {
+  if (!CAP || !CAP.capacity || !CAP.days || !window.NavreoCapacity) return null;
+  return alignCap(NavreoCapacity.capSeries(CAP, state.client, capWsKey()), CAP.days);
+}
+// THE capacity-used figure for the current client + range, with the numbers
+// behind it (see NavreoCapacity.usedDetail): weekday sends / weekday capacity.
+// The chart's "Hide weekends" toggle does NOT change it.
+function capacityUsedDetail() {
+  if (!CAP || !window.NavreoCapacity) return null;
+  var sent = sentDailyFull(), axis = chartAxisDays();
+  if (!sent || !axis.length) return null;
+  return NavreoCapacity.usedDetail({ sent: sent, sentDays: axis, cap: CAP,
+                                     name: state.client, wsKey: capWsKey(), days: state.range });
 }
 // ── Days-of-leads runway inputs (Bjion 2026-08-21) ────────────────────────
 // CURRENT per-day sending capacity for the selected client (latest non-null of
 // its capacity series; the flat client-cap value as a fallback).
 function capacityNow() {
-  var arr = capacityDailyFull();
+  var arr = capacityDailyAligned();
   if (arr) for (var i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i];
   return clientCapValue();
 }
@@ -1133,8 +1184,18 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     var cwr = cwFor(state.client);
     if (cwr && cwr.replied != null) return null;
   }
+  if (k === "interested") {
+    // Interested has ONE source on this page: Smartlead's positive-reply stat,
+    // carried by the client-windows sweep (owner ruling 2026-09-02). The chart
+    // line, the legend chip, the funnel and the KPI must all be that number —
+    // plotting the local reply archive here while the funnel read Smartlead let
+    // the chip say 413 next to a funnel saying 381. The archive series is the
+    // fallback only for a key whose Smartlead pull failed.
+    var cs2 = CW && CW.series && CW.series[ckey()];
+    if (cs2 && cs2.positives) return alignDaily(cs2.positives, CW.days, 0, null);
+  }
   var s = HUB && HUB.series && HUB.series[ckey()];
-  return (s && s[k === "interested" ? "interested" : k]) || [];
+  return hubAligned(s && s[k]) || [];
 }
 function repliesShown() { // THE reply count every widget shows for this view
   // No trusted daily line -> use the EXACT client-windows window total before
@@ -1258,6 +1319,11 @@ function renderLegend() {
     else if (k === "bounces") { var ba = bounceAvg(); val = ba == null ? "–" : ba + "%"; }
     else if (k === "sent") val = cw ? fmtN(cw.sent) : "–";
     else if (k === "replies") val = fmtN(repliesShown());   // the ONE reply count — chip can never disagree with the funnel
+    // Same rule for Interested: read the ONE number the funnel and the KPI show
+    // (Smartlead's positive-reply stat) instead of re-summing a series. Summing
+    // its own series here is how the chip came to read 413 beside a funnel
+    // reading 381 — two books for one word, in one viewport.
+    else if (k === "interested") val = fmtN(funnelSums().pos);
     else if (hasLine) val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
     else val = "–";
     // "noline" = a real total exists but no day-by-day line (shared-workspace
@@ -1292,9 +1358,8 @@ function renderTrend() {
   // Axis = the hub's day list, or client-windows' aligned day list while the hub
   // RPC is still in flight. Either one lets the chart draw; only when BOTH are
   // missing do we show the loading frame.
-  var axisDays = (HUB && HUB.days) || (CW && CW.days) || [];
-  var allDays = slice(axisDays);
-  if (!allDays.length) {
+  var allDays = slice(chartAxisDays());
+  if (!allDays.length) {   // no axis yet (or nothing before today)
     // hub still loading — say so instead of leaving a silent empty frame
     $("trend-svg").innerHTML = '<text x="560" y="132" text-anchor="middle" font-size="13" fill="var(--ink-3)">Loading your ' + rangeLabel() + "…</text>";
     $("trend-sub").textContent = "Fetching live data…";
@@ -1317,7 +1382,7 @@ function renderTrend() {
   var hasRate = lineVis.some(function (k) { return RAXIS[k]; });
   // Capacity ceiling (P1 headroom bars): per-day sending capacity for the current
   // scope, or null when it isn't separable (shared-workspace clients / no data).
-  var capFull = (state.on.sent && sentBars) ? capacityDailyFull() : null;
+  var capFull = (state.on.sent && sentBars) ? capacityDailyAligned() : null;
   var capBars = capFull ? pick(slice(capFull)) : null;
   // ── Best-guess fill for missing / near-zero days ──────────────────────────
   // Weekends (and other gap days) send ~0, so their bars vanish and their rate
@@ -1467,25 +1532,34 @@ function renderTrend() {
                      : "Every line is a count per day") +
     (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
   if (capMode) {
-    var capTot = 0, sBarsTot = 0;
-    capBars.forEach(function (v, ii) { if (v) { capTot += v; sBarsTot += (sentBars[ii] || 0); } });
-    if (capTot > 0) {
-      sub += " You used " + Math.round(sBarsTot / capTot * 100) + "% of sending capacity here — " +
-        fmtN(sBarsTot) + " of " + fmtN(capTot) + " possible. The left axis reads the period total; reply / interested / meeting lines keep their own scale.";
+    // The BARS above are the chart (they follow the Hide-weekends toggle and the
+    // chart's own gap-fill). The NUMBER below is not derived from them: it comes
+    // from the one shared helper and is always weekday-only, so the KPI pill, the
+    // footnote and the Fleet heat map can never disagree. See NavreoCapacity.
+    var cu = capacityUsedDetail();
+    if (cu && cu.pct != null) {
+      var overNote = cu.exceeded > 0
+        ? " On " + cu.exceeded + " day" + (cu.exceeded === 1 ? "" : "s") + " we sent more than the capacity on record for that day, so those days count at what they actually sent."
+        : "";
+      sub += " You used " + cu.pct + "% of sending capacity here — " +
+        fmtN(cu.sent) + " of " + fmtN(cu.cap) + " possible on the " + cu.days +
+        " weekday" + (cu.days === 1 ? "" : "s") + " in this window (weekends never send, so they are left out)." + overNote +
+        " The left axis reads the period total; reply / interested / meeting lines keep their own scale.";
       if (capEstimated()) sub += " " + escq(state.client) + "'s capacity is the cap of the mailboxes on its campaigns, tracking the fleet's daily warm-up.";
       // Capacity-used pill in the legend chip row (renderLegend already built it).
+      var capTip = fmtN(cu.sent) + " of " + fmtN(cu.cap) + " weekday capacity over the " + rangeLabel() + " (weekdays only)" +
+        (cu.exceeded > 0 ? " · cap snapshot below sends on " + cu.exceeded + " day(s)" : "");
       var lc = $("ah-lchips");
       if (lc) lc.insertAdjacentHTML("beforeend",
-        '<span class="lchip cap-pill" style="cursor:default" title="' +
-        fmtN(sBarsTot) + " of " + fmtN(capTot) + " capacity over the " + rangeLabel() + '">' +
+        '<span class="lchip cap-pill" style="cursor:default" title="' + escq(capTip) + '">' +
         '<i class="sw" style="background:linear-gradient(to top,' + COL.sent + ' 0 55%,var(--line-2) 55% 100%)"></i>' +
-        "Capacity used <b class=\"num\">" + Math.round(sBarsTot / capTot * 100) + "%</b></span>");
+        "Capacity used <b class=\"num\">" + cu.pct + "%</b></span>");
     }
   }
   if (state.on.sent && sentFull && sentDailyEstimated()) {
     sub += " " + escq(state.client) + " shares the Navreo fleet, so its daily bars are an estimated split of the fleet's daily sending (its window total is exact).";
   }
-  if (state.hideWeekends) sub += " Weekends hidden.";
+  if (state.hideWeekends) sub += " Weekends hidden from the chart.";
   sub += priorComparison();
   // close the ledger: the all-clients total includes campaigns archived since
   // they sent, which belong to no chip (9,081 unattributed sends confused
@@ -1541,7 +1615,7 @@ function hideTip() {
 function trendMove(ev) {
   var svg = $("trend-svg"), r = svg.getBoundingClientRect();
   if (!r.width) return;
-  var allD = slice((HUB && HUB.days) || (CW && CW.days) || []);
+  var allD = slice(chartAxisDays());
   if (!allD.length) return;
   var keep = chartKeep(allD);
   var days = keep.map(function (i) { return allD[i]; });
@@ -1626,13 +1700,22 @@ function funnelSums() {
   var cw = cwFor(state.client);
   if (cw) {
     v.win = true;
-    var sum = function (a) { return slice(a || []).reduce(function (x, y) { return x + (y || 0); }, 0); };
+    // hubAligned: the analytics-hub arrays still run to today, and slice() takes
+    // the LAST `range` entries — untrimmed, a 30-day read would count today's
+    // partial day and drop the oldest real one.
+    var sum = function (a) { return slice(hubAligned(a) || []).reduce(function (x, y) { return x + (y || 0); }, 0); };
     var s = HUB && HUB.series && HUB.series[ckey()];
     // sent + replies through the same helpers the hero legend uses, so the
     // funnel and the graph can never disagree about the same window
     v.sent = sentShown();
     v.rep = repliesShown();
-    v.pos = sum(s && s.interested);
+    // Interested = Smartlead's own positive-reply stat for this client and
+    // window when the sweep carries it (owner ruling 2026-09-02: Smartlead is
+    // the source of truth). The analytics-hub series, built from our local reply
+    // archive, is the fallback for a key whose Smartlead pull failed — it drifts
+    // from the platform (All 30d read 413 against Smartlead's 381).
+    v.posFromSmartlead = cw.positives != null;
+    v.pos = v.posFromSmartlead ? cw.positives : sum(s && s.interested);
     v.mtg = sum(s && s.meetings);
   } else if (CW && CW.windows) {
     // client-windows IS loaded, this client just has no sends in the window
@@ -1790,6 +1873,11 @@ function renderTags(v) {
   $("tag-sent").textContent = fmtN(v.sent);
   $("tag-replies").textContent = fmtN(v.rep);
   $("tag-int").textContent = fmtN(v.pos);
+  // say which book the Interested number came out of, on hover
+  var ti = $("tag-int").parentNode;
+  if (ti) ti.title = v.posFromSmartlead
+    ? "Smartlead 'Interested' leads in the window"
+    : "Counted from our own reply archive — Smartlead's Interested stat was unavailable for this view";
   $("tag-meet").textContent = fmtN(v.mtg);
 }
 function decisionRows() {
@@ -1822,7 +1910,6 @@ function weekdayAvgSent(daysBack) {
 function renderRunway(v) {
   // The lane-1 FUEL card was removed (duplicated this lane) — this now drives
   // only lane 2's runway (run-*).
-  var isAll = state.client === "All";
   setStamp("run-stamp", CW && CW.asof, 6);
   // Per-client daily send rate (Bjion 2026-07-28: "works for all clients but
   // not individual"). Fleet keeps its tested weekday average; a client's rate
@@ -1845,6 +1932,19 @@ function renderRunway(v) {
   var days = headroom ? Math.floor(v.leadsLeft / headroom) : null;
   var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
   var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
+  // Leads-still-to-work comes from the campaign scorecard. When that read fails
+  // the sum is 0, and the card used to announce "0 · No leads queued — add a
+  // list", which is a different claim from "we don't know". Say we don't know.
+  if (!SCORE) {
+    $("run-kick").textContent = "Leads still to work";
+    $("run-big").innerHTML = "—";
+    $("run-big").className = "bignum num";
+    $("run-sub").textContent = "runway unavailable — campaign data could not be loaded";
+    $("run-svg").style.display = "none";
+    $("run-take").textContent = "";
+    $("tag-leads").textContent = "—";
+    return;
+  }
   if (days != null) {
     $("run-kick").textContent = "Days of leads left";
     $("run-big").innerHTML = fmtN(days) + "<small> days</small>";
@@ -1887,15 +1987,24 @@ function renderSignals() {
     Object.keys(ce.mech || {}).forEach(function (m) {
       mech[m] = slice(ce.mech[m] || []).reduce(function (a, b) { return a + (b || 0); }, 0);
     });
-  } else {
+  } else if (SRC) {
+    // fleet view: the mechanism of each signal source comes from /api/sources.
     var srcMech = {};
-    var srcArr = Array.isArray(SRC) ? SRC : ((SRC && SRC.sources) || []);
+    var srcArr = Array.isArray(SRC) ? SRC : (SRC.sources || []);
     srcArr.forEach(function (s) { srcMech[s.id] = s.mechanism || "other"; });
     (SIG.series || []).forEach(function (se) {
       var m = srcMech[se.id] || "other";
       var n = slice(se.counts || []).reduce(function (a, b) { return a + (b || 0); }, 0);
       mech[m] = (mech[m] || 0) + n;
     });
+  }
+  // /api/sources failed: without it every source's mechanism is unknown, and the
+  // old code silently filed all of them under "Other" — a made-up breakdown of a
+  // real total. Show the total and say the split is missing.
+  if (!ce && !SRC) {
+    $("sig-rows").innerHTML = '<div class="subline">Where these came from is unavailable right now — the lead-source list could not be loaded.</div>';
+    $("sig-take").textContent = "";
+    return;
   }
   var label = { hiring: "Hiring", engagement: "Engagement", followers: "Followers", lookalike: "Lookalikes", news: "News", recontact: "Recontact", other: "Other" };
   var rows = Object.keys(mech).map(function (m) { return [label[m] || m, mech[m]]; })
@@ -1936,36 +2045,54 @@ function renderNC() {
 }
 
 /* ── lane 3: landing + weekday ── */
-// Fleet reply rate, day by day. A quiet day is not a rate — under WK_MIN_SENT
-// the day is a gap in the line, not a zero.
-var WK_MIN_SENT = 200;
+// Fleet reply rate, day by day. A quiet day is not a rate — below the gate the
+// day is a gap in the line, not a zero.
+//
+// The gate is RELATIVE to the window on screen, not a fixed number of sends.
+// A flat 200 was a tiny fraction of a normal 34k weekday, so a 234-send Sunday
+// cleared it and plotted a rate computed on 0.7% of a day's volume — which then
+// set the chart's scale and buried the weekday line the reader came for. 15% of
+// the window's typical (median non-zero) day keeps a genuinely quiet weekday
+// readable while a weekend or an outage day drops out, at any client scale.
+// The floor of 50 stops a near-dead window from gating nothing at all.
+function wkMinSent(sends) {
+  var v = sends.filter(function (x) { return x > 0; }).sort(function (a, b) { return a - b; });
+  if (!v.length) return 50;
+  var m = v.length >> 1;
+  var med = v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+  return Math.max(50, 0.15 * med);
+}
 function weekSeries(n) {
   // Per-client daily rate when a true series exists (All / Asteri / KRG via
   // client-windows); the fleet trends line is the fallback — renderWeek says
   // which one is on screen so a client view never silently reads fleet-wide.
   var out = { days: [], rate: [], sent: [], scope: "fleet" };
   var cs = cwTrusted(state.client === "All" ? "__all" : state.client);
-  if (cs && CW.days && CW.days.length) {
-    var min = state.client === "All" ? WK_MIN_SENT : 50;
-    var from0 = Math.max(0, CW.days.length - n);
-    for (var j = from0; j < CW.days.length; j++) {
-      var sj = cs.sent[j] || 0;
-      out.days.push(CW.days[j]);
-      out.sent.push(sj);
-      out.rate.push(sj < min ? null : Math.round((cs.replied[j] || 0) * 10000 / sj) / 100);
-    }
+  var from0, i, ax;
+  // Both source axes are trimmed to end YESTERDAY: today's partial day is not a
+  // reply rate, and a cached blob built before the 2026-09-02 ruling still runs
+  // to today. Same helper the day-by-day chart uses.
+  ax = axisEndingYesterday((CW && CW.days) || []);
+  if (cs && ax.length) {
+    from0 = Math.max(0, ax.length - n);
+    for (i = from0; i < ax.length; i++) { out.days.push(ax[i]); out.sent.push(cs.sent[i] || 0); }
+    var minC = wkMinSent(out.sent);
+    out.sent.forEach(function (sj, k) {
+      out.rate.push(sj < minC ? null : Math.round((cs.replied[from0 + k] || 0) * 10000 / sj) / 100);
+    });
     out.scope = state.client === "All" ? "all" : state.client;
     return out;
   }
   var s = TRENDS && TRENDS.series;
   if (!s || !s.days || !s.days.length) return out;
-  var from = Math.max(0, s.days.length - n);
-  for (var i = from; i < s.days.length; i++) {
-    var sent = s.sent[i] || 0, rp = s.reply_pct[i];
-    out.days.push(s.days[i]);
-    out.sent.push(sent);
-    out.rate.push(rp == null || sent < WK_MIN_SENT ? null : rp);
-  }
+  ax = axisEndingYesterday(s.days);
+  from0 = Math.max(0, ax.length - n);
+  for (i = from0; i < ax.length; i++) { out.days.push(ax[i]); out.sent.push(s.sent[i] || 0); }
+  var minF = wkMinSent(out.sent);
+  out.sent.forEach(function (sent, k) {
+    var rp = s.reply_pct[from0 + k];
+    out.rate.push(rp == null || sent < minF ? null : rp);
+  });
   return out;
 }
 var WK = null;
@@ -2111,7 +2238,7 @@ function renderRank() {
     }).map(function (r) {
       var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
       if (r.pos != null) winPM = true;
-      return { id: r.id, client: r.client, name: r.name || (sc && sc.name) || ("Campaign " + r.id),
+      return { id: r.id, client: r.client, name: campaignName(r.id, r.name),
                sent: r.sent, replied: r.replied,
                pos: r.pos != null ? r.pos : ((sc && sc.positives) || 0),
                mtg: r.mtg != null ? r.mtg : ((sc && sc.meetings) || 0),
@@ -2210,6 +2337,16 @@ function renderRank() {
 // to the same string, so a kill-order and a praise line looked like the same
 // campaign (2026-07-28 testers)
 function shortName(n) { n = String(n || ""); return n.length > 64 ? n.slice(0, 62) + "…" : n; }
+// A campaign's display name from whatever source has it, never a bare id.
+function campaignName(id, preferred) {
+  if (preferred) return preferred;
+  var sc = SCORE && SCORE.campaigns && SCORE.campaigns[id];
+  if (sc && sc.name) return sc.name;
+  var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
+  var hit = (win || []).filter(function (r) { return String(r.id) === String(id) && r.name; })[0];
+  if (hit) return hit.name;
+  return "Campaign " + id + " (name not synced)";
+}
 function renderDying() {
   var rows = decisionRows();
   if (!rows.length) { $("dying").style.display = "none"; return; }
@@ -2218,7 +2355,10 @@ function renderDying() {
     return sb2 - sa;
   });
   var r = rows[0], p = r.payload;
-  $("dying-txt").textContent = "“" + shortName(p.campaign_name || r.scope) + "” — " + (p.bold || "");
+  // r.scope is a raw campaign id. Falling back to it printed "3477409" as if it
+  // were the campaign's name — resolve it against the scorecard / hub first, and
+  // say plainly when the name simply hasn't synced.
+  $("dying-txt").textContent = "“" + shortName(campaignName(r.scope, p.campaign_name)) + "” — " + (p.bold || "");
   $("dying-fix").textContent = p.act || "This campaign stopped working.";
   $("dying-link").href = "campaigns.html#/c/" + encodeURIComponent(r.scope);
   $("dying").style.display = "";
@@ -2275,7 +2415,12 @@ function renderOffer() {
     box.innerHTML = '<div class="subline">Not enough sending behind any one offer' +
       (perClient ? " for " + escq(state.client) : "") +
       (windowed ? " in the " + rangeLabel() : "") + " yet.</div>";
-    $("offer-sub").textContent = "";
+    // was blank, which read as a broken card for every client with no
+    // offer-level rows (Arnic, TouchPoint, Grout, ThunderBird, Altius Reach,
+    // Asteri) — say what is actually true instead.
+    $("offer-sub").textContent = perClient
+      ? "No offer-level data for " + state.client + " yet."
+      : "No offer-level data for the whole book yet.";
     $("offer-take-row").style.display = "none";
     if ($("offer-scope")) $("offer-scope").textContent = scopeTxt;
     return;
@@ -2315,21 +2460,46 @@ function renderOffer() {
 // live per-client × range payload from /api/who-replies (see ensureWho)
 var WHO = null, WHO_KEY = null;
 var WHO_INFLIGHT = null;
-function ensureWho() {
+// The filter key whose fetch FAILED. Without it a rejected /api/who-replies
+// left both cards on this row at a literal "…" forever, indistinguishable from
+// a slow load, with nothing to click (seen on All·7, All·14, Amplifyy·30,
+// KRG·30). Cleared the moment a retry starts.
+var WHO_ERR = null;
+function ensureWho(force) {
   var kk = state.client + "|" + state.range;
-  if (WHO_KEY === kk) { renderWho(); return; }
+  if (WHO_KEY === kk && !force) { renderWho(); return; }
+  if (force) { WHO_KEY = null; WHO_INFLIGHT = null; }
+  WHO_ERR = null;
   renderWho();   // paint a loading/previous state immediately
   if (WHO_INFLIGHT === kk) return;   // boot renders re-enter per payload arrival
   WHO_INFLIGHT = kk;
+  function failed() {
+    if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null;
+    // only report the failure if the user is still looking at that filter —
+    // the out-of-order race guard cuts both ways
+    if (kk === state.client + "|" + state.range) { WHO_ERR = kk; renderWho(); }
+  }
   j("/api/who-replies?client=" + encodeURIComponent(state.client) + "&days=" + state.range)
     .then(function (d) {
       if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null;
       // a slow response for a filter the user already left must not clobber
       // the current view (out-of-order race stranded the cards at Loading…)
-      if (d && !d.error && kk === state.client + "|" + state.range) { WHO = d; WHO_KEY = kk; renderWho(); }
-    })
-    .catch(function () { if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null; });
+      if (kk !== state.client + "|" + state.range) return;
+      if (d && !d.error) { WHO = d; WHO_KEY = kk; renderWho(); }
+      else failed();
+    }, failed);
 }
+// One shared "we could not load this" state + Retry for the two cards fed by
+// /api/who-replies, so neither can sit on a silent ellipsis.
+function whoRetryLink() {
+  return '<a href="#" class="who-retry">Retry</a>';
+}
+document.addEventListener("click", function (e) {
+  var a = e.target && e.target.closest && e.target.closest("a.who-retry");
+  if (!a) return;
+  e.preventDefault();
+  ensureWho(true);
+});
 // ── who's-replying heatmap: pivots p.combos (title × company-size cross-tab)
 // into the winning-combination grid. Returns false when the cross-tab is too
 // sparse to draw, so renderWho falls back to the role-mix bars. ──
@@ -2393,7 +2563,12 @@ function renderWho() {
   // ── left box: who's replying (role mix + company size), per client+range ──
   var named = (p && p.named) || 0;
   var roleRows = (p && p.buckets) || [];
-  if (!p) {
+  var failed = WHO_ERR === state.client + "|" + state.range;
+  if (!p && failed) {
+    $("who-n").textContent = "–";
+    $("who-rows").innerHTML = '<div class="subline">Not available right now. ' + whoRetryLink() + "</div>";
+    $("who-size").textContent = ""; $("who-take-row").style.display = "none";
+  } else if (!p) {
     $("who-n").textContent = "…"; $("who-rows").innerHTML = '<div class="subline">Loading…</div>';
     $("who-size").textContent = ""; $("who-take-row").style.display = "none";
   } else if (named >= 3 && roleRows.length) {
@@ -2426,7 +2601,12 @@ function renderWho() {
   // ── right box: how fast we answer interested replies (benchmark 15 min) ──
   var sp = p && p.speed;
   if ($("wait-scope")) $("wait-scope").textContent = "· " + scope + " · benchmark 15 min";
-  if (!p) {
+  if (!p && failed) {
+    $("wait-big").textContent = "–"; $("wait-big").className = "bignum num";
+    $("wait-sub").innerHTML = "Not available right now. " + whoRetryLink();
+    $("wait-take").textContent = "";
+    renderWaitChart(null);
+  } else if (!p) {
     $("wait-big").textContent = "…"; $("wait-big").className = "bignum num";
     $("wait-sub").textContent = "Loading…"; $("wait-take").textContent = "";
   } else if (sp && sp.n > 0) {
@@ -3011,15 +3191,9 @@ function scheduleRender() {
   _renderT = setTimeout(function () { _renderT = 0; renderAll(); }, 16);
 }
 function boot() {
-  $("ah-databar").classList.remove("show");
-  var criticalLeft = 2;  // HUB + SCORE — the two that gate the "unavailable" note
-  function criticalSettled() {
-    if (--criticalLeft > 0) return;
-    if (!HUB && !SCORE) {
-      $("ah-databar-msg").textContent = "Live data unavailable right now.";
-      $("ah-databar").classList.add("show");
-    }
-  }
+  DEGRADED = {};
+  renderDataBar();
+  function criticalSettled() { markDegraded("Campaign performance", !HUB && !SCORE); }
   j("/api/analytics-hub?days=30").then(function (d) {
     HUB = d && !d.error ? d : null;
     // a restored client that no longer exists must not ghost-filter the page
@@ -3032,7 +3206,7 @@ function boot() {
   }, function () { HUB = null; setTimeout(loadHub, 15000); })
     .then(function () { criticalSettled(); scheduleRender(); });
   j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
-    .then(function () { criticalSettled(); scheduleRender(); });
+    .then(function () { markDegraded("Campaign list (leads still to work)", !SCORE); criticalSettled(); scheduleRender(); });
   // Synchronized first paint: the fast core reads below all land sub-second and
   // share the chart (capacity rides in it as the headroom bars). Hold the first
   // DATA paint until they've ALL settled, then paint once — so capacity appears
@@ -3058,7 +3232,8 @@ function boot() {
   jShared("/api/cockpit/insights").then(function (d) { INS = d; coreSettled(); }, function () { coreSettled(); });
   j("/api/campaigns-unified").then(function (d) { UNI = d; coreSettled(); }, function () { coreSettled(); });
   jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; coreSettled(); }, function () { coreSettled(); });
-  j("/api/sources?slim=1").then(function (d) { SRC = d; coreSettled(); }, function () { coreSettled(); });
+  j("/api/sources?slim=1").then(function (d) { SRC = d; markDegraded("Lead sources", false); coreSettled(); },
+                               function () { SRC = null; markDegraded("Lead sources", true); coreSettled(); });
   // jShared so any second hub read of /_audit reuses this boot promise
   // instead of issuing an identical request.
   jShared("/api/deliverability/_audit").then(function (d) { AUDIT = d; coreSettled(); }, function () { coreSettled(); });

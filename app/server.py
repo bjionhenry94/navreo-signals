@@ -9603,9 +9603,14 @@ def _all_campaign_scorecard() -> dict:
     camps = {}
     for r in (rows or []):
         sid = str(r.get("smartlead_campaign_id"))
-        # Demo-client campaigns stay off the day-to-day Campaigns page unless the
-        # Settings "Show demo clients" toggle is ON.
-        if _client_hidden(_client_win_label(r.get("workspace") or "navreo", r.get("name") or "")):
+        # Demo-client campaigns stay off every day-to-day surface — the Campaigns
+        # page AND the Analytics winners table, which reads this same payload —
+        # unless the Settings "Show demo clients" toggle is ON. Test BOTH the
+        # name-derived label (the rule _client_win_build uses, so the two agree)
+        # and the synced `client` column, so a demo row whose name happens not to
+        # carry the keyword still can't leak in.
+        if _client_hidden(_client_win_label(r.get("workspace") or "navreo", r.get("name") or "")) \
+                or _client_hidden(r.get("client")):
             continue
         camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total",
                                             "not_started", "inprogress", "paused", "blocked", "stopped", "status")}
@@ -17471,7 +17476,9 @@ def _snapshot_from_blob(blob: dict):
 def _deliv_trends_build(days: int) -> dict:
     """Fetch + shape the per-day series. Raises on Smartlead failure — the
     caller keeps serving the previous cached copy in that case."""
-    end = _dtmod.date.today()
+    # Ends YESTERDAY, like _client_win_build (owner ruling 2026-09-02) — today is
+    # a partial bucket, and the two series share the Analytics chart's axis.
+    end = _dtmod.date.today() - _dtmod.timedelta(days=1)
     start = end - _dtmod.timedelta(days=days - 1)
     # navreo-fleet-only BY DESIGN: OUR fleet's day-wise history
     url = (f"{SMARTLEAD_BASE}/analytics/day-wise-overall-stats"
@@ -17876,13 +17883,22 @@ def _persist_mcm_after_sweep():
     return None
 
 
-def snapshot_all_capacity(workspaces: list | None = None) -> dict:
+def snapshot_all_capacity(workspaces: list | None = None,
+                          force_fresh: bool = True) -> dict:
     """Persist TODAY's capacity for EVERY workspace — each pool straight from the
     mailboxes mirror (pause-aware), plus navreo per-client. Called from the
     federated mailbox sync so every workspace gets a real per-day row (navreo is
     additionally refreshed by the cap crons). One breakdown = all pools + clients;
-    no per-workspace Smartlead sweep."""
-    bd = _navreo_capacity_breakdown(force_fresh=True)
+    no per-workspace Smartlead sweep.
+
+    force_fresh=True runs the ~7-min restore sweep synchronously — correct in a
+    cron process, fatal on the web tier (512MB instance, see
+    web-instance-oom-crashloop). force_fresh=False reuses the 10-min cached
+    breakdown: the POOL caps come straight from the mailboxes mirror either way
+    (one DB read, no Smartlead fan-out), so an intraday web-tier top-up still
+    records a real per-workspace cap; only the navreo PER-CLIENT split needs the
+    sweep, and it is simply omitted when the sweep is cold."""
+    bd = _navreo_capacity_breakdown(force_fresh=force_fresh)
     pools = bd.get("workspace") or {}
     if not pools:
         return {"ok": False, "error": "no capacity data for any workspace"}
@@ -17890,16 +17906,60 @@ def snapshot_all_capacity(workspaces: list | None = None) -> dict:
         workspaces = list(_FLEET_CAP_WS)
     ws_updates = {ws: pools[ws] for ws in workspaces if ws in pools}
     client_updates = bd.get("clients") if "navreo" in workspaces else None
+    if client_updates is not None and not client_updates:
+        # cold sweep (force_fresh=False): write the pools we DO know and leave the
+        # per-client blob untouched rather than merging an empty client map
+        client_updates = None
     today = _dtmod.date.today().isoformat()
     _cap_blob_upsert(today, ws_updates, client_updates, src="sync")
     _CLIENT_CAP.update(data=bd, ts=time.time())
     # This is the reliable SERVER-SIDE path (federated mailbox-sync cron), so persist
     # the mcm snapshot here too — the navreo cap crons that also persist it are
     # laptop-side scripts that don't always run. See _persist_mcm_after_sweep.
-    mcm_clients = _persist_mcm_after_sweep() if "navreo" in workspaces else None
+    mcm_clients = (_persist_mcm_after_sweep()
+                   if force_fresh and "navreo" in workspaces else None)
     return {"ok": True, "date": today,
             "workspaces": {ws: v["cap"] for ws, v in ws_updates.items()},
             "clients": len(client_updates or {}), "mcm_clients": mcm_clients}
+
+
+# Hourly per-workspace capacity top-up, from /api/cron/audit-refresh.
+#
+# WHY: the own-workspace pools (asteri/krg/grout) get exactly ONE capacity row a
+# day, written by the 04:30 federated mailbox sync. Every cap change after that
+# — a pause, a restore, a tier change — lands in the mirror but not in the day's
+# recorded cap, so the Actively-sending cell measured that day's sends against a
+# stale morning ceiling and could read over 100%. High-water merging means a
+# later, higher snapshot can only raise the day's ceiling, never lower it
+# (_cap_hw_merge), so topping up hourly is safe by construction.
+#
+# It runs on a background thread with force_fresh=False so the web tier never
+# pays for the ~7-min restore sweep (web-instance-oom-crashloop) and never fans
+# out to Smartlead on a request thread. The pool caps it records come from one
+# mailboxes-mirror read.
+_CAP_TOPUP_MIN_S = 55 * 60          # ≥55 min between runs — the tick is hourly
+_CAP_TOPUP_LAST = [0.0]
+_CAP_TOPUP_LOCK = threading.Lock()
+
+
+def _capacity_topup_bg() -> None:
+    try:
+        r = snapshot_all_capacity(list(_FLEET_CAP_WS), force_fresh=False)
+        print(f"[cap-topup] {r}", flush=True)
+    except Exception as e:  # noqa: BLE001 — a top-up failure must never break the tick
+        print(f"[cap-topup] failed: {e}", file=sys.stderr)
+
+
+def _capacity_topup_start() -> dict:
+    """Kick the throttled top-up. Returns what it did, so the cron response says
+    whether it ran or was still inside its window."""
+    with _CAP_TOPUP_LOCK:
+        age = time.time() - _CAP_TOPUP_LAST[0]
+        if age < _CAP_TOPUP_MIN_S:
+            return {"started": False, "throttled_for_s": int(_CAP_TOPUP_MIN_S - age)}
+        _CAP_TOPUP_LAST[0] = time.time()
+    threading.Thread(target=_capacity_topup_bg, daemon=True).start()
+    return {"started": True}
 
 
 # ── warm-up capacity (sends/day currently being "repaired") ───────────────
@@ -18907,15 +18967,56 @@ def _daywise_series(key, days_out, start_iso, end_iso, campaign_ids=None):
     return {"sent": sent, "replied": rep, "bounced": bnc}
 
 
+def _daywise_positives(key, days_out, start_iso, end_iso, campaign_ids=None):
+    """Exact per-day "Interested" counts aligned to days_out, from Smartlead's
+    day-wise-positive-reply-stats.
+
+    Smartlead IS the source of truth for Interested (owner ruling 2026-09-02).
+    The page used to count positives out of the local reply archive, which holds
+    whatever our categoriser has written and drifts from the platform (All 30d
+    read 413 against Smartlead's 381). Same api_key / window / campaign_ids
+    contract as _daywise_series, so a client's positives line covers exactly the
+    campaigns its sent line does. Response shape mirrors day-wise-overall-stats:
+    data.day_wise_stats[].email_engagement_metrics.positive_replied, a string."""
+    chunks = [campaign_ids[i:i + 100] for i in range(0, len(campaign_ids), 100)] \
+        if campaign_ids else [None]
+    by_dm: dict = {}
+    for chunk in chunks:
+        url = (f"{SMARTLEAD_BASE}/analytics/day-wise-positive-reply-stats?api_key={key}"
+               f"&start_date={start_iso}&end_date={end_iso}")
+        if chunk:
+            url += "&campaign_ids=" + ",".join(str(c) for c in chunk)
+        raw = ((http_json("GET", url, {}, timeout=40) or {}).get("data") or {}).get("day_wise_stats") or []
+        for r in raw:
+            try:
+                d, mon = str(r.get("date", "")).split()
+                m = r.get("email_engagement_metrics") or {}
+                k = (int(d), _DAYWISE_MONTHS.get(mon[:3], 0))
+                by_dm[k] = by_dm.get(k, 0) + int(float(m.get("positive_replied") or 0))
+            except (ValueError, AttributeError):
+                continue
+    out = []
+    for iso in days_out:
+        dt = _dtmod.date.fromisoformat(iso)
+        out.append(int(by_dm.get((dt.day, dt.month)) or 0))
+    return out
+
+
 def _client_win_build():
     """The sweep. Candidates: every ACTIVE/PAUSED/STOPPED/COMPLETED campaign —
     COMPLETED must be swept unconditionally because finished campaigns keep
     sending follow-up steps inside the window (the 2026-07-28 truth check
     caught 12 completed Asteri campaigns holding 14% of its 14d sends).
     ARCHIVED/DRAFTED don't send. 30d first; campaigns with zero 30d sends
-    skip the 14/7 calls."""
+    skip the 14/7 calls.
+
+    Every window ENDS YESTERDAY (owner ruling 2026-09-02). Today is a partial,
+    still-ramping bucket: a "7 day" read at 09:00 used to be 6 full days plus a
+    near-empty one, which dragged every rate and every capacity-used figure
+    down and made the label a lie. This is the same rule the Fleet heat map's
+    24H snapshot has always followed, now applied to 7/14/30 as well."""
     t0 = time.time()
-    end = _dtmod.date.today()
+    end = _dtmod.date.today() - _dtmod.timedelta(days=1)
     rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status") or []
     if not rows:
         # 1,000+ campaigns exist; an empty read is a transient outage, and
@@ -18969,6 +19070,7 @@ def _client_win_build():
     # (Bjion: "we don't need to guess it, it's right here").
     nav_key = ws_key("navreo")
     _shared_client_keys = []   # scoped-series clients, for the systemic gate below
+    ids_by_client: dict = {}   # client -> its navreo campaign ids (also drives positives)
     if nav_key:
         # Scoped series span EVERY scorecard campaign of the client except
         # DRAFTED (never sent) — NOT the sweep's status filter: a campaign
@@ -18977,7 +19079,6 @@ def _client_win_build():
         # 68,673 30d sends, 12% missing from the page), and Smartlead's own
         # name-filtered analytics counts them. The window-total override
         # below then inherits the same completeness.
-        ids_by_client = {}
         for r in rows:
             if str(r.get("workspace") or "navreo").lower() != "navreo":
                 continue
@@ -19012,6 +19113,56 @@ def _client_win_build():
             if not failed_cl:
                 break
             time.sleep(10 * attempt)   # 429 back-off: 10s then 20s
+    # ── "Interested", straight from Smartlead ────────────────────────────────
+    # Owner ruling 2026-09-02: Smartlead's positive-reply stat IS Interested.
+    # Same keys, window and campaign_ids as the sent/replied lines above, so
+    # every client's positives cover exactly the campaigns its sent line does,
+    # and the fleet line is the sum of the workspaces (never of the client rows).
+    # Strictly ADDITIVE: any failure leaves `positives` ABSENT for that key —
+    # never zero — and the FE falls back to the reply archive for it alone.
+    pos_ws: dict = {}
+    for attempt in (1, 2):          # same retry shape as the day-wise loops above
+        failed_p = []
+        for ws in ws_ids:
+            if ws in pos_ws:
+                continue
+            try:
+                key = ws_key(ws)
+                if not key:
+                    continue
+                pos_ws[ws] = _daywise_positives(key, days_out, start30.isoformat(), end.isoformat())
+            except Exception as e:  # noqa: BLE001 — additive, never fatal
+                failed_p.append(ws)
+                if attempt == 2:
+                    daywise_errs.append(f"positives {ws}: {type(e).__name__}: {str(e)[:100]}")
+                print(f"[client-win] positives {ws} failed (attempt {attempt}): {e}", file=sys.stderr)
+        if not failed_p:
+            break
+        time.sleep(5)
+    for ws, arr in pos_ws.items():
+        if ws == "navreo":
+            continue            # navreo's own line rides the __all sum, as above
+        _lbl = _client_win_label(ws, None)
+        if _lbl in out_series:
+            out_series[_lbl]["positives"] = arr
+    if nav_key and ids_by_client:
+        for attempt in (1, 2, 3):
+            failed_pc = []
+            for cl, ids in ids_by_client.items():
+                if cl not in out_series or "positives" in out_series[cl]:
+                    continue
+                try:
+                    out_series[cl]["positives"] = _daywise_positives(
+                        nav_key, days_out, start30.isoformat(), end.isoformat(), campaign_ids=ids)
+                except Exception as e:  # noqa: BLE001 — additive, never fatal
+                    failed_pc.append(cl)
+                    if attempt == 3:
+                        daywise_errs.append(f"positives client {cl}: {type(e).__name__}: {str(e)[:100]}")
+                    print(f"[client-win] positives client {cl} failed (attempt {attempt}): {e}",
+                          file=sys.stderr)
+            if not failed_pc:
+                break
+            time.sleep(10 * attempt)   # 429 back-off, as the scoped-series loop
     # Navreo-workspace daily series still exposed under a reserved key as the
     # estimate fallback (used only if a shared client's scoped call above failed).
     if "navreo" in series:
@@ -19022,6 +19173,11 @@ def _client_win_build():
             for k in agg:
                 for i, v in enumerate(s[k]):
                     agg[k][i] += v
+        # fleet Interested = the sum of the WORKSPACE positives lines, matching
+        # how __all's sent/replied/bounced are built. Only when every enabled
+        # workspace answered — a partial sum would silently under-report.
+        if pos_ws and len(pos_ws) == len(series):
+            agg["positives"] = [sum(v) for v in zip(*pos_ws.values())]
         out_series["__all"] = agg
     # the campaign sweep
     windows = {str(w): {} for w in _CLIENT_WIN_WINDOWS}
@@ -19108,6 +19264,23 @@ def _client_win_build():
                 wk.update(sent=ssent,
                           replied=sum((s.get("replied") or [])[-w:]),
                           bounced=sum((s.get("bounced") or [])[-w:]))
+    # Windowed Interested = the tail sum of the same Smartlead positives line, so
+    # the KPI, the funnel and the daily line can never disagree. Absent whenever
+    # the pull failed for that key — the FE then falls back to the reply archive
+    # for that key alone, rather than reading a fabricated zero.
+    for w in _CLIENT_WIN_WINDOWS:
+        for cl, s in out_series.items():
+            if cl == "__navreo_ws":
+                continue
+            ps = s.get("positives")
+            if ps is None:
+                continue
+            wk = windows[str(w)].get(cl)
+            if wk is None:
+                if not sum(ps[-w:]):
+                    continue      # no sends AND no positives — no row to make
+                wk = windows[str(w)].setdefault(cl, {"sent": 0, "replied": 0, "bounced": 0})
+            wk["positives"] = sum(ps[-w:])
     if calls == 0:
         raise RuntimeError(f"no analytics-by-date call succeeded ({len(cands)} candidates; first errors: {errs[:2]})")
     # Windowed positives + meetings per campaign, from the same replies archive
@@ -24383,7 +24556,9 @@ class Handler(SimpleHTTPRequestHandler):
                 # no-ops while the cached blob is inside its 1h TTL.
                 st = _deliv_audit_start(force=False)
                 stb = _deliv_bundle_start(force=False)  # manager views/windows age on the same clock
-                return self._json({"ok": True, **st, "bundle": stb}, 202 if st.get("started") else 200)
+                stc = _capacity_topup_start()           # hourly per-workspace cap row
+                return self._json({"ok": True, **st, "bundle": stb, "capacity": stc},
+                                  202 if st.get("started") else 200)
             if path == "/api/cron/mailbox-sync":
                 if _MAILBOX_SYNC_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)

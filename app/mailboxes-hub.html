@@ -249,16 +249,30 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // 2026-08-28 a Friday mid-morning read 420 sent vs a normal ~31k day). Weekends
   // are skipped on the CALENDAR, so Saturday, Sunday and Monday all resolve to
   // Friday (owner 2026-08-28) — deterministic, independent of whether that weekday
-  // happened to send. Takes the day-wise `days` array (days[-1] = today); returns
-  // -1 if it's empty.
+  // happened to send.
+  //
+  // The search starts from the last entry whose DATE is strictly before today
+  // rather than from days[-2]: since the 2026-09-02 ruling the sweep's axis ends
+  // yesterday, but an older cached blob still ends today, and both must resolve
+  // to the same day. Returns -1 for an empty or all-future axis.
+  // UTC, because the sweep stamps its day list in UTC. A LOCAL date compare lets
+  // today's partial bucket through for a viewer ahead of UTC (between their local
+  // midnight and UTC midnight local "today" is already tomorrow's date), which is
+  // exactly the still-ramping day the 24H snapshot exists to skip.
+  function todayISO() { return new Date().toISOString().slice(0, 10); }
   function snapDayIndex(days) {
     if (!Array.isArray(days) || !days.length) return -1;
-    for (var i = days.length - 2; i >= 0; i--) {
+    var today = todayISO(), last = -1, i;
+    for (i = days.length - 1; i >= 0; i--) {
+      if (String(days[i] || "").slice(0, 10) < today) { last = i; break; }
+    }
+    if (last < 0) return -1;
+    for (i = last; i >= 0; i--) {
       var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(days[i] || "")); if (!m) continue;
       var wd = new Date(+m[1], +m[2] - 1, +m[3]).getDay();   // 0=Sun … 6=Sat, local
       if (wd !== 0 && wd !== 6) return i;                     // first weekday before today
     }
-    return days.length >= 2 ? days.length - 2 : 0;   // all-weekend series: yesterday
+    return last;   // all-weekend series: the last day before today
   }
   // "2026-08-27" → "27 Aug" for the scope label, so the snapshot day is explicit.
   var _MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -295,6 +309,26 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     });
     return hasClient ? out : null;         // __all alone isn't a fleet worth drawing
   }
+  // Capacity-used detail for one heat-map row, via the ONE shared helper.
+  // 24H truncates the series to END at the snapshot day and reads that single
+  // day, so utilisation reflects the same day reply/bounce do — not today's
+  // still-empty bucket. 7/14/30 read the last `win` days, weekdays only.
+  // wsKey "__all" is the fleet sum; asteri/krg/grout own their pool; every
+  // other client shares the navreo pool and is resolved by name.
+  function capWsKeyFor(name) {
+    var lc = String(name).toLowerCase();
+    if (name === "__all") return "__all";
+    return (lc === "asteri" || lc === "krg" || lc === "grout") ? lc : null;
+  }
+  function usedDetailFor(name, snapIdx, winN) {
+    if (!window.NavreoCapacity || !S.cap || !S.cw || !S.cw.series) return null;
+    var ser = S.cw.series[name];
+    var sent = ser && ser.sent, days = S.cw.days, n = winN;
+    if (!Array.isArray(sent) || !sent.length || !Array.isArray(days)) return null;
+    if (snapIdx >= 0) { sent = sent.slice(0, snapIdx + 1); days = days.slice(0, snapIdx + 1); n = 1; }
+    return NavreoCapacity.usedDetail({ sent: sent, sentDays: days, cap: S.cap,
+                                       name: name, wsKey: capWsKeyFor(name), days: n });
+  }
   function clientRows() {
     var cw = S.cw, win = String(S.win);
     var w = winData(win);
@@ -314,26 +348,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var pw = perClientWarmPct(name, labels);          // % of the client's mailboxes actively warming (inwarmup only)
       var wcap = warmCapFor(name, labels);              // estimated sends/day IN WARM-UP (being repaired), by provider
       var capDay = capFor(name, labels);                 // current per-day cap — ONLY for the "N/day cap" label text
-      // Capacity-used % via the ONE shared helper (NavreoCapacity in shell.js),
-      // a faithful port of the Analytics chart pipeline (align → window →
-      // gap-fill → Σsent÷Σcap). Reproduces the EXACT number the Analytics tab
-      // shows, per the 2026-08-23 "match Analytics" ruling. hideWeekends:false
-      // mirrors the Analytics DEFAULT (state.hideWeekends=false — weekends kept);
-      // verified byte-exact e.g. Asteri 21,677/41,884 = 52%. See capacity-parity-align.
-      var lc = String(name).toLowerCase();
-      var wsKey = (lc === "asteri" || lc === "krg" || lc === "grout") ? lc : null;
-      var sSer = (S.cw && S.cw.series && S.cw.series[name]) || null;
-      // For 24H, truncate the series to END at the snapshot day, then take that
-      // one day — so utilisation reflects the snapshot, not the current partial.
-      var capSent = sSer && sSer.sent, capDays = S.cw && S.cw.days, capN = winN;
-      if (snapIdx >= 0 && Array.isArray(capSent) && Array.isArray(capDays)) {
-        capSent = capSent.slice(0, snapIdx + 1); capDays = capDays.slice(0, snapIdx + 1); capN = 1;
-      }
-      var capUsed = (window.NavreoCapacity && capSent && capSent.length && capDays && S.cap)
-        ? NavreoCapacity.usedPct({
-            sent: capSent, sentDays: capDays, cap: S.cap,
-            name: name, wsKey: wsKey, days: capN, hideWeekends: false })
-        : null;
+      // Capacity-used via the ONE shared helper (NavreoCapacity in shell.js):
+      // weekday sends ÷ weekday capacity, the identical call the Analytics tab
+      // makes, so the two surfaces can never disagree. See its header comment
+      // for the 2026-09-02 weekdays-only ruling.
+      var cu = usedDetailFor(name, snapIdx, winN);
       return {
         name: prettyClient(name, labels), dom: null, inbox: pw ? pw.total : null,
         reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
@@ -354,7 +373,13 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         // range-averaged available made warm + available ≠ total on one row.
         totalCap: (wcap == null && capDay == null) ? null
           : Math.round((wcap ? wcap.capacityPerDay : 0) + (capDay || 0)),
-        cap: capUsed, capDay: capDay, bl: null
+        // cap = the % shown in "Actively sending"; sentW/capW/capDays/capExceeded
+        // are the numbers BEHIND it, so the sub-label under the % describes the
+        // same days the % was measured over (WI-2) and the All row can re-add
+        // them instead of averaging percentages.
+        cap: cu ? cu.pct : null, sentW: cu ? cu.sent : null, capW: cu ? cu.cap : null,
+        capDays: cu ? cu.days : null, capExceeded: cu ? cu.exceeded : 0,
+        capDay: capDay, bl: null
       };
     });
     rows.sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
@@ -474,8 +499,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // "missing a signature" item is now its own manager tab. buildFixItems()
   // is kept only because the "Inbox issues" KPI + verdict headline count it.
 
-  function heatCell(tone, big, small) {
-    return '<td><div class="hcell h-' + tone + '">' + big + (small ? '<small>' + small + '</small>' : '') + '</div></td>';
+  function heatCell(tone, big, small, title) {
+    return '<td' + (title ? ' title="' + esc(title) + '"' : '') + '><div class="hcell h-' + tone + '">' +
+      big + (small ? '<small>' + small + '</small>' : '') + '</div></td>';
   }
   // Aggregate "All clients" total row — reconciles from RAW totals (not an
   // average of per-client percentages): reply/bounce from the __all window
@@ -492,26 +518,45 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // known — the SAME total-sending-capacity definition as the per-client cells
     // (warm ÷ capacity-alone produced 254% nonsense), paired so the fleet %
     // stays ≤100 by construction.
-    // Capacity used % = the send-weighted mean of each client's own used-% (its
-    // exact per-client figure comes from the gap-filled capacity pipeline, which
-    // can't be re-derived from a single cap/day number here).
-    var sumWarm = 0, capForWarm = 0, wCapNum = 0, wCapDen = 0, sumTotal = 0, totalKnown = false;
+    var sumWarm = 0, capForWarm = 0, sumTotal = 0, totalKnown = false;
+    var sSent = 0, sCap = 0, sDays = 0, sExc = 0, anyRow = false;
     rows.forEach(function (r) {
       if (r.warmCap != null && r.capDay != null) { sumWarm += r.warmCap; capForWarm += r.capDay; }
-      if (r.cap != null && r.sent) { wCapNum += r.cap * r.sent; wCapDen += r.sent; }
+      if (r.sentW != null && r.capW) { sSent += r.sentW; sCap += r.capW; sDays = Math.max(sDays, r.capDays || 0); sExc += (r.capExceeded || 0); anyRow = true; }
       if (r.totalCap != null) { sumTotal += r.totalCap; totalKnown = true; }
     });
+    // Capacity used % — Σsent ÷ Σcap, NEVER a mean of percentages (a 200-send
+    // client at 90% must not weigh the same as a 300k client at 60%). Read the
+    // fleet's OWN __all series through the same helper the client rows use, so
+    // this row matches the Analytics All-clients KPI to the digit and stays in
+    // the same scope as the reply/bounce cells beside it (which already read
+    // __all, and so include campaigns that belong to no client chip). Summing
+    // the client rows is the fallback for a blob with no __all series.
+    var allCu = usedDetailFor("__all", win === "1" ? snapDayIndex((S.cw && S.cw.days) || []) : -1, Number(win) || 30);
+    var capPct = (allCu && allCu.pct != null) ? allCu.pct
+               : (anyRow && sCap > 0 ? Math.round(100 * sSent / sCap) : null);
     return {
       isAll: true, name: "All clients", dom: null, inbox: null,
       reply: reply, bounce: bounce,
       warmPct: (sumWarm + capForWarm) > 0 ? Math.round(100 * sumWarm / (sumWarm + capForWarm)) : null,
       warmCap: capForWarm > 0 ? sumWarm : null, warmCapKnown: true,
-      cap: wCapDen > 0 ? Math.round(wCapNum / wCapDen) : null,
+      cap: capPct,
+      sentW: allCu ? allCu.sent : (anyRow ? sSent : null),
+      capW: allCu ? allCu.cap : (anyRow ? sCap : null),
+      capDays: allCu ? allCu.days : (anyRow ? sDays : null),
+      capExceeded: allCu ? allCu.exceeded : sExc,
       capDay: null, totalCap: totalKnown ? sumTotal : null, bl: null, nClients: rows.length
     };
   }
   function renderHeat() {
     var rows = clientRows();
+    // "1 Sep" for the 24H sub-labels, so the cap a % was measured against names
+    // its own day. Empty for 7/14/30 (those say "avg" instead).
+    var snapTxt = "";
+    if (S.win === 1 && S.cw && S.cw.days) {
+      var si = snapDayIndex(S.cw.days);
+      if (si >= 0) snapTxt = fmtDay(S.cw.days[si]);
+    }
     // Lazy-load: never pre-paint the REP_CLIENTS sample (fabricated numbers
     // coloured as if real read as genuine fleet health). Until /api/client-windows
     // resolves, show a pulsing grey skeleton the shape of the heat map; once it
@@ -560,7 +605,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // ("12% of total sending capacity"; "in warm-up" while the % is unknown).
       var warmVal = null, warmSub = null;
       if (r.warmCap != null) {
-        warmVal = n(r.warmCap) + "/day";
+        // "~" because this is Sigma(resting mailboxes x provider default), not a
+        // Smartlead-reported volume — printing it bare read as a measurement.
+        warmVal = "~" + n(r.warmCap) + "/day";
         // A real-but-tiny share rounds to 0 (e.g. 102/day of a 23k fleet =
         // 0.44%): print "<1%" so a non-zero volume never reads "0%".
         warmSub = r.warmPct != null
@@ -573,11 +620,29 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         : (r.warmPct <= 20 ? "g1" : r.warmPct < 30 ? "a1" : "r1");
       // Until the warm-up feed lands for this row, show the lazy-load pulsing
       // skeleton (owner 2026-08-24) rather than a dash that reads like a value.
-      tds += (r.warmCap == null) ? '<td><div class="hcell sk"></div></td>' : heatCell(warmTn, warmVal, warmSub);
-      // Actively sending: the % (top); bottom = the available amount itself
-      // ("22.1k/day of available sending capacity") — the amount stays visible.
-      tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%",
-        r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day of available sending capacity" : "used"));
+      tds += (r.warmCap == null) ? '<td><div class="hcell sk"></div></td>'
+        : heatCell(warmTn, warmVal, warmSub,
+                   "Estimated: resting mailboxes \u00d7 provider default (Outlook 2 \u00b7 Gmail 20 \u00b7 Maildoso 15 \u00b7 SMTP 15 per day)");
+      // Actively sending: the % on top, and underneath it the capacity THAT %
+      // WAS MEASURED AGAINST — the same day (24H) or the same window (7/14/30),
+      // never today's live cap. Pairing the window % with today's cap was how a
+      // cell could read 112% of a number printed right beneath it. Today's live
+      // client_caps figure now appears only in the Total-capacity column.
+      var capSub = "", capTn = capTone(r.cap), capBig = r.cap == null ? "—" : r.cap + "%";
+      if (r.cap != null) {
+        if (r.capExceeded > 0) {
+          // The own-workspace pools are high-water-snapped once a day (04:30), so
+          // a day's recorded cap can sit BELOW what that day actually sent. Say so
+          // rather than printing an impossible >100%.
+          capBig = "100%"; capTn = "a1";
+          capSub = "cap snapshot below sends on " + r.capExceeded + " day" + (r.capExceeded === 1 ? "" : "s");
+        } else if (r.capW && r.capDays) {
+          capSub = S.win === 1
+            ? "of " + n(r.capW) + "/day" + (snapTxt ? " on " + snapTxt : "")
+            : "of ~" + n(Math.round(r.capW / r.capDays)) + "/day avg";
+        }
+      }
+      tds += heatCell(capTn, capBig, capSub);
       // ~Total sending capacity (black box) — the sum of the two numbers this
       // row already shows (warm-up + available). Top = per day, bottom = the
       // estimated monthly total at ×20 SENDING DAYS: Navreo never sends on
@@ -742,11 +807,16 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     return s;
   }
   // Canonical resting domain list — shared by the Resting tab and its badge so
-  // both count the same thing. Returns [{dom, rs, dueTs}] sorted soonest-due
-  // first, or null while the views are still loading. Merges inwarmup+rested
-  // mailbox rows (deduped), drops high-bounce-paused domains (they live in the
-  // High bounce-rate tab only), and synthesizes a domain-only entry for any
-  // ledger domain with no held-box rows in either view.
+  // both count the same thing. Returns [{dom, rs, boxes, hb, dueTs}] sorted
+  // soonest-due first, or null while the views are still loading. Merges
+  // inwarmup+rested mailbox rows (deduped) and synthesizes a domain-only entry
+  // for any ledger domain with no held-box rows in either view.
+  //
+  // A high-bounce domain is NOT dropped here (it used to be). Resting and high
+  // bounce are two different facts about one domain and both are true at once:
+  // hiding the overlap made KRG's Resting badge read 2 when 21 of its domains
+  // were genuinely resting with 1,089 mailboxes held. The domain stays in the
+  // High bounce-rate tab too and carries hb:true so the row can say so.
   function restingDomainEntries() {
     var iw = bundleView("inwarmup"), rv = bundleView("rested");
     if (iw == null && rv == null) return null;
@@ -755,26 +825,46 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var k = String(m.email || m.id || (m.domain + "#" + rows.length)).toLowerCase();
       if (seen[k]) return; seen[k] = 1; rows.push(m);
     });
-    var hb = highbList() || []; var hbSet = {}; hb.forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
-    rows = rows.filter(function (m) { return !hbSet[m.domain]; });
+    var hbSet = {}; (highbList() || []).forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
     var gr = groupByDomain(rows);
     var order = gr.order.slice(), inList = {};
     order.forEach(function (d) { inList[d] = true; });
     var rd = (S.bundle && S.bundle.restDue) || {};
-    Object.keys(rd).forEach(function (d) { if (d && !inList[d] && !hbSet[d]) { order.push(d); gr.g[d] = gr.g[d] || []; } });
+    Object.keys(rd).forEach(function (d) { if (d && !inList[d]) { order.push(d); gr.g[d] = gr.g[d] || []; } });
+    // Mailbox count: the audit backend truncates each view at 2,000 rows, so
+    // counting held rows can undercount a big domain. liveZeroCap is the
+    // census-complete per-domain count of cap-0 (sends-paused) mailboxes across
+    // the whole fleet — take whichever is larger, so the number is never a
+    // truncation artefact (see memory deliverability-count-truth-fix).
+    var lz = (S.bundle && S.bundle.liveZeroCap) || {};
     var entries = order.map(function (dom) {
       var rs = gr.g[dom] || [];
       var dueTs = rd[dom] || null;
       if (dueTs == null) {
+        // Derive the due date from when the boxes were actually rested. If we
+        // hold no rest date either, LEAVE IT NULL — the old `Date.now() + 7d`
+        // fallback re-based itself on every render, so a domain with no ledger
+        // row read "due in 7d" every day forever (the placeholder the
+        // 2026-08-23 ruling banned; memory dueback-ledger-one-clock). A rest
+        // date we do not hold is not a rest date.
         var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
-        dueTs = due.length ? Math.min.apply(null, due) : (Date.now() + 7 * 864e5);
+        dueTs = due.length ? Math.min.apply(null, due) : null;
       }
-      return { dom: dom, rs: rs, dueTs: dueTs };
+      return { dom: dom, rs: rs, boxes: Math.max(rs.length, Number(lz[dom]) || 0),
+               hb: !!hbSet[dom], dueTs: dueTs };
     });
-    entries.sort(function (a, b) { return a.dueTs - b.dueTs; });
+    // soonest-due first; domains with no known due date sort last (they are not
+    // "due now", they are unknown)
+    entries.sort(function (a, b) {
+      if (a.dueTs == null || b.dueTs == null) return (a.dueTs == null ? 1 : 0) - (b.dueTs == null ? 1 : 0);
+      return a.dueTs - b.dueTs;
+    });
     return entries;
   }
-  function dueChip(ts) { if (!ts) return '<span class="t-mut">—</span>'; var left = ts - Date.now();
+  // No due date on file reads "date unknown", not "—": a dash looks like an empty
+  // column, and inventing "due in 7d" was worse. The domain is still resting and
+  // still restorable — we just do not know when its rest started.
+  function dueChip(ts) { if (!ts) return '<span class="pill n">date unknown</span>'; var left = ts - Date.now();
     if (left <= 0) return '<span class="pill g">ready now</span>';
     var dl = Math.ceil(left / 864e5); return '<span class="pill ' + (dl <= 2 ? "a" : "n") + '">due in ' + dl + 'd</span>'; }
   function restedMs(m) { var v = m.restedAt; if (v == null) return null; if (typeof v === "number") return v < 1e12 ? v * 1000 : v; var p = Date.parse(v); return isNaN(p) ? null : p; }
@@ -814,6 +904,31 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // Design-system button (navreo.css): .btn.sm base, .primary for the orange emphasis variant.
     return '<button class="btn sm' + (primary ? ' primary' : '') + '" ' + attrs + '>' + esc(label) + '</button>';
   }
+  // Domain-health rows are stamped with the workspace they were pulled from
+  // (navreo rows carry no stamp). The SAME domain can appear twice — once under
+  // navreo and once under a client workspace — because both workspaces hold
+  // mailboxes on it, and two untagged identical rows read as a duplication bug.
+  // Tag the client-workspace row so the pair is legible; navreo stays bare.
+  function wsPill(row) {
+    var ws = row && row.workspace;
+    if (!ws) return "";
+    var labels = (S.cw && (S.cw.ws_labels || S.cw.labels)) || {};
+    var label = ws;
+    for (var lbl in labels) { if (String(labels[lbl]).toLowerCase() === String(ws).toLowerCase()) { label = lbl; break; } }
+    return ' <span class="pill n">' + esc(label) + '</span>';
+  }
+  // "N row(s) over X across D domain(s)" — plus how many of those domains send
+  // from two workspaces, so a doubled domain reads as a fact, not a glitch.
+  function domSpread(rows) {
+    var byDom = {}, dupes = 0;
+    rows.forEach(function (d) { (byDom[d.domain] = byDom[d.domain] || []).push(d.workspace || "navreo"); });
+    Object.keys(byDom).forEach(function (d) {
+      var seen = {}, n = 0;
+      byDom[d].forEach(function (w) { if (!seen[w]) { seen[w] = 1; n++; } });
+      if (n > 1) dupes++;
+    });
+    return { domains: Object.keys(byDom).length, dupes: dupes };
+  }
   function tagChips(tags) {
     if (!Array.isArray(tags) || !tags.length) return '<span class="t-mut">—</span>';
     return tags.slice(0, 2).map(function (t) { return '<span class="pill n" style="margin-right:3px">' + esc(t) + '</span>'; }).join("") + (tags.length > 2 ? '<span class="t-mut"> +' + (tags.length - 2) + '</span>' : "");
@@ -828,7 +943,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // Every domain here has live sends below the floor (paused ones are filtered out
       // in floorList and live in the In warm-up tab), so the only action is Warm up.
       var action = actBtn("warmup", d.domain, null, "Warm up domain", true);
-      return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+      return '<tr><td class="mono">' + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + comma(d.sent) + '</td>' +
         '<td class="num">' + comma(d.lead || 0) + '</td>' +
         '<td class="num t-r">' + (d.reply_rate).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
@@ -836,8 +951,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         '<td class="num' + (d.bounce_rate >= 3 ? ' t-r' : '') + '">' + (d.bounce_rate || 0).toFixed(2) + '%</td>' +
         '<td style="text-align:right">' + action + '</td></tr>';
     }).join("");
+    var spF = domSpread(rows);
     return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Leads</th><th class="num">Reply rate</th><th class="num">Positive</th><th class="num">Bounce</th><th style="text-align:right">Action</th>', body, null,
-      rows.length + ' domain(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + MGR_WIN + ' days. One button rests every mailbox on the domain.');
+      rows.length + ' row(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) across ' + spF.domains + ' domain(s)' +
+      (spF.dupes ? ' · ' + spF.dupes + ' domain(s) send from two workspaces' : '') +
+      ' · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + MGR_WIN + ' days. One button rests every mailbox on the domain.');
   }
   // ---- High bounce-rate (old flow "highbounce"): Domain·Sent·Bounces·Bounce rate·Reply rate·Action
   function mgrHighb() {
@@ -845,33 +963,41 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     if (!rows.length) return '<div class="mgr-empty">✓ No domains over ' + BOUNCE_HOT + '% bounce in the last ' + MGR_WIN + ' days.</div>';
     var body = rows.map(function (d) {
       var bn = (typeof d.bounced === "number") ? d.bounced : Math.round((d.bounce_rate || 0) * (d.sent || 0) / 100);
-      return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+      return '<tr><td class="mono">' + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + comma(d.sent) + '</td>' +
         '<td class="num" style="font-weight:700">' + comma(bn) + '</td>' +
         '<td class="num t-r">' + (d.bounce_rate).toFixed(2) + '%</td>' +
         '<td class="num">' + (d.reply_rate || 0).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
         '<td style="text-align:right">' + actBtn("bounce-pause", d.domain, null, "Pause", true) + '</td></tr>';
     }).join("");
+    var sp = domSpread(rows);
     return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Bounces</th><th class="num">Bounce rate</th><th class="num">Reply rate</th><th style="text-align:right">Action</th>', body, null,
-      rows.length + ' domain(s) over ' + BOUNCE_HOT + '% bounce · last ' + MGR_WIN + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
+      rows.length + ' row(s) over ' + BOUNCE_HOT + '% bounce across ' + sp.domains + ' domain(s)' +
+      (sp.dupes ? ' · ' + sp.dupes + ' domain(s) send from two workspaces' : '') +
+      ' · last ' + MGR_WIN + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
   }
   // ---- In warm-up (old flow "inwarmup", domain-grouped): Domain·Mailboxes·Due back·Status·Action(Restore)
   function mgrInWarmup() {
     var doms = restingEntriesC(); if (doms == null) return null;
     if (!doms.length) return '<div class="mgr-empty">None right now — nothing is resting.</div>';
-    var mbxTotal = 0;
+    var mbxTotal = 0, hbCount = 0;
     var body = doms.map(function (e) {
       var dom = e.dom, rs = e.rs, dueTs = e.dueTs, md = rs.some(function (r) { return r.maildoso; });
-      mbxTotal += rs.length;
-      var mbx = rs.length ? (' <span class="t-mut">· ' + rs.length + ' mbx</span>') : '';
-      return '<tr><td class="mono">' + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
-        '<td class="num">' + (rs.length || '—') + '</td>' +
+      mbxTotal += e.boxes;
+      if (e.hb) hbCount++;
+      var mbx = e.boxes ? (' <span class="t-mut">· ' + e.boxes + ' mbx</span>') : '';
+      return '<tr><td class="mono">' + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') +
+        // resting AND over the bounce floor — the domain is listed in both tabs
+        (e.hb ? ' <span class="pill a">also high bounce</span>' : '') + '</td>' +
+        '<td class="num">' + (e.boxes || '—') + '</td>' +
         '<td>' + dueChip(dueTs) + '</td>' +
         '<td>' + pill("n", "warming — sends held") + '</td>' +
         '<td style="text-align:right">' + actBtn("reactivate", dom, null, "Restore", dueTs != null && dueTs <= Date.now()) + '</td></tr>';
     }).join("");
     return tableWrap('<th>Domain / mailbox</th><th class="num">Mailboxes</th><th>Due back</th><th>Status</th><th style="text-align:right">Action</th>', body, null,
-      doms.length + ' domain(s) resting' + (mbxTotal ? ' · ' + mbxTotal + ' mailbox(es)' : '') + '. None are sending while they warm (normal). Restore returns a whole domain to sending.');
+      doms.length + ' domain(s) resting' + (mbxTotal ? ' · ' + mbxTotal + ' mailbox(es)' : '') +
+      (hbCount ? ' · ' + hbCount + ' also over the ' + BOUNCE_HOT + '% bounce floor' : '') +
+      '. None are sending while they warm (normal). Restore returns a whole domain to sending.');
   }
   // ---- Repeat parks: domains parked 2+ times in the trailing 6 weeks --------
   // The rest conveyor is healthy for a one-off park (7 days, auto-restore), but
@@ -1058,7 +1184,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // aria-live so a screen reader hears the new scope the instant a filter changes.
   function renderHeatScope() {
     var s = el("hub-heat-scope"); if (!s) return;
-    var txt = "last " + S.win + " days";
+    // 7/14/30 say "weekdays" because Actively-sending measures weekday sends
+    // against weekday capacity (weekends never send) — see NavreoCapacity.
+    var txt = "last " + S.win + " days · weekdays";
     if (S.win === 1) {
       txt = "last 24 hours";
       var days = S.cw && S.cw.days;
