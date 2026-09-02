@@ -1062,6 +1062,23 @@ function capacityDailyAligned() {
   if (!CAP || !CAP.capacity || !CAP.days || !window.NavreoCapacity) return null;
   return alignCap(NavreoCapacity.capSeries(CAP, state.client, capWsKey()), CAP.days);
 }
+// Per-day capacity for the CHART — one rule shared by the bar drawing and the
+// hover, so the two can never disagree, and the same rule NavreoCapacity
+// .usedDetail applies to the window figure: a day that sent MORE than the
+// capacity on record counts as having used exactly its own sends. So a sent bar
+// can never overshoot its own capacity bar, and the day reads 100%, not 120%.
+// The hover still names the recorded figure ("cap on record 2,400") so the
+// reader can see why the two numbers differ.
+// WHY such days exist: the own-workspace pools were high-water-snapped just ONCE
+// a day (04:30) until the hourly capacity top-up shipped 2026-09-02, so a
+// historical day's recorded cap can sit below what that day actually sent — and
+// those days keep their single morning snapshot until they scroll out of the
+// window. Grout on Tue 1 Sep: 2,891 sent against a 2,400 morning snapshot.
+function capDayDrawn(sent, capOnRecord) {
+  if (capOnRecord == null) return null;
+  var s = sent || 0;
+  return s > capOnRecord ? s : capOnRecord;
+}
 // THE capacity-used figure for the current client + range, with the numbers
 // behind it (see NavreoCapacity.usedDetail): weekday sends / weekday capacity.
 // The chart's "Hide weekends" toggle does NOT change it.
@@ -1427,7 +1444,11 @@ function renderTrend() {
   // read as 33, not get best-guessed to yesterday's 16k (Bjion 2026-08-25: the UI
   // must match the data amounts).
   if (sentBars) { var _sm = _med(sentBars), _st = function (v) { return v == null || v < Math.max(5, 0.15 * _sm); }; _sentMask = _fill(sentBars, _st).mask; sentBars = sentBars.map(function (v) { return Math.round(v || 0); }); }
-  if (capBars) { capBars = _fill(capBars, function (v) { return v == null || v === 0; }).vals; }
+  if (capBars) {
+    capBars = _fill(capBars, function (v) { return v == null || v === 0; }).vals;
+    // never draw a ceiling below the bar it is supposed to cap (see capDayDrawn)
+    capBars = capBars.map(function (v, ii) { return capDayDrawn(sentBars ? sentBars[ii] : 0, v); });
+  }
   lineVis.forEach(function (k) { if (!RAXIS[k]) return; data[k] = _fill(data[k], function (v, ii) { return v == null || (_sentMask && _sentMask[ii]); }).vals; });
   var capMode = !!(capBars && capBars.some(function (v) { return v; }));
   var L = 40, R = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
@@ -1657,8 +1678,12 @@ function trendMove(ev) {
       html += '<circle cx="' + X.toFixed(1) + '" cy="' + sby.toFixed(1) + '" r="3" fill="' + COL.sent + '" stroke="#fff" stroke-width="1.5"/>';
       rows += '<div class="row"><i style="background:' + COL.sent + '"></i>Sent<span class="v num">' + fmtN(sv) + "</span></div>";
       if (GEO.capMode && GEO.capFull) {
-        var cv = GEO.capFull[oi];
-        if (cv) rows += '<div class="row"><i style="background:var(--line-2)"></i>Capacity used<span class="v num">' + Math.round(sv / cv * 100) + '% · ' + fmtN(cv) + "</span></div>";
+        var cv = GEO.capFull[oi];                     // the capacity ON RECORD for that day
+        if (cv) {
+          var cd = capDayDrawn(sv, cv);               // what that day's bar was drawn at
+          rows += '<div class="row"><i style="background:var(--line-2)"></i>Capacity used<span class="v num">' +
+            Math.round(sv / cd * 100) + '% · ' + (cd > cv ? "cap on record " : "") + fmtN(cv) + "</span></div>";
+        }
       }
     }
   }
