@@ -132,3 +132,11 @@ BEGIN
 END $$;
 ALTER TABLE optimiser_notifications ADD CONSTRAINT optimiser_notifications_status_check
   CHECK (status in ('new','acknowledged','actioned','dismissed','resolved'));
+
+-- 2026-09-02 (variant-auto-mover Step 4): the verdict shape behind an
+-- actionable row. Today only the variant_call pill fills it — {mode, leaders,
+-- winner, laggards, dropped, via, bar, lead_share} — so a reader (the card
+-- mirror, the cockpit, the auto-mover) never has to parse a title back into a
+-- mode. Null everywhere else. Every builder row carries the key (row_base),
+-- because PostgREST rejects mixed-key bulk chunks (PGRST102).
+ALTER TABLE optimiser_notifications ADD COLUMN IF NOT EXISTS evidence jsonb;
