@@ -19403,15 +19403,27 @@ def auto_move_run(campaign_id=None, max_moves=None,
         if _CRON_LOCK.locked():          # R9: never race the batch pull
             return {"ok": True, "started": False, "busy": True,
                     "reason": "cron_running", "disposition": []}
+        one = str(campaign_id).strip() if campaign_id not in (None, "") else ""
         if not auto_mover_enabled(force=True):     # R11: fresh, every run
-            return {"ok": True, "started": False, "reason": "global_off",
-                    "disposition": []}
+            # Nothing can move while the global switch is off — that is the
+            # hard kill and it always wins. A single-campaign PROBE still gets
+            # the precise reason it would have been skipped for, because
+            # "global_off" alone hides an explicit per-campaign Off. Reporting
+            # only: no candidate is read, no Smartlead call is made either way.
+            reason = "global_off"
+            mode_probe = None
+            if one:
+                mode_probe = auto_mover_campaign_mode(one)
+                if mode_probe == "off":
+                    reason = "per_campaign_off"
+            return {"ok": True, "started": False, "reason": reason,
+                    "global_off": True, "campaign_id": one or None,
+                    "campaign_mode": mode_probe, "disposition": []}
         breaker = _am_breaker_tripped()
         if breaker:
             return {"ok": True, "started": False, "reason": "breaker_tripped",
                     "breaker": breaker, "disposition": []}
 
-        one = str(campaign_id).strip() if campaign_id not in (None, "") else ""
         cands = ([{"campaign_id": one, "notification_id": "", "source": "explicit"}]
                  if one else _am_candidates())
         try:
