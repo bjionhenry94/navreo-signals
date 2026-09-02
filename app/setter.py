@@ -14891,7 +14891,7 @@ def route_training_generate(payload):
             # them is fine and matches the other marker sites) so this marker
             # write can't clobber a concurrent answer.
             with _get_training_doc_lock(agent_id):
-                marker_doc = _load_training(agent_id)
+                marker_doc = _load_training(agent_id, strict=True)
                 # Merge-preserve (2026-08-20): keep a retrain_queued flag a
                 # concurrent answer may have just written; a generate_queued flag
                 # is consumed - this generate IS its fulfilment.
@@ -15612,7 +15612,7 @@ def _flag_training_generate_queued(agent_id: str, batch_size: int, is_share_mode
     semantics, and correct."""
     try:
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             gen = dict(doc.get("generating") or {})
             is_real_generate = gen.get("status") == "running" and gen.get("kind") != "retrain"
             if not is_real_generate:
@@ -16298,7 +16298,7 @@ def _finish_training_recheck(agent_id: str, rechecked: int = 0, error: str | Non
         # committed between the load and save is never clobbered (pure dict
         # work + one save, no model/HTTP held).
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             marker = {"status": "idle" if error is None else "failed", "kind": "recheck",
                       "finished_at": _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds"),
                       "rechecked": rechecked}
@@ -16394,7 +16394,7 @@ def _training_recheck_worker(agent_id: str, count: int):
         # targeted. Doc lock wraps ONLY this reload→save window, never the
         # recheck ThreadPoolExecutor loop above (which runs the model).
         with _get_training_doc_lock(agent_id):
-            fresh = _load_training(agent_id)
+            fresh = _load_training(agent_id, strict=True)
             fresh_cases = list(fresh.get("cases") or [])
             for c in fresh_cases:
                 cid = str(c.get("id"))
@@ -16478,7 +16478,7 @@ def route_training_recheck(payload):
             # them is fine and matches the other marker sites) so this marker
             # write can't clobber a concurrent answer.
             with _get_training_doc_lock(agent_id):
-                marker_doc = _load_training(agent_id)
+                marker_doc = _load_training(agent_id, strict=True)
                 # Merge-preserve (2026-08-20): queued flags survive this marker
                 # write like every other one - see the retrain worker's loop-top.
                 marker_doc["generating"] = _merge_running_marker(
@@ -17049,7 +17049,7 @@ def route_training_reset(payload):
             threading.Thread(target=_prebuild_training_pool, args=(agent_id,), daemon=True).start()
             return 200, {"ok": True, "full": True}
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             doc["answers"] = {}
             doc["readiness_history"] = []
             _save_training(agent_id, doc)
@@ -17415,8 +17415,12 @@ def _append_interview_set(agent_id: str, questions_text):
         doc = _load_training(agent_id, strict=True)
         interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
         latest = interviews[-1] if interviews else None
-        if latest and _iv_unanswered(latest):
-            return _iv_unanswered(latest), str(latest.get("asked_at") or ""), True
+        # Reuse only when the unanswered tail is still SERVABLE - the same
+        # banned-shape filter the route applies at serve time (panel round 2,
+        # C3b): an all-banned tail must be displaced, never returned forever.
+        served = _drop_banned_interview_questions(_iv_unanswered(latest)) if latest else []
+        if served:
+            return served, str(latest.get("asked_at") or ""), True
         if not questions:
             return [], at, False
         interviews.append({"questions": questions, "answers": {}, "asked_at": at})
@@ -17798,7 +17802,7 @@ def route_training_chat(payload):
         # answer POST may have written the doc in the meantime - never save
         # over it from the stale pre-LLM copy.
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             if action == "remember_feedback" and feedback_text:
                 pending = list(doc.get("pending_merges") or [])
                 pending.append({"note": feedback_text[:2500], "source": "chat-feedback", "at": at})
@@ -17903,7 +17907,7 @@ def route_training_material(payload):
         # Same doc-lock discipline as answer/chat: the distill call above
         # took seconds, so load fresh inside the lock before writing.
         with _get_training_doc_lock(agent_id):
-            doc = _load_training(agent_id)
+            doc = _load_training(agent_id, strict=True)
             pending = list(doc.get("pending_merges") or [])
             pending.append({"note": note[:2500], "source": f"material:{filename}", "at": at})
             doc["pending_merges"] = pending
