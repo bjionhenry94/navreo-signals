@@ -535,6 +535,13 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   }
   function renderHeat() {
     var rows = clientRows();
+    // "1 Sep" for the 24H sub-labels, so the cap a % was measured against names
+    // its own day. Empty for 7/14/30 (those say "avg" instead).
+    var snapTxt = "";
+    if (S.win === 1 && S.cw && S.cw.days) {
+      var si = snapDayIndex(S.cw.days);
+      if (si >= 0) snapTxt = fmtDay(S.cw.days[si]);
+    }
     // Lazy-load: never pre-paint the REP_CLIENTS sample (fabricated numbers
     // coloured as if real read as genuine fleet health). Until /api/client-windows
     // resolves, show a pulsing grey skeleton the shape of the heat map; once it
@@ -597,10 +604,26 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // Until the warm-up feed lands for this row, show the lazy-load pulsing
       // skeleton (owner 2026-08-24) rather than a dash that reads like a value.
       tds += (r.warmCap == null) ? '<td><div class="hcell sk"></div></td>' : heatCell(warmTn, warmVal, warmSub);
-      // Actively sending: the % (top); bottom = the available amount itself
-      // ("22.1k/day of available sending capacity") — the amount stays visible.
-      tds += heatCell(capTone(r.cap), r.cap == null ? "—" : r.cap + "%",
-        r.cap == null ? "" : (r.capDay ? n(r.capDay) + "/day of available sending capacity" : "used"));
+      // Actively sending: the % on top, and underneath it the capacity THAT %
+      // WAS MEASURED AGAINST — the same day (24H) or the same window (7/14/30),
+      // never today's live cap. Pairing the window % with today's cap was how a
+      // cell could read 112% of a number printed right beneath it. Today's live
+      // client_caps figure now appears only in the Total-capacity column.
+      var capSub = "", capTn = capTone(r.cap), capBig = r.cap == null ? "—" : r.cap + "%";
+      if (r.cap != null) {
+        if (r.capExceeded > 0) {
+          // The own-workspace pools are high-water-snapped once a day (04:30), so
+          // a day's recorded cap can sit BELOW what that day actually sent. Say so
+          // rather than printing an impossible >100%.
+          capBig = "100%"; capTn = "a1";
+          capSub = "cap snapshot below sends on " + r.capExceeded + " day" + (r.capExceeded === 1 ? "" : "s");
+        } else if (r.capW && r.capDays) {
+          capSub = S.win === 1
+            ? "of " + n(r.capW) + "/day" + (snapTxt ? " on " + snapTxt : "")
+            : "of ~" + n(Math.round(r.capW / r.capDays)) + "/day avg";
+        }
+      }
+      tds += heatCell(capTn, capBig, capSub);
       // ~Total sending capacity (black box) — the sum of the two numbers this
       // row already shows (warm-up + available). Top = per day, bottom = the
       // estimated monthly total at ×20 SENDING DAYS: Navreo never sends on

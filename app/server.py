@@ -17876,13 +17876,22 @@ def _persist_mcm_after_sweep():
     return None
 
 
-def snapshot_all_capacity(workspaces: list | None = None) -> dict:
+def snapshot_all_capacity(workspaces: list | None = None,
+                          force_fresh: bool = True) -> dict:
     """Persist TODAY's capacity for EVERY workspace — each pool straight from the
     mailboxes mirror (pause-aware), plus navreo per-client. Called from the
     federated mailbox sync so every workspace gets a real per-day row (navreo is
     additionally refreshed by the cap crons). One breakdown = all pools + clients;
-    no per-workspace Smartlead sweep."""
-    bd = _navreo_capacity_breakdown(force_fresh=True)
+    no per-workspace Smartlead sweep.
+
+    force_fresh=True runs the ~7-min restore sweep synchronously — correct in a
+    cron process, fatal on the web tier (512MB instance, see
+    web-instance-oom-crashloop). force_fresh=False reuses the 10-min cached
+    breakdown: the POOL caps come straight from the mailboxes mirror either way
+    (one DB read, no Smartlead fan-out), so an intraday web-tier top-up still
+    records a real per-workspace cap; only the navreo PER-CLIENT split needs the
+    sweep, and it is simply omitted when the sweep is cold."""
+    bd = _navreo_capacity_breakdown(force_fresh=force_fresh)
     pools = bd.get("workspace") or {}
     if not pools:
         return {"ok": False, "error": "no capacity data for any workspace"}
@@ -17890,16 +17899,60 @@ def snapshot_all_capacity(workspaces: list | None = None) -> dict:
         workspaces = list(_FLEET_CAP_WS)
     ws_updates = {ws: pools[ws] for ws in workspaces if ws in pools}
     client_updates = bd.get("clients") if "navreo" in workspaces else None
+    if client_updates is not None and not client_updates:
+        # cold sweep (force_fresh=False): write the pools we DO know and leave the
+        # per-client blob untouched rather than merging an empty client map
+        client_updates = None
     today = _dtmod.date.today().isoformat()
     _cap_blob_upsert(today, ws_updates, client_updates, src="sync")
     _CLIENT_CAP.update(data=bd, ts=time.time())
     # This is the reliable SERVER-SIDE path (federated mailbox-sync cron), so persist
     # the mcm snapshot here too — the navreo cap crons that also persist it are
     # laptop-side scripts that don't always run. See _persist_mcm_after_sweep.
-    mcm_clients = _persist_mcm_after_sweep() if "navreo" in workspaces else None
+    mcm_clients = (_persist_mcm_after_sweep()
+                   if force_fresh and "navreo" in workspaces else None)
     return {"ok": True, "date": today,
             "workspaces": {ws: v["cap"] for ws, v in ws_updates.items()},
             "clients": len(client_updates or {}), "mcm_clients": mcm_clients}
+
+
+# Hourly per-workspace capacity top-up, from /api/cron/audit-refresh.
+#
+# WHY: the own-workspace pools (asteri/krg/grout) get exactly ONE capacity row a
+# day, written by the 04:30 federated mailbox sync. Every cap change after that
+# — a pause, a restore, a tier change — lands in the mirror but not in the day's
+# recorded cap, so the Actively-sending cell measured that day's sends against a
+# stale morning ceiling and could read over 100%. High-water merging means a
+# later, higher snapshot can only raise the day's ceiling, never lower it
+# (_cap_hw_merge), so topping up hourly is safe by construction.
+#
+# It runs on a background thread with force_fresh=False so the web tier never
+# pays for the ~7-min restore sweep (web-instance-oom-crashloop) and never fans
+# out to Smartlead on a request thread. The pool caps it records come from one
+# mailboxes-mirror read.
+_CAP_TOPUP_MIN_S = 55 * 60          # ≥55 min between runs — the tick is hourly
+_CAP_TOPUP_LAST = [0.0]
+_CAP_TOPUP_LOCK = threading.Lock()
+
+
+def _capacity_topup_bg() -> None:
+    try:
+        r = snapshot_all_capacity(list(_FLEET_CAP_WS), force_fresh=False)
+        print(f"[cap-topup] {r}", flush=True)
+    except Exception as e:  # noqa: BLE001 — a top-up failure must never break the tick
+        print(f"[cap-topup] failed: {e}", file=sys.stderr)
+
+
+def _capacity_topup_start() -> dict:
+    """Kick the throttled top-up. Returns what it did, so the cron response says
+    whether it ran or was still inside its window."""
+    with _CAP_TOPUP_LOCK:
+        age = time.time() - _CAP_TOPUP_LAST[0]
+        if age < _CAP_TOPUP_MIN_S:
+            return {"started": False, "throttled_for_s": int(_CAP_TOPUP_MIN_S - age)}
+        _CAP_TOPUP_LAST[0] = time.time()
+    threading.Thread(target=_capacity_topup_bg, daemon=True).start()
+    return {"started": True}
 
 
 # ── warm-up capacity (sends/day currently being "repaired") ───────────────
@@ -24383,7 +24436,9 @@ class Handler(SimpleHTTPRequestHandler):
                 # no-ops while the cached blob is inside its 1h TTL.
                 st = _deliv_audit_start(force=False)
                 stb = _deliv_bundle_start(force=False)  # manager views/windows age on the same clock
-                return self._json({"ok": True, **st, "bundle": stb}, 202 if st.get("started") else 200)
+                stc = _capacity_topup_start()           # hourly per-workspace cap row
+                return self._json({"ok": True, **st, "bundle": stb, "capacity": stc},
+                                  202 if st.get("started") else 200)
             if path == "/api/cron/mailbox-sync":
                 if _MAILBOX_SYNC_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
