@@ -1643,7 +1643,13 @@ function funnelSums() {
     // funnel and the graph can never disagree about the same window
     v.sent = sentShown();
     v.rep = repliesShown();
-    v.pos = sum(s && s.interested);
+    // Interested = Smartlead's own positive-reply stat for this client and
+    // window when the sweep carries it (owner ruling 2026-09-02: Smartlead is
+    // the source of truth). The analytics-hub series, built from our local reply
+    // archive, is the fallback for a key whose Smartlead pull failed — it drifts
+    // from the platform (All 30d read 413 against Smartlead's 381).
+    v.posFromSmartlead = cw.positives != null;
+    v.pos = v.posFromSmartlead ? cw.positives : sum(s && s.interested);
     v.mtg = sum(s && s.meetings);
   } else if (CW && CW.windows) {
     // client-windows IS loaded, this client just has no sends in the window
@@ -1801,6 +1807,11 @@ function renderTags(v) {
   $("tag-sent").textContent = fmtN(v.sent);
   $("tag-replies").textContent = fmtN(v.rep);
   $("tag-int").textContent = fmtN(v.pos);
+  // say which book the Interested number came out of, on hover
+  var ti = $("tag-int").parentNode;
+  if (ti) ti.title = v.posFromSmartlead
+    ? "Smartlead 'Interested' leads in the window"
+    : "Counted from our own reply archive — Smartlead's Interested stat was unavailable for this view";
   $("tag-meet").textContent = fmtN(v.mtg);
 }
 function decisionRows() {
