@@ -10693,28 +10693,23 @@ def _cockpit_messaging(cid) -> dict:
                 campaign_positives = _sc[0].get("positives")
         except Exception:  # noqa: BLE001 — reconciliation is best-effort, never break the tab
             pass
-    # Fair-test judging bars (Bjion 2026-08-31): the house bar is 800 sends
-    # per live version before a best-opener verdict; when the audience can
-    # never give every live version 800 (total leads / live versions < 800,
-    # assuming an even split), the bar drops to 300 (the table's own 'early'
-    # line) so small campaigns still get a verdict eventually. Served in the
-    # payload so the campaign page, the cockpit and the parity mirror
-    # (build_notifications.pill_best_opener) all read ONE number. Unknown
-    # lead total = conservative 800.
+    # Fair-test judging bars (Bjion 2026-08-31; AMENDED 2026-09-02): the house
+    # bar is a FLAT 800 sends per live version before a best-opener verdict —
+    # always, with NO small-list drop. Small audiences simply wait; a campaign
+    # that can never give every live version 800 gets no verdict, never a
+    # discounted one. Served in the payload so the campaign page, the cockpit
+    # and the parity mirror (build_notifications.pill_best_opener) all read
+    # ONE number.
     judge_bars: dict = {}
     try:
-        _tot = None
-        _sc2 = sb("GET", f"campaign_scorecard?smartlead_campaign_id=eq.{n}&select=total")
-        if isinstance(_sc2, list) and _sc2:
-            _tot = _sc2[0].get("total")
         _live_ct: dict = {}
         for _v2 in versions:
             if (not _v2.get("inline") and not _v2.get("disabled")
                     and _v2.get("label") is not None and _v2.get("split") != 0):
                 _k2 = str(_v2.get("step"))
                 _live_ct[_k2] = _live_ct.get(_k2, 0) + 1
-        for _k2, _ct in _live_ct.items():
-            judge_bars[_k2] = 300 if (_tot and _ct and _tot / _ct < 800) else 800
+        for _k2 in _live_ct:
+            judge_bars[_k2] = 800
     except Exception:  # noqa: BLE001 — bar computation must never break the tab
         judge_bars = {}
     return {"campaign_id": n, "versions": versions, "meetings": meetings,

@@ -833,13 +833,16 @@ def pill_best_opener(m: dict) -> tuple:
     "partial" (a winner is judged but live laggards are still under the bar,
     button says 80% with 20% kept on the test).
 
-    Fair-test law (Bjion 2026-08-31, mirrored in campaigns.html and
-    optimise.html - keep all three in step):
-      - the judging bar comes from the payload's judge_bars (800, or 300 when
-        the audience can never give every live version 800 - computed in
-        server._cockpit_messaging); unknown = conservative 800.
+    Fair-test law (Bjion 2026-08-31; AMENDED 2026-09-02, mirrored in
+    campaigns.html and optimise.html - keep all three in step):
+      - the judging bar comes from the payload's judge_bars: a FLAT 800 sends
+        per live version, ALWAYS, with no small-list drop (Bjion 2026-09-02) -
+        small audiences simply wait; unknown = conservative 800.
       - nobody is EVER crowned below the bar - one early positive at ~200
         sends reads exactly like a winner but can be pure luck.
+      - a crown needs a strictly-ahead winner: if two crownable openers are an
+        exact dead heat on the winning metric, there is no clear winner and
+        the verdict HOLDS (Bjion 2026-09-02). A single-unit lead still crowns.
       - live versions (not deleted, not switched off) still under the bar are
         laggards: they hold the verdict at PARTIAL (winner backed with 80%,
         laggards keep 20% collectively so their test keeps running); only
@@ -901,11 +904,22 @@ def pill_best_opener(m: dict) -> tuple:
         bp_mt = sorted([c for c in bp_all if c["mt"] > 0 and c["snt"] > 0],
                        key=lambda c: c["snt"] / c["mt"])
         floor800 = [c for c in bp_mt if c["snt"] >= 800]
-        bp_top = floor800[0] if floor800 else (bp_mt[0] if bp_mt else None)
+        _pool = floor800 or bp_mt
+        bp_top = _pool[0] if _pool else None
+        if bp_top is not None:
+            # Ties hold (Bjion 2026-09-02): if two distinct openers share the
+            # winning sends-per-meeting exactly, there is no clear winner — hold.
+            _r = bp_top["snt"] / bp_top["mt"]
+            if len({c["e1"] for c in _pool if c["snt"] / c["mt"] == _r}) > 1:
+                return None, False, None
         if bp_top is None:
             by_pos = sorted([c for c in bp_all if c["pos"] > 0 and c["snt"] > 0],
                             key=lambda c: c["snt"] / c["pos"])
             bp_top = by_pos[0] if by_pos else None
+            if bp_top is not None:
+                _rp = bp_top["snt"] / bp_top["pos"]
+                if len({c["e1"] for c in by_pos if c["snt"] / c["pos"] == _rp}) > 1:
+                    return None, False, None
         if bp_top and (bp_top["mt"] > 0 or bp_top["pos"] > 0):
             for v in step1:
                 if best or v.get("disabled") or v.get("inline") or not v.get("sent") \
@@ -915,6 +929,7 @@ def pill_best_opener(m: dict) -> tuple:
                         (rep_of.get("1|" + v["label"]) or v["label"]) == bp_top["e1"]:
                     best, via = {"label": v["label"]}, "best-path"
     if best is None:
+        _cand = []
         for v in step1:
             if v.get("disabled") or v.get("inline") or not v.get("sent") \
                     or v.get("label") is None or v["label"] not in crownable:
@@ -923,17 +938,26 @@ def pill_best_opener(m: dict) -> tuple:
             mv = by_var.get("1|" + rep, 0) if rep == v["label"] else 0
             if not mv:
                 continue
-            pm = v["sent"] / mv
-            if best is None or pm < best["pm"]:
-                best, via = {"label": v["label"], "pm": pm}, "meetings-per-send"
+            _cand.append((v["label"], v["sent"] / mv))
+        if _cand:
+            _mn = min(p for _, p in _cand)
+            if sum(1 for _, p in _cand if p == _mn) > 1:
+                return None, False, None   # tie on sends-per-meeting — hold
+            best, via = {"label": next(l for l, p in _cand if p == _mn),
+                         "pm": _mn}, "meetings-per-send"
     if best is None:
+        _cand = []
         for v in step1:
             if v.get("disabled") or v.get("inline") or not (v.get("positives") or 0) \
                     or not v.get("sent") or v.get("label") not in crownable:
                 continue
-            pp = v["sent"] / v["positives"]
-            if best is None or pp < best["pp"]:
-                best, via = {"label": v["label"], "pp": pp}, "sends-per-positive"
+            _cand.append((v["label"], v["sent"] / v["positives"]))
+        if _cand:
+            _mn = min(p for _, p in _cand)
+            if sum(1 for _, p in _cand if p == _mn) > 1:
+                return None, False, None   # tie on sends-per-positive — hold
+            best, via = {"label": next(l for l, p in _cand if p == _mn),
+                         "pp": _mn}, "sends-per-positive"
     if best is None:
         return None, False, None
     lab = best["label"]
