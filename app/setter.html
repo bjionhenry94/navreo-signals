@@ -7647,23 +7647,36 @@ function threadKey(t) {
    refresh that doesn't yet contain it (Smartlead ingestion lag), then let it
    fall away with no duplicate once the server catches up.
 
-   Correlation is by SENT COUNT, not body text: matching on the cleaned body
-   was unreliable both ways — an earlier identical follow-up would drop the
-   placeholder prematurely, and any server-side reformat (merge-variable /
-   signature resolution) would keep it sitting beside the real one. Instead we
-   count the REAL (non-optimistic) SENTs we already knew about vs the real
-   SENTs the fresh thread now reports; the difference is how many of our
-   placeholders the server has absorbed, so we drop exactly that many (oldest
-   first) and keep the rest visible. Robust to identical text and to any body
-   reformat; a stray unrelated outbound in the same few-second window can only
-   retire a placeholder one refresh early, and the next refresh self-heals. */
+   Correlation is by IDENTITY, not by SENT count (owner report 2026-09-02,
+   Approve path). The count difference assumed `old` already held the full real
+   thread — but Approve grafts its placeholder onto rows that were never
+   hydrated (row.thread is undefined for Needs-review rows off the slim list),
+   so `old` held ZERO real SENTs while the first full fetch returned every
+   older real SENT; the difference retired the placeholder and the just-sent
+   email vanished from the pane. Instead we count only the real SENTs in
+   `fresh` that (a) were NOT already in `old` — keyed by message_id when
+   present, else type:time, never stats_id (thread-level, identical across
+   messages) — and (b) are timestamped at or after the earliest pending
+   placeholder minus 5 minutes (unparseable times read as 0, so they never
+   count). That is how many of our placeholders the server has absorbed, so we
+   drop exactly that many (oldest first) and keep the rest visible. Robust to
+   identical text, to any body reformat, and to an unhydrated `old`. */
 function mergeOptimisticSents(fresh, old) {
   const pending = (old || []).filter((m) => m && m._optimistic);
   if (!pending.length) return fresh;
-  const realSentCount = (arr) => (arr || []).filter(
+  const keyOf = (m) => (m && m.message_id)
+    ? String(m.message_id)
+    : `${String(m && m.type)}:${String(m && m.time)}`;
+  const timeOf = (m) => {
+    const t = Date.parse((m && m.time) || "");
+    return Number.isFinite(t) ? t : 0;
+  };
+  const known = new Set((old || []).filter((m) => m && !m._optimistic).map(keyOf));
+  const floor = Math.min.apply(null, pending.map(timeOf)) - 5 * 60 * 1000;
+  const landed = (fresh || []).filter(
     (m) => m && String(m.type).toUpperCase() === "SENT" && !m._optimistic
+      && !known.has(keyOf(m)) && timeOf(m) >= floor
   ).length;
-  const landed = Math.max(0, realSentCount(fresh) - realSentCount(old));
   const keep = pending.slice(landed);   // retire the oldest `landed` placeholders
   return keep.length ? fresh.concat(keep) : fresh;
 }
