@@ -1158,8 +1158,18 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     var cwr = cwFor(state.client);
     if (cwr && cwr.replied != null) return null;
   }
+  if (k === "interested") {
+    // Interested has ONE source on this page: Smartlead's positive-reply stat,
+    // carried by the client-windows sweep (owner ruling 2026-09-02). The chart
+    // line, the legend chip, the funnel and the KPI must all be that number —
+    // plotting the local reply archive here while the funnel read Smartlead let
+    // the chip say 413 next to a funnel saying 381. The archive series is the
+    // fallback only for a key whose Smartlead pull failed.
+    var cs2 = CW && CW.series && CW.series[ckey()];
+    if (cs2 && cs2.positives) return alignDaily(cs2.positives, CW.days, 0, null);
+  }
   var s = HUB && HUB.series && HUB.series[ckey()];
-  return (s && s[k === "interested" ? "interested" : k]) || [];
+  return (s && s[k]) || [];
 }
 function repliesShown() { // THE reply count every widget shows for this view
   // No trusted daily line -> use the EXACT client-windows window total before
@@ -1283,6 +1293,11 @@ function renderLegend() {
     else if (k === "bounces") { var ba = bounceAvg(); val = ba == null ? "–" : ba + "%"; }
     else if (k === "sent") val = cw ? fmtN(cw.sent) : "–";
     else if (k === "replies") val = fmtN(repliesShown());   // the ONE reply count — chip can never disagree with the funnel
+    // Same rule for Interested: read the ONE number the funnel and the KPI show
+    // (Smartlead's positive-reply stat) instead of re-summing a series. Summing
+    // its own series here is how the chip came to read 413 beside a funnel
+    // reading 381 — two books for one word, in one viewport.
+    else if (k === "interested") val = fmtN(funnelSums().pos);
     else if (hasLine) val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
     else val = "–";
     // "noline" = a real total exists but no day-by-day line (shared-workspace
