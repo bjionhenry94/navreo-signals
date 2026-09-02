@@ -4383,7 +4383,22 @@ def _disable_variant_pcts(steps: list, email_num: int, variant_label: str,
 _VARIANT_ACTION_CONFIRM = {"disable": "DISABLE", "enable": "ENABLE",
                            "scale_winner": "SCALE", "even_split": "SPLIT",
                            "shift_share": "SHIFT", "repair_mode": "REPAIR",
-                           "back_winner": "BACK"}
+                           "back_winner": "BACK", "split_leaders": "SPLITLEADERS"}
+
+
+def _variant_sent_by_vid(campaign_id: int) -> dict:
+    """{seq_variant_id: sent_count} from Smartlead's variant-statistics — the
+    send history that tells a NEVER-CONFIGURED 0% version (no sends, may be
+    given traffic) from one SWITCHED OFF ON PURPOSE (0% with sends — human-off,
+    sticky, never resurrected by the algorithm; Bjion 2026-09-02). Raises on
+    an unreadable read so callers refuse rather than guess."""
+    stats = _smartlead_json("GET", f"/campaigns/{campaign_id}/variant-statistics", timeout=20)
+    rows = stats.get("data") if isinstance(stats, dict) else None
+    out: dict = {}
+    for r in (rows or []):
+        if isinstance(r, dict) and r.get("seq_variant_id") is not None:
+            out[r.get("seq_variant_id")] = int(r.get("sent_count") or 0)
+    return out
 
 
 def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
@@ -4409,6 +4424,11 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
         str(x).strip() for x in (payload.get("laggards") or []) if str(x or "").strip()))
     if action == "back_winner" and not lag_labels:
         return 400, {"ok": False, "message": "laggards (the still-testing version labels) are required for back_winner"}
+    # split_leaders: the TIE verdict — the co-leader labels that share traffic evenly
+    lead_labels = list(dict.fromkeys(
+        str(x).strip() for x in (payload.get("leaders") or []) if str(x or "").strip()))
+    if action == "split_leaders" and len(lead_labels) < 2:
+        return 400, {"ok": False, "message": "leaders (at least two tied version labels) are required for split_leaders"}
 
     if _va_test_force_429():
         return 429, {"ok": False, "message": "Smartlead is rate-limiting right now — wait a few seconds and try again (synthetic test 429)"}
@@ -4436,6 +4456,27 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
             return 502, {"ok": False,
                           "message": "couldn't read version send history from Smartlead - refusing to guess "
                                      "which versions were switched off on purpose; try again in a moment"}
+
+    def _hist() -> dict:
+        # lazy send-history read, only when a 0% version must be classified
+        if not receipt["sent_by_vid"]:
+            try:
+                receipt["sent_by_vid"] = _variant_sent_by_vid(campaign_id) or {"_read": 1}
+            except Exception:  # noqa: BLE001
+                raise SequenceActionRefused(502, {
+                    "ok": False,
+                    "message": "couldn't read version send history from Smartlead - refusing to guess "
+                               "whether a 0% version was switched off on purpose; try again in a moment"})
+        return receipt["sent_by_vid"]
+
+    def _refuse_if_human_off(lv, what: str) -> None:
+        # never-starve may hand a share to a 0% version ONLY if it was never
+        # configured (no send history); 0% WITH sends = human-off = sticky
+        if _hist().get(lv.get("id"), 0) > 0:
+            raise SequenceActionRefused(400, {
+                "ok": False,
+                "message": f"variant {lv.get('variant_label')} was switched off on purpose "
+                           f"(0% with send history) - it stays off; leave it out of the {what}"})
 
     def _mutate(steps):
         step = _find_step(steps, email_num)
@@ -4520,9 +4561,9 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
                     raise SequenceActionRefused(400, {
                         "ok": False, "message": "the winner can't also be a still-testing version"})
                 if not equal_mode and _pct_of(lv) <= 0:
-                    raise SequenceActionRefused(400, {
-                        "ok": False,
-                        "message": f"variant {ll} is switched off - switch it on first or leave it out"})
+                    # never-starve (Bjion 2026-09-02): a never-configured 0%
+                    # laggard may join the 20% lane; a human-off one may not.
+                    _refuse_if_human_off(lv, "test lane")
                 lags.append(lv)
             base20, rem20 = divmod(20, len(lags))
             new_pcts = {v.get("id"): 0 for v in variants}
@@ -4531,6 +4572,49 @@ def api_campaign_variant_action(cid: str, payload: dict) -> tuple:
                 new_pcts[lv.get("id")] = base20 + (1 if i < rem20 else 0)
             _apply_step_pcts(steps, email_num, new_pcts)
             receipt["target_id"] = target.get("id")
+        elif action == "split_leaders":
+            # TIE verdict (Bjion 2026-09-02): the tied co-leaders share traffic
+            # EVENLY — 100 between them, or 80 when still-testing laggards keep
+            # the 20% lane — and every other live version drops to 0 (a
+            # past-bar loser, tried and tested). Same id-intact door, history
+            # kept. Human-off versions are refused, never resurrected.
+            leads = []
+            for ll in lead_labels:
+                lv = _find_variant(step, ll)
+                if lv is None or lv.get("is_deleted"):
+                    raise SequenceActionRefused(404, {
+                        "ok": False, "message": f"variant {ll} not found (or deleted) on Email {email_num}"})
+                leads.append(lv)
+            lead_ids = {lv.get("id") for lv in leads}
+            lags = []
+            for ll in lag_labels:
+                lv = _find_variant(step, ll)
+                if lv is None or lv.get("is_deleted"):
+                    raise SequenceActionRefused(404, {
+                        "ok": False, "message": f"variant {ll} not found (or deleted) on Email {email_num}"})
+                if lv.get("id") in lead_ids:
+                    raise SequenceActionRefused(400, {
+                        "ok": False, "message": f"variant {ll} can't be both a leader and a still-testing version"})
+                lags.append(lv)
+            equal_mode = sum(_pct_of(v) for v in variants) <= 0
+            if equal_mode:
+                shares0 = _even_shares(len(variants))
+                receipt["pcts_before"] = {v.get("id"): shares0[i] for i, v in enumerate(variants)}
+            for lv in leads + lags:
+                if not equal_mode and _pct_of(lv) <= 0:
+                    _refuse_if_human_off(lv, "split")
+            pool = 80 if lags else 100
+            base, rem = divmod(pool, len(leads))
+            new_pcts = {v.get("id"): 0 for v in variants}
+            for i, lv in enumerate(leads):
+                new_pcts[lv.get("id")] = base + (1 if i < rem else 0)
+            if lags:
+                base20, rem20 = divmod(20, len(lags))
+                for i, lv in enumerate(lags):
+                    new_pcts[lv.get("id")] = base20 + (1 if i < rem20 else 0)
+            _apply_step_pcts(steps, email_num, new_pcts)
+            receipt["target_id"] = leads[0].get("id")
+            receipt["leader_ids"] = sorted(lead_ids)
         elif action == "shift_share":
             # Move ALL of one live variant's share onto another live variant
             # (the "push the loser's quarter onto the winner" card move). The
@@ -4698,6 +4782,7 @@ def _va_label(payload: dict) -> str:
         "enable": f"Switch on Version {vl} — Email {em}",
         "scale_winner": f"Send 100% of Email {em} to Version {vl}",
         "back_winner": f"Back Version {vl} with 80% — Email {em}",
+        "split_leaders": f"Split Email {em} evenly across Versions {', '.join(str(x) for x in (payload.get('leaders') or []))}",
         "shift_share": f"Move Version {vl}'s share to Version {to} — Email {em}",
         "even_split": f"Even split — Email {em}",
         "repair_mode": f"Repair split mode — Email {em}",
@@ -4820,6 +4905,8 @@ def api_campaign_variant_action_async(cid: str, payload: dict) -> tuple:
         return 400, {"ok": False, "message": "to_label is required for shift_share"}
     if action == "back_winner" and not [x for x in (payload.get("laggards") or []) if str(x or "").strip()]:
         return 400, {"ok": False, "message": "laggards (the still-testing version labels) are required for back_winner"}
+    if action == "split_leaders" and len([x for x in (payload.get("leaders") or []) if str(x or "").strip()]) < 2:
+        return 400, {"ok": False, "message": "leaders (at least two tied version labels) are required for split_leaders"}
     job_id = _va_enqueue(cid, payload)
     return 202, {"ok": True, "queued": True, "job": job_id, "executed": action,
                  "message": "queued — the write runs in the background"}

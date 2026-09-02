@@ -117,7 +117,8 @@ RATE_SLEEP = 0.35  # ~170 req/min, under Smartlead's 200/min cap (matches fetch_
 STATS_PAGE = 1000  # /statistics page size (skill's response-breakdown workflow uses 1000)
 STATS_MAX_ROWS = 60000  # hard safety cap per campaign
 REPORT_MIN_SENT = 1500   # campaigns below this get one all_clear row
-JUDGE_MIN_SENT = 800     # monitor phase below this
+JUDGE_MIN_SENT = 800     # monitor phase below this; the FLAT judging bar (no small-list drop)
+MTG_OVERRIDE_MIN = 2     # a live version with this many meetings may be crowned under the bar
 PERFORMING_RATIO = 1500  # sent/pos at or under this = performing
 KILL_MIN_SENT = 15000
 KILL_RATIO = 2500
@@ -874,18 +875,41 @@ def pill_best_opener(m: dict) -> tuple:
         bar = int((m.get("judge_bars") or {}).get("1") or 0) or JUDGE_MIN_SENT
     except (TypeError, ValueError):
         bar = JUDGE_MIN_SENT
-    live1 = [v for v in step1
-             if not v.get("disabled") and not v.get("inline")
-             and v.get("label") is not None and v.get("split") != 0]
-    crownable = {v["label"] for v in step1
+
+    def _mtg(v):
+        rep = rep_of.get("1|" + v["label"]) or v["label"]
+        return by_var.get("1|" + rep, 0) if rep == v["label"] else 0
+
+    def _pos(v):
+        # meeting implies positive (Bjion): a row never has more meetings than
+        # positives, so the effective positive count is max of the two.
+        return max(v.get("positives") or 0, _mtg(v))
+
+    def _human_off(v):
+        # Switched off ON PURPOSE = 0% share with send history (the codebase's
+        # existing provenance convention, see server even_split). 0% with zero
+        # sends is merely "never configured" and stays eligible. A human-off
+        # version is sticky (Bjion 2026-09-02): keep its data, never crown it,
+        # never make it a laggard, never route traffic back to it.
+        return v.get("split") == 0 and (v.get("sent") or 0) > 0
+
+    eligible = [v for v in step1
+                if not v.get("disabled") and not v.get("inline")
+                and v.get("label") is not None and not _human_off(v)]
+    human_off = [v["label"] for v in step1
                  if not v.get("disabled") and not v.get("inline")
-                 and v.get("label") is not None and (v.get("sent") or 0) >= bar}
+                 and v.get("label") is not None and _human_off(v)]
+    live1 = [v for v in eligible if v.get("split") != 0]
+    # Crownable = past the flat bar, OR the meeting-leader override: a LIVE
+    # version with >=2 booked meetings may be crowned under the bar (it must
+    # still actually LEAD the ranking below). One meeting never qualifies.
+    crownable = {v["label"] for v in eligible
+                 if (v.get("sent") or 0) >= bar
+                 or (v.get("split") != 0 and _mtg(v) >= MTG_OVERRIDE_MIN)}
     if not live1 or not crownable:
         return None, False, None
-    laggards = [v["label"] for v in live1 if (v.get("sent") or 0) < bar]
-    mode = "partial" if laggards else "full"
     crown_reps = {rep_of.get("1|" + lb) or lb for lb in crownable}
-    best = None
+    leaders: list = []   # every crownable version tied at the top of the ranking
     via = None
     if paths:
         s1_tot = sum(s for k, s in sent_by_rep.items() if k.startswith("1|"))
@@ -905,70 +929,81 @@ def pill_best_opener(m: dict) -> tuple:
                        key=lambda c: c["snt"] / c["mt"])
         floor800 = [c for c in bp_mt if c["snt"] >= 800]
         _pool = floor800 or bp_mt
-        bp_top = _pool[0] if _pool else None
-        if bp_top is not None:
-            # Ties hold (Bjion 2026-09-02): if two distinct openers share the
-            # winning sends-per-meeting exactly, there is no clear winner — hold.
-            _r = bp_top["snt"] / bp_top["mt"]
-            if len({c["e1"] for c in _pool if c["snt"] / c["mt"] == _r}) > 1:
-                return None, False, None
-        if bp_top is None:
+        top_e1: list = []
+        if _pool:
+            _r = _pool[0]["snt"] / _pool[0]["mt"]
+            top_e1 = list(dict.fromkeys(c["e1"] for c in _pool if c["snt"] / c["mt"] == _r))
+        else:
             by_pos = sorted([c for c in bp_all if c["pos"] > 0 and c["snt"] > 0],
                             key=lambda c: c["snt"] / c["pos"])
-            bp_top = by_pos[0] if by_pos else None
-            if bp_top is not None:
-                _rp = bp_top["snt"] / bp_top["pos"]
-                if len({c["e1"] for c in by_pos if c["snt"] / c["pos"] == _rp}) > 1:
-                    return None, False, None
-        if bp_top and (bp_top["mt"] > 0 or bp_top["pos"] > 0):
-            for v in step1:
-                if best or v.get("disabled") or v.get("inline") or not v.get("sent") \
-                        or v.get("label") is None or v["label"] not in crownable:
-                    continue
-                if v["label"] == bp_top["e1"] or \
-                        (rep_of.get("1|" + v["label"]) or v["label"]) == bp_top["e1"]:
-                    best, via = {"label": v["label"]}, "best-path"
-    if best is None:
-        _cand = []
-        for v in step1:
-            if v.get("disabled") or v.get("inline") or not v.get("sent") \
-                    or v.get("label") is None or v["label"] not in crownable:
-                continue
-            rep = rep_of.get("1|" + v["label"]) or v["label"]
-            mv = by_var.get("1|" + rep, 0) if rep == v["label"] else 0
-            if not mv:
-                continue
-            _cand.append((v["label"], v["sent"] / mv))
+            if by_pos:
+                _rp = by_pos[0]["snt"] / by_pos[0]["pos"]
+                top_e1 = list(dict.fromkeys(c["e1"] for c in by_pos if c["snt"] / c["pos"] == _rp))
+        # every distinct top opener maps back to ONE crownable version (its rep)
+        for e1 in top_e1:
+            hit = next((v for v in eligible
+                        if v["label"] in crownable and v.get("sent")
+                        and (v["label"] == e1 or (rep_of.get("1|" + v["label"]) or v["label"]) == e1)),
+                       None)
+            if hit is not None and hit not in leaders:
+                leaders.append(hit)
+        if leaders:
+            via = "best-path"
+    if not leaders:
+        # Tier 2: fewest sends per meeting (meetings outrank positives).
+        _cand = [(v, v["sent"] / _mtg(v)) for v in eligible
+                 if v["label"] in crownable and v.get("sent") and _mtg(v) > 0]
         if _cand:
             _mn = min(p for _, p in _cand)
-            if sum(1 for _, p in _cand if p == _mn) > 1:
-                return None, False, None   # tie on sends-per-meeting — hold
-            best, via = {"label": next(l for l, p in _cand if p == _mn),
-                         "pm": _mn}, "meetings-per-send"
-    if best is None:
-        _cand = []
-        for v in step1:
-            if v.get("disabled") or v.get("inline") or not (v.get("positives") or 0) \
-                    or not v.get("sent") or v.get("label") not in crownable:
-                continue
-            _cand.append((v["label"], v["sent"] / v["positives"]))
+            leaders = [v for v, p in _cand if p == _mn]
+            via = "meetings-per-send"
+    if not leaders:
+        # Tier 3: fewest sends per positive — only when nobody has a meeting.
+        _cand = [(v, v["sent"] / _pos(v)) for v in eligible
+                 if v["label"] in crownable and v.get("sent") and _pos(v) > 0]
         if _cand:
             _mn = min(p for _, p in _cand)
-            if sum(1 for _, p in _cand if p == _mn) > 1:
-                return None, False, None   # tie on sends-per-positive — hold
-            best, via = {"label": next(l for l, p in _cand if p == _mn),
-                         "pp": _mn}, "sends-per-positive"
-    if best is None:
+            leaders = [v for v, p in _cand if p == _mn]
+            via = "sends-per-positive"
+    if not leaders:
         return None, False, None
-    lab = best["label"]
-    bv = next((v for v in step1 if v.get("label") == lab and not v.get("inline")), None)
-    split = bv.get("split") if bv else None
-    cap = 100 if mode == "full" else 80
-    has_scale = bv is not None and split is not None and 0 < split < cap
-    return lab, has_scale, {"via": via, "split": split, "mode": mode,
-                            "bar": bar, "laggards": laggards,
-                            "sent": (bv or {}).get("sent") or 0,
-                            "positives": (bv or {}).get("positives") or 0}
+
+    lead_labels = [v["label"] for v in leaders]
+    others = [v for v in eligible if v["label"] not in lead_labels]
+    # never-starve laggards: live, under the bar, still owed their 800
+    under_live = [v["label"] for v in others
+                  if v.get("split") != 0 and (v.get("sent") or 0) < bar]
+    base_ev = {"via": via, "bar": bar, "leaders": lead_labels, "human_off": human_off}
+
+    if len(leaders) > 1:
+        # TIE (Bjion 2026-09-02): co-leaders split evenly; past-bar losers are
+        # dropped; an under-bar live laggard keeps 20 (co-leaders share 80).
+        n = len(leaders)
+        lead_share = (80 if under_live else 100) // n
+        dropped = [v["label"] for v in others if v["label"] not in under_live]
+        cur = {v["label"]: v.get("split") for v in eligible}
+        has_scale = any(cur.get(lb) is not None and cur.get(lb) != lead_share for lb in lead_labels) \
+            or any((cur.get(d) or 0) > 0 for d in dropped)
+        return None, has_scale, dict(base_ev, mode="tie", split=None, laggards=under_live,
+                                     dropped=dropped, lead_share=lead_share, override=False,
+                                     sent=0, positives=0)
+
+    w = leaders[0]
+    lab = w["label"]
+    override = (w.get("sent") or 0) < bar          # crowned early on >=2 meetings
+    full = (not override) and not under_live       # winner past bar, every live version past bar
+    if full:
+        mode, cap, laggards, dropped = "full", 100, [], [v["label"] for v in others]
+    else:
+        # PARTIAL: winner 80; the other 20 keeps EVERY other eligible version
+        # alive (never-starve) — including a past-bar incumbent displaced by an
+        # early-crowned meeting leader. Nothing is dropped in a partial.
+        mode, cap, laggards, dropped = "partial", 80, [v["label"] for v in others], []
+    split = w.get("split")
+    has_scale = split is not None and 0 < split < cap
+    return lab, has_scale, dict(base_ev, mode=mode, split=split, laggards=laggards,
+                                dropped=dropped, override=override,
+                                sent=w.get("sent") or 0, positives=_pos(w))
 
 
 def build_pill_row(ctx: dict, m: dict) -> dict | None:
