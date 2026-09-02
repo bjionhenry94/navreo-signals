@@ -7024,6 +7024,58 @@ FLIP_NAME_CHANNELS = {
     "revive": "C0BP7BNEC0J",   # #revive-navreo-private
 }
 
+# A FRESH positive on a navreo-hosted client campaign has no path to that
+# client's OWN shared channel: the Make categoriser announces positives only to
+# the internal #interested-replies, and run_client_positive_alerts covers
+# non-navreo workspaces. This map gives navreo-hosted clients that shared
+# delivery — a positive whose campaign name matches is posted ONCE to the shared
+# channel from the positive branch of run_ever_positive_alerts (the internal
+# Make post is unchanged, so nothing double-posts to the same channel). REViVE →
+# #revive-navreo (Bjion 2026-09-02, "positives -> shared channel").
+POSITIVE_SHARED_CHANNELS = {
+    "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared, Slack Connect)
+}
+
+
+def _ep_name_channel(mapping, workspace, campaign_id):
+    """Return mapping[marker] when this navreo-hosted campaign's name carries a
+    marker (first match wins). None otherwise. Fails open; never raises."""
+    if not campaign_id or (workspace or "").lower() != "navreo":
+        return None
+    try:
+        rows = _SB("GET", f"campaigns?workspace=eq.{workspace}"
+                          f"&smartlead_campaign_id=eq.{campaign_id}"
+                          f"&select=name&limit=1")
+        if isinstance(rows, list) and rows and isinstance(rows[0], dict):
+            name = (rows[0].get("name") or "").lower()
+            for marker, chan in mapping.items():
+                if marker in name:
+                    return chan
+    except Exception:  # noqa: BLE001 — routing decoration, never load-bearing
+        pass
+    return None
+
+
+def _ep_positive_shared_text(row: dict, cname: str, link: str) -> str:
+    """Client-facing positive alert for a shared channel — no internal
+    workspace labelling (the client reads this)."""
+    cat = row.get("category") or "positive"
+    snippet = clean_body(row.get("reply_body") or "")[:400]
+    lines = [
+        f"\U0001F3AF New positive reply \u2014 {cat}",
+        "---------------------------",
+        f"Lead: {row.get('email')}",
+        f"Campaign: {cname}",
+        f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
+    ]
+    chat = _chat_permalink(row.get("email") or "", row.get("smartlead_message_id") or "")
+    if chat:
+        lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
+    if link:
+        lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
+    lines += ["", "Reply:", snippet or "(no body archived)"]
+    return "\n".join(lines)
+
 
 def _ep_channel_override(workspace, campaign_id):
     """Return the client Slack channel when this campaign belongs to a client
@@ -7181,6 +7233,38 @@ def run_ever_positive_alerts() -> dict:
             if not rid or not ws or not email or not rt:
                 continue
             if cat in POSITIVE_CATEGORY_NAMES:
+                # Fresh positive: module 33 / routeB own the INTERNAL announce.
+                # A navreo-hosted client with its OWN shared channel (REViVE)
+                # has no other path to it — deliver the positive there once,
+                # then stamp. Fail-closed: an unstamped row retries next tick.
+                shared = _ep_name_channel(POSITIVE_SHARED_CHANNELS, ws,
+                                          row.get("smartlead_campaign_id"))
+                if shared:
+                    if summary["alerted"] >= EP_POST_CAP:
+                        summary["capped"] = True
+                        summary["ok"] = False       # leftovers retry next tick
+                        continue
+                    nm = _ep_campaign_names(ws, [row.get("smartlead_campaign_id")])
+                    cname = nm.get(str(row.get("smartlead_campaign_id"))) \
+                        or f"campaign {row.get('smartlead_campaign_id')}"
+                    text = _ep_positive_shared_text(
+                        row, cname,
+                        _ep_smartlead_link(row.get("smartlead_campaign_id"), email))
+                    posted = False
+                    try:
+                        _HTTP("POST", EVER_POSITIVE_HOOK, {},
+                              {"event_type": "EVER_POSITIVE_ALERT",
+                               "text": text, "channel": shared})
+                        posted = True
+                    except ValueError:
+                        posted = True   # non-JSON 2xx = accepted
+                    except Exception:   # noqa: BLE001 — hook down: retry next tick
+                        summary["failed_posts"] += 1
+                        summary["ok"] = False
+                    if posted:
+                        _ep_stamp(rid, "positive-shared")
+                        summary["alerted"] += 1
+                    continue
                 # module 33 / routeB territory — never alert from here
                 _ep_stamp(rid, "positive-covered")
                 summary["stamped_positive"] += 1
