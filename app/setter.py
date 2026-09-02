@@ -7012,11 +7012,25 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
 CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius")
 
+# A once-positive→negative FLIP (all this sweep ever alerts on — fresh
+# positives are excluded above and owned by the Make categoriser) is a CHURN
+# signal: for a client with its own dedicated channel it goes to that client's
+# INTERNAL/private channel, never the client-shared one where the client would
+# see a lost lead. Keyed by campaign-name marker; checked BEFORE the generic
+# client-internal fallback so the client's own channel wins. REViVE →
+# #revive-navreo-private (Bjion 2026-09-02; fresh REViVE positives land in the
+# shared #revive-navreo via the categoriser, not here).
+FLIP_NAME_CHANNELS = {
+    "revive": "C0BP7BNEC0J",   # #revive-navreo-private
+}
+
 
 def _ep_channel_override(workspace, campaign_id):
-    """Return the client-internal Slack channel when this campaign belongs
-    to a client hosted in the navreo workspace — Supabase registry client_id
-    says so, or the campaign name carries a client marker. None -> the hook's
+    """Return the client Slack channel when this campaign belongs to a client
+    hosted in the navreo workspace. A campaign whose name carries a
+    FLIP_NAME_CHANNELS marker routes its churn flip to that client's own
+    (internal) channel; otherwise Supabase registry client_id or a
+    CLIENT_NAME_MARKER routes to #client-interested-replies. None -> the hook's
     default (#interested-replies). Fails open to the default; never raises."""
     if not campaign_id:
         return None
@@ -7027,6 +7041,9 @@ def _ep_channel_override(workspace, campaign_id):
         if isinstance(rows, list) and rows and isinstance(rows[0], dict):
             cid = (rows[0].get("client_id") or "").strip().lower()
             name = (rows[0].get("name") or "").lower()
+            for marker, chan in FLIP_NAME_CHANNELS.items():
+                if marker in name:
+                    return chan
             if cid not in ("", "navreo") or \
                     any(m in name for m in CLIENT_NAME_MARKERS):
                 return CLIENT_INTERNAL_CHANNEL

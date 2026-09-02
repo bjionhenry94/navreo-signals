@@ -18853,6 +18853,8 @@ _SHARED_WS_CLIENTS = (
     ("arnic", "Arnic"),
     ("qwintiq", "Qwintiq"),
     ("thunderbird", "ThunderBird"),   # ThunderBird is its own client (Bjion 2026-07-28)
+    ("revive", "REViVE"),             # in-workspace client (Bjion 2026-09-02)
+    ("greenshift", "Greenshift"),     # in-workspace client (Bjion 2026-09-02)
     ("altius", "Altius Reach"),       # in-workspace client (Bjion 2026-08-11)
     ("touchpoint", "TouchPoint"),     # in-workspace client (Bjion 2026-08-11)
     ("acme", "Acme"),                 # DEMO client (Bjion 2026-07-29) — see _DEMO_CLIENT_LABELS
@@ -21795,7 +21797,7 @@ _RESTORE_FORECAST_DAYS = 14
 
 _RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags carry it)
     ("amplif", "Amplifyy"), ("arnic", "Arnic"), ("qwintiq", "Qwintiq"),
-    ("thunderbird", "ThunderBird"),
+    ("thunderbird", "ThunderBird"), ("revive", "REViVE"), ("greenshift", "Greenshift"),
     ("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
     ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang"),
     ("altius", "Altius Reach"), ("touchpoint", "TouchPoint"),

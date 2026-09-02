@@ -44,6 +44,8 @@ cmap as (
       when name ilike '%arnic%'       then 'Arnic'
       when name ilike '%qwintiq%'     then 'Qwintiq'
       when name ilike '%thunderbird%' then 'ThunderBird'
+      when name ilike '%revive%'      then 'REViVE'
+      when name ilike '%greenshift%'  then 'Greenshift'
       else 'Navreo'
     end as client,
     coalesce(total,0) as total, coalesce(completed,0) as completed
