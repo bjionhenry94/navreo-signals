@@ -9603,9 +9603,14 @@ def _all_campaign_scorecard() -> dict:
     camps = {}
     for r in (rows or []):
         sid = str(r.get("smartlead_campaign_id"))
-        # Demo-client campaigns stay off the day-to-day Campaigns page unless the
-        # Settings "Show demo clients" toggle is ON.
-        if _client_hidden(_client_win_label(r.get("workspace") or "navreo", r.get("name") or "")):
+        # Demo-client campaigns stay off every day-to-day surface — the Campaigns
+        # page AND the Analytics winners table, which reads this same payload —
+        # unless the Settings "Show demo clients" toggle is ON. Test BOTH the
+        # name-derived label (the rule _client_win_build uses, so the two agree)
+        # and the synced `client` column, so a demo row whose name happens not to
+        # carry the keyword still can't leak in.
+        if _client_hidden(_client_win_label(r.get("workspace") or "navreo", r.get("name") or "")) \
+                or _client_hidden(r.get("client")):
             continue
         camps[sid] = {k: r.get(k) for k in ("sent", "replied", "positives", "bounced", "completed", "total",
                                             "not_started", "inprogress", "paused", "blocked", "stopped", "status")}
