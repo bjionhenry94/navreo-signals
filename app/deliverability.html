@@ -844,7 +844,10 @@ var RAXIS = { rate: 1, bounces: 1 };   // % series that ride the right-hand axis
 // sent/bounces/rate totals are real for EVERY client via /api/client-windows;
 // a day-by-day LINE additionally exists when cwSeries() has one (All, Asteri,
 // KRG — clients that map to a whole Smartlead workspace).
-var GEO = { ymax: 60, n: 30, off: 0 };
+// Chart geometry the HOVER needs to place its markers. Only the fields read in
+// trendMove live here — `n`/`off`/`keep` used to be written and never read, and
+// `off` was the last reference to a local the trimmed-axis change removed.
+var GEO = { ymax: 60 };
 var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
@@ -999,9 +1002,10 @@ function sentDailyEstimated() {
 // ── Sending CAPACITY (P1 headroom bars) ──────────────────────────────────
 // Which capacity series backs the selected client. EXACT for the all-clients
 // sum and the own-workspace clients (Asteri/KRG/Grout). navreo-workspace clients
-// (Navreo/Amplifyy/Arnic/…) share one untagged pool, so capacityDailyFull splits
-// that pool by the client's share of navreo-workspace sends — the same estimate
-// the sent bars already use, so capacity shows on EVERY client (Bjion 2026-08-19).
+// (Navreo/Amplifyy/Arnic/…) share one untagged pool, so NavreoCapacity.capSeries
+// builds their line from the recorded per-client caps, falling back to the navreo
+// pool scaled to the client's own cap — so capacity shows on EVERY client
+// (Bjion 2026-08-19). wsKey null means "resolve this client by name".
 function capWsKey() {
   if (state.client === "All") return "__all";
   var k = state.client.toLowerCase();
@@ -1441,7 +1445,7 @@ function renderTrend() {
     sentBars.forEach(function (v) { if (v > cmax) cmax = v; });
     AXCAP = niceCeil(cmax);
   }
-  GEO = { ymax: ymax, rmax: rmax, n: n, off: (axisDays.length - n), keep: keep, sentMax: sentMax,
+  GEO = { ymax: ymax, rmax: rmax, sentMax: sentMax,
           capMode: capMode, axcap: AXCAP, capFull: capMode ? slice(capFull) : null };
   function X(ii) { return n === 1 ? L : L + ii * pw / (n - 1); }
   function Y(v) { return T + (1 - v / ymax) * ph; }
