@@ -15787,6 +15787,28 @@ def client_card_backfill_sweep(hours: int = 72, cap: int = 15) -> dict:
         return out
 
 
+_INTAKE_GATE_LOCK = threading.Lock()
+
+
+def _intake_gate_bg(dry_run: bool = False, since=None):
+    """Server-side upload gate sweep (see intake_gate.py). Its own run row lands
+    in app_activity_log (action intake_gate / intake_gate_failed) with the
+    watermark the next tick resumes from; a crash here is recorded, never raised."""
+    if not _INTAKE_GATE_LOCK.acquire(blocking=False):
+        return
+    try:
+        import intake_gate  # lazy: circular-safe (module imports server)
+        intake_gate.run_and_log(dry_run=dry_run, since=since)
+    except Exception as e:  # noqa: BLE001
+        print(f"[intake-gate] FAILED: {e}", file=sys.stderr)
+        sb("POST", "app_activity_log",
+           {"actor": "cron", "endpoint": "/api/cron/intake-gate",
+            "action": "intake_gate_failed", "entity": "contact_history",
+            "payload": {"error": str(e)[:300]}})
+    finally:
+        _INTAKE_GATE_LOCK.release()
+
+
 def _mailbox_sync_bg():
     if not _MAILBOX_SYNC_LOCK.acquire(blocking=False):
         return  # a prior sweep is still running — skip this one
@@ -24526,6 +24548,7 @@ class Handler(SimpleHTTPRequestHandler):
                    # moves all came from the laptop-side scripts. Added 07-29.
                    "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
                    "/api/cron/maildoso-reply-caps",
+                   "/api/cron/intake-gate",
                    "/api/notify/positive-card"):
             # External-scheduler endpoints. Token-guarded (header, not body) and
             # run OUTSIDE the global drafts_lock — each job takes its own locks
@@ -24559,6 +24582,22 @@ class Handler(SimpleHTTPRequestHandler):
                 stc = _capacity_topup_start()           # hourly per-workspace cap row
                 return self._json({"ok": True, **st, "bundle": stb, "capacity": stc},
                                   202 if st.get("started") else 200)
+            if path == "/api/cron/intake-gate":
+                # Owner ruling 2026-09-02 "force it to go through our safety
+                # checks": every daily_sync lead in a campaign with no gate run
+                # is checked server-side and paused in Smartlead if it fails.
+                # Body {"dry_run": true} evaluates without pausing or writing;
+                # {"since": ISO} sweeps a backlog deliberately (never by default).
+                if _INTAKE_GATE_LOCK.locked():
+                    return self._json({"ok": True, "started": False, "busy": True}, 200)
+                try:
+                    p = json.loads(self._post_body.decode() or "{}")
+                except ValueError:
+                    p = {}
+                threading.Thread(target=_intake_gate_bg,
+                                 args=(bool(p.get("dry_run")), p.get("since")),
+                                 daemon=True).start()
+                return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/mailbox-sync":
                 if _MAILBOX_SYNC_LOCK.locked():
                     return self._json({"ok": True, "started": False, "busy": True}, 200)
