@@ -3206,7 +3206,7 @@ function boot() {
   }, function () { HUB = null; setTimeout(loadHub, 15000); })
     .then(function () { criticalSettled(); scheduleRender(); });
   j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
-    .then(function () { markDegraded("Lead supply", !SCORE); criticalSettled(); scheduleRender(); });
+    .then(function () { markDegraded("Campaign list (leads still to work)", !SCORE); criticalSettled(); scheduleRender(); });
   // Synchronized first paint: the fast core reads below all land sub-second and
   // share the chart (capacity rides in it as the headroom bars). Hold the first
   // DATA paint until they've ALL settled, then paint once — so capacity appears
