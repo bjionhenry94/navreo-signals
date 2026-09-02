@@ -249,16 +249,29 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // 2026-08-28 a Friday mid-morning read 420 sent vs a normal ~31k day). Weekends
   // are skipped on the CALENDAR, so Saturday, Sunday and Monday all resolve to
   // Friday (owner 2026-08-28) — deterministic, independent of whether that weekday
-  // happened to send. Takes the day-wise `days` array (days[-1] = today); returns
-  // -1 if it's empty.
+  // happened to send.
+  //
+  // The search starts from the last entry whose DATE is strictly before today
+  // rather than from days[-2]: since the 2026-09-02 ruling the sweep's axis ends
+  // yesterday, but an older cached blob still ends today, and both must resolve
+  // to the same day. Returns -1 for an empty or all-future axis.
+  function todayISO() {
+    var t = new Date();
+    return t.getFullYear() + "-" + ("0" + (t.getMonth() + 1)).slice(-2) + "-" + ("0" + t.getDate()).slice(-2);
+  }
   function snapDayIndex(days) {
     if (!Array.isArray(days) || !days.length) return -1;
-    for (var i = days.length - 2; i >= 0; i--) {
+    var today = todayISO(), last = -1, i;
+    for (i = days.length - 1; i >= 0; i--) {
+      if (String(days[i] || "").slice(0, 10) < today) { last = i; break; }
+    }
+    if (last < 0) return -1;
+    for (i = last; i >= 0; i--) {
       var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(days[i] || "")); if (!m) continue;
       var wd = new Date(+m[1], +m[2] - 1, +m[3]).getDay();   // 0=Sun … 6=Sat, local
       if (wd !== 0 && wd !== 6) return i;                     // first weekday before today
     }
-    return days.length >= 2 ? days.length - 2 : 0;   // all-weekend series: yesterday
+    return last;   // all-weekend series: the last day before today
   }
   // "2026-08-27" → "27 Aug" for the scope label, so the snapshot day is explicit.
   var _MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];

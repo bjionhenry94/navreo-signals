@@ -17471,7 +17471,9 @@ def _snapshot_from_blob(blob: dict):
 def _deliv_trends_build(days: int) -> dict:
     """Fetch + shape the per-day series. Raises on Smartlead failure — the
     caller keeps serving the previous cached copy in that case."""
-    end = _dtmod.date.today()
+    # Ends YESTERDAY, like _client_win_build (owner ruling 2026-09-02) — today is
+    # a partial bucket, and the two series share the Analytics chart's axis.
+    end = _dtmod.date.today() - _dtmod.timedelta(days=1)
     start = end - _dtmod.timedelta(days=days - 1)
     # navreo-fleet-only BY DESIGN: OUR fleet's day-wise history
     url = (f"{SMARTLEAD_BASE}/analytics/day-wise-overall-stats"
@@ -19001,9 +19003,15 @@ def _client_win_build():
     sending follow-up steps inside the window (the 2026-07-28 truth check
     caught 12 completed Asteri campaigns holding 14% of its 14d sends).
     ARCHIVED/DRAFTED don't send. 30d first; campaigns with zero 30d sends
-    skip the 14/7 calls."""
+    skip the 14/7 calls.
+
+    Every window ENDS YESTERDAY (owner ruling 2026-09-02). Today is a partial,
+    still-ramping bucket: a "7 day" read at 09:00 used to be 6 full days plus a
+    near-empty one, which dragged every rate and every capacity-used figure
+    down and made the label a lie. This is the same rule the Fleet heat map's
+    24H snapshot has always followed, now applied to 7/14/30 as well."""
     t0 = time.time()
-    end = _dtmod.date.today()
+    end = _dtmod.date.today() - _dtmod.timedelta(days=1)
     rows = sb_get_all("campaign_scorecard?select=smartlead_campaign_id,workspace,name,status") or []
     if not rows:
         # 1,000+ campaigns exist; an empty read is a transient outage, and

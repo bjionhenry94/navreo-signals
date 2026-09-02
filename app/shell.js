@@ -1057,6 +1057,21 @@ function setupChartTooltip(wrap) {
     return out;
   }
   function isWeekend(d) { var g = new Date(d + "T12:00:00Z").getUTCDay(); return g === 0 || g === 6; }
+  function todayISO() {
+    var t = new Date();
+    return t.getFullYear() + "-" + ("0" + (t.getMonth() + 1)).slice(-2) + "-" + ("0" + t.getDate()).slice(-2);
+  }
+  // How many leading entries of `axis` fall strictly before today. Windows END
+  // YESTERDAY (owner ruling 2026-09-02): today is a partial, still-ramping day,
+  // and counting its near-zero sends against a full day's capacity dropped the
+  // figure by a whole day's worth every morning. Enforced HERE so it holds
+  // whatever axis a caller hands in — the Analytics chart axis still runs to
+  // today because /api/analytics-hub keys its lines to it.
+  function daysBeforeToday(axis) {
+    var today = todayISO(), i;
+    for (i = axis.length - 1; i >= 0; i--) if (String(axis[i] || "").slice(0, 10) < today) return i + 1;
+    return 0;
+  }
 
   // THE capacity-used figure, with the numbers behind it so callers can label
   // it honestly instead of re-deriving anything.
@@ -1076,9 +1091,12 @@ function setupChartTooltip(wrap) {
     var axis = opts.sentDays;
     var capOnAxis = alignTo(capSeries(opts.cap, opts.name, opts.wsKey), opts.cap.days, axis);
     if (!capOnAxis) return null;
-    var range = opts.days || axis.length;
-    var start = Math.max(0, axis.length - range);
-    var wDays = axis.slice(start), wSent = opts.sent.slice(start), wCap = capOnAxis.slice(start);
+    var stop = daysBeforeToday(axis);          // the window ends YESTERDAY
+    if (!stop) return null;
+    var range = opts.days || stop;
+    var start = Math.max(0, stop - range);
+    var wDays = axis.slice(start, stop), wSent = opts.sent.slice(start, stop),
+        wCap = capOnAxis.slice(start, stop);
     var keep = [];
     wDays.forEach(function (d, i) { if (!isWeekend(d)) keep.push(i); });   // weekdays only, always
     var sentBars = keep.map(function (i) { return Math.round(wSent[i] || 0); });
