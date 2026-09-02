@@ -15739,7 +15739,12 @@ def client_card_backfill_sweep(hours: int = 72, cap: int = 15) -> dict:
            "still_failing": 0, "errors": 0}
     try:
         from datetime import datetime, timedelta, timezone
-        since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+        # quote() is load-bearing: an aware isoformat ends '+00:00', and a bare
+        # '+' in a query string decodes to a space, so PostgREST rejects the
+        # timestamp (22007) and returns an error dict instead of rows.
+        since = urllib.parse.quote(
+            (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(),
+            safe="")
         logs = sb("GET", "app_activity_log?actor=eq.positive_card"
                          "&ts=gte.%s&select=action,ts,payload"
                          "&order=ts.desc&limit=1000" % since)
@@ -21961,7 +21966,11 @@ def _auto_domain_recent_restores(days: int = 14) -> set:
     The warm-up half leaves these alone until they've had time to re-prove."""
     from datetime import datetime, timedelta, timezone
     doms = set()
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    # quote(): a bare '+00:00' offset decodes to a space and PostgREST rejects
+    # the timestamp, which here fails SILENTLY — the isinstance guard below just
+    # yields an empty set, so every recently-restored domain looked un-restored.
+    since = urllib.parse.quote(
+        (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(), safe="")
     try:
         rows = sb("GET", "app_activity_log?action=in.(restore_live,warmup_resume)"
                          "&ts=gte.%s&select=entity_id,payload&limit=2000" % since)

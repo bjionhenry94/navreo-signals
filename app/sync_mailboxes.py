@@ -481,6 +481,48 @@ def prune_stale_attached(now_iso, ws_pulled, ws_failed, supabase_url, supabase_k
             log(f"[{wid}] prune FAILED (non-fatal): {e}")
 
 
+# Rows untouched for this long are treated as gone from Smartlead and deleted.
+# Generous on purpose: a single truncated pull (Smartlead paginates short under
+# rate-limit) must self-heal on a later run rather than delete a live box.
+DEAD_ROW_GRACE_DAYS = 7
+
+
+def prune_dead_rows(now, ws_pulled, ws_failed, supabase_url, supabase_key):
+    """DELETE mirror rows no pull has refreshed for DEAD_ROW_GRACE_DAYS.
+
+    prune_stale_attached only zeroes campaign_count, so a row that leaves
+    Smartlead lingers forever. That is not cosmetic: a mailbox MOVED to a client
+    workspace comes back under a new smartlead_id, so the mirror inserts a second
+    row and keeps the original — the same physical box counted twice. On
+    2026-09-02 that was 709 duplicated mailboxes (12,712 rows for 12,003 real
+    boxes), all frozen at one instant on 25 Aug when boxes were moved into the
+    grout/krg workspaces, and every per-domain count built on this table was
+    inflated to match.
+
+    Same 70% guard as prune_stale_attached — a truncated or failed pull can never
+    delete live rows — plus the grace window, so only rows absent from several
+    consecutive healthy pulls are removed."""
+    from urllib.parse import quote as _q
+    cutoff = _q((now - timedelta(days=DEAD_ROW_GRACE_DAYS)).isoformat())
+    for wid, pulled in ws_pulled.items():
+        if wid in (ws_failed or []):
+            continue
+        total = verify_count("mailboxes", f"workspace=eq.{wid}", supabase_url, supabase_key)
+        if not total or pulled < 0.7 * total:
+            log(f"[{wid}] dead-row prune SKIPPED — pulled {pulled} < 70% of {total} mirror rows")
+            continue
+        filt = f"workspace=eq.{wid}&last_synced_at=lt.{cutoff}"
+        dead = verify_count("mailboxes", filt, supabase_url, supabase_key)
+        if not dead:
+            continue
+        try:
+            server.sb("DELETE", f"mailboxes?{filt}")
+            log(f"[{wid}] deleted {dead} dead mirror row(s) "
+                f"(not seen in {DEAD_ROW_GRACE_DAYS}d — gone from Smartlead or moved workspace)")
+        except Exception as e:  # noqa: BLE001 — hygiene, never fail the sync on it
+            log(f"[{wid}] dead-row prune FAILED (non-fatal): {e}")
+
+
 # ---------- main ----------
 def main():
     log("=== Smartlead -> Supabase mailbox sync: START ===")
@@ -593,6 +635,7 @@ def main():
         # Runs only after a successful write and is itself guarded per workspace.
         log("Pruning stale-attached mailboxes (dead-box reconciliation) ...")
         prune_stale_attached(now_iso_str, ws_pulled, ws_failed, supabase_url, supabase_key)
+        prune_dead_rows(now, ws_pulled, ws_failed, supabase_url, supabase_key)
 
         # Verification — per workspace: filtered counts must equal that
         # workspace's own pulled count (a whole-table count would mix
