@@ -1057,10 +1057,11 @@ function setupChartTooltip(wrap) {
     return out;
   }
   function isWeekend(d) { var g = new Date(d + "T12:00:00Z").getUTCDay(); return g === 0 || g === 6; }
-  function todayISO() {
-    var t = new Date();
-    return t.getFullYear() + "-" + ("0" + (t.getMonth() + 1)).slice(-2) + "-" + ("0" + t.getDate()).slice(-2);
-  }
+  // UTC, because every axis the server stamps is a UTC date. A LOCAL date compare
+  // is wrong for a viewer ahead of UTC: between their local midnight and UTC
+  // midnight, local "today" is already tomorrow's date, so today's own bucket
+  // stops being trimmed and its near-empty partial day re-enters the figure.
+  function todayISO() { return new Date().toISOString().slice(0, 10); }
   // How many leading entries of `axis` fall strictly before today. Windows END
   // YESTERDAY (owner ruling 2026-09-02): today is a partial, still-ramping day,
   // and counting its near-zero sends against a full day's capacity dropped the

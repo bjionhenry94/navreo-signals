@@ -255,10 +255,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // rather than from days[-2]: since the 2026-09-02 ruling the sweep's axis ends
   // yesterday, but an older cached blob still ends today, and both must resolve
   // to the same day. Returns -1 for an empty or all-future axis.
-  function todayISO() {
-    var t = new Date();
-    return t.getFullYear() + "-" + ("0" + (t.getMonth() + 1)).slice(-2) + "-" + ("0" + t.getDate()).slice(-2);
-  }
+  // UTC, because the sweep stamps its day list in UTC. A LOCAL date compare lets
+  // today's partial bucket through for a viewer ahead of UTC (between their local
+  // midnight and UTC midnight local "today" is already tomorrow's date), which is
+  // exactly the still-ramping day the 24H snapshot exists to skip.
+  function todayISO() { return new Date().toISOString().slice(0, 10); }
   function snapDayIndex(days) {
     if (!Array.isArray(days) || !days.length) return -1;
     var today = todayISO(), last = -1, i;

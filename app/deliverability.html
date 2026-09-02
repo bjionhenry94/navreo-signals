@@ -850,7 +850,7 @@ var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
 function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 
-function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} aligned to HUB.days, from trends
+function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} on the chart axis, from trends
   var out = { sent: [], bounces: [], bounceN: [], rate: [] };
   if (!HUB) return out;
   var map = {};
@@ -866,7 +866,7 @@ function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} aligned 
                  r: (rp == null || s < 1000 ? null : rp) };
     });
   }
-  HUB.days.forEach(function (d) {
+  chartAxisDays().forEach(function (d) {   // trimmed axis: the fleet line ends yesterday too
     var m = map[d];
     out.sent.push(m ? m.s : 0);
     out.bounces.push(m ? m.b : null);   // bounce-rate %, right axis — gap on quiet days
@@ -893,7 +893,33 @@ function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} aligned 
 // strictly before CW.asof are trusted from client-windows. Without this a stale
 // cache would draw yesterday from its own partial morning snapshot (e.g. 9 sends
 // instead of ~18,600).
-function chartAxisDays() { return (HUB && HUB.days) || (CW && CW.days) || []; }
+// "Today" in UTC, because every axis the server stamps is a UTC date. A LOCAL
+// date compare is wrong for a viewer ahead of UTC: between their local midnight
+// and UTC midnight, local "today" is already tomorrow's date, so the real
+// today's bucket stops being trimmed and its near-empty partial day leaks back
+// into the chart, the legend sums and the capacity figure.
+function todayUTC() { return new Date().toISOString().slice(0, 10); }
+// Trim an axis to the last date STRICTLY BEFORE today. Windows end yesterday
+// (owner ruling 2026-09-02) — today is a partial, still-ramping bucket. The
+// analytics-hub RPC still stamps its day list to today, so the cut is made here
+// on the front end, once, and EVERY series the chart plots is index-aligned to
+// this axis: trim the axis and the whole page moves with it.
+function axisEndingYesterday(days) {
+  if (!Array.isArray(days) || !days.length) return [];
+  var t = todayUTC();
+  for (var i = days.length - 1; i >= 0; i--) {
+    if (String(days[i] || "").slice(0, 10) < t) return days.slice(0, i + 1);
+  }
+  return [];
+}
+function chartAxisDays() { return axisEndingYesterday((HUB && HUB.days) || (CW && CW.days) || []); }
+// A raw analytics-hub series is keyed to HUB.days, which still runs to today.
+// Cut it to the chart axis so index i always describes axis day i.
+function hubAligned(arr) {
+  if (!Array.isArray(arr)) return arr;
+  var n = chartAxisDays().length;
+  return arr.length > n ? arr.slice(0, n) : arr;
+}
 function cwAsofDate() { return (CW && CW.asof) ? String(CW.asof).slice(0, 10) : null; }
 function alignDaily(srcArr, srcDays, fill, fb) {
   var ax = chartAxisDays();
@@ -1169,7 +1195,7 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     if (cs2 && cs2.positives) return alignDaily(cs2.positives, CW.days, 0, null);
   }
   var s = HUB && HUB.series && HUB.series[ckey()];
-  return (s && s[k]) || [];
+  return hubAligned(s && s[k]) || [];
 }
 function repliesShown() { // THE reply count every widget shows for this view
   // No trusted daily line -> use the EXACT client-windows window total before
@@ -1332,9 +1358,8 @@ function renderTrend() {
   // Axis = the hub's day list, or client-windows' aligned day list while the hub
   // RPC is still in flight. Either one lets the chart draw; only when BOTH are
   // missing do we show the loading frame.
-  var axisDays = (HUB && HUB.days) || (CW && CW.days) || [];
-  var allDays = slice(axisDays);
-  if (!allDays.length) {
+  var allDays = slice(chartAxisDays());
+  if (!allDays.length) {   // no axis yet (or nothing before today)
     // hub still loading — say so instead of leaving a silent empty frame
     $("trend-svg").innerHTML = '<text x="560" y="132" text-anchor="middle" font-size="13" fill="var(--ink-3)">Loading your ' + rangeLabel() + "…</text>";
     $("trend-sub").textContent = "Fetching live data…";
@@ -1590,7 +1615,7 @@ function hideTip() {
 function trendMove(ev) {
   var svg = $("trend-svg"), r = svg.getBoundingClientRect();
   if (!r.width) return;
-  var allD = slice((HUB && HUB.days) || (CW && CW.days) || []);
+  var allD = slice(chartAxisDays());
   if (!allD.length) return;
   var keep = chartKeep(allD);
   var days = keep.map(function (i) { return allD[i]; });
@@ -1675,7 +1700,10 @@ function funnelSums() {
   var cw = cwFor(state.client);
   if (cw) {
     v.win = true;
-    var sum = function (a) { return slice(a || []).reduce(function (x, y) { return x + (y || 0); }, 0); };
+    // hubAligned: the analytics-hub arrays still run to today, and slice() takes
+    // the LAST `range` entries — untrimmed, a 30-day read would count today's
+    // partial day and drop the oldest real one.
+    var sum = function (a) { return slice(hubAligned(a) || []).reduce(function (x, y) { return x + (y || 0); }, 0); };
     var s = HUB && HUB.series && HUB.series[ckey()];
     // sent + replies through the same helpers the hero legend uses, so the
     // funnel and the graph can never disagree about the same window
@@ -2040,10 +2068,14 @@ function weekSeries(n) {
   // which one is on screen so a client view never silently reads fleet-wide.
   var out = { days: [], rate: [], sent: [], scope: "fleet" };
   var cs = cwTrusted(state.client === "All" ? "__all" : state.client);
-  var from0, i;
-  if (cs && CW.days && CW.days.length) {
-    from0 = Math.max(0, CW.days.length - n);
-    for (i = from0; i < CW.days.length; i++) { out.days.push(CW.days[i]); out.sent.push(cs.sent[i] || 0); }
+  var from0, i, ax;
+  // Both source axes are trimmed to end YESTERDAY: today's partial day is not a
+  // reply rate, and a cached blob built before the 2026-09-02 ruling still runs
+  // to today. Same helper the day-by-day chart uses.
+  ax = axisEndingYesterday((CW && CW.days) || []);
+  if (cs && ax.length) {
+    from0 = Math.max(0, ax.length - n);
+    for (i = from0; i < ax.length; i++) { out.days.push(ax[i]); out.sent.push(cs.sent[i] || 0); }
     var minC = wkMinSent(out.sent);
     out.sent.forEach(function (sj, k) {
       out.rate.push(sj < minC ? null : Math.round((cs.replied[from0 + k] || 0) * 10000 / sj) / 100);
@@ -2053,8 +2085,9 @@ function weekSeries(n) {
   }
   var s = TRENDS && TRENDS.series;
   if (!s || !s.days || !s.days.length) return out;
-  from0 = Math.max(0, s.days.length - n);
-  for (i = from0; i < s.days.length; i++) { out.days.push(s.days[i]); out.sent.push(s.sent[i] || 0); }
+  ax = axisEndingYesterday(s.days);
+  from0 = Math.max(0, ax.length - n);
+  for (i = from0; i < ax.length; i++) { out.days.push(ax[i]); out.sent.push(s.sent[i] || 0); }
   var minF = wkMinSent(out.sent);
   out.sent.forEach(function (sent, k) {
     var rp = s.reply_pct[from0 + k];
