@@ -2430,6 +2430,12 @@ def _ob_record2(cid: str) -> tuple[dict | None, bool]:
         if isinstance(rows, list):
             rec = rows[0]["doc"] if rows and isinstance(rows[0], dict) and rows[0].get("doc") else None
             if rec is not None:
+                # A stranded file-fallback write (from an outage) can be NEWER
+                # than the Supabase row - serving the older row would roll the
+                # client back and the next heal would delete the only newer copy.
+                fc = _ob_file_read().get(cid)
+                if isinstance(fc, dict) and str(fc.get("updated_at") or "") > str(rec.get("updated_at") or ""):
+                    return fc, False
                 return rec, False
             # Confirmed absent in Supabase — but an earlier outage may have
             # stranded a file-fallback write on this instance; that copy is
@@ -2438,6 +2444,9 @@ def _ob_record2(cid: str) -> tuple[dict | None, bool]:
         # Supabase errored: a local file copy (from a fallback write) still
         # counts as a real read; nothing anywhere = existence unknown.
         rec = _ob_file_read().get(cid)
+        if rec is None:
+            print(f"[ob] WARNING draft store DEGRADED for {cid}: Supabase read failed and no file copy "
+                  f"- hub will retry with its write gate closed", file=sys.stderr)
         return rec, rec is None
     return _ob_file_read().get(cid), False
 
@@ -2486,7 +2495,10 @@ def onboarding_draft_upsert(p: dict):
                      "created_at": prev.get("created_at") or now,
                      "store": "noop-behind-reset"}
     doc["resetRev"] = max(_in_rev, _prev_rev)
-    for _bo in ("domains", "site"):
+    # ideas / offerAudience: the offers Claude drafts at portal-creation are
+    # back-office authored too (the hub only READS them) - an open client tab
+    # autosaving ideas:null must not erase the CSM's sign-off work.
+    for _bo in ("domains", "site", "ideas", "offerAudience"):
         if not doc.get(_bo) and pdoc.get(_bo):
             doc[_bo] = pdoc[_bo]
     # homeLinks / portalUrl / slackUrl are BACK-OFFICE-authored (CSM / onboarding
@@ -22036,6 +22048,7 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
                      # both from 07-28 until 07-29.
                      "/api/cron/outlook-reply-caps", "/api/cron/google-reply-caps",
                      "/api/cron/maildoso-reply-caps",
+                     "/api/cron/intake-gate",
                      "/api/notify/positive-card",
                      "/api/setter/poll", "/api/setter/inbound",
                      "/api/setter/training/answer", "/api/setter/training/generate",
@@ -22334,15 +22347,20 @@ def _offer_fetch_site(url: str, deep: bool = True):
 def _offer_scrub(s: str) -> str:
     """Backstop the style laws: never an em-dash, and never a hyphen standing in
     for a comma (Navreo writes with commas, not dashes), plus normalise the
-    fullwidth pound sign gpt-5-mini sometimes emits. Horizontal-whitespace only so
-    paragraph breaks (\\n\\n) are never collapsed; unspaced hyphens in compounds
-    (cash-runway, 48-hour, co-founder) and numeric ranges (2-20) are left alone."""
+    fullwidth pound sign gpt-5-mini sometimes emits. Ranges and leading dashes
+    are NOT commas (review 2026-09-01): "2\u201320 meetings" stays a range,
+    "Mon - Fri" stays a range, a line-leading "\u2014 Sarah" / "- item" just loses the
+    dash. Horizontal-whitespace only so paragraph breaks are never collapsed;
+    unspaced hyphens in compounds (cash-runway, 48-hour) are left alone."""
     s = str(s or "")
-    s = re.sub(r"[ \t]*[—–][ \t]*", ", ", s)          # em / en dash -> comma
-    s = re.sub(r"[ \t]+-[ \t]+", ", ", s)              # spaced hyphen used as a dash -> comma
-    s = re.sub(r"\bP\.?[ \t]?S\.?,[ \t]*", "P.S. ", s)  # tidy a "P.S," back to "P.S."
-    s = re.sub(r",[ \t]*,", ", ", s)                    # collapse any double comma
-    s = re.sub(r"[ \t]*,[ \t]*([.?!;:])", r"\1", s)     # drop a comma that butts end punctuation
+    s = re.sub(r"(?<=[\w£$%])\u2013(?=[\w£$])", "-", s)          # en-dash range 2\u201320 -> 2-20
+    s = re.sub(r"(?<=\d)[ \t]+-[ \t]+(?=\d)", "-", s)            # spaced numeric range 10 - 15 -> 10-15
+    s = re.sub(r"(?m)^[ \t]*[\u2014\u2013-][ \t]+", "", s)          # line-leading dash / bullet -> dropped
+    s = re.sub(r"(?<=\S)[ \t]*[\u2014\u2013][ \t]*", ", ", s)      # em / en dash as a comma -> comma
+    s = re.sub(r"(?<=\S)[ \t]+-[ \t]+", ", ", s)                # spaced hyphen as a comma -> comma
+    s = re.sub(r"\bP\.?[ \t]?S\.?,[ \t]*", "P.S. ", s)           # tidy a "P.S," back to "P.S."
+    s = re.sub(r",[ \t]*,[ \t]*", ", ", s)                       # collapse any double comma (+ its trailing space)
+    s = re.sub(r"[ \t]*,[ \t]*([.?!;:])", r"\1", s)              # drop a comma that butts end punctuation
     return s.replace("￡", "£").strip()
 
 
@@ -24063,7 +24081,7 @@ class Handler(SimpleHTTPRequestHandler):
         "/api/auth/login", "/api/cron/pull-all", "/api/cron/heyreach-sync",
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
         "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/notify/positive-card",
-        "/api/cron/booked-sweep",
+        "/api/cron/booked-sweep", "/api/cron/intake-gate",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
         "/api/warmup-live",  # read-only Smartlead read — must not nuke SWR caches
         # act-state clicks touch only cockpit_action_assignments (whose GET is

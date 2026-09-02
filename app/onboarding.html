@@ -879,7 +879,7 @@ if(OB_FORCE_NEW){if(OB_Q.name)S.clientName=OB_Q.name;if(OB_Q.company&&!S.clientN
    Unscoped demo previews keep the old behavior (local copy is their truth). */
 var _obTimer=null,_obLast="",_obReady=OB_LOCAL;
 function obSetStatus(st){var el=document.getElementById("obSave");if(!el)return;
- var m={saving:"Saving…",saved:"Saved ✓",error:OB_LOCAL?"Saved on this device — retrying…":"Not saved yet — retrying…"};
+ var m={saving:"Saving…",saved:"Saved ✓",loading:"Loading your saved progress…",error:OB_LOCAL?"Saved on this device — retrying…":"Not saved yet — retrying…"};
  el.textContent=m[st]||"";el.setAttribute("data-st",st);el.style.color=(st==="saved")?"#3f9e5a":(st==="error")?"#c2683a":"#8a8378";}
 function obPayload(){return {id:S.clientId,name:(S.clientName||S.offerAudience||""),stage:S.stage,status:(S.stage>=4?"submitted":"draft"),doc:S};}
 function obSync(){if(!_obReady)return;var body;try{body=JSON.stringify(obPayload());}catch(e){return;}
@@ -887,9 +887,13 @@ function obSync(){if(!_obReady)return;var body;try{body=JSON.stringify(obPayload
  obSetStatus("saving");
  fetch("/api/onboarding/draft",{method:"POST",headers:{"Content-Type":"application/json"},body:body})
   .then(function(r){if(!r.ok)throw r.status;return r.json();})
-  .then(function(){_obLast=body;obSetStatus("saved");})
+  .then(function(j){
+   /* A file-fallback write lives on an ephemeral per-instance disk - NOT delivered.
+      Keep retrying until a real Supabase write lands; never show Saved for it. */
+   if(j&&j.store==="file-fallback"){obSetStatus("saving");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,4000);return;}
+   _obLast=body;obSetStatus("saved");})
   .catch(function(){obSetStatus("error");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,4000);});}
-function scheduleSync(){if(!_obReady)return;obSetStatus("saving");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,700);}
+function scheduleSync(){if(!_obReady){obSetStatus("error");return;} /* edits while the write gate is closed must never look saved */obSetStatus("saving");clearTimeout(_obTimer);_obTimer=setTimeout(obSync,700);}
 function obFlush(){if(!_obReady)return;try{var body=JSON.stringify(obPayload());if(body===_obLast)return;
  /* sendBeacon only QUEUES the request — the server may still refuse it (the
     degraded-store 503). Never mark it as delivered (_obLast), or a refused
@@ -910,14 +914,14 @@ function obRestore(){if(OB_FORCE_NEW){_obReady=true;scheduleSync();return;}
  fetch("/api/onboarding/draft?id="+encodeURIComponent(S.clientId),{cache:"no-store"})
   .then(function(r){return r.ok?r.json():null;})
   .then(function(j){
-   if(!j){setTimeout(obRestore,3000);return;} /* server hiccup (incl. the 503 degraded-store answer) — retry, keep gate closed */
+   if(!j){obSetStatus("loading");setTimeout(obRestore,3000);return;} /* server hiccup (incl. the 503 degraded-store answer) — retry, keep gate closed */
    if(!j.draft||!j.draft.doc){
     /* Only an EXPLICIT exists:false from the server means brand-new. A missing
        draft without that marker is ambiguous (degraded store, old server, odd
        body) — creating FRESH here is how a mid-deploy load wiped a real client
        (obtest-harborline, 2026-09-01). Keep the write gate closed and retry. */
     if(j.exists===false){_obReady=true;scheduleSync();return;}
-    setTimeout(obRestore,3000);return;}
+    obSetStatus("loading");setTimeout(obRestore,3000);return;}
    var sv=obMigrate(j.draft.doc);
    var pristine=(S.stage===0&&Object.keys(S.done||{}).length===0);
    /* Back-office reset: when the server issues a newer resetRev than this browser
@@ -945,7 +949,7 @@ function obRestore(){if(OB_FORCE_NEW){_obReady=true;scheduleSync();return;}
     for(var hk in svL){if(svL[hk]&&svL[hk]!==S.homeLinks[hk]){S.homeLinks[hk]=svL[hk];chg=true;}}
     if(chg){if(OB_LOCAL){try{localStorage.setItem(LS_KEY,JSON.stringify(S));}catch(e){}}if(typeof render==="function")render();}
     _obReady=true;try{_obLast=JSON.stringify(obPayload());}catch(e){}}
-  }).catch(function(){setTimeout(obRestore,3000);});}
+  }).catch(function(){obSetStatus("loading");setTimeout(obRestore,3000);});}
 
 var _DOW=["Sun","Mon","Tue","Wed","Thu","Fri","Sat"],_MON=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 function fmtD(d){return _DOW[d.getDay()]+" "+_MON[d.getMonth()]+" "+d.getDate();}
@@ -1506,7 +1510,7 @@ function tidyOffer(raw){var t=raw.trim().replace(/\s+/g," ").replace(/[.\s]+$/,"
  return offMk("lead_magnet",t);}
 function offCard(o,idx){var star=!!o.star;var editable=(o.src!=="drafted");
  var tag=o.src==="yours"?'<span class="yours">Yours</span>':(o.src==="generated"?'<span class="yours idea">Fresh idea</span>':'');
- var head='<div class="top"><span class="ofr-badge '+oesc(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+tag+'<span class="ofr-pick">'+OSVG.star+' SHORTLISTED</span></div>';
+ var head='<div class="top"><span class="ofr-badge '+oatt(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+tag+'<span class="ofr-pick">'+OSVG.star+' SHORTLISTED</span></div>';
  var body='<div class="nm">'+oesc(o.name)+'</div><div class="ln">'+oesc(o.line)+'</div>';
  var card='<button class="ofr-card'+(star?' picked':'')+'" data-star="'+idx+'" aria-pressed="'+(star?'true':'false')+'"><span class="ofr-starbtn" aria-hidden="true">'+OSVG.star+'</span>'+head+body+'</button>';
  if(!editable)return card;
@@ -1524,12 +1528,17 @@ function deTag(s){return String(s||"")
    we'd likely say. Empty when a client has no drafted ideas yet (page shows just the
    teaching intro until Claude drafts them). */
 function offersDrafted(){
- if(!Array.isArray(S.ideas)||!S.ideas.length)return "";
- var cards=S.ideas.map(function(o){
+ if(!Array.isArray(S.ideas))return "";
+ /* Only real offer objects: a botched hand-edit ([null], [""]) must not blank the page,
+    and the old demo stand-ins (OFFERS_EG) must never show as "offers we think might work". */
+ var _eg={};(typeof OFFERS_EG!=="undefined"?OFFERS_EG:[]).forEach(function(e){_eg[e.name]=1;});
+ var list=S.ideas.filter(function(o){return o&&typeof o==="object"&&!_eg[o.name];});
+ if(!list.length)return "";
+ var cards=list.map(function(o){
   var full=deTag(o.full||"");
   var more=full?('<details class="ofr-more"><summary>See example message</summary><div class="ofr-full">'+oesc(full)+'</div></details>'):'';
   return '<div class="ofr-card ofr-ro">'
-   +'<div class="top"><span class="ofr-badge '+oesc(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+'</div>'
+   +'<div class="top"><span class="ofr-badge '+oatt(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+'</div>'
    +'<div class="nm">'+oesc(deTag(o.name))+'</div>'
    +'<div class="ln">'+oesc(deTag(o.line))+'</div>'
    +more+'</div>';
