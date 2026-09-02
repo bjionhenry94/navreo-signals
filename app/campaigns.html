@@ -5640,12 +5640,15 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     var byStep = {};
     versions.forEach(function (v) { var k = v.step != null ? String(v.step) : '?'; (byStep[k] = byStep[k] || []).push(v); });
     var stepKeys = Object.keys(byStep).sort(function (a, b) { return (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0); });
-    /* fair-test law (Bjion 2026-08-31, mirrored in optimise.html's
-       versionTableHTML and build_notifications.py's pill_best_opener — keep
-       all three in step): the judging bar comes from the payload (800, or
-       300 when the list can never give every live version 800). Nobody is
-       EVER crowned below the bar — one early positive at ~200 sends reads
-       exactly like a winner but can be pure luck. Live versions (not
+    /* fair-test law (Bjion 2026-08-31; AMENDED 2026-09-02, mirrored in
+       optimise.html's versionTableHTML and build_notifications.py's
+       pill_best_opener — keep all three in step): the judging bar is a FLAT
+       800 sends per live version, ALWAYS — no small-list drop (Bjion
+       2026-09-02); small audiences simply wait. Nobody is EVER crowned below
+       the bar — one early positive at ~200 sends reads exactly like a winner
+       but can be pure luck. A crown also needs a strictly-ahead winner: two
+       crownable openers in an exact dead heat hold the verdict (Bjion
+       2026-09-02); a single-unit lead still crowns. Live versions (not
        deleted, not switched off) still under the bar are laggards: they
        hold the verdict at PARTIAL — the winner is backed with 80% while the
        laggards keep 20% collectively so their test keeps running — and only
@@ -5653,71 +5656,119 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
        100%). Switched-off versions never block, but stay crownable once
        past the bar: their late replies/meetings count (Bjion B-5). */
     var BARS = judgeBars || {};
-    function barOf(sk2) { var b = parseInt(BARS[sk2], 10); return (b === 300 || b === 800) ? b : 800; }
-    function liveVs(sk2) { return (byStep[sk2] || []).filter(function (v) { return !v.disabled && !v.inline && v.label != null && v.split !== 0; }); }
+    function barOf(sk2) { var b = parseInt(BARS[sk2], 10); return b === 800 ? b : 800; }
+    /* ── fair-test law v3 (Bjion 2026-09-02) — mirrored verbatim in
+       optimise.html's versionTableHTML and build_notifications.py's
+       pill_best_opener; keep all three in step. New in v3: flat-800 bar,
+       human-off exclusion, the meeting-leader override, tie co-leaders and
+       never-starve. ───────────────────────────────────────────────────── */
+    /* HUMAN-OFF: split 0 AFTER the version has sent = a human switched it off
+       on purpose (server.py's split-0 convention). It is excluded from
+       judging entirely — never crownable, never a laggard, never given
+       traffic — though its row still shows its data. split 0 with 0 sends is
+       "never configured", NOT human-off, so never-starve still covers it. */
+    function humanOff(v) { return v.split === 0 && (v.sent || 0) > 0; }
+    function eligibleV(v) { return !v.disabled && !v.inline && v.label != null && !humanOff(v); }
+    function liveVs(sk2) { return (byStep[sk2] || []).filter(eligibleV); }
+    /* own attributed meetings (a non-representative sibling of an
+       identical-copy cluster carries 0 — the credit sits on the rep) */
+    function mtOf(sk2, v) {
+      if (v.inline || v.label == null) return 0;
+      var rp = repOf[sk2 + '|' + v.label] || v.label;
+      return rp === v.label ? (byVar[sk2 + '|' + rp] || 0) : 0;
+    }
+    /* meeting ⟹ positive: effective positives never read below meetings */
+    function eposOf(v) { return Math.max(v.positives || 0, mtOf('1', v)); }
     var e1Bar = barOf('1');
+    var e1List = (byStep['1'] || []).filter(eligibleV);
+    /* crownable = eligible AND (past the bar OR the MEETING-LEADER OVERRIDE:
+       ≥2 meetings while live — it may still win under 800 sends, but only if
+       it actually leads the ranking; exactly 1 meeting never qualifies). */
     var e1Crown = {};
-    (byStep['1'] || []).forEach(function (v) { if (!v.disabled && !v.inline && v.label != null && (v.sent || 0) >= e1Bar) e1Crown[v.label] = 1; });
-    var e1Laggards = liveVs('1').filter(function (v) { return (v.sent || 0) < e1Bar; }).map(function (v) { return v.label; });
-    var e1Mode = Object.keys(e1Crown).length ? (e1Laggards.length ? 'partial' : 'full') : 'none';
-    /* best opener: Email-1, crownable (past the bar), most meetings per
-       email sent (lowest Sent/meeting, own sends), falling back to fewest
-       sends per positive. */
-    var best = null;
-    /* the best OPENER is a journey verdict: the opener of the winning path
-       (most meetings, then most positives). The Meetings column itself is
-       reply-grain (2026-08-09b) and no longer carries journey credit, so the
-       badge reads the same data the Best-path medal does — one signal. */
-    if (e1Mode !== 'none' && paths) {
-      /* same EFFICIENCY ranking as the Best-path medal (fewest sends per
-         meeting, 800-send floor preferred; then fewest sends per positive) —
-         the badge and the medal must never crown two different openers. */
-      var s1Tot = 0;
-      Object.keys(sentByRep).forEach(function (k) { if (k.indexOf('1|') === 0) s1Tot += sentByRep[k]; });
-      var crownReps = {};
-      Object.keys(e1Crown).forEach(function (lb) { crownReps[repOf['1|' + lb] || lb] = 1; });
-      var bpAll = Object.keys(paths).map(function (k) {
-        var p = k.split('>'), d = paths[k] || {};
-        var e1S = sentByRep['1|' + p[0]] || 0;
-        var e2S = sentByRep['2|' + p[1]] || 0;
-        var snt = e1S ? e1S + Math.round(s1Tot ? e2S * e1S / s1Tot : e2S) : 0;
-        return { e1: p[0], mt: d.meetings || 0, pos: d.positives || 0, snt: snt };
-      }).filter(function (c) { return crownReps[c.e1]; }); /* a path whose opener is under the bar can't crown */
-      var bpMt = bpAll.filter(function (c) { return c.mt > 0 && c.snt > 0; })
-        .sort(function (a, b) { return (a.snt / a.mt) - (b.snt / b.mt); });
-      var bpTop = bpMt.filter(function (c) { return c.snt >= 800; })[0] || bpMt[0] ||
-        bpAll.filter(function (c) { return c.pos > 0 && c.snt > 0; })
-          .sort(function (a, b) { return (a.snt / a.pos) - (b.snt / b.pos); })[0];
-      if (bpTop && (bpTop.mt > 0 || bpTop.pos > 0)) {
-        (byStep['1'] || []).forEach(function (v) {
-          if (best || v.disabled || v.inline || !v.sent || v.label == null || !e1Crown[v.label]) return;
-          if (v.label === bpTop.e1 || (repOf['1|' + v.label] || v.label) === bpTop.e1) best = { label: v.label };
+    e1List.forEach(function (v) { if ((v.sent || 0) >= e1Bar || mtOf('1', v) >= 2) e1Crown[v.label] = 1; });
+    var e1Laggards = e1List.filter(function (v) { return (v.sent || 0) < e1Bar; }).map(function (v) { return v.label; });
+    /* winner ranking (lower is better): best-path → sent/meeting → sent/
+       effective-positive (the last only when no crownable version has a
+       meeting). 2+ distinct co-leaders on the exact winning value = a TIE. */
+    var winners = [];
+    var crownList = e1List.filter(function (v) { return e1Crown[v.label] && (v.sent || 0) > 0; });
+    if (crownList.length) {
+      /* Tier 1 — the journey verdict: the opener of the winning path, same
+         EFFICIENCY ranking as the Best-path medal, so the badge and the medal
+         never crown two different openers. */
+      if (paths) {
+        var s1Tot = 0;
+        Object.keys(sentByRep).forEach(function (k) { if (k.indexOf('1|') === 0) s1Tot += sentByRep[k]; });
+        var crownReps = {};
+        Object.keys(e1Crown).forEach(function (lb) { crownReps[repOf['1|' + lb] || lb] = 1; });
+        var bpAll = Object.keys(paths).map(function (k) {
+          var p = k.split('>'), d = paths[k] || {};
+          var e1S = sentByRep['1|' + p[0]] || 0;
+          var e2S = sentByRep['2|' + p[1]] || 0;
+          var snt = e1S ? e1S + Math.round(s1Tot ? e2S * e1S / s1Tot : e2S) : 0;
+          return { e1: p[0], mt: d.meetings || 0, pos: Math.max(d.positives || 0, d.meetings || 0), snt: snt };
+        }).filter(function (c) { return crownReps[c.e1]; }); /* a path whose opener can't crown can't win */
+        var bpMt = bpAll.filter(function (c) { return c.mt > 0 && c.snt > 0; })
+          .sort(function (a, b) { return (a.snt / a.mt) - (b.snt / b.mt); });
+        var bpPool = bpMt.filter(function (c) { return c.snt >= 800; });
+        if (!bpPool.length) bpPool = bpMt;
+        var bpReps = [];
+        if (bpPool.length) {
+          var bpR = bpPool[0].snt / bpPool[0].mt;
+          bpPool.forEach(function (c) { if (c.snt / c.mt === bpR && bpReps.indexOf(c.e1) < 0) bpReps.push(c.e1); });
+        } else {
+          var bpPos = bpAll.filter(function (c) { return c.pos > 0 && c.snt > 0; })
+            .sort(function (a, b) { return (a.snt / a.pos) - (b.snt / b.pos); });
+          if (bpPos.length) {
+            var bpRp = bpPos[0].snt / bpPos[0].pos;
+            bpPos.forEach(function (c) { if (c.snt / c.pos === bpRp && bpReps.indexOf(c.e1) < 0) bpReps.push(c.e1); });
+          }
+        }
+        if (bpReps.length) crownList.forEach(function (v) {
+          var rp = repOf['1|' + v.label] || v.label;
+          if ((bpReps.indexOf(v.label) >= 0 || bpReps.indexOf(rp) >= 0) && winners.indexOf(v.label) < 0) winners.push(v.label);
         });
       }
+      /* Tier 2 — sent/meeting among crownable versions with ≥1 meeting.
+         Tier 3 — sent/effective-positive, only when none of them has one. */
+      if (!winners.length) {
+        var mtCand = crownList.filter(function (v) { return mtOf('1', v) > 0; })
+          .map(function (v) { return { label: v.label, r: v.sent / mtOf('1', v) }; });
+        var posCand = crownList.filter(function (v) { return eposOf(v) > 0; })
+          .map(function (v) { return { label: v.label, r: v.sent / eposOf(v) }; });
+        var cand = mtCand.length ? mtCand : posCand;
+        if (cand.length) {
+          var mn = Math.min.apply(null, cand.map(function (c) { return c.r; }));
+          cand.forEach(function (c) { if (c.r === mn && winners.indexOf(c.label) < 0) winners.push(c.label); });
+        }
+      }
     }
-    if (e1Mode !== 'none' && best === null) (byStep['1'] || []).forEach(function (v) {
-      if (v.disabled || v.inline || !v.sent || v.label == null || !e1Crown[v.label]) return;
-      var rep = repOf['1|' + v.label] || v.label;
-      var mv = rep === v.label ? (byVar['1|' + rep] || 0) : 0;
-      if (!(mv > 0)) return;
-      var pm = v.sent / mv;
-      if (best === null || pm < best.pm) best = { label: v.label, pm: pm };
-    });
-    if (e1Mode !== 'none' && best === null) (byStep['1'] || []).forEach(function (v) {
-      if (v.disabled || v.inline || !(v.positives > 0) || !v.sent || !e1Crown[v.label]) return;
-      var pp = v.sent / v.positives;
-      if (best === null || pp < best.pp) best = { label: v.label, pp: pp };
-    });
+    var best = winners.length === 1 ? { label: winners[0] } : null;
+    var tied = winners.length > 1 ? winners.slice() : [];
+    /* verdict modes: NONE (keep testing) · FULL (single winner, everything
+       eligible past the bar) · PARTIAL (a live eligible version is still
+       under 800, or the winner itself is crowned early via the override) ·
+       TIE (co-leaders split evenly; only past-bar losers are dropped). */
+    var e1Mode = !winners.length ? 'none'
+      : (winners.length > 1 ? 'tie' : (e1Laggards.length ? 'partial' : 'full'));
+    var bestV = best ? (byStep['1'] || []).filter(function (v) { return v.label === best.label && !v.inline; })[0] : null;
+    var bestOverride = !!(bestV && (bestV.sent || 0) < e1Bar);
+    /* NEVER STARVE: on a partial verdict the remaining 20% is split evenly
+       across EVERY other eligible version — nothing under 800 is switched
+       off, so this list is no longer just the under-bar laggards. */
+    var e1Share20 = best ? e1List.filter(function (v) { return v.label !== best.label; }).map(function (v) { return v.label; }) : [];
     var rows = stepKeys.map(function (sk) {
       var vs = byStep[sk].slice().sort(function (a, b) { return (a.label == null ? '￿' : String(a.label)).localeCompare(b.label == null ? '￿' : String(b.label)); });
       /* honest state while the law holds the verdict back — say WHY there is
          no best pill, so a missing badge never reads as a broken page */
       var testing = sk === '1' && liveVs('1').length > 1 && e1Mode === 'none';
+      var tieCap = (sk === '1' && e1Mode === 'tie')
+        ? ' &middot; Tied &mdash; ' + tied.map(function (l) { return esc(String(l)); }).join(' and ') +
+          ' split traffic evenly; past-bar losers dropped' : '';
       var band = '<tr class="vp-band"><td class="vp-l" colspan="7">Email ' + esc(sk) +
         ' <span class="ring-caption">' + vs.length + ' variant' + (vs.length === 1 ? '' : 's') +
-        (testing ? ' &middot; a best opener is only called once every live version has ' + fmtInt(e1Bar) + ' sends' +
-          (e1Bar === 300 ? ' (small list &mdash; bar lowered from 800)' : '') : '') +
-        '</span></td></tr>';
+        (testing ? ' &middot; a best opener is only called once every live version has ' + fmtInt(e1Bar) + ' sends' : '') +
+        tieCap + '</span></td></tr>';
       /* an inline (step-level) counter row can coexist with real versions of
          the same email — Smartlead keeps the pre-split sends on it. Calling it
          "the only version" beside version rows contradicts itself (founder
@@ -5727,6 +5778,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       var body = vs.map(function (v) {
         var label = v.inline ? (soleStep ? 'A' : 'Original') : (v.label || '?');
         var isBest = best && sk === '1' && !v.disabled && !v.inline && v.label === best.label;
+        var isTied = tied.length > 0 && sk === '1' && !v.disabled && !v.inline && tied.indexOf(v.label) >= 0;
         var rep = (!v.inline && v.label != null) ? (repOf[sk + '|' + v.label] || v.label) : null;
         var isRep = rep != null && rep === v.label;
         /* every row shows its own attributed integer; an identical-copy
@@ -5806,12 +5858,14 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         else if (hasScale)
           scaleBtn = ' <button type="button" class="vaw-mini vaw-mini--best" data-vaw-scale80 data-step="' + esc(String(sk)) +
             '" data-vlabel="' + esc(String(v.label)) + '" data-split="' + v.split +
-            '" data-laggards="' + esc(JSON.stringify(e1Laggards)) +
-            '" title="' + esc(e1Laggards.join(', ')) + ' still under the ' + e1Bar + '-send judging bar &mdash; they keep 20% collectively' +
+            '" data-laggards="' + esc(JSON.stringify(e1Share20)) +
+            '" title="' + (bestOverride ? 'backed early &mdash; ' + fmtInt(mtOf('1', v)) + ' meetings on ' + fmtInt(v.sent) + ' sends. ' : '') +
+              'the other versions (' + esc(e1Share20.join(', ')) + ') share the 20% &mdash; nothing under the ' + e1Bar + '-send judging bar is switched off' +
             '"><span class="vp-best">BEST</span> Send 80% of Email ' + esc(String(sk)) + ' to it<span class="vaw-arr" aria-hidden="true">&rarr;</span></button>';
         return '<tr>' +
           '<td data-label="Version">' + esc(label) + stateCell +
-            ((isBest && !hasScale) ? ' <span class="vp-best">best</span>' : '') + scaleBtn + '</td>' +
+            ((isBest && !hasScale) ? ' <span class="vp-best">best</span>' : '') +
+            (isTied ? ' <span class="vp-best" title="tied on the winning metric &mdash; co-leaders split traffic evenly">tied</span>' : '') + scaleBtn + '</td>' +
           /* a deleted variant's counters were PURGED by Smartlead, not zero —
              '—' with the why, never a false 'Sent 0' (audit #8) */
           (v.stats_purged
