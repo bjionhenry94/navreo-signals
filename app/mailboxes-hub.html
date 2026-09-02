@@ -630,16 +630,22 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // client_caps figure now appears only in the Total-capacity column.
       var capSub = "", capTn = capTone(r.cap), capBig = r.cap == null ? "—" : r.cap + "%";
       if (r.cap != null) {
-        if (r.capExceeded > 0) {
-          // The own-workspace pools are high-water-snapped once a day (04:30), so
-          // a day's recorded cap can sit BELOW what that day actually sent. Say so
-          // rather than printing an impossible >100%.
-          capBig = "100%"; capTn = "a1";
-          capSub = "cap snapshot below sends on " + r.capExceeded + " day" + (r.capExceeded === 1 ? "" : "s");
-        } else if (r.capW && r.capDays) {
+        if (r.capW && r.capDays) {
           capSub = S.win === 1
             ? "of " + n(r.capW) + "/day" + (snapTxt ? " on " + snapTxt : "")
             : "of ~" + n(Math.round(r.capW / r.capDays)) + "/day avg";
+        }
+        if (r.capExceeded > 0) {
+          // The own-workspace pools are high-water-snapped once a day (04:30), so
+          // a day's recorded cap can sit BELOW what that day actually sent.
+          // usedDetail already counts such a day at what it really sent, so the %
+          // can never exceed 100 — it does NOT become 100. Over a 30-day window
+          // nine over-cap days sit inside a fleet that used 86% of its weekday
+          // capacity; printing 100% there would overstate the fleet AND break the
+          // digit-for-digit match with the Analytics KPI. Show the real figure,
+          // flag it amber, and say which days carry the caveat.
+          capTn = "a1";
+          capSub = "cap snapshot below sends on " + r.capExceeded + " day" + (r.capExceeded === 1 ? "" : "s");
         }
       }
       tds += heatCell(capTn, capBig, capSub);
