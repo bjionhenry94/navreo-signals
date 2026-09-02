@@ -841,16 +841,30 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var rs = gr.g[dom] || [];
       var dueTs = rd[dom] || null;
       if (dueTs == null) {
+        // Derive the due date from when the boxes were actually rested. If we
+        // hold no rest date either, LEAVE IT NULL — the old `Date.now() + 7d`
+        // fallback re-based itself on every render, so a domain with no ledger
+        // row read "due in 7d" every day forever (the placeholder the
+        // 2026-08-23 ruling banned; memory dueback-ledger-one-clock). A rest
+        // date we do not hold is not a rest date.
         var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
-        dueTs = due.length ? Math.min.apply(null, due) : (Date.now() + 7 * 864e5);
+        dueTs = due.length ? Math.min.apply(null, due) : null;
       }
       return { dom: dom, rs: rs, boxes: Math.max(rs.length, Number(lz[dom]) || 0),
                hb: !!hbSet[dom], dueTs: dueTs };
     });
-    entries.sort(function (a, b) { return a.dueTs - b.dueTs; });
+    // soonest-due first; domains with no known due date sort last (they are not
+    // "due now", they are unknown)
+    entries.sort(function (a, b) {
+      if (a.dueTs == null || b.dueTs == null) return (a.dueTs == null ? 1 : 0) - (b.dueTs == null ? 1 : 0);
+      return a.dueTs - b.dueTs;
+    });
     return entries;
   }
-  function dueChip(ts) { if (!ts) return '<span class="t-mut">—</span>'; var left = ts - Date.now();
+  // No due date on file reads "date unknown", not "—": a dash looks like an empty
+  // column, and inventing "due in 7d" was worse. The domain is still resting and
+  // still restorable — we just do not know when its rest started.
+  function dueChip(ts) { if (!ts) return '<span class="pill n">date unknown</span>'; var left = ts - Date.now();
     if (left <= 0) return '<span class="pill g">ready now</span>';
     var dl = Math.ceil(left / 864e5); return '<span class="pill ' + (dl <= 2 ? "a" : "n") + '">due in ' + dl + 'd</span>'; }
   function restedMs(m) { var v = m.restedAt; if (v == null) return null; if (typeof v === "number") return v < 1e12 ? v * 1000 : v; var p = Date.parse(v); return isNaN(p) ? null : p; }
