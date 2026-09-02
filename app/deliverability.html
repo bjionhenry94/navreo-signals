@@ -261,6 +261,9 @@
 .ah .databar{display:none;font-size:12px;color:var(--ink-2);background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:9px;padding:8px 14px;margin-bottom:14px}
 .ah .databar.show{display:flex;align-items:center;gap:12px}
 .ah .databar button{margin-left:auto}
+/* inline "Retry" inside a card's own subline, for reads that fail per-card
+   (who-replies) rather than at boot */
+.ah a.who-retry{color:var(--orange-700);font-weight:600;text-decoration:underline}
 
 .ah .moved-note{margin-top:14px;font-size:12.5px;color:var(--ink-3)}
 .ah .moved-note a{color:var(--ink-2);font-weight:600;text-decoration:none}
@@ -724,6 +727,26 @@ function jShared(url) {
 }
 
 var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null, CW = null, COLL = null;
+// Which boot reads FAILED, by the plain-English name of what they feed. Every
+// failure used to be swallowed by an empty rejection handler: a 503 on
+// /api/sources left lane 2 rendering a confident runway with nothing on screen
+// to say a read had died, and the databar only ever appeared when BOTH the hub
+// and the scorecard were gone. Anything in here is named in the databar.
+var DEGRADED = {};
+function markDegraded(what, failed) {
+  if (failed) DEGRADED[what] = 1; else delete DEGRADED[what];
+  renderDataBar();
+}
+function renderDataBar() {
+  var bar = $("ah-databar"), msg = $("ah-databar-msg");
+  if (!bar || !msg) return;
+  var names = Object.keys(DEGRADED);
+  if (!names.length) { bar.classList.remove("show"); return; }
+  msg.textContent = names.length === 1
+    ? names[0] + " could not be loaded."
+    : "Live data unavailable: " + names.join(", ") + ".";
+  bar.classList.add("show");
+}
 var CAP = null;   // /api/fleet-capacity — per-day sending capacity per workspace (P1 headroom bars)
 // Bounce-Rate defaults OFF: it's a % on the right axis now (it no longer
 // flattens anything), but the landing card owns the bounce story and the
@@ -1844,7 +1867,6 @@ function weekdayAvgSent(daysBack) {
 function renderRunway(v) {
   // The lane-1 FUEL card was removed (duplicated this lane) — this now drives
   // only lane 2's runway (run-*).
-  var isAll = state.client === "All";
   setStamp("run-stamp", CW && CW.asof, 6);
   // Per-client daily send rate (Bjion 2026-07-28: "works for all clients but
   // not individual"). Fleet keeps its tested weekday average; a client's rate
@@ -1867,6 +1889,19 @@ function renderRunway(v) {
   var days = headroom ? Math.floor(v.leadsLeft / headroom) : null;
   var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
   var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
+  // Leads-still-to-work comes from the campaign scorecard. When that read fails
+  // the sum is 0, and the card used to announce "0 · No leads queued — add a
+  // list", which is a different claim from "we don't know". Say we don't know.
+  if (!SCORE) {
+    $("run-kick").textContent = "Leads still to work";
+    $("run-big").innerHTML = "—";
+    $("run-big").className = "bignum num";
+    $("run-sub").textContent = "runway unavailable — campaign data could not be loaded";
+    $("run-svg").style.display = "none";
+    $("run-take").textContent = "";
+    $("tag-leads").textContent = "—";
+    return;
+  }
   if (days != null) {
     $("run-kick").textContent = "Days of leads left";
     $("run-big").innerHTML = fmtN(days) + "<small> days</small>";
@@ -1909,15 +1944,24 @@ function renderSignals() {
     Object.keys(ce.mech || {}).forEach(function (m) {
       mech[m] = slice(ce.mech[m] || []).reduce(function (a, b) { return a + (b || 0); }, 0);
     });
-  } else {
+  } else if (SRC) {
+    // fleet view: the mechanism of each signal source comes from /api/sources.
     var srcMech = {};
-    var srcArr = Array.isArray(SRC) ? SRC : ((SRC && SRC.sources) || []);
+    var srcArr = Array.isArray(SRC) ? SRC : (SRC.sources || []);
     srcArr.forEach(function (s) { srcMech[s.id] = s.mechanism || "other"; });
     (SIG.series || []).forEach(function (se) {
       var m = srcMech[se.id] || "other";
       var n = slice(se.counts || []).reduce(function (a, b) { return a + (b || 0); }, 0);
       mech[m] = (mech[m] || 0) + n;
     });
+  }
+  // /api/sources failed: without it every source's mechanism is unknown, and the
+  // old code silently filed all of them under "Other" — a made-up breakdown of a
+  // real total. Show the total and say the split is missing.
+  if (!ce && !SRC) {
+    $("sig-rows").innerHTML = '<div class="subline">Where these came from is unavailable right now — the lead-source list could not be loaded.</div>';
+    $("sig-take").textContent = "";
+    return;
   }
   var label = { hiring: "Hiring", engagement: "Engagement", followers: "Followers", lookalike: "Lookalikes", news: "News", recontact: "Recontact", other: "Other" };
   var rows = Object.keys(mech).map(function (m) { return [label[m] || m, mech[m]]; })
@@ -2146,7 +2190,7 @@ function renderRank() {
     }).map(function (r) {
       var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
       if (r.pos != null) winPM = true;
-      return { id: r.id, client: r.client, name: r.name || (sc && sc.name) || ("Campaign " + r.id),
+      return { id: r.id, client: r.client, name: campaignName(r.id, r.name),
                sent: r.sent, replied: r.replied,
                pos: r.pos != null ? r.pos : ((sc && sc.positives) || 0),
                mtg: r.mtg != null ? r.mtg : ((sc && sc.meetings) || 0),
@@ -2245,6 +2289,16 @@ function renderRank() {
 // to the same string, so a kill-order and a praise line looked like the same
 // campaign (2026-07-28 testers)
 function shortName(n) { n = String(n || ""); return n.length > 64 ? n.slice(0, 62) + "…" : n; }
+// A campaign's display name from whatever source has it, never a bare id.
+function campaignName(id, preferred) {
+  if (preferred) return preferred;
+  var sc = SCORE && SCORE.campaigns && SCORE.campaigns[id];
+  if (sc && sc.name) return sc.name;
+  var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
+  var hit = (win || []).filter(function (r) { return String(r.id) === String(id) && r.name; })[0];
+  if (hit) return hit.name;
+  return "Campaign " + id + " (name not synced)";
+}
 function renderDying() {
   var rows = decisionRows();
   if (!rows.length) { $("dying").style.display = "none"; return; }
@@ -2253,7 +2307,10 @@ function renderDying() {
     return sb2 - sa;
   });
   var r = rows[0], p = r.payload;
-  $("dying-txt").textContent = "“" + shortName(p.campaign_name || r.scope) + "” — " + (p.bold || "");
+  // r.scope is a raw campaign id. Falling back to it printed "3477409" as if it
+  // were the campaign's name — resolve it against the scorecard / hub first, and
+  // say plainly when the name simply hasn't synced.
+  $("dying-txt").textContent = "“" + shortName(campaignName(r.scope, p.campaign_name)) + "” — " + (p.bold || "");
   $("dying-fix").textContent = p.act || "This campaign stopped working.";
   $("dying-link").href = "campaigns.html#/c/" + encodeURIComponent(r.scope);
   $("dying").style.display = "";
@@ -2310,7 +2367,12 @@ function renderOffer() {
     box.innerHTML = '<div class="subline">Not enough sending behind any one offer' +
       (perClient ? " for " + escq(state.client) : "") +
       (windowed ? " in the " + rangeLabel() : "") + " yet.</div>";
-    $("offer-sub").textContent = "";
+    // was blank, which read as a broken card for every client with no
+    // offer-level rows (Arnic, TouchPoint, Grout, ThunderBird, Altius Reach,
+    // Asteri) — say what is actually true instead.
+    $("offer-sub").textContent = perClient
+      ? "No offer-level data for " + state.client + " yet."
+      : "No offer-level data for the whole book yet.";
     $("offer-take-row").style.display = "none";
     if ($("offer-scope")) $("offer-scope").textContent = scopeTxt;
     return;
@@ -2350,21 +2412,46 @@ function renderOffer() {
 // live per-client × range payload from /api/who-replies (see ensureWho)
 var WHO = null, WHO_KEY = null;
 var WHO_INFLIGHT = null;
-function ensureWho() {
+// The filter key whose fetch FAILED. Without it a rejected /api/who-replies
+// left both cards on this row at a literal "…" forever, indistinguishable from
+// a slow load, with nothing to click (seen on All·7, All·14, Amplifyy·30,
+// KRG·30). Cleared the moment a retry starts.
+var WHO_ERR = null;
+function ensureWho(force) {
   var kk = state.client + "|" + state.range;
-  if (WHO_KEY === kk) { renderWho(); return; }
+  if (WHO_KEY === kk && !force) { renderWho(); return; }
+  if (force) { WHO_KEY = null; WHO_INFLIGHT = null; }
+  WHO_ERR = null;
   renderWho();   // paint a loading/previous state immediately
   if (WHO_INFLIGHT === kk) return;   // boot renders re-enter per payload arrival
   WHO_INFLIGHT = kk;
+  function failed() {
+    if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null;
+    // only report the failure if the user is still looking at that filter —
+    // the out-of-order race guard cuts both ways
+    if (kk === state.client + "|" + state.range) { WHO_ERR = kk; renderWho(); }
+  }
   j("/api/who-replies?client=" + encodeURIComponent(state.client) + "&days=" + state.range)
     .then(function (d) {
       if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null;
       // a slow response for a filter the user already left must not clobber
       // the current view (out-of-order race stranded the cards at Loading…)
-      if (d && !d.error && kk === state.client + "|" + state.range) { WHO = d; WHO_KEY = kk; renderWho(); }
-    })
-    .catch(function () { if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null; });
+      if (kk !== state.client + "|" + state.range) return;
+      if (d && !d.error) { WHO = d; WHO_KEY = kk; renderWho(); }
+      else failed();
+    }, failed);
 }
+// One shared "we could not load this" state + Retry for the two cards fed by
+// /api/who-replies, so neither can sit on a silent ellipsis.
+function whoRetryLink() {
+  return '<a href="#" class="who-retry">Retry</a>';
+}
+document.addEventListener("click", function (e) {
+  var a = e.target && e.target.closest && e.target.closest("a.who-retry");
+  if (!a) return;
+  e.preventDefault();
+  ensureWho(true);
+});
 // ── who's-replying heatmap: pivots p.combos (title × company-size cross-tab)
 // into the winning-combination grid. Returns false when the cross-tab is too
 // sparse to draw, so renderWho falls back to the role-mix bars. ──
@@ -2428,7 +2515,12 @@ function renderWho() {
   // ── left box: who's replying (role mix + company size), per client+range ──
   var named = (p && p.named) || 0;
   var roleRows = (p && p.buckets) || [];
-  if (!p) {
+  var failed = WHO_ERR === state.client + "|" + state.range;
+  if (!p && failed) {
+    $("who-n").textContent = "–";
+    $("who-rows").innerHTML = '<div class="subline">Not available right now. ' + whoRetryLink() + "</div>";
+    $("who-size").textContent = ""; $("who-take-row").style.display = "none";
+  } else if (!p) {
     $("who-n").textContent = "…"; $("who-rows").innerHTML = '<div class="subline">Loading…</div>';
     $("who-size").textContent = ""; $("who-take-row").style.display = "none";
   } else if (named >= 3 && roleRows.length) {
@@ -2461,7 +2553,12 @@ function renderWho() {
   // ── right box: how fast we answer interested replies (benchmark 15 min) ──
   var sp = p && p.speed;
   if ($("wait-scope")) $("wait-scope").textContent = "· " + scope + " · benchmark 15 min";
-  if (!p) {
+  if (!p && failed) {
+    $("wait-big").textContent = "–"; $("wait-big").className = "bignum num";
+    $("wait-sub").innerHTML = "Not available right now. " + whoRetryLink();
+    $("wait-take").textContent = "";
+    renderWaitChart(null);
+  } else if (!p) {
     $("wait-big").textContent = "…"; $("wait-big").className = "bignum num";
     $("wait-sub").textContent = "Loading…"; $("wait-take").textContent = "";
   } else if (sp && sp.n > 0) {
@@ -3046,15 +3143,9 @@ function scheduleRender() {
   _renderT = setTimeout(function () { _renderT = 0; renderAll(); }, 16);
 }
 function boot() {
-  $("ah-databar").classList.remove("show");
-  var criticalLeft = 2;  // HUB + SCORE — the two that gate the "unavailable" note
-  function criticalSettled() {
-    if (--criticalLeft > 0) return;
-    if (!HUB && !SCORE) {
-      $("ah-databar-msg").textContent = "Live data unavailable right now.";
-      $("ah-databar").classList.add("show");
-    }
-  }
+  DEGRADED = {};
+  renderDataBar();
+  function criticalSettled() { markDegraded("Campaign performance", !HUB && !SCORE); }
   j("/api/analytics-hub?days=30").then(function (d) {
     HUB = d && !d.error ? d : null;
     // a restored client that no longer exists must not ghost-filter the page
@@ -3067,7 +3158,7 @@ function boot() {
   }, function () { HUB = null; setTimeout(loadHub, 15000); })
     .then(function () { criticalSettled(); scheduleRender(); });
   j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
-    .then(function () { criticalSettled(); scheduleRender(); });
+    .then(function () { markDegraded("Lead supply", !SCORE); criticalSettled(); scheduleRender(); });
   // Synchronized first paint: the fast core reads below all land sub-second and
   // share the chart (capacity rides in it as the headroom bars). Hold the first
   // DATA paint until they've ALL settled, then paint once — so capacity appears
@@ -3093,7 +3184,8 @@ function boot() {
   jShared("/api/cockpit/insights").then(function (d) { INS = d; coreSettled(); }, function () { coreSettled(); });
   j("/api/campaigns-unified").then(function (d) { UNI = d; coreSettled(); }, function () { coreSettled(); });
   jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; coreSettled(); }, function () { coreSettled(); });
-  j("/api/sources?slim=1").then(function (d) { SRC = d; coreSettled(); }, function () { coreSettled(); });
+  j("/api/sources?slim=1").then(function (d) { SRC = d; markDegraded("Lead sources", false); coreSettled(); },
+                               function () { SRC = null; markDegraded("Lead sources", true); coreSettled(); });
   // jShared so any second hub read of /_audit reuses this boot promise
   // instead of issuing an identical request.
   jShared("/api/deliverability/_audit").then(function (d) { AUDIT = d; coreSettled(); }, function () { coreSettled(); });
