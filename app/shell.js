@@ -1114,7 +1114,12 @@ function setupChartTooltip(wrap) {
     return { pct: Math.round(100 * sTot / capTot), sent: sTot, cap: Math.round(capTot),
              days: nDays, exceeded: exceeded };
   }
-  // Back-compat thin wrapper: the percentage alone.
+  // Deploy-race shim, not a second formula: a browser holding a CACHED copy of
+  // mailboxes-hub.html / deliverability.html from before this change still calls
+  // usedPct (with the now-ignored hideWeekends flag) against the freshly served
+  // shell.js, and losing the symbol would throw and blank the heat map. It
+  // returns usedDetail().pct and nothing else. Delete it once no released page
+  // references it.
   function usedPct(opts) { var d = usedDetail(opts); return d ? d.pct : null; }
 
   window.NavreoCapacity = { usedDetail: usedDetail, usedPct: usedPct, capSeries: capSeries };
