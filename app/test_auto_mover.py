@@ -411,6 +411,21 @@ r = server.auto_move_run()
 check("R11 per-campaign off skips WITHOUT a Smartlead call",
       d0(r)["reason"] == "per_campaign_off" and not W.door_calls
       and not W.smartlead_calls and not W.ledger, (r, W.smartlead_calls))
+# a single-campaign probe still names the per-campaign switch while global is
+# off — reporting only: still started:False, still nothing read or written
+W.reset(); W.ui_prefs["auto_mover_enabled"] = False
+W.prefs["3445988"] = {"campaign_id": "3445988", "mode": "off"}
+server._UI_PREFS_TS = 0.0
+r = server.auto_move_run(campaign_id="3445988")
+check("R11 a probe on an off campaign names per_campaign_off while global is off",
+      r.get("started") is False and r.get("reason") == "per_campaign_off"
+      and r.get("global_off") is True and not W.door_calls and not W.smartlead_calls, r)
+W.reset(); W.ui_prefs["auto_mover_enabled"] = False
+server._UI_PREFS_TS = 0.0
+r = server.auto_move_run(campaign_id="3445988")
+check("R11 a probe on an inherit campaign still reads global_off",
+      r.get("reason") == "global_off" and not W.smartlead_calls, r)
+
 W.reset(); W.ui_prefs["auto_mover_breaker"] = {"tripped": True, "reason": "x"}
 server._UI_PREFS_TS = 0.0
 r = server.auto_move_run()
