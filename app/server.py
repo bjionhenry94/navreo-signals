@@ -19566,15 +19566,25 @@ def _client_win_adopt_persisted() -> bool:
 
 
 def client_windows_get(force: bool = False) -> tuple[dict, int]:
-    """Serve the cache (stale allowed — the page shows asof). On TTL expiry,
-    first adopt the cron-persisted blob if it's newer; the in-process sweep
-    only runs as a fallback when the cron's blob has itself gone stale
-    (> _CLIENT_WIN_STALL_S), or on ?refresh=1. First-ever call returns
-    {building:true} and the page polls."""
+    """Serve the cache (stale allowed — the page shows asof). On TTL expiry AND
+    on ?refresh=1, first adopt the cron-persisted blob if it's newer; the
+    in-process sweep only runs as a fallback when nothing newer is persisted and
+    the cron's blob has itself gone stale (> _CLIENT_WIN_STALL_S). First-ever
+    call returns {building:true} and the page polls."""
     _client_win_restore()
     with _CLIENT_WIN_LOCK:
         ent, ts = _CLIENT_WIN["data"], _CLIENT_WIN["ts"]
     expired = ent is None or (time.time() - ts) >= _CLIENT_WIN_TTL_S
+    # ?refresh=1 asks for FRESHER DATA, not specifically for this process to run
+    # the sweep. Adopting the cron's newer blob gives exactly that, instantly and
+    # for free — whereas running the sweep here is the ~36-min, 760-call build
+    # that OOM-killed the 512MB web box mid-flight (web-instance-oom-crashloop),
+    # and it would throw away a fresher blob already sitting in Supabase. So a
+    # forced refresh tries adoption FIRST and only falls through to the sweep
+    # when nothing newer is persisted.
+    if force and ent is not None and _client_win_adopt_persisted():
+        force = False
+        expired = False
     if expired and not force and ent is not None:
         if _client_win_adopt_persisted():
             expired = False
