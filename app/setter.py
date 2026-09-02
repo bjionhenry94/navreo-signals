@@ -7013,15 +7013,14 @@ CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
 CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius")
 
 # A once-positive→negative FLIP (all this sweep ever alerts on — fresh
-# positives are excluded above and owned by the Make categoriser) is a CHURN
-# signal: for a client with its own dedicated channel it goes to that client's
-# INTERNAL/private channel, never the client-shared one where the client would
-# see a lost lead. Keyed by campaign-name marker; checked BEFORE the generic
-# client-internal fallback so the client's own channel wins. REViVE →
-# #revive-navreo-private (Bjion 2026-09-02; fresh REViVE positives land in the
-# shared #revive-navreo via the categoriser, not here).
+# positives are excluded above and owned by the Make categoriser) routes to the
+# client's own dedicated channel. Keyed by campaign-name marker; checked BEFORE
+# the generic client-internal fallback so the client's own channel wins. REViVE
+# → #revive-navreo, the same client-shared channel as its fresh positives
+# (Bjion 2026-09-02: "post notifs to the shared one" — all REViVE alerts land
+# in one place).
 FLIP_NAME_CHANNELS = {
-    "revive": "C0BP7BNEC0J",   # #revive-navreo-private
+    "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared)
 }
 
 # A FRESH positive on a navreo-hosted client campaign has no path to that
