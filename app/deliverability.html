@@ -734,8 +734,10 @@ var CAP = null;   // /api/fleet-capacity — per-day sending capacity per worksp
 // sent defaults ON now — it renders as faint BARS (its own scale), so it no
 // longer flattens the reply/meeting lines the way the old sent LINE did, and
 // per-day sent is the thing Bjion most wants to see (2026-07-28).
-// hideWeekends: drop Sat/Sun from the day-by-day chart (weekends are ~0 sends
-// and flatten the weekday rhythm).
+// hideWeekends: a CHART-ONLY toggle — drop Sat/Sun from the day-by-day bars and
+// lines (weekends are ~0 sends and flatten the weekday rhythm). It does NOT
+// touch the Capacity-used figure, which is always weekday-only (owner ruling
+// 2026-09-02); see NavreoCapacity in shell.js.
 var state = { client: "All", range: 30, hideWeekends: false,
               on: { sent: true, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
 try {
@@ -997,31 +999,31 @@ function capEstimated() {
   if (state.client === "All" || capWsKey() || clientCapValue() == null) return false;
   return clientCapRealDaily() == null;
 }
-function capacityDailyFull() {   // full 30-day capacity array for the client, or null
-  if (!CAP || !CAP.capacity || !CAP.days) return null;
-  var k = capWsKey();
-  if (k) return alignCap(CAP.capacity[k], CAP.days);          // All + own-workspace: exact per-day
-  // shared navreo-workspace client. Prefer the REAL per-day series the daily cap
-  // crons record (client_caps_daily); fall back per-day to scaling the navreo
-  // series to the client's current cap where a real value isn't recorded yet, so
-  // the line stays continuous and converges to fully-real as history accrues
-  // (Bjion 2026-08-21 capacity audit — replaces the borrowed fleet shape).
-  var real = clientCapRealDaily();
-  var navCap = alignCap(CAP.capacity.navreo, CAP.days), clientCur = clientCapValue();
-  var est = null;
-  if (navCap && clientCur != null) {
-    var navCur = null;
-    for (var i = navCap.length - 1; i >= 0; i--) if (navCap[i] != null) { navCur = navCap[i]; break; }
-    if (navCur) { var ratio = clientCur / navCur; est = navCap.map(function (v) { return v == null ? null : Math.round(v * ratio); }); }
-  }
-  if (!real) return est;
-  return real.map(function (v, i) { return v != null ? v : (est ? est[i] : null); });
+// The client's per-day capacity on the CHART axis. ONE definition, shared with
+// the Fleet heat map: NavreoCapacity.capSeries (shell.js) picks the exact
+// own-workspace/__all series or builds the shared-client series from
+// client_caps_daily + a scaled navreo pool. This page used to carry its own
+// copy of that logic, which then missed the latest-recorded-cap fallback and
+// drifted from the heat map — never fork it again.
+function capacityDailyAligned() {
+  if (!CAP || !CAP.capacity || !CAP.days || !window.NavreoCapacity) return null;
+  return alignCap(NavreoCapacity.capSeries(CAP, state.client, capWsKey()), CAP.days);
+}
+// THE capacity-used figure for the current client + range, with the numbers
+// behind it (see NavreoCapacity.usedDetail): weekday sends / weekday capacity.
+// The chart's "Hide weekends" toggle does NOT change it.
+function capacityUsedDetail() {
+  if (!CAP || !window.NavreoCapacity) return null;
+  var sent = sentDailyFull(), axis = chartAxisDays();
+  if (!sent || !axis.length) return null;
+  return NavreoCapacity.usedDetail({ sent: sent, sentDays: axis, cap: CAP,
+                                     name: state.client, wsKey: capWsKey(), days: state.range });
 }
 // ── Days-of-leads runway inputs (Bjion 2026-08-21) ────────────────────────
 // CURRENT per-day sending capacity for the selected client (latest non-null of
 // its capacity series; the flat client-cap value as a fallback).
 function capacityNow() {
-  var arr = capacityDailyFull();
+  var arr = capacityDailyAligned();
   if (arr) for (var i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i];
   return clientCapValue();
 }
@@ -1317,7 +1319,7 @@ function renderTrend() {
   var hasRate = lineVis.some(function (k) { return RAXIS[k]; });
   // Capacity ceiling (P1 headroom bars): per-day sending capacity for the current
   // scope, or null when it isn't separable (shared-workspace clients / no data).
-  var capFull = (state.on.sent && sentBars) ? capacityDailyFull() : null;
+  var capFull = (state.on.sent && sentBars) ? capacityDailyAligned() : null;
   var capBars = capFull ? pick(slice(capFull)) : null;
   // ── Best-guess fill for missing / near-zero days ──────────────────────────
   // Weekends (and other gap days) send ~0, so their bars vanish and their rate
@@ -1467,25 +1469,34 @@ function renderTrend() {
                      : "Every line is a count per day") +
     (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
   if (capMode) {
-    var capTot = 0, sBarsTot = 0;
-    capBars.forEach(function (v, ii) { if (v) { capTot += v; sBarsTot += (sentBars[ii] || 0); } });
-    if (capTot > 0) {
-      sub += " You used " + Math.round(sBarsTot / capTot * 100) + "% of sending capacity here — " +
-        fmtN(sBarsTot) + " of " + fmtN(capTot) + " possible. The left axis reads the period total; reply / interested / meeting lines keep their own scale.";
+    // The BARS above are the chart (they follow the Hide-weekends toggle and the
+    // chart's own gap-fill). The NUMBER below is not derived from them: it comes
+    // from the one shared helper and is always weekday-only, so the KPI pill, the
+    // footnote and the Fleet heat map can never disagree. See NavreoCapacity.
+    var cu = capacityUsedDetail();
+    if (cu && cu.pct != null) {
+      var overNote = cu.exceeded > 0
+        ? " On " + cu.exceeded + " day" + (cu.exceeded === 1 ? "" : "s") + " we sent more than the capacity on record for that day, so those days count at what they actually sent."
+        : "";
+      sub += " You used " + cu.pct + "% of sending capacity here — " +
+        fmtN(cu.sent) + " of " + fmtN(cu.cap) + " possible on the " + cu.days +
+        " weekday" + (cu.days === 1 ? "" : "s") + " in this window (weekends never send, so they are left out)." + overNote +
+        " The left axis reads the period total; reply / interested / meeting lines keep their own scale.";
       if (capEstimated()) sub += " " + escq(state.client) + "'s capacity is the cap of the mailboxes on its campaigns, tracking the fleet's daily warm-up.";
       // Capacity-used pill in the legend chip row (renderLegend already built it).
+      var capTip = fmtN(cu.sent) + " of " + fmtN(cu.cap) + " weekday capacity over the " + rangeLabel() + " (weekdays only)" +
+        (cu.exceeded > 0 ? " · cap snapshot below sends on " + cu.exceeded + " day(s)" : "");
       var lc = $("ah-lchips");
       if (lc) lc.insertAdjacentHTML("beforeend",
-        '<span class="lchip cap-pill" style="cursor:default" title="' +
-        fmtN(sBarsTot) + " of " + fmtN(capTot) + " capacity over the " + rangeLabel() + '">' +
+        '<span class="lchip cap-pill" style="cursor:default" title="' + escq(capTip) + '">' +
         '<i class="sw" style="background:linear-gradient(to top,' + COL.sent + ' 0 55%,var(--line-2) 55% 100%)"></i>' +
-        "Capacity used <b class=\"num\">" + Math.round(sBarsTot / capTot * 100) + "%</b></span>");
+        "Capacity used <b class=\"num\">" + cu.pct + "%</b></span>");
     }
   }
   if (state.on.sent && sentFull && sentDailyEstimated()) {
     sub += " " + escq(state.client) + " shares the Navreo fleet, so its daily bars are an estimated split of the fleet's daily sending (its window total is exact).";
   }
-  if (state.hideWeekends) sub += " Weekends hidden.";
+  if (state.hideWeekends) sub += " Weekends hidden from the chart.";
   sub += priorComparison();
   // close the ledger: the all-clients total includes campaigns archived since
   // they sent, which belong to no chip (9,081 unattributed sends confused

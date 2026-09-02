@@ -970,15 +970,28 @@ function setupChartTooltip(wrap) {
    NavreoCapacity — the ONE "Capacity used" number, shared by the
    Analytics tab (deliverability.html) and the Fleet heat map
    (mailboxes-hub.html). Both read /api/fleet-capacity + /api/client-windows.
-   This is a FAITHFUL port of the Analytics chart pipeline so the heat map
-   reproduces the EXACT number the Analytics tab shows (user ruling
-   2026-08-23: "match Analytics"). The pipeline is not a plain Σsent÷Σcap —
-   it mirrors renderTrend(): align cap onto the sent-day axis, slice the
-   window, optionally drop weekends (Analytics' DEFAULT keeps them —
-   state.hideWeekends=false), gap-fill low-send and zero-cap days (_fill),
-   then capUsed = Σ sentBars ÷ Σ capBars over days where cap>0.
+
+   THE FORMULA (owner ruling 2026-09-02, superseding capacity-parity-align):
+   capacity used = WEEKDAY sends ÷ WEEKDAY capacity over the window.
+     • Weekends are ALWAYS dropped. Navreo does not send Sat/Sun, so a weekend
+       in the denominator is capacity nobody ever intended to use — it made a
+       fully-booked fleet read ~71% on a 7-day window. The old `hideWeekends`
+       option is GONE on purpose: no caller may re-enable weekends, and the
+       Analytics "Hide weekends" toggle now only styles the CHART, never this
+       number.
+     • CAP is configuration, so a missing/zero cap day is gap-filled from the
+       neighbouring RECORDED caps (the cron simply didn't write that day).
+     • SENT is measurement, so it is NEVER interpolated or fabricated. A dead
+       weekday (pause, outage, 429) counts as the zero it really was — the old
+       pipeline best-guessed those days up to the window median and quietly
+       erased them from utilisation.
+     • A day that sent MORE than its recorded cap counts its own sends as the
+       denominator for that day, so the percentage can never exceed 100 and the
+       overage is reported separately as `exceeded` instead of being hidden.
+       (Own-workspace pools are high-water-snapped once a day at 04:30, so a
+       recorded cap legitimately sits below that day's sends until the next
+       snapshot — see snapshot_all_capacity in server.py.)
    Keep this the single definition so the two surfaces can never drift.
-   See capacity-parity-align.
    =================================================================== */
 (function () {
   function ci(map, name) {                 // case-insensitive object lookup
@@ -988,17 +1001,16 @@ function setupChartTooltip(wrap) {
     for (var k in map) if (k.toLowerCase() === lc) return map[k];
     return undefined;
   }
-  // Per-day capacity series (on cap.days axis), mirroring capacityDailyFull():
-  //  • own-workspace clients (asteri/krg/grout) → cap.capacity[wsKey] exact per-day
-  //  • shared clients → real cap.client_caps_daily[name], else the navreo per-day
-  //    series scaled to the client's current cap (cap.client_caps[name]).
+  // Per-day capacity series for one client, on the cap.days axis:
+  //  • own-workspace clients (asteri/krg/grout) and the fleet sum (__all) →
+  //    cap.capacity[wsKey], exact per-day
+  //  • shared navreo-workspace clients → the real per-day series the cap crons
+  //    record (client_caps_daily), with any un-recorded day filled by the
+  //    navreo pool series scaled to the client's current cap.
   function capSeries(cap, name, wsKey) {
     if (!cap || !cap.capacity) return null;
     var own = wsKey && cap.capacity[wsKey];
     if (Array.isArray(own)) return own;                    // own-workspace: exact per-day
-    // shared client: real per-day series (client_caps_daily), with any NULL day
-    // filled by the navreo series scaled to the client's current cap — this
-    // merge is capacityDailyFull()'s exact behaviour (real.map(v ?? est[i])).
     var realRaw = ci(cap.client_caps_daily, name);
     var real = (Array.isArray(realRaw) && realRaw.some(function (v) { return v != null; })) ? realRaw : null;
     var nav = cap.capacity.navreo, cur = ci(cap.client_caps, name), est = null;
@@ -1027,21 +1039,18 @@ function setupChartTooltip(wrap) {
     var m = {}; for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = vals[i];
     return axis.map(function (d) { return m[d] == null ? null : m[d]; });
   }
-  function median(a) {
-    var v = a.filter(function (x) { return x != null; }).slice().sort(function (x, y) { return x - y; });
-    if (!v.length) return 0; var m = v.length >> 1;
-    return v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
-  }
-  // Analytics' _fill: interpolate over "trivial" gap days so the bars stay
-  // continuous. Returns filled values (same length). triv(v,i) marks a gap.
-  function fill(arr, triv) {
+  // Fill the CAP series' holes (null / 0) by interpolating between the nearest
+  // RECORDED caps either side — capacity is configuration the cron writes daily,
+  // so a hole means "not written", not "no capacity". Never used on sends.
+  function fillCap(arr) {
     var out = arr.slice(), i, j;
-    if (!arr.some(function (v, k) { return !triv(v, k); })) return out;
+    function hole(v) { return v == null || v === 0; }
+    if (!arr.some(function (v) { return !hole(v); })) return out;   // nothing recorded at all
     for (i = 0; i < arr.length; i++) {
-      if (!triv(arr[i], i)) continue;
+      if (!hole(arr[i])) continue;
       var lo = null, hi = null;
-      for (j = i - 1; j >= 0; j--) if (!triv(arr[j], j)) { lo = j; break; }
-      for (j = i + 1; j < arr.length; j++) if (!triv(arr[j], j)) { hi = j; break; }
+      for (j = i - 1; j >= 0; j--) if (!hole(arr[j])) { lo = j; break; }
+      for (j = i + 1; j < arr.length; j++) if (!hole(arr[j])) { hi = j; break; }
       out[i] = (lo != null && hi != null) ? arr[lo] + (arr[hi] - arr[lo]) * (i - lo) / (hi - lo)
              : lo != null ? arr[lo] : (hi != null ? arr[hi] : arr[i]);
     }
@@ -1049,35 +1058,46 @@ function setupChartTooltip(wrap) {
   }
   function isWeekend(d) { var g = new Date(d + "T12:00:00Z").getUTCDay(); return g === 0 || g === 6; }
 
-  // THE number the Analytics tab shows, reproduced. Returns 0..100 or null.
+  // THE capacity-used figure, with the numbers behind it so callers can label
+  // it honestly instead of re-deriving anything.
   // opts = {
   //   sent:[per-day], sentDays:[dates],   // from /api/client-windows series[client]
   //   cap:{payload}, name, wsKey,          // from /api/fleet-capacity
-  //   days,                                // window length (7/14/30)
-  //   hideWeekends                         // default true — Analytics' default view
+  //   days                                 // window length (1/7/14/30)
   // }
-  function usedPct(opts) {
+  // returns { pct, sent, cap, days, exceeded } or null when nothing is countable:
+  //   pct       0..100, or null when no counted day has a capacity
+  //   sent      weekday sends counted   (the "N" in "N of M")
+  //   cap       weekday capacity counted (the "M"), raised to sent on over-cap days
+  //   days      how many weekdays were counted
+  //   exceeded  how many of those days sent more than their recorded cap
+  function usedDetail(opts) {
     if (!opts || !opts.sent || !opts.sentDays || !opts.cap) return null;
     var axis = opts.sentDays;
-    var cs = capSeries(opts.cap, opts.name, opts.wsKey);
-    var capOnAxis = alignTo(cs, opts.cap.days, axis);
+    var capOnAxis = alignTo(capSeries(opts.cap, opts.name, opts.wsKey), opts.cap.days, axis);
     if (!capOnAxis) return null;
     var range = opts.days || axis.length;
     var start = Math.max(0, axis.length - range);
     var wDays = axis.slice(start), wSent = opts.sent.slice(start), wCap = capOnAxis.slice(start);
-    var hideWk = opts.hideWeekends !== false;              // default: weekends hidden
     var keep = [];
-    wDays.forEach(function (d, i) { if (!(hideWk && isWeekend(d))) keep.push(i); });
-    var sentBars = keep.map(function (i) { return wSent[i]; });
-    var capBars = keep.map(function (i) { return wCap[i]; });
-    var med = median(sentBars);
-    sentBars = fill(sentBars, function (v) { return v == null || v < Math.max(5, 0.15 * med); })
-      .map(function (v) { return Math.round(v || 0); });
-    capBars = fill(capBars, function (v) { return v == null || v === 0; });
-    var capTot = 0, sTot = 0;
-    capBars.forEach(function (v, i) { if (v) { capTot += v; sTot += (sentBars[i] || 0); } });
-    if (capTot <= 0) return null;
-    return Math.round(100 * sTot / capTot);
+    wDays.forEach(function (d, i) { if (!isWeekend(d)) keep.push(i); });   // weekdays only, always
+    var sentBars = keep.map(function (i) { return Math.round(wSent[i] || 0); });
+    var capBars = fillCap(keep.map(function (i) { return wCap[i]; }));
+    var capTot = 0, sTot = 0, nDays = 0, exceeded = 0;
+    capBars.forEach(function (c, i) {
+      if (!c) return;                       // no capacity ever recorded near this day
+      var s = sentBars[i] || 0;
+      nDays++;
+      sTot += s;
+      if (s > c) { capTot += s; exceeded++; }   // never let the ratio exceed 1
+      else capTot += c;
+    });
+    if (capTot <= 0) return { pct: null, sent: sTot, cap: 0, days: nDays, exceeded: exceeded };
+    return { pct: Math.round(100 * sTot / capTot), sent: sTot, cap: Math.round(capTot),
+             days: nDays, exceeded: exceeded };
   }
-  window.NavreoCapacity = { usedPct: usedPct, capSeries: capSeries };
+  // Back-compat thin wrapper: the percentage alone.
+  function usedPct(opts) { var d = usedDetail(opts); return d ? d.pct : null; }
+
+  window.NavreoCapacity = { usedDetail: usedDetail, usedPct: usedPct, capSeries: capSeries };
 })();

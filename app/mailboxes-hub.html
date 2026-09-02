@@ -295,6 +295,26 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     });
     return hasClient ? out : null;         // __all alone isn't a fleet worth drawing
   }
+  // Capacity-used detail for one heat-map row, via the ONE shared helper.
+  // 24H truncates the series to END at the snapshot day and reads that single
+  // day, so utilisation reflects the same day reply/bounce do — not today's
+  // still-empty bucket. 7/14/30 read the last `win` days, weekdays only.
+  // wsKey "__all" is the fleet sum; asteri/krg/grout own their pool; every
+  // other client shares the navreo pool and is resolved by name.
+  function capWsKeyFor(name) {
+    var lc = String(name).toLowerCase();
+    if (name === "__all") return "__all";
+    return (lc === "asteri" || lc === "krg" || lc === "grout") ? lc : null;
+  }
+  function usedDetailFor(name, snapIdx, winN) {
+    if (!window.NavreoCapacity || !S.cap || !S.cw || !S.cw.series) return null;
+    var ser = S.cw.series[name];
+    var sent = ser && ser.sent, days = S.cw.days, n = winN;
+    if (!Array.isArray(sent) || !sent.length || !Array.isArray(days)) return null;
+    if (snapIdx >= 0) { sent = sent.slice(0, snapIdx + 1); days = days.slice(0, snapIdx + 1); n = 1; }
+    return NavreoCapacity.usedDetail({ sent: sent, sentDays: days, cap: S.cap,
+                                       name: name, wsKey: capWsKeyFor(name), days: n });
+  }
   function clientRows() {
     var cw = S.cw, win = String(S.win);
     var w = winData(win);
@@ -314,26 +334,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var pw = perClientWarmPct(name, labels);          // % of the client's mailboxes actively warming (inwarmup only)
       var wcap = warmCapFor(name, labels);              // estimated sends/day IN WARM-UP (being repaired), by provider
       var capDay = capFor(name, labels);                 // current per-day cap — ONLY for the "N/day cap" label text
-      // Capacity-used % via the ONE shared helper (NavreoCapacity in shell.js),
-      // a faithful port of the Analytics chart pipeline (align → window →
-      // gap-fill → Σsent÷Σcap). Reproduces the EXACT number the Analytics tab
-      // shows, per the 2026-08-23 "match Analytics" ruling. hideWeekends:false
-      // mirrors the Analytics DEFAULT (state.hideWeekends=false — weekends kept);
-      // verified byte-exact e.g. Asteri 21,677/41,884 = 52%. See capacity-parity-align.
-      var lc = String(name).toLowerCase();
-      var wsKey = (lc === "asteri" || lc === "krg" || lc === "grout") ? lc : null;
-      var sSer = (S.cw && S.cw.series && S.cw.series[name]) || null;
-      // For 24H, truncate the series to END at the snapshot day, then take that
-      // one day — so utilisation reflects the snapshot, not the current partial.
-      var capSent = sSer && sSer.sent, capDays = S.cw && S.cw.days, capN = winN;
-      if (snapIdx >= 0 && Array.isArray(capSent) && Array.isArray(capDays)) {
-        capSent = capSent.slice(0, snapIdx + 1); capDays = capDays.slice(0, snapIdx + 1); capN = 1;
-      }
-      var capUsed = (window.NavreoCapacity && capSent && capSent.length && capDays && S.cap)
-        ? NavreoCapacity.usedPct({
-            sent: capSent, sentDays: capDays, cap: S.cap,
-            name: name, wsKey: wsKey, days: capN, hideWeekends: false })
-        : null;
+      // Capacity-used via the ONE shared helper (NavreoCapacity in shell.js):
+      // weekday sends ÷ weekday capacity, the identical call the Analytics tab
+      // makes, so the two surfaces can never disagree. See its header comment
+      // for the 2026-09-02 weekdays-only ruling.
+      var cu = usedDetailFor(name, snapIdx, winN);
       return {
         name: prettyClient(name, labels), dom: null, inbox: pw ? pw.total : null,
         reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
@@ -354,7 +359,13 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         // range-averaged available made warm + available ≠ total on one row.
         totalCap: (wcap == null && capDay == null) ? null
           : Math.round((wcap ? wcap.capacityPerDay : 0) + (capDay || 0)),
-        cap: capUsed, capDay: capDay, bl: null
+        // cap = the % shown in "Actively sending"; sentW/capW/capDays/capExceeded
+        // are the numbers BEHIND it, so the sub-label under the % describes the
+        // same days the % was measured over (WI-2) and the All row can re-add
+        // them instead of averaging percentages.
+        cap: cu ? cu.pct : null, sentW: cu ? cu.sent : null, capW: cu ? cu.cap : null,
+        capDays: cu ? cu.days : null, capExceeded: cu ? cu.exceeded : 0,
+        capDay: capDay, bl: null
       };
     });
     rows.sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
@@ -492,21 +503,33 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // known — the SAME total-sending-capacity definition as the per-client cells
     // (warm ÷ capacity-alone produced 254% nonsense), paired so the fleet %
     // stays ≤100 by construction.
-    // Capacity used % = the send-weighted mean of each client's own used-% (its
-    // exact per-client figure comes from the gap-filled capacity pipeline, which
-    // can't be re-derived from a single cap/day number here).
-    var sumWarm = 0, capForWarm = 0, wCapNum = 0, wCapDen = 0, sumTotal = 0, totalKnown = false;
+    var sumWarm = 0, capForWarm = 0, sumTotal = 0, totalKnown = false;
+    var sSent = 0, sCap = 0, sDays = 0, sExc = 0, anyRow = false;
     rows.forEach(function (r) {
       if (r.warmCap != null && r.capDay != null) { sumWarm += r.warmCap; capForWarm += r.capDay; }
-      if (r.cap != null && r.sent) { wCapNum += r.cap * r.sent; wCapDen += r.sent; }
+      if (r.sentW != null && r.capW) { sSent += r.sentW; sCap += r.capW; sDays = Math.max(sDays, r.capDays || 0); sExc += (r.capExceeded || 0); anyRow = true; }
       if (r.totalCap != null) { sumTotal += r.totalCap; totalKnown = true; }
     });
+    // Capacity used % — Σsent ÷ Σcap, NEVER a mean of percentages (a 200-send
+    // client at 90% must not weigh the same as a 300k client at 60%). Read the
+    // fleet's OWN __all series through the same helper the client rows use, so
+    // this row matches the Analytics All-clients KPI to the digit and stays in
+    // the same scope as the reply/bounce cells beside it (which already read
+    // __all, and so include campaigns that belong to no client chip). Summing
+    // the client rows is the fallback for a blob with no __all series.
+    var allCu = usedDetailFor("__all", win === "1" ? snapDayIndex((S.cw && S.cw.days) || []) : -1, Number(win) || 30);
+    var capPct = (allCu && allCu.pct != null) ? allCu.pct
+               : (anyRow && sCap > 0 ? Math.round(100 * sSent / sCap) : null);
     return {
       isAll: true, name: "All clients", dom: null, inbox: null,
       reply: reply, bounce: bounce,
       warmPct: (sumWarm + capForWarm) > 0 ? Math.round(100 * sumWarm / (sumWarm + capForWarm)) : null,
       warmCap: capForWarm > 0 ? sumWarm : null, warmCapKnown: true,
-      cap: wCapDen > 0 ? Math.round(wCapNum / wCapDen) : null,
+      cap: capPct,
+      sentW: allCu ? allCu.sent : (anyRow ? sSent : null),
+      capW: allCu ? allCu.cap : (anyRow ? sCap : null),
+      capDays: allCu ? allCu.days : (anyRow ? sDays : null),
+      capExceeded: allCu ? allCu.exceeded : sExc,
       capDay: null, totalCap: totalKnown ? sumTotal : null, bl: null, nClients: rows.length
     };
   }
@@ -1058,7 +1081,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // aria-live so a screen reader hears the new scope the instant a filter changes.
   function renderHeatScope() {
     var s = el("hub-heat-scope"); if (!s) return;
-    var txt = "last " + S.win + " days";
+    // 7/14/30 say "weekdays" because Actively-sending measures weekday sends
+    // against weekday capacity (weekends never send) — see NavreoCapacity.
+    var txt = "last " + S.win + " days · weekdays";
     if (S.win === 1) {
       txt = "last 24 hours";
       var days = S.cw && S.cw.days;
