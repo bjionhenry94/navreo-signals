@@ -18755,19 +18755,47 @@ def is_demo_client(label=None, workspace=None) -> bool:
 # deploy restores instantly). Currently one pref: whether DEMO clients show in day-to-day
 # surfaces. Default False → demo clients hidden everywhere until Bjion flips the Settings
 # "Show demo clients" switch.
-_UI_PREFS = {"show_demo_clients": False}
+#
+# Keyed patch (auto-mover Step 3): the blob now carries more than the demo
+# switch. Every key has a declared coercer + default in _UI_PREFS_KEYS, so a
+# read miss, a legacy blob written before the key existed, and a partial POST
+# all land on the same shape. show_demo_clients behaviour is unchanged.
+_UI_PREFS_KEYS = {
+    # key                 -> (coercer, default)
+    "show_demo_clients":   (bool, False),
+    # Variant Auto-Mover global switch. Default False — the mover is inert
+    # until someone flips this on Settings → General (arming is Step 5).
+    "auto_mover_enabled":  (bool, False),
+    # Circuit breaker (R1): {"tripped": bool, "reason": str, "at": iso}. Set by
+    # the mover when a counter drops or saves fail; clears only by hand.
+    "auto_mover_breaker":  (dict, {}),
+}
+_UI_PREFS = {k: (d.copy() if isinstance(d, dict) else d)
+             for k, (_c, d) in _UI_PREFS_KEYS.items()}
 _UI_PREFS_TS = 0.0
 _UI_PREFS_TTL = 30.0
+
+
+def _ui_prefs_coerce(key: str, val) -> object:
+    """One declared value for one declared key — never a raw blob passthrough."""
+    coercer, default = _UI_PREFS_KEYS[key]
+    if val is None:
+        return default.copy() if isinstance(default, dict) else default
+    if coercer is dict:
+        return dict(val) if isinstance(val, dict) else (default.copy() if isinstance(default, dict) else default)
+    return coercer(val)
 
 
 def _ui_prefs(force: bool = False) -> dict:
     global _UI_PREFS_TS
     if not force and (time.time() - _UI_PREFS_TS) < _UI_PREFS_TTL:
-        return _UI_PREFS
+        return dict(_UI_PREFS)
     try:
         rows = sb("GET", "deliverability_audit_cache?id=eq.ui_prefs&select=blob") or []
         if rows and isinstance(rows[0].get("blob"), dict):
-            _UI_PREFS["show_demo_clients"] = bool(rows[0]["blob"].get("show_demo_clients"))
+            blob = rows[0]["blob"]
+            for k in _UI_PREFS_KEYS:
+                _UI_PREFS[k] = _ui_prefs_coerce(k, blob.get(k))
     except Exception:  # noqa: BLE001 — a read miss just keeps the default
         pass
     _UI_PREFS_TS = time.time()
@@ -18780,15 +18808,129 @@ def show_demo_clients() -> bool:
     return bool(_ui_prefs().get("show_demo_clients"))
 
 
-def _ui_prefs_set(show_demo: bool) -> dict:
+def _ui_prefs_set(patch) -> dict:
+    """Patch one or more ui_prefs keys and return the FULL new prefs blob.
+
+    Accepts either a partial dict (the keyed patch — unknown keys ignored) or,
+    for the original single-switch callers, a bare bool meaning show_demo_clients.
+    Untouched keys keep their current stored value: the blob is always written
+    whole, so a partial POST can never drop a sibling key.
+    """
     global _UI_PREFS_TS
-    blob = {"show_demo_clients": bool(show_demo)}
+    if not isinstance(patch, dict):
+        patch = {"show_demo_clients": bool(patch)}
+    cur = _ui_prefs(force=True)  # read-modify-write: never clobber a sibling key
+    blob = {k: cur.get(k, d.copy() if isinstance(d, dict) else d)
+            for k, (_c, d) in _UI_PREFS_KEYS.items()}
+    for k in _UI_PREFS_KEYS:
+        if k in patch:
+            blob[k] = _ui_prefs_coerce(k, patch[k])
     sb("POST", "deliverability_audit_cache?on_conflict=id",
        {"id": "ui_prefs", "blob": blob, "ts": _dtmod.datetime.utcnow().isoformat() + "Z"},
        prefer="resolution=merge-duplicates,return=minimal")
     _UI_PREFS.update(blob)
     _UI_PREFS_TS = 0.0
-    return blob
+    return dict(blob)
+
+
+def auto_mover_enabled(force: bool = False) -> bool:
+    """The global kill switch. The mover reads it with force=True at run start,
+    before every enqueue, and inside the queued job before the save (R11)."""
+    return bool(_ui_prefs(force=force).get("auto_mover_enabled"))
+
+
+# ── Variant Auto-Mover — per-campaign switch + move ledger ───────────────────
+# The per-campaign switch is three-state: `inherit` (follow the global switch —
+# the default, and no row is stored), `on`, `off`. Per-campaign `off` beats
+# global `on`; per-campaign `on` NEVER beats global `off` (R11).
+_AUTO_MOVER_MODES = ("inherit", "on", "off")
+
+
+def auto_mover_campaign_mode(cid: str) -> str:
+    from urllib.parse import quote
+    try:
+        rows = sb("GET", "auto_mover_campaign_prefs?campaign_id=eq."
+                  + quote(str(cid), safe="") + "&select=mode&limit=1") or []
+        m = (rows[0].get("mode") if rows else "") or "inherit"
+        return m if m in _AUTO_MOVER_MODES else "inherit"
+    except Exception:  # noqa: BLE001 — a read miss inherits, it never arms
+        return "inherit"
+
+
+def auto_mover_campaign_pref(cid: str) -> dict:
+    """{mode, set_by, set_at} for one campaign — absence reads as inherit."""
+    from urllib.parse import quote
+    try:
+        rows = sb("GET", "auto_mover_campaign_prefs?campaign_id=eq."
+                  + quote(str(cid), safe="") + "&select=mode,set_by,set_at&limit=1") or []
+    except Exception:  # noqa: BLE001
+        rows = []
+    r = rows[0] if rows else {}
+    mode = (r.get("mode") or "inherit")
+    return {"mode": mode if mode in _AUTO_MOVER_MODES else "inherit",
+            "set_by": r.get("set_by"), "set_at": r.get("set_at")}
+
+
+def auto_mover_last_move(cid: str) -> dict:
+    """The latest ledger row for a campaign, or {} — powers "last auto-move: …"."""
+    from urllib.parse import quote
+    try:
+        rows = sb("GET", "auto_mover_moves?campaign_id=eq." + quote(str(cid), safe="")
+                  + "&select=id,step,action,winner,mode,pcts_before,pcts_after,"
+                    "actor,outcome,issue_kind,created_at"
+                    "&order=created_at.desc&limit=1") or []
+    except Exception:  # noqa: BLE001
+        rows = []
+    return rows[0] if rows else {}
+
+
+def api_campaign_auto_move_get(cid: str) -> tuple:
+    """GET /api/campaigns/{cid}/auto-move — the switch + the last move."""
+    cid = str(cid or "").strip()
+    if not cid:
+        return 400, {"ok": False, "message": "campaign id required"}
+    pref = auto_mover_campaign_pref(cid)
+    return 200, {"ok": True, "campaign_id": cid, **pref,
+                 "global_enabled": auto_mover_enabled(),
+                 "last_auto_move": auto_mover_last_move(cid) or None}
+
+
+def api_campaign_auto_move_set(cid: str, payload: dict, actor: str = "") -> tuple:
+    """POST /api/campaigns/{cid}/auto-move {mode: inherit|on|off}."""
+    cid = str(cid or "").strip()
+    if not cid:
+        return 400, {"ok": False, "message": "campaign id required"}
+    mode = str((payload or {}).get("mode") or "").strip().lower()
+    if mode not in _AUTO_MOVER_MODES:
+        return 400, {"ok": False,
+                     "message": "mode must be one of: " + ", ".join(_AUTO_MOVER_MODES)}
+    row = {"campaign_id": cid, "mode": mode, "set_by": actor or "app",
+           "set_at": _dtmod.datetime.utcnow().isoformat() + "Z"}
+    sb("POST", "auto_mover_campaign_prefs?on_conflict=campaign_id", row,
+       prefer="resolution=merge-duplicates,return=minimal")
+    return 200, {"ok": True, "campaign_id": cid, "mode": mode,
+                 "set_by": row["set_by"], "set_at": row["set_at"],
+                 "global_enabled": auto_mover_enabled(),
+                 "last_auto_move": auto_mover_last_move(cid) or None}
+
+
+def api_auto_mover_moves(limit: int = 50, issues_only: bool = False) -> dict:
+    """GET /api/auto-mover/moves?limit=50[&issues=1] — the General page's feed."""
+    try:
+        limit = max(1, min(200, int(limit or 50)))
+    except (TypeError, ValueError):
+        limit = 50
+    sel = ("id,campaign_id,step,action,winner,leaders,mode,via,laggards,dropped,"
+           "pcts_before,pcts_after,notification_id,actor,outcome,issue_kind,"
+           "notion_task_url,created_at")
+    qs = "auto_mover_moves?select=" + sel + "&order=created_at.desc&limit=" + str(limit)
+    if issues_only:
+        qs += "&or=(outcome.eq.issue,issue_kind.not.is.null)"
+    try:
+        rows = sb("GET", qs) or []
+    except Exception as e:  # noqa: BLE001 — an empty feed beats a 500 on the page
+        return {"ok": True, "moves": [], "count": 0, "warning": str(e)[:200]}
+    return {"ok": True, "moves": rows, "count": len(rows)}
 
 
 # ── Optimisation Queue (morning task routine) — config + daily run log ───────
@@ -23923,6 +24065,18 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(_COCKPIT_MESSAGING_SWR.get((q.get("id") or [""])[0]))
+        if path == "/api/auto-mover/moves":
+            # Settings → General: the last N moves, or only the flagged ones.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(api_auto_mover_moves(
+                (q.get("limit") or ["50"])[0],
+                (q.get("issues") or [""])[0] in ("1", "true", "yes")))
+        if path.startswith("/api/campaigns/") and path.endswith("/auto-move"):
+            # per-campaign auto-mover switch: inherit | on | off + last move
+            cid = path[len("/api/campaigns/"):-len("/auto-move")]
+            status, body = api_campaign_auto_move_get(cid)
+            return self._json(body, status)
         if path.startswith("/api/campaigns/") and "/variant-action-status/" in path:
             # background variant-action job poll: /api/campaigns/{cid}/variant-action-status/{job}
             job_id = path.rsplit("/variant-action-status/", 1)[1]
@@ -24592,12 +24746,17 @@ class Handler(SimpleHTTPRequestHandler):
                             else api_workspaces_add(p))
             return self._json(body, status)
         if path == "/api/settings/ui":
-            # Settings "Show demo clients" toggle (KV-persisted). Session-gated above.
+            # Settings UI prefs — a PARTIAL keyed patch (Settings → Clients
+            # "Show demo clients", Settings → General auto-mover switch and
+            # breaker). Only the keys present in the body change; the rest keep
+            # their stored value. Session-gated above.
             try:
                 p = json.loads(self._post_body.decode() or "{}")
             except ValueError:
                 return self._json({"ok": False, "message": "invalid JSON body"}, 400)
-            blob = _ui_prefs_set(bool(p.get("show_demo_clients")))
+            if not isinstance(p, dict):
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            blob = _ui_prefs_set(p)
             log_activity("/api/settings/ui", blob, action="set", entity="settings")
             return self._json({"ok": True, **blob})
         if path == "/api/optiqueue/config":
@@ -25005,6 +25164,22 @@ class Handler(SimpleHTTPRequestHandler):
         # and route through save_sequence_ids_intact (the one sequences door).
         if path.startswith("/api/campaigns/"):
             _va_rest = path[len("/api/campaigns/"):]
+            if _va_rest.endswith("/auto-move") and len(_va_rest) > len("/auto-move"):
+                # per-campaign auto-mover switch write. No Smartlead write and
+                # no traffic move — it only records who chose inherit/on/off.
+                cid = _va_rest[:-len("/auto-move")]
+                try:
+                    payload = json.loads(self._post_body.decode() or "{}")
+                except ValueError:
+                    return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+                if not isinstance(payload, dict):
+                    return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+                status, body = api_campaign_auto_move_set(
+                    cid, payload, self._authed_email() or "app")
+                if status == 200:
+                    log_activity(path, {"mode": body.get("mode")},
+                                 action="auto-move", entity="campaign", entity_id=cid)
+                return self._json(body, status)
             for _va_suffix, _va_fn in (("/variant-action", api_campaign_variant_action_async),
                                         ("/draft-challenger", api_campaign_draft_challenger),
                                         ("/add-variant", api_campaign_add_variant)):
