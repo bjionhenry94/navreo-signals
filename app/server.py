@@ -19344,14 +19344,19 @@ def _am_moves_today() -> int:
                          f"&created_at=gte.{day}T00:00:00&select=id&limit=200") or []
     except Exception:  # noqa: BLE001 — an unreadable ledger is treated as full
         return _AM_MAX_MOVES_DAY
+    if not isinstance(rows, list):   # PostgREST error dict — unreadable, so full
+        return _AM_MAX_MOVES_DAY
     return len(rows)
 
 
 def _am_recent_ledger(cid: str, step: int, hours: float) -> dict:
     """The newest ledger row for this campaign+step inside `hours`, or {}."""
     from urllib.parse import quote
-    since = (_dtmod.datetime.now(_dtmod.timezone.utc)
-             - _dtmod.timedelta(hours=hours)).isoformat()
+    # The offset in an aware isoformat() is "+00:00"; a bare "+" in a query
+    # string decodes to a SPACE, so PostgREST hands Postgres "…T15:06:09 00:00"
+    # and it answers 22007 "invalid input syntax for timestamp". quote() it.
+    since = quote((_dtmod.datetime.now(_dtmod.timezone.utc)
+                   - _dtmod.timedelta(hours=hours)).isoformat(), safe="")
     try:
         rows = sb("GET", "auto_mover_moves?campaign_id=eq." + quote(str(cid), safe="")
                   + f"&step=eq.{int(step)}&outcome=eq.moved&created_at=gte.{since}"
@@ -19359,7 +19364,10 @@ def _am_recent_ledger(cid: str, step: int, hours: float) -> dict:
                     "&order=created_at.desc&limit=1") or []
     except Exception:  # noqa: BLE001
         rows = []
-    return rows[0] if rows else {}
+    # A PostgREST error comes back as a truthy DICT, not a list. Indexing it
+    # raises KeyError(0) — which used to kill the whole run on candidate #1,
+    # because this call site is not inside a try. Shape-check, never assume.
+    return rows[0] if isinstance(rows, list) and rows else {}
 
 
 def _am_human_owned(cid: str, step: int, splits: dict) -> dict:
@@ -19531,11 +19539,18 @@ def auto_move_run(campaign_id=None, max_moves=None,
 
             # ── THE ALGORITHM. Imported lazily: build_notifications imports us.
             import build_notifications as _bn
-            m = _cockpit_messaging(cid)
+            # One sick campaign must never take the sweep down with it: read
+            # the payload and the verdict defensively and skip just this one.
+            try:
+                m = _cockpit_messaging(cid)
+                lab, has_scale, ev = _bn.pill_best_opener(m) if (
+                    isinstance(m, dict) and not m.get("degraded")) else (None, False, None)
+            except Exception as e:  # noqa: BLE001
+                _say("skipped", f"verdict_unavailable:{str(e)[:120]}")
+                continue
             if not isinstance(m, dict) or m.get("degraded"):
                 _say("skipped", "messaging_unavailable")
                 continue
-            lab, has_scale, ev = _bn.pill_best_opener(m)
             if not has_scale or ev is None:                 # R2/R7
                 _say("skipped", "no_move")
                 continue
@@ -19586,11 +19601,16 @@ def auto_move_run(campaign_id=None, max_moves=None,
             # the traffic already sits where the engine wants it, has_scale has
             # gone False on its own - that IS "already at target", derived from
             # the engine, never from arithmetic in here.
-            m2 = _cockpit_messaging(cid)
+            try:
+                m2 = _cockpit_messaging(cid)
+                lab, has_scale, ev = _bn.pill_best_opener(m2) if (
+                    isinstance(m2, dict) and not m2.get("degraded")) else (None, False, None)
+            except Exception as e:  # noqa: BLE001 — skip this one, not the sweep
+                _say("skipped", f"verdict_unavailable:{str(e)[:120]}", before=before)
+                continue
             if not isinstance(m2, dict) or m2.get("degraded"):
                 _say("skipped", "messaging_unavailable")
                 continue
-            lab, has_scale, ev = _bn.pill_best_opener(m2)
             if not has_scale or ev is None:
                 if cand.get("notification_id"):
                     try:
