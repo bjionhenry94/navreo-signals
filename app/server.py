@@ -18335,7 +18335,7 @@ PARK_CHURN_DAYS = 42       # trailing window (owner spec: "last 6 weeks")
 PARK_CHURN_MIN = 2         # flag at 2+ parks; the UI escalates 3+ to "retire"
 PARK_CYCLE_MIN_DAYS = 5    # a held run this long (through snapshot gaps) = a real 7-day rest
 PARK_CYCLE_SAMPLE = 8      # boxes per domain read from mailbox_stats_daily
-PARK_SNAPSHOT_EPOCH = "2026-07-01"  # mailbox_stats_daily starts 2026-07-08: "all time" = since then
+PARK_SNAPSHOT_EPOCH = "2026-07-08"  # first mailbox_stats_daily snapshot: "all time" = since then
 
 
 def rest_enforce(mode: str = "preview") -> dict:
