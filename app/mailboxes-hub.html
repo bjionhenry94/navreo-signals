@@ -624,31 +624,42 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         : heatCell(warmTn, warmVal, warmSub,
                    "Estimated: resting mailboxes \u00d7 provider default (Outlook 2 \u00b7 Gmail 20 \u00b7 Maildoso 15 \u00b7 SMTP 15 per day)");
       // Actively sending: the % on top, and underneath it the capacity THAT %
-      // WAS MEASURED AGAINST — the same day (24H) or the same window (7/14/30),
-      // never today's live cap. Pairing the window % with today's cap was how a
-      // cell could read 112% of a number printed right beneath it. Today's live
-      // client_caps figure now appears only in the Total-capacity column.
-      var capSub = "", capTn = capTone(r.cap), capBig = r.cap == null ? "—" : r.cap + "%";
-      if (r.cap != null) {
-        if (r.capW && r.capDays) {
-          capSub = S.win === 1
-            ? "of " + n(r.capW) + "/day" + (snapTxt ? " on " + snapTxt : "")
-            : "of ~" + n(Math.round(r.capW / r.capDays)) + "/day avg";
-        }
+      // WAS MEASURED AGAINST — the same day (24H) or the same window average
+      // (7/14/30), never today's live cap. Pairing the window % with today's cap
+      // was how a cell could read 112% of a number printed right beneath it.
+      // Today's live client_caps figure appears only in the Total-capacity column.
+      //
+      // The visible sub-label is ONE sentence in ONE shape for every row and every
+      // range — "of 38.8k/day active sending capacity" (owner ruling 2026-09-02).
+      // Which day it was measured on, and the over-cap caveat, live on hover: they
+      // are the explanation, not the number, and varying the label per row made a
+      // column that should scan in one pass unreadable.
+      var capSub = "", capTitle = "", capBig = r.cap == null ? "—" : r.cap + "%";
+      if (r.cap != null && r.capW && r.capDays) {
+        // 24H measures ONE day, so its capW IS that day's cap; a multi-day window
+        // shows the mean weekday cap it was actually divided by.
+        var capBasis = S.win === 1 ? r.capW : Math.round(r.capW / r.capDays);
+        capSub = "of " + n(capBasis) + "/day active sending capacity";
+        capTitle = S.win === 1
+          ? "Measured on " + (snapTxt || "the last weekday") +
+            ": weekday sends \u00f7 the capacity recorded for that day"
+          : "Weekday sends \u00f7 weekday capacity, averaged over the last " + S.win + " days";
         if (r.capExceeded > 0) {
-          // The own-workspace pools are high-water-snapped once a day (04:30), so
-          // a day's recorded cap can sit BELOW what that day actually sent.
-          // usedDetail already counts such a day at what it really sent, so the %
-          // can never exceed 100 — it does NOT become 100. Over a 30-day window
-          // nine over-cap days sit inside a fleet that used 86% of its weekday
-          // capacity; printing 100% there would overstate the fleet AND break the
-          // digit-for-digit match with the Analytics KPI. Show the real figure,
-          // flag it amber, and say which days carry the caveat.
-          capTn = "a1";
-          capSub = "cap snapshot below sends on " + r.capExceeded + " day" + (r.capExceeded === 1 ? "" : "s");
+          // The own-workspace pools were high-water-snapped just ONCE a day (04:30)
+          // until the hourly top-up shipped today, so a historical day's recorded
+          // cap can sit BELOW what that day actually sent — and those days keep
+          // their single morning snapshot until they scroll out of the window.
+          // usedDetail already counts such a day at what it really sent, so the
+          // ratio is clamped at 100 and the visible cell keeps its NORMAL tone
+          // (owner ruling 2026-09-02: no amber, the label stays uniform). The
+          // caveat belongs on hover, where it explains rather than alarms.
+          capTitle += ", cap snapshot below sends on " + r.capExceeded +
+            " day" + (r.capExceeded === 1 ? "" : "s") +
+            " \u2014 those days count at what they actually sent";
         }
+        capTitle += ".";
       }
-      tds += heatCell(capTn, capBig, capSub);
+      tds += heatCell(capTone(r.cap), capBig, capSub, capTitle);
       // ~Total sending capacity (black box) — the sum of the two numbers this
       // row already shows (warm-up + available). Top = per day, bottom = the
       // estimated monthly total at ×20 SENDING DAYS: Navreo never sends on
