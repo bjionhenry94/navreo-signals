@@ -871,6 +871,31 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // Design-system button (navreo.css): .btn.sm base, .primary for the orange emphasis variant.
     return '<button class="btn sm' + (primary ? ' primary' : '') + '" ' + attrs + '>' + esc(label) + '</button>';
   }
+  // Domain-health rows are stamped with the workspace they were pulled from
+  // (navreo rows carry no stamp). The SAME domain can appear twice — once under
+  // navreo and once under a client workspace — because both workspaces hold
+  // mailboxes on it, and two untagged identical rows read as a duplication bug.
+  // Tag the client-workspace row so the pair is legible; navreo stays bare.
+  function wsPill(row) {
+    var ws = row && row.workspace;
+    if (!ws) return "";
+    var labels = (S.cw && (S.cw.ws_labels || S.cw.labels)) || {};
+    var label = ws;
+    for (var lbl in labels) { if (String(labels[lbl]).toLowerCase() === String(ws).toLowerCase()) { label = lbl; break; } }
+    return ' <span class="pill n">' + esc(label) + '</span>';
+  }
+  // "N row(s) over X across D domain(s)" — plus how many of those domains send
+  // from two workspaces, so a doubled domain reads as a fact, not a glitch.
+  function domSpread(rows) {
+    var byDom = {}, dupes = 0;
+    rows.forEach(function (d) { (byDom[d.domain] = byDom[d.domain] || []).push(d.workspace || "navreo"); });
+    Object.keys(byDom).forEach(function (d) {
+      var seen = {}, n = 0;
+      byDom[d].forEach(function (w) { if (!seen[w]) { seen[w] = 1; n++; } });
+      if (n > 1) dupes++;
+    });
+    return { domains: Object.keys(byDom).length, dupes: dupes };
+  }
   function tagChips(tags) {
     if (!Array.isArray(tags) || !tags.length) return '<span class="t-mut">—</span>';
     return tags.slice(0, 2).map(function (t) { return '<span class="pill n" style="margin-right:3px">' + esc(t) + '</span>'; }).join("") + (tags.length > 2 ? '<span class="t-mut"> +' + (tags.length - 2) + '</span>' : "");
@@ -885,7 +910,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // Every domain here has live sends below the floor (paused ones are filtered out
       // in floorList and live in the In warm-up tab), so the only action is Warm up.
       var action = actBtn("warmup", d.domain, null, "Warm up domain", true);
-      return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+      return '<tr><td class="mono">' + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + comma(d.sent) + '</td>' +
         '<td class="num">' + comma(d.lead || 0) + '</td>' +
         '<td class="num t-r">' + (d.reply_rate).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
@@ -893,8 +918,11 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         '<td class="num' + (d.bounce_rate >= 3 ? ' t-r' : '') + '">' + (d.bounce_rate || 0).toFixed(2) + '%</td>' +
         '<td style="text-align:right">' + action + '</td></tr>';
     }).join("");
+    var spF = domSpread(rows);
     return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Leads</th><th class="num">Reply rate</th><th class="num">Positive</th><th class="num">Bounce</th><th style="text-align:right">Action</th>', body, null,
-      rows.length + ' domain(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + MGR_WIN + ' days. One button rests every mailbox on the domain.');
+      rows.length + ' row(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) across ' + spF.domains + ' domain(s)' +
+      (spF.dupes ? ' · ' + spF.dupes + ' domain(s) send from two workspaces' : '') +
+      ' · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + MGR_WIN + ' days. One button rests every mailbox on the domain.');
   }
   // ---- High bounce-rate (old flow "highbounce"): Domain·Sent·Bounces·Bounce rate·Reply rate·Action
   function mgrHighb() {
@@ -902,15 +930,18 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     if (!rows.length) return '<div class="mgr-empty">✓ No domains over ' + BOUNCE_HOT + '% bounce in the last ' + MGR_WIN + ' days.</div>';
     var body = rows.map(function (d) {
       var bn = (typeof d.bounced === "number") ? d.bounced : Math.round((d.bounce_rate || 0) * (d.sent || 0) / 100);
-      return '<tr><td class="mono">' + esc(d.domain) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+      return '<tr><td class="mono">' + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + comma(d.sent) + '</td>' +
         '<td class="num" style="font-weight:700">' + comma(bn) + '</td>' +
         '<td class="num t-r">' + (d.bounce_rate).toFixed(2) + '%</td>' +
         '<td class="num">' + (d.reply_rate || 0).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
         '<td style="text-align:right">' + actBtn("bounce-pause", d.domain, null, "Pause", true) + '</td></tr>';
     }).join("");
+    var sp = domSpread(rows);
     return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Bounces</th><th class="num">Bounce rate</th><th class="num">Reply rate</th><th style="text-align:right">Action</th>', body, null,
-      rows.length + ' domain(s) over ' + BOUNCE_HOT + '% bounce · last ' + MGR_WIN + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
+      rows.length + ' row(s) over ' + BOUNCE_HOT + '% bounce across ' + sp.domains + ' domain(s)' +
+      (sp.dupes ? ' · ' + sp.dupes + ' domain(s) send from two workspaces' : '') +
+      ' · last ' + MGR_WIN + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
   }
   // ---- In warm-up (old flow "inwarmup", domain-grouped): Domain·Mailboxes·Due back·Status·Action(Restore)
   function mgrInWarmup() {
