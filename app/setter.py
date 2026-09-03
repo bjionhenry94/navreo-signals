@@ -7315,7 +7315,7 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 # modules 33/51) applies the same rule via campaign-name markers; this is
 # the sweep-side half.
 CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
-CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius")
+CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greenshift")
 
 # A once-positive→negative FLIP (all this sweep ever alerts on — fresh
 # positives are excluded above and owned by the Make categoriser) routes to the
@@ -7340,6 +7340,100 @@ POSITIVE_SHARED_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared, Slack Connect)
 }
 
+# A "positive-re-reply" row is routeB's label for "an already-positive lead
+# replied again" — routeB is alert-only and never reads the new reply, so the
+# label says NOTHING about what the lead actually said. Delivering it to a
+# client channel as "New positive reply — positive-re-reply" is how REViVE was
+# told that "We are no longer in the retail business" was a positive (Sheila
+# / Livliga, 2026-09-03, flagged by the client). Before a re-reply reaches a
+# client's shared channel the sweep reads it: a negative becomes the churn
+# FLIP alert (the once-positive path), a still-positive is announced as a
+# re-reply (never as a new positive), an auto-responder is dropped. Internal
+# channels are untouched — the Make 🚨 already covers them.
+EP_RE_REPLY_NEGATIVE = ("Not Interested", "Do Not Contact", "Wrong Person")
+EP_RE_REPLY_SILENT = ("Out Of Office",)
+EP_RE_REPLY_CATEGORIES = ("Interested", "Meeting Request", "Call Booked",
+                          "Information Request") + EP_RE_REPLY_SILENT + EP_RE_REPLY_NEGATIVE
+EP_CLASSIFY_GRACE_MIN = 30    # classifier down: retry for this long, then deliver neutrally
+RE_REPLY_CLASSIFY_SYSTEM = (
+    "You categorise the LATEST reply from a B2B cold-email prospect who ALREADY "
+    "replied positively earlier in this thread. Return exactly ONE category from: "
+    "Interested, Meeting Request, Call Booked, Information Request, Out Of Office, "
+    "Wrong Person, Not Interested, Do Not Contact.\n"
+    "Rules, first match wins: (1) explicitly says the call IS booked -> Call Booked. "
+    "(2) proposes or accepts a time, shares availability, asks for a booking link or "
+    "to be called -> Meeting Request. (3) asks for material, pricing or details, or "
+    "asks any question that continues the conversation -> Information Request. "
+    "(4) a stated interest signal, including interest with an objection or a CONCRETE "
+    "re-contact window (a named month, quarter, year, 'after our launch') -> "
+    "Interested. (5) a pure auto-responder -> Out Of Office. (6) redirects to someone "
+    "else with no interest signal -> Wrong Person. (7) a decline, a bare deferral "
+    "with no window ('not now', 'not at this time', 'maybe later', 'not the right "
+    "time'), 'we no longer do this', 'we're sorted', or a cold / confused answer -> "
+    "Not Interested. (8) an unsubscribe or removal demand, hostility, legal threats, "
+    "a bounce notice -> Do Not Contact.\n"
+    "Ignore signature blocks and quoted earlier messages; judge only the new text at "
+    "the top. Output JSON only: {\"category\": \"<one of the 8>\"}."
+)
+
+
+def _ep_classify_re_reply(row: dict):
+    """Category of a re-reply's NEW text (one of EP_RE_REPLY_CATEGORIES), or
+    None when the classifier is unavailable or answers off-list. Never
+    raises — the caller decides between retry and neutral delivery."""
+    try:
+        key = _KEYS.get("OPENAI_API_KEY")
+        body = clean_body(row.get("reply_body") or "")[:3000].strip()
+        if not key or not body:
+            return None
+        prior = row.get("prior_category") or "positive"
+        user = json.dumps({"earlier_positive_category": prior, "latest_reply": body},
+                          ensure_ascii=False)
+        r = _openai({"model": OPENAI_MODEL,
+                     "messages": [{"role": "system", "content": RE_REPLY_CLASSIFY_SYSTEM},
+                                  {"role": "user", "content": user}],
+                     "response_format": {"type": "json_schema", "json_schema": {
+                         "name": "re_reply_category", "strict": True, "schema": {
+                             "type": "object", "additionalProperties": False,
+                             "required": ["category"],
+                             "properties": {"category": {
+                                 "type": "string",
+                                 "enum": list(EP_RE_REPLY_CATEGORIES)}}}}}},
+                    key, timeout=30, retries=1)
+        content = (((r or {}).get("choices") or [{}])[0].get("message") or {}).get("content")
+        cat = (json.loads(content) if isinstance(content, str) else (content or {})).get("category")
+        return cat if cat in EP_RE_REPLY_CATEGORIES else None
+    except Exception as e:  # noqa: BLE001 — never load-bearing
+        print(f"[setter] re-reply classify failed: {type(e).__name__}: {str(e)[:120]}",
+              file=sys.stderr)
+        return None
+
+
+def _ep_post(payload: dict, summary: dict) -> bool:
+    """POST one alert to the ever-positive hook. True when the hook accepted
+    (a non-JSON 2xx counts); False leaves the row unstamped for a retry."""
+    try:
+        _HTTP("POST", EVER_POSITIVE_HOOK, {}, payload)
+        return True
+    except ValueError:
+        return True   # Make answers a non-JSON 2xx ("Accepted") = success
+    except Exception:   # noqa: BLE001 — hook down: retry next tick
+        summary["failed_posts"] += 1
+        summary["ok"] = False
+        return False
+
+
+def _ep_display_prior(workspace, email: str, prior):
+    """The earlier positive as the alert should NAME it: routeB's internal
+    label resolves to the lead's real category (owner ask 2026-08-17 - the
+    label is never a status), and a missing history row still reads."""
+    prior = dict(prior or {})
+    if prior.get("category") == _RE_REPLY_LABEL:
+        prior["category"] = _resolve_re_reply_category(
+            workspace, prior.get("smartlead_campaign_id"), email,
+            prior.get("replied_at")) or "Interested"
+    return prior
+
 
 def _ep_name_channel(mapping, workspace, campaign_id):
     """Return mapping[marker] when this navreo-hosted campaign's name carries a
@@ -7360,13 +7454,14 @@ def _ep_name_channel(mapping, workspace, campaign_id):
     return None
 
 
-def _ep_positive_shared_text(row: dict, cname: str, link: str) -> str:
+def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = None) -> str:
     """Client-facing positive alert for a shared channel — no internal
-    workspace labelling (the client reads this)."""
+    workspace labelling (the client reads this). `header` replaces the
+    "New positive reply" line for re-replies, which are never new."""
     cat = row.get("category") or "positive"
     snippet = clean_body(row.get("reply_body") or "")[:400]
     lines = [
-        f"\U0001F3AF New positive reply \u2014 {cat}",
+        header or f"\U0001F3AF New positive reply \u2014 {cat}",
         "---------------------------",
         f"Lead: {row.get('email')}",
         f"Campaign: {cname}",
@@ -7488,8 +7583,10 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict) -> str:
         "---------------------------",
         f"Lead: {row.get('email')}",
         f"Campaign: {cname}",
-        (f"Originally positive: {prior.get('category')} on "
-         f"{str(prior.get('replied_at') or '')[:10]} ({pname})"),
+        ((f"Originally positive: {prior.get('category')} on "
+          f"{str(prior.get('replied_at') or '')[:10]} ({pname})")
+         if prior.get("replied_at") else
+         f"Originally positive: {prior.get('category') or 'earlier in this thread'}"),
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
     chat = _chat_permalink(row.get("email") or "", row.get("smartlead_message_id") or "")
@@ -7507,7 +7604,8 @@ def run_ever_positive_alerts() -> dict:
     summary = {"ok": True, "skipped": False, "checked": 0, "alerted": 0,
                "stamped_positive": 0, "stamped_no_history": 0,
                "deferred_null": 0, "failed_posts": 0, "capped": False,
-               "errors": 0}
+               "errors": 0, "deferred_classify": 0, "re_reply_flips": 0,
+               "re_reply_unclassified": 0}
     if not _SB:
         summary["skipped"] = True
         return summary
@@ -7544,6 +7642,50 @@ def run_ever_positive_alerts() -> dict:
                 shared = _ep_name_channel(POSITIVE_SHARED_CHANNELS, ws,
                                           row.get("smartlead_campaign_id"))
                 if shared:
+                    header = None
+                    kind = "positive-shared"
+                    if cat == _RE_REPLY_LABEL:
+                        # routeB never read this reply — do it here before the
+                        # client is told anything (see EP_RE_REPLY_* above).
+                        prior = _ep_display_prior(
+                            ws, email, _ep_prior_positive(ws, email, rt))
+                        verdict = _ep_classify_re_reply(
+                            dict(row, prior_category=prior.get("category")))
+                        if verdict is None:
+                            rt_dt = _parse_iso(rt)
+                            if rt_dt and (now - rt_dt) < _dt.timedelta(minutes=EP_CLASSIFY_GRACE_MIN):
+                                summary["deferred_classify"] += 1   # retry next tick
+                                continue
+                            header = "\U0001F501 Interested lead replied again"
+                            kind = "positive-shared-unclassified"
+                        elif verdict in EP_RE_REPLY_SILENT:
+                            _ep_stamp(rid, "re-reply-ooo")      # auto-reply: nothing to tell
+                            summary["stamped_positive"] += 1
+                            continue
+                        elif verdict in EP_RE_REPLY_NEGATIVE:
+                            # A churn FLIP — the once-positive path owns the
+                            # wording and the channel (REViVE: shared, per
+                            # Bjion 2026-09-02; other clients: their own lane).
+                            if summary["alerted"] >= EP_POST_CAP:
+                                summary["capped"] = True
+                                summary["ok"] = False
+                                continue
+                            names = _ep_campaign_names(
+                                ws, [row.get("smartlead_campaign_id"),
+                                     prior.get("smartlead_campaign_id")])
+                            payload = {"event_type": "EVER_POSITIVE_ALERT",
+                                       "text": _ep_compose(dict(row, category=verdict),
+                                                           prior, names)}
+                            chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
+                            if chan:
+                                payload["channel"] = chan
+                            if _ep_post(payload, summary):
+                                _ep_stamp(rid, "re-reply-flip-alerted")
+                                summary["alerted"] += 1
+                                summary["re_reply_flips"] += 1
+                            continue
+                        else:
+                            header = f"\U0001F501 Interested lead replied again \u2014 {verdict}"
                     if summary["alerted"] >= EP_POST_CAP:
                         summary["capped"] = True
                         summary["ok"] = False       # leftovers retry next tick
@@ -7553,21 +7695,14 @@ def run_ever_positive_alerts() -> dict:
                         or f"campaign {row.get('smartlead_campaign_id')}"
                     text = _ep_positive_shared_text(
                         row, cname,
-                        _ep_smartlead_link(row.get("smartlead_campaign_id"), email))
-                    posted = False
-                    try:
-                        _HTTP("POST", EVER_POSITIVE_HOOK, {},
-                              {"event_type": "EVER_POSITIVE_ALERT",
-                               "text": text, "channel": shared})
-                        posted = True
-                    except ValueError:
-                        posted = True   # non-JSON 2xx = accepted
-                    except Exception:   # noqa: BLE001 — hook down: retry next tick
-                        summary["failed_posts"] += 1
-                        summary["ok"] = False
-                    if posted:
-                        _ep_stamp(rid, "positive-shared")
+                        _ep_smartlead_link(row.get("smartlead_campaign_id"), email),
+                        header=header)
+                    if _ep_post({"event_type": "EVER_POSITIVE_ALERT",
+                                 "text": text, "channel": shared}, summary):
+                        _ep_stamp(rid, kind)
                         summary["alerted"] += 1
+                        if kind == "positive-shared-unclassified":
+                            summary["re_reply_unclassified"] += 1
                     continue
                 # module 33 / routeB territory — never alert from here
                 _ep_stamp(rid, "positive-covered")
@@ -7587,6 +7722,7 @@ def run_ever_positive_alerts() -> dict:
                 summary["capped"] = True
                 summary["ok"] = False       # leftovers retry next tick, loudly
                 continue
+            prior = _ep_display_prior(ws, email, prior)
             names = _ep_campaign_names(
                 ws, [row.get("smartlead_campaign_id"),
                      prior.get("smartlead_campaign_id")])
