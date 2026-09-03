@@ -6558,6 +6558,20 @@ _JOB_DB_FIELDS = ("id", "kind", "label", "campaign_id", "mode", "status",
                   "finished_at", "auto_remove", "resume_count", "owner",
                   "max_new")  # max_new is durable so an auto-resumed
                               # continuation inherits the spend cap
+
+
+def _compute_jobs_db_recent():
+    """The /api/jobs history leg: newest 50 app_jobs rows, explicit column
+    list (no select=* - the rail only renders these). Non-list = degraded."""
+    return sb("GET", "app_jobs?select=" + ",".join(_JOB_DB_FIELDS + ("created_at",))
+                     + "&order=created_at.desc&limit=50")
+
+
+# 3 s: shorter than shell.js's fast poll (4 s) so a running job's progress is
+# never served stale, while N open tabs collapse onto one Supabase read.
+_JOBS_DB_SWR = _SWRCache(_compute_jobs_db_recent, 3,
+                         is_degraded=lambda p: not isinstance(p, list),
+                         name="jobs-db")
 # NOTE: app_jobs has no `mock` column (confirmed live: PGRST204 "column
 # app_jobs.mock does not exist") - the in-memory job dict keeps a `mock` key
 # for runtime branching, but it is deliberately excluded from _JOB_DB_FIELDS.
@@ -7022,6 +7036,7 @@ def _retire_resumed_job(jid: str):
         with JOBS_LOCK:
             JOBS.pop(jid, None)
         sb("DELETE", f"app_jobs?id=eq.{jid}")
+        _JOBS_DB_SWR.mark_stale()   # don't let the 3 s memo resurrect the row
     except Exception:  # noqa: BLE001 — never fail a successful resume over cleanup
         pass
 
@@ -7114,6 +7129,7 @@ def dismiss_job(jid: str):
     with JOBS_LOCK:
         JOBS.pop(jid, None)
     sb("DELETE", f"app_jobs?id=eq.{jid}")
+    _JOBS_DB_SWR.mark_stale()   # don't let the 3 s memo resurrect the row
     return {"ok": True}, 200
 
 
@@ -25281,10 +25297,15 @@ class Handler(SimpleHTTPRequestHandler):
         if path == "/api/jobs":
             # Memory first (live progress), then union in durable app_jobs rows
             # that aren't in memory (recent history + jobs from before a restart).
+            # The DB leg is only history, so it sits behind a 3 s SWR memo:
+            # shell.js polls this from every page (4 s while a job runs) and
+            # this one query was ~7.6k Supabase reads/day (egress audit
+            # 2026-09-03). Memory rows stay live; only the history leg is memoed.
             with JOBS_LOCK:
                 mem = list(reversed(JOBS.values()))
             seen = {j["id"] for j in mem}
-            db = sb("GET", "app_jobs?order=created_at.desc&limit=50") or []
+            db = _JOBS_DB_SWR.get()
+            db = db if isinstance(db, list) else []
             merged = mem + [r for r in db if r.get("id") not in seen]
             return self._json({"jobs": [_job_with_family(j) for j in merged[:50]]})
         if path == "/api/campaign-lead-counts":
