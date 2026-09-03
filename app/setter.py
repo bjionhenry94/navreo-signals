@@ -3954,7 +3954,8 @@ def ensure_video_where_clause(html: str, *, sender_first: str = "", slots: list 
 
         # The fallback line's fixed wording ("book in direct here", row 2518
         # wrote "book in directly here").
-        out = re.sub(r"(feel free to suggest some times, or book in )directly(\s*<a\b)", r"\1direct\2", out, flags=re.I)
+        out = re.sub(r"(feel free to suggest some times),?\s*or book\s+(?:in\s+)?direct(?:ly)?(\s*<a\b)",
+                     r"\1, or book in direct\2", out, flags=re.I)
 
         if sender_first:
             out = _video_force_signoff(out, sender_first)
