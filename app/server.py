@@ -6587,6 +6587,47 @@ def _job_persist(job: dict):
         daemon=True).start()
 
 
+# ── Task families (panel grouping + auto-retry) ──────────────────────────────
+# ONE source of truth for which family a job kind belongs to. The Tasks panel
+# (app/shell.js JOB_FAMILIES) mirrors these keys for its icon/colour, so both
+# sides agree; /api/jobs stamps `family` on every row it serves. Unknown kind
+# -> "other" (never a crash, never a retry).
+JOB_FAMILY_OF = {
+    "variant_action": "traffic",
+    "auto_mover": "traffic",
+    "auto_mover_move": "traffic",
+    "warmup_pause": "mailbox",
+    "warmup_resume": "mailbox",
+    "bounce_pause": "mailbox",
+    "bounce_resume": "mailbox",
+    "rest_enforce": "mailbox",
+    "verify": "data",
+    "remove_bad": "data",
+    "pool_pull": "data",
+    "recontact_buckets": "launch",
+    "recontact_create": "launch",
+    "reconnect-watch": "sync",
+}
+# Retryable FAMILIES (per owner spec 2026-09-03). Launch/sync are NOT retryable:
+# a recontact draft re-run would create a second draft, and the reconnect watcher
+# has its own revival path (_revive_reconnect_watchers).
+JOB_FAMILY_RETRYABLE = {"traffic": True, "mailbox": True, "data": True,
+                        "launch": False, "sync": False, "other": False}
+JOB_MAX_RETRIES = 3
+JOB_RETRY_BACKOFF_S = (60, 300, 900)  # 1m, 5m, 15m before attempt 1/2/3
+
+
+def job_family_of(kind) -> str:
+    return JOB_FAMILY_OF.get(str(kind or ""), "other")
+
+
+def _job_with_family(r: dict) -> dict:
+    """A job row plus its family, for /api/jobs. Non-destructive on JOBS."""
+    if not isinstance(r, dict):
+        return r
+    return {**r, "family": job_family_of(r.get("kind"))}
+
+
 def _new_job(kind: str, label: str, campaign_id, mode: str = "", dry_run: bool = False,
              auto_remove: bool = False, resume_count: int = 0, mock: bool = False,
              max_new: int | None = None) -> dict:
@@ -6812,6 +6853,104 @@ def _maybe_auto_resume(r: dict):
         print(f"[auto-resume] failed for job {r.get('id')}: {e}")
 
 
+def _job_retry_reenqueue(r: dict) -> bool:
+    """Re-run the SAME work a failed job did, through the SAME door it used.
+
+    Hard rule: a traffic move is never replayed as a raw save. auto_mover_move /
+    auto_mover rows go back through auto_move_run(), which re-derives the verdict
+    and re-applies every gate (global switch, per-campaign switch, breaker, caps,
+    human-owned, freshness) before it calls api_campaign_variant_action_async ->
+    save_sequence_ids_intact. A manual variant_action row carries no durable
+    payload, so it is NOT reconstructable and stays failed.
+    Returns True if a continuation was started."""
+    kind = str(r.get("kind") or "")
+    counts = r.get("counts") if isinstance(r.get("counts"), dict) else {}
+    if kind in ("auto_mover", "auto_mover_move"):
+        cid = str(r.get("campaign_id") or "").strip()
+        threading.Thread(
+            target=lambda: auto_move_run(campaign_id=cid or None),
+            daemon=True, name="job-retry-auto-mover").start()
+        return True
+    if kind in ("warmup_pause", "warmup_resume"):
+        doms = counts.get("domains_list") or []
+        op = counts.get("op") or kind[len("warmup_"):]
+        if not doms or op not in ("pause", "resume"):
+            return False
+        body, st = api_warmup_job({"op": op, "domains": list(doms)})
+        return st in (200, 202)
+    if kind == "rest_enforce":
+        threading.Thread(target=lambda: rest_enforce("apply"),
+                         daemon=True, name="job-retry-rest-enforce").start()
+        return True
+    if kind == "verify":
+        with _JOB_CREATE_LOCK:
+            if _campaign_has_active_job(r.get("campaign_id")):
+                return False
+            _reenqueue_verify(r, (r.get("resume_count") or 0) + 1)
+        return True
+    return False  # no reconstructable entry -> leave it failed
+
+
+def _retry_failed_jobs():
+    """Bounded auto-retry for failed jobs of retryable families.
+
+    Picks status='failed' rows whose family is retryable and resume_count < 3,
+    once the backoff for the NEXT attempt (1m / 5m / 15m) has elapsed since the
+    row finished. Increments resume_count, sets auto_resumed, and stamps error
+    'retrying (n/3): <prev>'. A row that has burned all 3 gets the final
+    'gave up after 3 retries: …' stamp and is never touched again.
+    Production instance only, same storm guard as _maybe_auto_resume."""
+    if not _ON_RENDER:
+        return
+    try:
+        rows = sb("GET", "app_jobs?status=eq.failed&order=finished_at.desc&limit=100"
+                         "&select=id,owner,kind,campaign_id,mode,label,auto_remove,"
+                         "resume_count,auto_resumed,max_new,counts,error,finished_at") or []
+    except Exception:  # noqa: BLE001 — never kill the sweeper
+        return
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+    for r in rows:
+        if r.get("owner") != _SERVER_INSTANCE:
+            continue
+        kind = str(r.get("kind") or "")
+        if not JOB_FAMILY_RETRYABLE.get(job_family_of(kind)):
+            continue
+        n = int(r.get("resume_count") or 0)
+        prev = str(r.get("error") or "").strip()
+        if n >= JOB_MAX_RETRIES:
+            if not prev.startswith("gave up after"):
+                try:
+                    sb("PATCH", f"app_jobs?id=eq.{r['id']}",
+                       {"error": f"gave up after {JOB_MAX_RETRIES} retries: {prev}"[:300]})
+                except Exception:  # noqa: BLE001
+                    pass
+            continue
+        try:
+            fin = datetime.fromisoformat(str(r.get("finished_at") or "").replace("Z", "+00:00"))
+        except Exception:  # noqa: BLE001 — no clock, no backoff proof
+            continue
+        if (now - fin).total_seconds() < JOB_RETRY_BACKOFF_S[min(n, len(JOB_RETRY_BACKOFF_S) - 1)]:
+            continue
+        try:
+            # Compare-and-set on resume_count so two incarnations can't both
+            # re-enqueue the same row (same arbitration as _maybe_auto_resume).
+            claimed = sb("PATCH", f"app_jobs?id=eq.{r['id']}&resume_count=eq.{n}",
+                         {"resume_count": n + 1, "auto_resumed": True,
+                          "error": f"retrying ({n + 1}/{JOB_MAX_RETRIES}): {prev}"[:300]},
+                         prefer="return=representation")
+            if not claimed:
+                continue
+            if not _job_retry_reenqueue(r):
+                # not reconstructable — hand the attempt back so the row reads true
+                sb("PATCH", f"app_jobs?id=eq.{r['id']}",
+                   {"resume_count": n, "error": prev[:300] or "failed"})
+                continue
+            print(f"[job-retry] {kind} {r['id']} attempt {n + 1}/{JOB_MAX_RETRIES}")
+        except Exception as e:  # noqa: BLE001 — one bad row must not stop the rest
+            print(f"[job-retry] failed for {r.get('id')}: {e}")
+
+
 def _job_zombie_sweeper():
     """Boot recovery only runs once, so a job created on a DYING deploy-overlap
     instance AFTER the new instance booted becomes a permanent fake-'running'
@@ -6822,6 +6961,7 @@ def _job_zombie_sweeper():
         time.sleep(300)
         try:
             _sweep_orphan_jobs(grace_s=_JOB_STALE_S)
+            _retry_failed_jobs()   # bounded auto-retry of failed retryable-family jobs
             # A watcher killed JUST before a deploy is younger than boot
             # recovery's 180s grace, so it's THIS sweep (minutes later) that
             # first marks it interrupted — revival must follow the sweep, not
@@ -25146,7 +25286,7 @@ class Handler(SimpleHTTPRequestHandler):
             seen = {j["id"] for j in mem}
             db = sb("GET", "app_jobs?order=created_at.desc&limit=50") or []
             merged = mem + [r for r in db if r.get("id") not in seen]
-            return self._json({"jobs": merged[:50]})
+            return self._json({"jobs": [_job_with_family(j) for j in merged[:50]]})
         if path == "/api/campaign-lead-counts":
             # "How many leads will a verify cover?" — Smartlead's total_leads via
             # a limit=1 page per campaign, cached 1hr so repaints don't re-pay
