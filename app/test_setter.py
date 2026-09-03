@@ -972,6 +972,10 @@ def test_video_backstop_enforces_template():
     freeform = head + f'<div>Would you be open to a call on {l1} or {l2} where we could run through all of this?</div><br><div>Bjion</div>'
     fixed = setter.ensure_video_where_clause(freeform, **kw)
     check("video backstop: free-form clause replaced by the fixed one", "where I could share some of the other ideas I had for Zenon Wholesale?</div>" in fixed and "run through" not in fixed, fixed)
+    when = head + f'<div>Would you be open to a call on {l1} or {l2} when I could share some of the other ideas I had for Orlo?</div><br><div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(when, **{**kw, "company": ""})
+    check("video backstop: 'when I could share' (row 2607) is the clause, not doubled",
+          fixed.count("ideas I had for") == 1 and "</a> where I could share some of the other ideas I had for Orlo?</div>" in fixed, fixed)
 
     # scope guard: not the video template -> untouched even with a wrong sign-off
     other = '<div>Hi Ron,</div><br><div>Here is the resource we put together.</div><br><div>Jane</div>'
