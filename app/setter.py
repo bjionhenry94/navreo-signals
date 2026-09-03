@@ -3776,6 +3776,10 @@ def normalize_call_intent(classification: dict) -> dict:
 
 
 _VIDEO_WHERE_CLAUSE = "where I could share some of the other ideas I had for you"
+_VIDEO_WHERE_CLAUSE_FMT = "where I could share some of the other ideas I had for {company}"
+_VIDEO_FALLBACK_LINKED_FMT = ("If those times aren't suitable, feel free to suggest some times, or book in direct "
+                              '<a href="{booking_link}">here</a>.')
+_VIDEO_FALLBACK_PLAIN = "If those times aren't suitable, feel free to suggest some times that work for you."
 _VIDEO_OPENING_RE = re.compile(r"here is the video i recorded for you", re.I)
 # The house two-times question, from its fixed opener to the closing "?".
 # The two proposed times are themselves booking links whose hrefs carry a
@@ -3787,26 +3791,205 @@ _VIDEO_OPENING_RE = re.compile(r"here is the video i recorded for you", re.I)
 # A query-string "?" is always followed by "key=", a real question mark never
 # is, so skip any "?" that starts a query string.
 _TWO_TIMES_Q_RE = re.compile(r"(Would you be open to a call on\b.*?)(\s*\?)(?!\w+=)", re.I | re.S)
+# The value clause inside that question: from " where " to the end of the
+# question text. Hrefs never contain a space and slot labels never contain
+# the word "where", so the first " where " after the opener is the clause.
+_VIDEO_CLAUSE_RE = re.compile(r"\swhere\b.*$", re.I | re.S)
+# "...ideas I had for {X}" / "...ideas I have for {X}" - what the drafter
+# named the company as, when it wrote a company form at all.
+_VIDEO_CLAUSE_FOR_RE = re.compile(r"\bideas\s+I\s+(?:had|have)\s+for\s+(.+?)\s*$", re.I | re.S)
+# The company the ORIGINAL OUTREACH named ("I recorded a quick video for Awe
+# Studios walking through ..."): the same source the agent instructions tell
+# the drafter to use, read deterministically.
+_VIDEO_OUTREACH_COMPANY_RE = re.compile(
+    r"recorded\s+a\s+(?:quick\s+|short\s+|brief\s+|personal(?:ised|ized)\s+)?(?:video|loom)\s+for\s+"
+    r"(.+?)(?=\s+(?:walking|showing|going|covering|explaining|breaking|outlining|sharing|that|which|where|on|about|to)\b"
+    r"|\s*[,:;!\n]|\.(?=\s|$)|\s+-\s|$)",
+    re.I)
+# A short sign-off line: an optional courtesy ("Best,", "Thanks,") then one to
+# three name words. Anything longer is a sentence, not a signature.
+_SIGNOFF_LINE_RE = re.compile(
+    r"^(?:(?:best|thanks|thank you|regards|kind regards|cheers|many thanks|warm regards)\s*,?\s*(?:<br\s*/?>)?\s*)?"
+    r"[A-Z][A-Za-z'\-]*(?:\s+[A-Z][A-Za-z'\-]*){0,2}\.?\s*$",
+    re.I | re.S)
+_LAST_DIV_RE = re.compile(r"<div\b[^>]*>((?:(?!<div\b).)*?)</div>\s*$", re.I | re.S)   # the LAST <div> block
+_TRAILING_BREAKS_RE = re.compile(r"(?:\s*<br\s*/?>\s*)+$", re.I)
 
 
-def ensure_video_where_clause(html: str) -> str:
-    """Deterministic backstop for the LOOM VIDEO template's mandated value
-    clause (owner report 2026-09-01, "it drifted again"): on busy multi-intent
-    replies the drafter keeps ending the two-times question at the second time
-    ("...work?" / "...EDT?") and dropping "where I could share some of the
-    other ideas I had for you", and a lint-feedback redraft doesn't reliably
-    coax it back. When the draft is unmistakably the video template (its fixed
-    opening line is present) and the two-times question carries no "where ..."
-    clause, splice the fixed clause in before the "?". Tightly scoped to the
-    video opening so no other agent/template is touched; idempotent."""
+def _video_company_for(row: dict) -> str:
+    """The lead's company name for the video template's where-clause (owner
+    ruling 2026-09-03: "for {Company}", never "for you" while a company is
+    known). Resolution order mirrors the agent instructions: the row/lead
+    record (lead_company), then the company named by the original outreach
+    ("I recorded a quick video for Awe Studios walking through ..."), then
+    the companies table by the lead's domain. "" when nothing resolves - the
+    caller then keeps the "for you" fallback. Never raises."""
+    try:
+        row = row or {}
+        name = str(row.get("lead_company") or "").strip()
+        if name:
+            return name
+        fo = clean_body(str(row.get("first_outbound") or ""))
+        m = _VIDEO_OUTREACH_COMPANY_RE.search(fo)
+        if m:
+            cand = re.sub(r"\s+", " ", m.group(1)).strip(" \"'")
+            if 0 < len(cand) <= 60 and len(cand.split()) <= 6:
+                return cand
+        domain = str(row.get("company_domain") or "").strip().lower()
+        if not domain and "@" in str(row.get("lead_email") or ""):
+            domain = str(row.get("lead_email")).split("@", 1)[1].strip().lower()
+        if domain:
+            name = str((_company_row(domain) or {}).get("name") or "").strip()
+            if name:
+                return name
+        return ""
+    except Exception:  # noqa: BLE001 - a lookup must never break the draft
+        return ""
+
+
+def _video_force_signoff(html: str, sender_first: str) -> str:
+    """Make the final line exactly `<div>{sender_first}</div>`. The drafter
+    keeps copying the original outreach's From: name ("Jane") into the
+    sign-off (queue row 3264, 2026-09-03) even though the instructions
+    mandate the single word "Bjion". A short name-like last line is replaced;
+    a draft with no sign-off at all gets one appended; a last line that is a
+    real sentence is left alone and the sign-off is appended after it."""
+    sender_first = str(sender_first or "").strip()
+    if not sender_first:
+        return html
+    body = _TRAILING_BREAKS_RE.sub("", html.rstrip())
+    m = _LAST_DIV_RE.search(body)
+    if m:
+        inner = m.group(1)
+        text = re.sub(r"<[^>]+>", " ", inner)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text == sender_first:
+            return html
+        if _SIGNOFF_LINE_RE.match(text) and not text.lower().startswith("hi ") and "?" not in text:
+            return body[:m.start()] + f"<div>{sender_first}</div>"
+        return body + f"<br><div>{sender_first}</div>"
+    # Not <div>-shaped (rare): a bare trailing name after the last <br>.
+    tail = body.rsplit("<br>", 1)
+    if len(tail) == 2:
+        t = re.sub(r"<[^>]+>", " ", tail[1]).strip()
+        if t == sender_first:
+            return html
+        if _SIGNOFF_LINE_RE.match(t) and "?" not in t:
+            return tail[0] + "<br>" + sender_first
+    return body + f"<br>{sender_first}"
+
+
+def ensure_video_where_clause(html: str, *, sender_first: str = "", slots: list = None,
+                              booking_link: str = "", company: str = "") -> str:
+    """Deterministic backstop for the LOOM VIDEO template (Navreo agent), run
+    after proofread on every drafting surface. Scoped to drafts that carry
+    the template's fixed opening line ("Here is the video I recorded for
+    you."), idempotent, and never raises. Enforces in code the rules the
+    gpt-mini drafter kept breaking on ~40-50% of video replies across six
+    live redraft rounds on 2026-09-03, even with a worked example and a
+    NEVER-list in the instructions:
+
+    1. WHERE-CLAUSE PRESENT (owner report 2026-09-01, "it drifted again"):
+       a two-times question with no "where ..." clause gets the fixed clause
+       spliced in before the "?" (after the second time link, never inside
+       slot 1's href - PR #149).
+    2. WHERE-CLAUSE WORDING (row 2518): any clause is normalised to the fixed
+       "where I could share some of the other ideas I had for {Company}".
+    3. COMPANY, NOT "you" (rows 3273/3262, owner ruling 2026-09-03): the
+       clause names the lead's company when one is resolvable (`company`,
+       resolved by the caller via _video_company_for); "for you" only when
+       none is. A company the drafter itself named is kept when the caller
+       resolved none.
+    4. TWO-TIMES ASK PRESENT (rows 2613/3271/3276): a bare acceptance drafted
+       as just the opening line + sign-off gets the house two-times paragraph
+       with both slot links, plus the fallback line ("... suggest some times,
+       or book in direct <a>here</a>."), appended before the sign-off - only
+       when live `slots` exist and the draft offers no times in any shape.
+    5. SIGN-OFF (row 3264): the last line is exactly `sender_first`.
+
+    `sender_first`/`slots`/`booking_link`/`company` are all optional so the
+    original one-argument call keeps its original behaviour (clause only)."""
     try:
         if not html or not _VIDEO_OPENING_RE.search(html):
             return html
-        m = _TWO_TIMES_Q_RE.search(html)
-        if not m or " where " in m.group(1).lower():
-            return html
-        return html[:m.start()] + m.group(1) + " " + _VIDEO_WHERE_CLAUSE + m.group(2) + html[m.end():]
+        out = html
+        slots = [s for s in (slots or []) if isinstance(s, dict) and s.get("link") and s.get("label")]
+        company = str(company or "").strip()
+
+        m = _TWO_TIMES_Q_RE.search(out)
+        if m:
+            q = m.group(1)
+            cm = _VIDEO_CLAUSE_RE.search(q)
+            existing = cm.group(0) if cm else ""
+            name = company
+            if not name and existing:
+                fm = _VIDEO_CLAUSE_FOR_RE.search(existing)
+                if fm:
+                    drafted = re.sub(r"<[^>]+>", "", fm.group(1)).strip(" \"'")
+                    if drafted and drafted.lower() not in ("you", "your team", "your business", "your company"):
+                        name = drafted
+            clause = _VIDEO_WHERE_CLAUSE_FMT.format(company=name or "you")
+            head = q[:cm.start()] if cm else q
+            new_q = head.rstrip() + " " + clause
+            if new_q != q:
+                out = out[:m.start()] + new_q + m.group(2) + out[m.end():]
+        elif len(slots) >= 2 and not _video_offers_times(out, slots):
+            clause = _VIDEO_WHERE_CLAUSE_FMT.format(company=company or "you")
+            para = (f'<div>Would you be open to a call on <a href="{slots[0]["link"]}">{slots[0]["label"]}</a> '
+                    f'or <a href="{slots[1]["link"]}">{slots[1]["label"]}</a> {clause}?</div>')
+            fallback = (_VIDEO_FALLBACK_LINKED_FMT.format(booking_link=booking_link)
+                        if booking_link else _VIDEO_FALLBACK_PLAIN)
+            insert = para + "<br><div>" + fallback + "</div>"
+            if _IF_TIMES_PARA_RE.search(out):
+                insert = para       # the fallback line is already there
+            out = _video_insert_before_signoff(out, insert, sender_first)
+
+        # The fallback line's fixed wording ("book in direct here", row 2518
+        # wrote "book in directly here").
+        out = re.sub(r"(feel free to suggest some times, or book in )directly(\s*<a\b)", r"\1direct\2", out, flags=re.I)
+
+        if sender_first:
+            out = _video_force_signoff(out, sender_first)
+        return out
     except Exception:  # noqa: BLE001 - a repair must never break the draft
+        return html
+
+
+def _video_offers_times(html: str, slots: list) -> bool:
+    """True when the draft already proposes times in SOME shape - a slot link
+    is present, or it carries the lead-proposed-time accept/counter opener -
+    so the house two-times paragraph must not be appended on top."""
+    low = (html or "").lower()
+    if any(str(s.get("link") or "") in html for s in slots):
+        return True
+    return any(k in low for k in ("would you be open to a call on", "unfortunately i can't make",
+                                  "i'm free on", "i am free on", "see my availability here"))
+
+
+def _video_insert_before_signoff(html: str, insert: str, sender_first: str) -> str:
+    """Place `insert` (one or more <div> paragraphs) before the sign-off line
+    when the draft ends with one, else at the end."""
+    body = _TRAILING_BREAKS_RE.sub("", html.rstrip())
+    m = _LAST_DIV_RE.search(body)
+    if m:
+        text = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", m.group(1))).strip()
+        if text and (text == str(sender_first or "").strip() or
+                     (_SIGNOFF_LINE_RE.match(text) and not text.lower().startswith("hi ") and "?" not in text)):
+            return body[:m.start()].rstrip() + ("<br>" if not _TRAILING_BREAKS_RE.search(body[:m.start()]) else "") \
+                + insert + "<br>" + body[m.start():]
+    return body + "<br>" + insert
+
+
+def apply_video_backstop(html: str, row: dict, agent: dict, slots: list, sender_first: str = "") -> str:
+    """Call-site wrapper: resolves the company lazily (a DB lookup) only when
+    the draft is actually the video template, then runs the backstop."""
+    try:
+        if not html or not _VIDEO_OPENING_RE.search(html):
+            return html
+        return ensure_video_where_clause(
+            html, sender_first=sender_first or _sender_first_for(agent),
+            slots=slots, booking_link=_booking_link(agent), company=_video_company_for(row))
+    except Exception:  # noqa: BLE001
         return html
 
 
@@ -6127,7 +6310,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
                 # Second sweep (owner brief 2026-07-14): proofread the draft
                 # BEFORE lint_draft below, so lint checks the final text.
                 draft_body, _proofread_changed = proofread_draft(draft_body, sender_first, _booking_link(agent))
-                draft_body = ensure_video_where_clause(draft_body)
+                draft_body = apply_video_backstop(draft_body, row, agent, slots, sender_first)
         except Exception as e:  # noqa: BLE001 - a draft outage falls back to no draft -> lint fails -> review
             if not row.get("error"):
                 row["error"] = f"draft failed: {type(e).__name__}"
@@ -13228,7 +13411,7 @@ def _redraft_sync(payload):
             _t = _time.time()
             draft_html, _proofread_changed = proofread_draft(
                 draft_html, sender_first, _booking_link(agent), timeout=REGEN_PROOFREAD_TIMEOUT)
-            draft_html = ensure_video_where_clause(draft_html)
+            draft_html = apply_video_backstop(draft_html, row, agent, slots, sender_first)
             _stage("proofread", _t)
         # One-shot lint-feedback redraft (parity with the training builder,
         # owner report 2026-08-27). The interactive Regenerate used to draft
@@ -13269,7 +13452,7 @@ def _redraft_sync(payload):
                     if _h2:
                         _h2, _ = proofread_draft(_h2, sender_first, _booking_link(agent),
                                                  timeout=REGEN_PROOFREAD_TIMEOUT)
-                        _h2 = ensure_video_where_clause(_h2)
+                        _h2 = apply_video_backstop(_h2, row, agent, slots, sender_first)
                         _rd_ctx2 = dict(_rd_lint_ctx); _rd_ctx2["subject"] = d2.get("subject")
                         _rd_ok2, _ = lint_draft(_h2, _rd_ctx2)
                         if _rd_ok2:
@@ -14612,7 +14795,9 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                     # both real (_build_training_case) and synthetic
                     # (_build_synthetic_training_case) cases.
                     draft_html, _proofread_changed = proofread_draft(draft_html, _sender_first_for(agent), _booking_link(agent))
-                    draft_html = ensure_video_where_clause(draft_html)
+                    draft_html = apply_video_backstop(
+                        draft_html, {"first_outbound": first_outbound, "company_domain": email_domain},
+                        agent, slots, _sender_first_for(agent))
                 _lint_ctx["subject"] = d.get("subject")
                 lint_ok, lint_reason = lint_draft(draft_html, _lint_ctx)
                 if lint_ok:

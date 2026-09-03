@@ -889,6 +889,106 @@ def test_ensure_video_where_clause_skips_query_string_question_mark():
           in setter.ensure_video_where_clause(plain))
 
 
+def test_video_backstop_enforces_template():
+    # 2026-09-03: six live redraft rounds - the gpt-mini drafter broke rules
+    # that are explicit in the instructions on ~40-50% of video replies, so
+    # they are enforced in code: sign-off, two-times ask, company in the
+    # where-clause, fixed clause wording.
+    base = "https://calendly.com/navreo/navreo-book-a-call-with-us-clone"
+    book = base
+    slots = [{"iso": "2026-09-04T09:00:00-04:00",
+              "link": f"{base}/2026-09-04T09:00:00-04:00?name=Ron%20G&email=ron%40zenon.com",
+              "label": "Friday, 4th September at 9:00 AM EDT"},
+             {"iso": "2026-09-07T09:00:00-04:00",
+              "link": f"{base}/2026-09-07T09:00:00-04:00?name=Ron%20G&email=ron%40zenon.com",
+              "label": "Monday, 7th September at 9:00 AM EDT"}]
+    l1 = f'<a href="{slots[0]["link"]}">{slots[0]["label"]}</a>'
+    l2 = f'<a href="{slots[1]["link"]}">{slots[1]["label"]}</a>'
+    head = '<div>Hi Ron,</div><br><div>Here is the video I recorded for you.</div><br>'
+    kw = dict(sender_first="Bjion", slots=slots, booking_link=book, company="Zenon Wholesale")
+
+    def hrefs(h):
+        return re.findall(r'href="([^"]*)"', h)
+
+    # (a) sign-off: "Jane" (the outreach From: name, row 3264) -> "Bjion"
+    jane = head + f'<div>Would you be open to a call on {l1} or {l2} where I could share some of the other ideas I had for Zenon Wholesale?</div><br><div>Jane</div>'
+    fixed = setter.ensure_video_where_clause(jane, **kw)
+    check("video backstop: sign-off forced to sender_first", fixed.endswith("<div>Bjion</div>") and "Jane" not in fixed, fixed[-120:])
+    # sign-off missing entirely -> appended, once
+    nosig = head + f'<div>Would you be open to a call on {l1} or {l2} where I could share some of the other ideas I had for Zenon Wholesale?</div>'
+    fixed = setter.ensure_video_where_clause(nosig, **kw)
+    check("video backstop: missing sign-off appended", fixed.endswith("</div><br><div>Bjion</div>") and fixed.count("<div>Bjion</div>") == 1, fixed[-160:])
+    # "Best, Jane" shape
+    bestjane = head + '<div>Would you be open to a call on Friday or Monday where I could share some of the other ideas I had for Zenon Wholesale?</div><br><div>Best,<br>Jane</div>'
+    fixed = setter.ensure_video_where_clause(bestjane, **kw)
+    check("video backstop: 'Best, Jane' replaced by the single name", fixed.endswith("<div>Bjion</div>") and "Jane" not in fixed, fixed[-160:])
+
+    # (b) bare acceptance drafted as opening + signature (rows 2613/3271/3276):
+    #     the house two-times paragraph + fallback line get appended before the sign-off
+    bare = head + '<div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(bare, **kw)
+    want_q = (f'<div>Would you be open to a call on {l1} or {l2} where I could share some of the other ideas I had for Zenon Wholesale?</div>')
+    want_fb = f'<div>If those times aren\'t suitable, feel free to suggest some times, or book in direct <a href="{book}">here</a>.</div>'
+    check("video backstop: two-times paragraph appended with both slot links", want_q in fixed, fixed)
+    check("video backstop: fallback line appended with the booking link", want_fb in fixed, fixed)
+    check("video backstop: order is opening, question, fallback, sign-off",
+          fixed.index("recorded for you") < fixed.index("Would you be open") < fixed.index("If those times") < fixed.rindex("<div>Bjion</div>"), fixed)
+    check("video backstop: appended draft is idempotent", setter.ensure_video_where_clause(fixed, **kw) == fixed)
+    check("video backstop: no href gains prose", all(" " not in h for h in hrefs(fixed)), hrefs(fixed))
+    # no slots -> nothing appended (the draft still gets its sign-off)
+    fixed = setter.ensure_video_where_clause(bare, **{**kw, "slots": []})
+    check("video backstop: no live slots -> no two-times paragraph invented", "Would you be open" not in fixed and fixed.endswith("<div>Bjion</div>"), fixed)
+    # no booking link -> plain-text fallback, no link
+    fixed = setter.ensure_video_where_class(bare, **{**kw, "booking_link": ""}) if False else setter.ensure_video_where_clause(bare, **{**kw, "booking_link": ""})
+    check("video backstop: empty booking link -> plain fallback sentence", "suggest some times that work for you." in fixed and "book in direct" not in fixed, fixed)
+    # times already offered in the lead-proposed-time counter shape -> untouched
+    counter = head + f'<div>Unfortunately I can\'t make Thursday, but I can do {l1} or {l2} - would either of those work?</div><br><div>Bjion</div>'
+    check("video backstop: a counter that already offers the slots is not doubled",
+          setter.ensure_video_where_clause(counter, **kw) == counter)
+
+    # (c) company in the clause: "for you?" -> "for {Company}" when resolvable (rows 3273/3262)
+    foryou = head + f'<div>Would you be open to a call on {l1} or {l2} where I could share some of the other ideas I had for you?</div><br><div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(foryou, **kw)
+    check("video backstop: 'for you' becomes the company name", "ideas I had for Zenon Wholesale?</div>" in fixed and "for you?" not in fixed, fixed)
+    check("video backstop: slot hrefs survive the company rewrite", hrefs(fixed)[:2] == hrefs(foryou)[:2], hrefs(fixed))
+    fixed = setter.ensure_video_where_clause(foryou, **{**kw, "company": ""})
+    check("video backstop: no company resolvable -> 'for you' kept", "ideas I had for you?</div>" in fixed, fixed)
+    # a clause missing altogether gets the company form too
+    missing = head + f'<div>Would you be open to a call on {l1} or {l2}?</div><br><div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(missing, **kw)
+    check("video backstop: missing clause spliced with the company", "</a> where I could share some of the other ideas I had for Zenon Wholesale?</div>" in fixed, fixed)
+
+    # (d) variant clause wording normalised (row 2518: "ideas I have for insyghtful.ai")
+    variant = head + f'<div>Would you be open to a call on {l1} or {l2} where I could share some of the other ideas I have for insyghtful.ai?</div><br><div>If those times aren\'t suitable, feel free to suggest some times, or book in directly <a href="{book}">here</a>.</div><br><div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(variant, **{**kw, "company": ""})
+    check("video backstop: variant wording normalised, drafter's company kept when none resolved",
+          "where I could share some of the other ideas I had for insyghtful.ai?</div>" in fixed, fixed)
+    check("video backstop: 'book in directly here' -> 'book in direct here'", "book in direct <a" in fixed and "directly" not in fixed, fixed)
+    fixed = setter.ensure_video_where_clause(variant, **kw)
+    check("video backstop: resolved company outranks the drafter's", "ideas I had for Zenon Wholesale?</div>" in fixed, fixed)
+    freeform = head + f'<div>Would you be open to a call on {l1} or {l2} where we could run through all of this?</div><br><div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(freeform, **kw)
+    check("video backstop: free-form clause replaced by the fixed one", "where I could share some of the other ideas I had for Zenon Wholesale?</div>" in fixed and "run through" not in fixed, fixed)
+
+    # scope guard: not the video template -> untouched even with a wrong sign-off
+    other = '<div>Hi Ron,</div><br><div>Here is the resource we put together.</div><br><div>Jane</div>'
+    check("video backstop: non-video draft untouched", setter.ensure_video_where_clause(other, **kw) == other)
+    # legacy one-argument call keeps its original behaviour
+    check("video backstop: one-arg call still splices the clause only",
+          "ideas I had for you?</div>" in setter.ensure_video_where_clause(missing) and setter.ensure_video_where_clause(bare) == bare)
+
+    # company resolution from the original outreach / row
+    co = setter._video_company_for({"first_outbound": "Hi Ron,\n\nI recorded a quick video for Zenon Wholesale Digital Marketing walking through exactly what we'd build.",
+                                    "company_domain": "zenonwholesaledigitalmarketing.com"})
+    check("video company: read from the original outreach", co == "Zenon Wholesale Digital Marketing", co)
+    co = setter._video_company_for({"first_outbound": "I recorded a short video for insyghtful.ai showing exactly what we'd build"})
+    check("video company: domain-style company from the outreach", co == "insyghtful.ai", co)
+    co = setter._video_company_for({"lead_company": "Awe Studios", "first_outbound": "I recorded a quick video for Someone Else walking"})
+    check("video company: lead record outranks the outreach", co == "Awe Studios", co)
+    co = setter._video_company_for({"first_outbound": "Hi Ron, hope you're well."})
+    check("video company: nothing resolvable -> empty (no DB when no domain)", co == "", co)
+
+
 def test_lint_draft():
     ctx = {"subject": "Re: hello", "first_name": "Jane", "needs_resource_link": True,
            "instructions": "Resource: The breakdown - https://navreo.notion.site/abc - "
@@ -12367,6 +12467,7 @@ if __name__ == "__main__":
     test_training_interview_questions_and_answers_merge()
     test_route_training_get_exposes_fastloop_fields()
     test_ensure_video_where_clause_skips_query_string_question_mark()
+    test_video_backstop_enforces_template()
 
     failed = run_report()
     sys.exit(1 if failed else 0)
