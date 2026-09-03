@@ -6558,6 +6558,15 @@ def run_client_reply_sync() -> dict:
                 s["gap"] = max(0, len(inbox) - CLIENT_SYNC_CAP)
             catmap = None                       # fetched lazily, once per workspace
             advanced_to, frozen = wm, False
+            # Same batching as run_reply_sync (egress audit 2026-09-03, PR
+            # #146 covered only the navreo loop): one seen-set and one
+            # archived-set read per workspace instead of two GETs per reply.
+            # None => batch failed => per-row fallback, never a re-archive.
+            _ws_mids = [f"{r.get('email_lead_id')}-{r.get('last_reply_time')}"
+                        for r in to_process if isinstance(r, dict)
+                        and r.get("email_lead_id") and r.get("last_reply_time")]
+            _ws_seen = _reply_sync_seen_batch(_ws_mids)
+            _ws_arch = _reply_in_archive_batch(ws, _ws_mids) if _ws_seen is not None else None
             for r in to_process:
                 if not isinstance(r, dict):
                     continue
@@ -6570,10 +6579,11 @@ def run_client_reply_sync() -> dict:
                 mid = f"{lead_id}-{rtime}"      # == ingest/categoriser archive key
                 rt_dt = _parse_iso(rtime)
                 handled = False
-                if _reply_sync_seen(mid):
+                _ws_is_seen = (mid in _ws_seen) if _ws_seen is not None else _reply_sync_seen(mid)
+                if _ws_is_seen:
                     s["skipped_seen"] += 1
                     handled = True
-                elif _reply_in_archive_ws(ws, mid):
+                elif ((mid in _ws_arch) if _ws_arch is not None else _reply_in_archive_ws(ws, mid)):
                     _mark_reply_seen(mid)
                     s["skipped_archived"] += 1
                     handled = True
