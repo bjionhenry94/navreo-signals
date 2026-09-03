@@ -46,8 +46,12 @@ def fake_sb(method, path, body=None, prefer="", **kw):
         return [m for m in STORE["moves"] if str(m.get("campaign_id")) == cid][:1]
     if path.startswith("auto_mover_moves?select="):
         rows = list(STORE["moves"])
+        if "issue_kind=eq.thin_evidence" in path:
+            return [m for m in rows if m.get("issue_kind") == "thin_evidence"]
         if "or=(outcome.eq.issue" in path:
             rows = [m for m in rows if m.get("outcome") == "issue" or m.get("issue_kind")]
+        if "issue_kind=neq.thin_evidence" in path:
+            rows = [m for m in rows if m.get("issue_kind") != "thin_evidence"]
         return rows
     return []
 
@@ -166,14 +170,20 @@ STORE["moves"] = [{"id": 2, "campaign_id": "3445988", "step": 1, "action": "scal
                    "created_at": "2026-09-02T10:00:00Z"},
                   {"id": 1, "campaign_id": "3445988", "step": 1, "action": "back_winner",
                    "winner": "B", "outcome": "issue", "issue_kind": "flap",
-                   "created_at": "2026-09-01T10:00:00Z"}]
+                   "created_at": "2026-09-01T10:00:00Z"},
+                  {"id": 3, "campaign_id": "3445988", "step": 2, "action": "scale_winner",
+                   "winner": "C", "outcome": "moved", "issue_kind": "thin_evidence",
+                   "created_at": "2026-09-03T10:00:00Z"}]
 s, b = server.api_campaign_auto_move_get("3445988")
 check("GET surfaces the latest move", (b.get("last_auto_move") or {}).get("id") == 2, b)
 feed = server.api_auto_mover_moves(50)
-check("moves feed returns rows", feed.get("ok") and feed.get("count") == 2, feed)
+check("moves feed returns rows", feed.get("ok") and feed.get("count") == 3, feed)
 feed = server.api_auto_mover_moves(50, issues_only=True)
-check("issues filter returns only the flagged row",
+check("issues filter returns only the flagged row, never thin_evidence",
       [m["id"] for m in feed["moves"]] == [1], feed)
+feed = server.api_auto_mover_moves(50, thin_only=True)
+check("thin filter returns only the thin_evidence row",
+      [m["id"] for m in feed["moves"]] == [3], feed)
 
 # a Supabase blow-up on the feed degrades to empty, never a 500
 _old = server.sb

@@ -25,6 +25,8 @@ table.ws tr:last-child td { border-bottom: none; }
 .pill.on { color: var(--green); background: var(--green-bg); border: 1px solid var(--green-line); }
 .pill.off { color: var(--ink-3); background: var(--bg-sunken); border: 1px solid var(--line-2); }
 .pill.bad { color: var(--red); background: var(--bg-sunken); border: 1px solid var(--line-2); }
+.pill.warn { color: var(--amber, #6B4A00); background: var(--amber-bg, var(--bg-sunken)); border: 1px solid var(--line-2); }
+.pill.sub-kind { margin-left: 6px; }
 .empty, .loading { padding: 22px 10px; color: var(--ink-3); font-size: 13px; }
 .hint { font-size: 12px; color: var(--ink-3); line-height: 1.45; }
 /* the splits column: "A 80% · B 20%  →  A 100% · B 0%" */
@@ -108,9 +110,17 @@ table.ws tr:last-child td { border-bottom: none; }
       <h2>Open issues</h2>
       <p class="sub">Anything the auto-mover flagged rather than quietly did — a
       counter that dropped, a save that failed, a campaign a human had already
-      taken over, or a winner that flipped back on itself. Each one is also filed
-      as a Notion task.</p>
+      taken over, or a winner that flipped back on itself. Each one is filed as a
+      Notion task.</p>
       <div class="tablewrap"><div id="issues-table"><div class="loading">Loading issues…</div></div></div>
+    </section>
+
+    <section class="section" id="thin-section">
+      <h2>Low-confidence moves</h2>
+      <p class="sub">Moves the auto-mover made exactly as the engine ruled, where
+      the winner had fewer than 2 positives. Worth a glance — no action needed,
+      nothing is filed to Notion.</p>
+      <div class="tablewrap"><div id="thin-table"><div class="loading">Loading low-confidence moves…</div></div></div>
     </section>
 
     <section class="section" id="moves-section">
@@ -241,7 +251,9 @@ function movesTable(rows){
         '<span class="arrow">&rarr;</span>', gSplits(r.pcts_after), "</td>",
       "<td>", gEsc(r.actor || "–"), "</td>",
       '<td><span class="pill ', (bad ? "bad" : "on"), '">',
-        gEsc(r.issue_kind || r.outcome || "moved"), "</span></td>",
+        gEsc(r.outcome || "moved"), "</span>",
+        (r.issue_kind ? '<span class="pill warn sub-kind">' + gEsc(r.issue_kind) +
+          "</span>" : ""), "</td>",
       "<td>", gEsc(gAgo(r.created_at)), "</td>",
       "</tr>");
   });
@@ -271,6 +283,37 @@ function issuesTable(rows){
   });
   h.push("</tbody></table>");
   return h.join("");
+}
+function thinTable(rows){
+  if (!rows.length)
+    return '<div class="empty">No low-confidence moves.</div>';
+  var h = ['<table class="ws"><thead><tr>',
+    "<th>Campaign</th><th>Step</th><th>Action</th><th>Winner</th>",
+    "<th>Before &rarr; after</th><th>When</th>",
+    "</tr></thead><tbody>"];
+  rows.forEach(function(r){
+    h.push("<tr>",
+      "<td>", gCampaign(r.campaign_id), "</td>",
+      "<td>", r.step == null ? "–" : "Email " + gEsc(r.step), "</td>",
+      '<td class="ws-slug">', gEsc(r.action || "–"), "</td>",
+      "<td>", gWinner(r), "</td>",
+      '<td class="splits">', gSplits(r.pcts_before),
+        '<span class="arrow">&rarr;</span>', gSplits(r.pcts_after), "</td>",
+      "<td>", gEsc(gAgo(r.created_at)), "</td>",
+      "</tr>");
+  });
+  h.push("</tbody></table>");
+  return h.join("");
+}
+async function loadThin(){
+  try {
+    var r = await fetch("/api/auto-mover/moves?limit=50&thin=1", { cache: "no-store" });
+    var b = await r.json();
+    document.getElementById("thin-table").innerHTML = thinTable(b.moves || []);
+  } catch (e) {
+    document.getElementById("thin-table").innerHTML =
+      '<div class="empty">Couldn\'t load low-confidence moves.</div>';
+  }
 }
 async function loadMoves(){
   try {
@@ -307,11 +350,12 @@ document.getElementById("am-run").addEventListener("click", async function(){
     hint.textContent = "Couldn't run.";
   }
   btn.disabled = false;
-  loadIssues(); loadMoves();
+  loadIssues(); loadThin(); loadMoves();
 });
 
 loadPrefs();
 loadIssues();
+loadThin();
 loadMoves();
 </script>
 </body>
