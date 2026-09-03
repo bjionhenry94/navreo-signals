@@ -846,6 +846,49 @@ def test_pick_slots():
 
 # ── 4. draft lint ────────────────────────────────────────────────────────────
 
+def test_ensure_video_where_clause_skips_query_string_question_mark():
+    # 2026-09-03: every Navreo video draft carried a dead FIRST time link.
+    # The two proposed times are booking links whose hrefs end in a query
+    # string ("...T09:00:00-04:00?name=...&email=..."), and the backstop's
+    # regex took the first "?" after the opener - the one inside slot 1's
+    # URL - as the question mark, splicing the fixed clause INTO the href:
+    #   .../2026-09-04T09:00:00-04:00 where I could share ... for you?name=...
+    base = "https://calendly.com/navreo/navreo-book-a-call-with-us-clone"
+    l1 = (f'<a href="{base}/2026-09-04T15:00:00+02:00?name=Reza%20Ghadim&email=rghadim%40geosig.com">'
+          'Friday, 4th September at 3:00 PM CEST</a>')
+    l2 = (f'<a href="{base}/2026-09-07T14:30:00+02:00?name=Reza%20Ghadim&email=rghadim%40geosig.com">'
+          'Monday, 7th September at 2:30 PM CEST</a>')
+    head = '<div>Hi Reza,</div><br><div>Here is the video I recorded for you.</div><br>'
+
+    def hrefs(h):
+        return re.findall(r'href="([^"]*)"', h)
+
+    # clause missing, hyperlinked times: the clause lands AFTER the second
+    # link and every href stays a clean URL (no space, no prose inside it)
+    missing = head + f'<div>Would you be open to a call on {l1} or {l2}?</div><br><div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(missing)
+    check("video where-clause: spliced after the second time link, not into slot 1's href",
+          "</a> where I could share some of the other ideas I had for you?</div>" in fixed, fixed)
+    check("video where-clause: no href gains a space or prose",
+          all(" " not in h and "where" not in h.lower() for h in hrefs(fixed)), hrefs(fixed))
+    check("video where-clause: both slot hrefs survive verbatim",
+          hrefs(fixed)[:2] == hrefs(missing)[:2], hrefs(fixed))
+
+    # clause already present (the company form the instructions now mandate):
+    # the backstop must be a no-op, even though each href carries a "?"
+    present = head + (f'<div>Would you be open to a call on {l1} or {l2} where I could share some '
+                      'of the other ideas I had for GeoSIG?</div><br><div>Bjion</div>')
+    check("video where-clause: draft that already has the clause is left untouched",
+          setter.ensure_video_where_clause(present) == present)
+
+    # plain-text times (no links, no "?" before the real one): unchanged behaviour
+    plain = head + ('<div>Would you be open to a call on Friday, 4 September at 9:00 AM EDT or '
+                    'Monday, 7 September at 9:00 AM EDT?</div><br><div>Bjion</div>')
+    check("video where-clause: plain-text times still get the clause before the '?'",
+          "9:00 AM EDT where I could share some of the other ideas I had for you?</div>"
+          in setter.ensure_video_where_clause(plain))
+
+
 def test_lint_draft():
     ctx = {"subject": "Re: hello", "first_name": "Jane", "needs_resource_link": True,
            "instructions": "Resource: The breakdown - https://navreo.notion.site/abc - "
@@ -12323,6 +12366,7 @@ if __name__ == "__main__":
     test_queued_share_retrain_keeps_pool_mode()
     test_training_interview_questions_and_answers_merge()
     test_route_training_get_exposes_fastloop_fields()
+    test_ensure_video_where_clause_skips_query_string_question_mark()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

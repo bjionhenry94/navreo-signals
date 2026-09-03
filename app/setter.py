@@ -3778,7 +3778,15 @@ def normalize_call_intent(classification: dict) -> dict:
 _VIDEO_WHERE_CLAUSE = "where I could share some of the other ideas I had for you"
 _VIDEO_OPENING_RE = re.compile(r"here is the video i recorded for you", re.I)
 # The house two-times question, from its fixed opener to the closing "?".
-_TWO_TIMES_Q_RE = re.compile(r"(Would you be open to a call on\b.*?)(\s*\?)", re.I | re.S)
+# The two proposed times are themselves booking links whose hrefs carry a
+# query string ("...T09:00:00-04:00?name=...&email=..."), so the FIRST "?"
+# after the opener is usually the one inside slot 1's URL, not the question
+# mark. Matching that one spliced the fixed clause into the href (every
+# Navreo video draft on 2026-09-03: a dead first link reading
+# ".../2026-09-04T09:00:00-04:00 where I could share ... for you?name=...").
+# A query-string "?" is always followed by "key=", a real question mark never
+# is, so skip any "?" that starts a query string.
+_TWO_TIMES_Q_RE = re.compile(r"(Would you be open to a call on\b.*?)(\s*\?)(?!\w+=)", re.I | re.S)
 
 
 def ensure_video_where_clause(html: str) -> str:
