@@ -19657,7 +19657,7 @@ def auto_move_run(campaign_id=None, max_moves=None,
 
         run_job = None
         try:
-            run_job = _new_job("auto_mover", f"Auto-mover: reviewing {len(cands)} campaigns",
+            run_job = _new_job("auto_mover", f"Checking {len(cands)} campaigns for the best email",
                                None, auto_remove=True)
             _job_started(run_job)
         except Exception:  # noqa: BLE001 — the panel mirror never blocks the run
@@ -19826,8 +19826,13 @@ def auto_move_run(campaign_id=None, max_moves=None,
 
             move_job = None
             try:
-                move_label = (f"Moved Email {_AM_STEP} to Version {lab} - {name}" if lab
-                              else f"Split Email {_AM_STEP} evenly - {name}")
+                _am_mode = str(ev.get("mode") or "")
+                if not lab:
+                    move_label = f"Two versions tied - split Email {_AM_STEP} evenly - {name}"
+                elif _am_mode == "partial":
+                    move_label = f"Sent most of Email {_AM_STEP} to the best version ({lab}) - {name}"
+                else:
+                    move_label = f"Sent all of Email {_AM_STEP} to the best version ({lab}) - {name}"
                 move_job = _new_job("auto_mover_move", move_label, cid)
                 _job_started(move_job)
             except Exception:  # noqa: BLE001
@@ -21379,13 +21384,11 @@ def _report_auto_moves(camp_ids: list, camp_names: dict,
         win = r.get("winner")
         leads = [str(x) for x in (r.get("leaders") or [])]
         if mode == "tie" and leads:
-            txt = ("Split Email 1 evenly across Versions "
-                   + (", ".join(leads[:-1]) + " and " + leads[-1] if len(leads) > 1
-                      else leads[0]))
+            txt = "Two versions were tied, so we split Email 1 evenly"
         elif mode == "partial" and win:
-            txt = f"Backed Version {win} with 80% of Email 1"
+            txt = f"Sent most of Email 1 to the best version ({win}) and kept testing the rest"
         elif win:
-            txt = f"Moved all of Email 1 to the best-performing version ({win})"
+            txt = f"Sent all of Email 1 to the best-performing version ({win})"
         else:
             continue
         out.append({"campaign": camp_names.get(str(r.get("campaign_id"))) or "",
@@ -21401,7 +21404,7 @@ def _report_replied_rows(client: str, camp_ids: list, camp_names: dict,
     report range, plus the campaigns that launched (started sending) in it.
     Cheap PostgREST reads, 10-min cached per client|range; reply text is
     cleaned server-side so raw HTML never reaches a client."""
-    key = f"v6|{client}|{start_iso}|{end_iso}"   # v6: + auto-mover traffic moves
+    key = f"v7|{client}|{start_iso}|{end_iso}"   # v7: plain-English auto-mover lines
     with _REPORT_REPLIED_LOCK:
         ent = _REPORT_REPLIED_CACHE.get(key)
         if ent and (time.time() - ent["ts"]) < _REPORT_REPLIED_TTL_S:

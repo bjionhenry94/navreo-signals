@@ -373,11 +373,11 @@ function setupChartTooltip(wrap) {
     "reconnect-watch": "sync"
   };
   var JOB_FAMILIES = {
-    traffic: { name: "Traffic moves", icon: "sr-i-fam-traffic", cls: "sr-fam-traffic" },
-    mailbox: { name: "Mailbox health", icon: "sr-i-fam-mailbox", cls: "sr-fam-mailbox" },
-    data: { name: "Data pulls", icon: "sr-i-fam-data", cls: "sr-fam-data" },
-    launch: { name: "Launches", icon: "sr-i-fam-launch", cls: "sr-fam-launch" },
-    sync: { name: "Sync", icon: "sr-i-fam-sync", cls: "sr-fam-sync" },
+    traffic: { name: "Email picks", icon: "sr-i-fam-traffic", cls: "sr-fam-traffic" },
+    mailbox: { name: "Inbox health", icon: "sr-i-fam-mailbox", cls: "sr-fam-mailbox" },
+    data: { name: "Lead work", icon: "sr-i-fam-data", cls: "sr-fam-data" },
+    launch: { name: "New campaigns", icon: "sr-i-fam-launch", cls: "sr-fam-launch" },
+    sync: { name: "Background jobs", icon: "sr-i-fam-sync", cls: "sr-fam-sync" },
     other: { name: "Other", icon: "sr-i-fam-other", cls: "sr-fam-other" }
   };
   function njFamilyOf(job) {
@@ -425,31 +425,31 @@ function setupChartTooltip(wrap) {
       var parent = jobs.filter(function (j) { return j.kind === "auto_mover"; })[0];
       var reviewed = null;
       if (parent) {
-        var m = /reviewing\s+(\d+)/i.exec(String(parent.label || ""));
+        var m = /(?:reviewing|checking)\s+(\d+)/i.exec(String(parent.label || ""));
         if (m) reviewed = Number(m[1]);
       }
       if (parent && reviewed != null && reviewed >= moves) {
-        return "Auto-mover moved traffic on " + moves + " of " + reviewed + " campaigns reviewed";
+        return "Looked at " + reviewed + " campaigns and improved " + moves;
       }
-      return "Moved traffic to the winner on " + moves + " campaign" + (moves === 1 ? "" : "s");
+      return "Sent more of the best email on " + moves + " campaign" + (moves === 1 ? "" : "s");
     }
     if (g.shape === "warmup_resume") {
       return "Woke up " + boxes + " inbox" + (boxes === 1 ? "" : "es")
         + (dPart || " across " + n + " run" + (n === 1 ? "" : "s"));
     }
     if (g.shape === "warmup_pause") {
-      return "Rested " + boxes + " inbox" + (boxes === 1 ? "" : "es")
+      return "Let " + boxes + " inbox" + (boxes === 1 ? "" : "es") + " rest"
         + (dPart || " across " + n + " run" + (n === 1 ? "" : "s"));
     }
     if (g.shape === "rest_enforce") {
-      return "Re-parked " + boxes + " mailbox" + (boxes === 1 ? "" : "es")
+      return "Rested " + boxes + " inbox" + (boxes === 1 ? "" : "es") + " to keep them healthy"
         + (domains > 0 ? " on " + domains + " domain" + (domains === 1 ? "" : "s") : "");
     }
-    if (g.shape === "bounce_pause") return "Paused " + boxes + " inboxes (high bounce)";
-    if (g.shape === "bounce_resume") return "Resumed " + boxes + " inboxes";
+    if (g.shape === "bounce_pause") return "Paused " + boxes + " inboxes that were bouncing";
+    if (g.shape === "bounce_resume") return "Turned " + boxes + " inboxes back on";
     if (g.shape === "verify") return "Checked emails on " + n + " campaigns";
-    if (g.shape === "remove_bad") return "Cleaned bad leads on " + n + " campaigns";
-    if (g.shape === "pool_pull") return "Pulled more leads " + n + " times";
+    if (g.shape === "remove_bad") return "Took out bad leads on " + n + " campaign" + (n === 1 ? "" : "s");
+    if (g.shape === "pool_pull") return "Found more leads " + n + " time" + (n === 1 ? "" : "s");
     return (JOB_FAMILIES[g.family] || JOB_FAMILIES.other).name + " — " + n + " updates";
   }
   /* Collapse consecutive-in-time jobs of the same family + status + shape that
@@ -476,6 +476,27 @@ function setupChartTooltip(wrap) {
     flush();
     return out;
   }
+  // Cosmetic display rules (owner 2026-09-03):
+  //  - HIDDEN_KINDS never render in the panel (the work + auto-retry still run).
+  //  - a FINISHED row that did zero work (0 moves / 0 inboxes / 0 leads) is
+  //    hidden; running and failed rows always show, even at zero.
+  var HIDDEN_KINDS = { verify: 1 };
+  var NJ_WORK_KEYS = ["moved", "resumed", "smartlead_capped", "held_boxes",
+    "boxes", "paused", "removed", "deleted", "pulled", "checked", "woke"];
+  function njZeroWork(job) {
+    var c = njCounts(job); var seen = false, total = 0;
+    NJ_WORK_KEYS.forEach(function (k) {
+      if (c[k] != null && !isNaN(Number(c[k]))) { seen = true; total += Number(c[k]); }
+    });
+    return seen && total === 0;
+  }
+  function njVisible(job) {
+    if (HIDDEN_KINDS[String(job.kind || "").toLowerCase()]) return false;
+    var done = job.status === "done" || job.status === "cancelled";
+    if (done && njZeroWork(job)) return false;
+    return true;
+  }
+
   /*__JOBS_GROUP_END__*/
 
   /* Split Rail: one plain-English sentence per job — verbs + one big number,
@@ -999,18 +1020,21 @@ function setupChartTooltip(wrap) {
   let srExpanded = false;
 
   function render() {
+    const jobsV = jobs.filter(njVisible);
     if (!jobs.length) {
       elList.innerHTML = `<div class="nj-empty">No tasks yet.</div>`;
+    } else if (!jobsV.length) {
+      elList.innerHTML = `<div class="nj-empty">No tasks yet.</div>`;
     } else {
-      const running = jobs.filter((j) => j.status === "running").length;
-      const queuedSeqs = jobs.filter((j) => j.status === "queued")
+      const running = jobsV.filter((j) => j.status === "running").length;
+      const queuedSeqs = jobsV.filter((j) => j.status === "queued")
         .map((j) => j.queue_seq).filter((s) => s != null).sort((a, b) => a - b);
       const posFor = (job) => {
         if (job.status !== "queued") return null;
         return running + (job.queue_seq != null
           ? queuedSeqs.filter((s) => s < job.queue_seq).length : 0);
       };
-      const busyCampaigns = new Set(jobs
+      const busyCampaigns = new Set(jobsV
         .filter((j) => (j.status === "queued" || j.status === "running") && j.campaign_id != null)
         .map((j) => String(j.campaign_id)));
       const row = (j) => renderRow(j, posFor(j), j.campaign_id != null && busyCampaigns.has(String(j.campaign_id)));
@@ -1037,9 +1061,9 @@ function setupChartTooltip(wrap) {
       }).join("");
 
       // Split Rail zones: Needs you → Happening now → Just finished.
-      const needs = jobs.filter((j) => j.status === "failed" || j.status === "interrupted");
-      const now = jobs.filter((j) => j.status === "queued" || j.status === "running");
-      const fin = jobs.filter((j) => j.status === "done" || j.status === "cancelled");
+      const needs = jobsV.filter((j) => j.status === "failed" || j.status === "interrupted");
+      const now = jobsV.filter((j) => j.status === "queued" || j.status === "running");
+      const fin = jobsV.filter((j) => j.status === "done" || j.status === "cancelled");
       const two = (n) => String(n).padStart(2, "0");
       let html = "";
       if (needs.length) html += `<div class="sr-zone">Needs you <span class="sr-zn">${two(needs.length)}</span></div>${rows(needs)}`;
@@ -1066,7 +1090,7 @@ function setupChartTooltip(wrap) {
       const moreBtn = elList.querySelector(".sr-more");
       if (moreBtn) moreBtn.addEventListener("click", () => { srExpanded = !srExpanded; render(); });
     }
-    const activeCount = jobs.filter((j) => j.status === "queued" || j.status === "running").length;
+    const activeCount = jobs.filter(njVisible).filter((j) => j.status === "queued" || j.status === "running").length;
     elBadge.textContent = String(activeCount);
     elBadge.classList.toggle("nj-on", activeCount > 0);
     elBadge.classList.toggle("nj-pulse", activeCount > 0);
