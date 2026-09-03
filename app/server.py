@@ -19041,8 +19041,15 @@ def api_campaign_auto_move_set(cid: str, payload: dict, actor: str = "") -> tupl
                  "last_auto_move": auto_mover_last_move(cid) or None}
 
 
-def api_auto_mover_moves(limit: int = 50, issues_only: bool = False) -> dict:
-    """GET /api/auto-mover/moves?limit=50[&issues=1] — the General page's feed."""
+def api_auto_mover_moves(limit: int = 50, issues_only: bool = False,
+                         thin_only: bool = False) -> dict:
+    """GET /api/auto-mover/moves?limit=50[&issues=1|&thin=1] — General's feed.
+
+    ``issues=1`` is the real-issue feed (save_failed / counter_drop / human_owned
+    / flap / breaker). ``thin_evidence`` is digest-only by design (rule R3 — it
+    never becomes a Notion task), so it is excluded there and served on its own
+    via ``thin=1``.
+    """
     try:
         limit = max(1, min(200, int(limit or 50)))
     except (TypeError, ValueError):
@@ -19051,8 +19058,10 @@ def api_auto_mover_moves(limit: int = 50, issues_only: bool = False) -> dict:
            "pcts_before,pcts_after,notification_id,actor,outcome,issue_kind,"
            "notion_task_url,created_at")
     qs = "auto_mover_moves?select=" + sel + "&order=created_at.desc&limit=" + str(limit)
-    if issues_only:
-        qs += "&or=(outcome.eq.issue,issue_kind.not.is.null)"
+    if thin_only:
+        qs += "&issue_kind=eq.thin_evidence"
+    elif issues_only:
+        qs += "&or=(outcome.eq.issue,issue_kind.not.is.null)&issue_kind=neq.thin_evidence"
     try:
         rows = sb("GET", qs) or []
     except Exception as e:  # noqa: BLE001 — an empty feed beats a 500 on the page
@@ -25029,7 +25038,8 @@ class Handler(SimpleHTTPRequestHandler):
             q = parse_qs(urlparse(self.path).query)
             return self._json(api_auto_mover_moves(
                 (q.get("limit") or ["50"])[0],
-                (q.get("issues") or [""])[0] in ("1", "true", "yes")))
+                (q.get("issues") or [""])[0] in ("1", "true", "yes"),
+                (q.get("thin") or [""])[0] in ("1", "true", "yes")))
         if path.startswith("/api/campaigns/") and path.endswith("/auto-move"):
             # per-campaign auto-mover switch: inherit | on | off + last move
             cid = path[len("/api/campaigns/"):-len("/auto-move")]
