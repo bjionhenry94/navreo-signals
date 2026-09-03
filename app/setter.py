@@ -4824,6 +4824,44 @@ def _existing_row(workspace: str, campaign_id, email: str, message_id: str):
         return None
 
 
+def _pg_in_list(values) -> str:
+    """PostgREST `in.(...)` list: each value double-quoted (Message-IDs carry
+    commas, parens and angle brackets), then URL-encoded as one unit."""
+    return quote(",".join('"' + str(v).replace('"', '\\"') + '"' for v in values), safe="")
+
+
+def _existing_keys_batch(workspace: str, candidates):
+    """Batched twin of _existing_row for the poll sweep (egress audit
+    2026-09-03: one GET per candidate reply was ~20k requests/day). Returns
+    the set of (campaign_id, email, message_id) keys that already have a
+    queue row - matched on message_id OR source_message_id exactly like
+    _existing_row - or None when any chunk fails, so the caller falls back
+    to the per-row check rather than re-intaking a reply it can't verify."""
+    if not _SB:
+        return None
+    mids = sorted({str(m) for (_c, _e, m) in candidates if m})
+    if not mids:
+        return set()
+    found = set()
+    for i in range(0, len(mids), 50):          # ~50 ids keeps the URL well under 8 KB
+        inl = _pg_in_list(mids[i:i + 50])
+        rows = _SB("GET", f"{QUEUE_TABLE}?workspace=eq.{workspace}"
+                          f"&or=(message_id.in.({inl}),source_message_id.in.({inl}))"
+                          f"&select=smartlead_campaign_id,lead_email,message_id,source_message_id"
+                          f"&limit=1000")
+        if not isinstance(rows, list):
+            return None
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            cid = str(r.get("smartlead_campaign_id") or "")
+            em = (r.get("lead_email") or "").strip().lower()
+            for key in (r.get("message_id"), r.get("source_message_id")):
+                if key:
+                    found.add((cid, em, str(key)))
+    return found
+
+
 def _row_same_instant(workspace: str, campaign_id, email: str, rtime, own_id):
     """The sibling row (any status) already representing this reply INSTANT,
     or None. Message-id identity alone cannot dedupe a re-reply: the webhook,
@@ -6224,6 +6262,41 @@ def _mark_reply_seen(mid: str) -> None:
             prefer="resolution=merge-duplicates")
 
 
+def _reply_sync_seen_batch(mids):
+    """Set of message_ids already in reply_sync_seen, fetched in chunks of 100
+    instead of one GET per reply (egress audit 2026-09-03: the per-mid form
+    was ~10k requests/day). None if any chunk fails -> caller falls back to
+    the per-row _reply_sync_seen."""
+    if not _SB:
+        return None
+    mids = sorted({str(m) for m in mids if m})
+    seen = set()
+    for i in range(0, len(mids), 100):
+        rows = _SB("GET", f"reply_sync_seen?message_id=in.({_pg_in_list(mids[i:i + 100])})"
+                          f"&select=message_id&limit=1000")
+        if not isinstance(rows, list):
+            return None
+        seen.update(str(r.get("message_id")) for r in rows if isinstance(r, dict))
+    return seen
+
+
+def _reply_in_archive_batch(ws: str, mids):
+    """Set of message_ids already archived in `replies` for one workspace,
+    chunked like _reply_sync_seen_batch. None on failure."""
+    if not _SB:
+        return None
+    mids = sorted({str(m) for m in mids if m})
+    found = set()
+    for i in range(0, len(mids), 100):
+        rows = _SB("GET", f"replies?workspace=eq.{ws}"
+                          f"&smartlead_message_id=in.({_pg_in_list(mids[i:i + 100])})"
+                          f"&select=smartlead_message_id&limit=1000")
+        if not isinstance(rows, list):
+            return None
+        found.update(str(r.get("smartlead_message_id")) for r in rows if isinstance(r, dict))
+    return found
+
+
 def _fetch_master_inbox_window(since_iso: str, until_iso: str, hard_cap: int, api_key=None):
     """Raw Smartlead master-inbox list for replies in [since, until].
     POST /master-inbox/inbox-replies (MCP-free, built on _sl_post — the MCP
@@ -6289,6 +6362,14 @@ def run_reply_sync() -> dict:
             summary["gap"] = max(0, len(rows) - REPLY_SYNC_CAP)
 
         advanced_to, frozen = wm, False
+        # Two set-reads for the whole window instead of two GETs per reply
+        # (egress audit 2026-09-03). A failed batch (None) falls back to the
+        # per-row checks below so nothing is ever re-POSTed on a read gap.
+        _all_mids = [f"{r.get('email_lead_id')}-{r.get('last_reply_time')}"
+                     for r in to_process if isinstance(r, dict)
+                     and r.get("email_lead_id") and r.get("last_reply_time")]
+        _seen_set = _reply_sync_seen_batch(_all_mids)
+        _archived_set = _reply_in_archive_batch(WORKSPACE, _all_mids) if _seen_set is not None else None
         for r in to_process:
             if not isinstance(r, dict):
                 continue
@@ -6301,10 +6382,11 @@ def run_reply_sync() -> dict:
             mid = f"{lead_id}-{rtime}"          # == categoriser archive key (module 60)
             rt_dt = _parse_iso(rtime)
             handled = False
-            if _reply_sync_seen(mid):
+            _is_seen = (mid in _seen_set) if _seen_set is not None else _reply_sync_seen(mid)
+            if _is_seen:
                 summary["skipped_seen"] += 1
                 handled = True
-            elif _reply_in_archive(mid):
+            elif ((mid in _archived_set) if _archived_set is not None else _reply_in_archive(mid)):
                 _mark_reply_seen(mid)           # remember so we skip the archive check next run
                 summary["skipped_archived"] += 1
                 handled = True
@@ -8050,14 +8132,29 @@ def run_poll() -> dict:
         # cheap _existing_row prechecks are byte-for-byte identical to the old
         # loop; only the expensive per-reply pipeline (Phase B) is parallelised.
         tasks = []   # each: {"kind": "agent"|"agentless", "reply": ..., "agent": ...}
+
+        def _key_of(r):
+            return (r.get("smartlead_campaign_id"),
+                    (r.get("email") or "").strip().lower(),
+                    str(r.get("smartlead_message_id") or r.get("message_id") or r.get("id") or ""))
+
+        # One batched "already queued?" read for the whole page instead of one
+        # GET per reply (egress audit 2026-09-03). None => batch failed, fall
+        # back to the per-row _existing_row so a verification gap never turns
+        # into a duplicate intake.
+        _pre_existing = _existing_keys_batch(WORKSPACE, [_key_of(r) for r in replies])
+
+        def _already_queued(cid, email, mid):
+            if _pre_existing is not None:
+                return (str(cid), email, mid) in _pre_existing
+            return bool(_existing_row(WORKSPACE, cid, email, mid))
+
         for r in replies:
             if len(tasks) >= 15:
                 break
             if not isinstance(r, dict):
                 continue
-            cid = r.get("smartlead_campaign_id")
-            email = (r.get("email") or "").strip().lower()
-            mid = str(r.get("smartlead_message_id") or r.get("message_id") or r.get("id") or "")
+            cid, email, mid = _key_of(r)
             if not cid or not email or not mid:
                 continue
             # Belt-and-braces (the server-side category filter above already
@@ -8096,7 +8193,7 @@ def run_poll() -> dict:
                             continue
                     except (ValueError, TypeError):
                         pass
-                if _existing_row(WORKSPACE, cid, email, mid):
+                if _already_queued(cid, email, mid):
                     continue
                 # Tell the pipeline we've already confirmed no existing row so it
                 # doesn't repeat the same read (perf pass R8).
@@ -8105,7 +8202,7 @@ def run_poll() -> dict:
             else:
                 # Agentless intake (owner ruling 2026-07-14): no campaign_assigned_at
                 # concept without an agent doc - the reply just goes straight in.
-                if _existing_row(WORKSPACE, cid, email, mid):
+                if _already_queued(cid, email, mid):
                     continue
                 tasks.append({"kind": "agentless", "reply": reply, "agent": None})
         summary["checked"] += len(tasks)

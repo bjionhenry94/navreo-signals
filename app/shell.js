@@ -1077,13 +1077,26 @@ function setupChartTooltip(wrap) {
     return anyActive ? POLL_FAST_MS : POLL_SLOW_MS;
   }
 
+  // Hidden tabs don't poll (egress audit 2026-09-03: this rail ships on every
+  // page and a forgotten background tab was 80-900 Supabase reads/hour). The
+  // timer is parked while document.hidden and a visibilitychange re-fires
+  // one fetch the moment the tab is looked at again, so nothing is missed.
+  let inFlight = false;
   function scheduleNext() {
     if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = null;
+    if (document.hidden) return;
     pollTimer = setTimeout(() => fetchJobs(), currentInterval());
   }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !pollTimer && !inFlight) fetchJobs();
+  });
 
   function fetchJobs() {
+    if (inFlight) return;
+    inFlight = true;
     fetch("/api/jobs", { cache: "no-store" })
+      .finally(() => { inFlight = false; })
       .then((r) => {
         if (!r.ok) throw new Error("bad status " + r.status);
         return r.json();
