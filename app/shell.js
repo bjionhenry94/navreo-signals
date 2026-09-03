@@ -359,6 +359,121 @@ function setupChartTooltip(wrap) {
     return { queued: "jq-n", running: "jq-b", done: "jq-g", failed: "jq-r", cancelled: "jq-c", interrupted: "jq-r" }[status] || "jq-n";
   }
 
+  /* ── Task families + grouping (pure; unit-tested by app/test_jobs_panel_retry.py
+     via the markers below — keep this block DOM-free and side-effect-free) ── */
+  /*__JOBS_GROUP_START__*/
+  // Mirrors server.py JOB_FAMILY_OF. The server stamps `family` on every
+  // /api/jobs row; this map only covers a payload served by an older instance.
+  var JOB_KIND_FAMILY = {
+    variant_action: "traffic", auto_mover: "traffic", auto_mover_move: "traffic",
+    warmup_pause: "mailbox", warmup_resume: "mailbox", bounce_pause: "mailbox",
+    bounce_resume: "mailbox", rest_enforce: "mailbox",
+    verify: "data", remove_bad: "data", pool_pull: "data",
+    recontact_buckets: "launch", recontact_create: "launch",
+    "reconnect-watch": "sync"
+  };
+  var JOB_FAMILIES = {
+    traffic: { name: "Traffic moves", icon: "sr-i-fam-traffic", cls: "sr-fam-traffic" },
+    mailbox: { name: "Mailbox health", icon: "sr-i-fam-mailbox", cls: "sr-fam-mailbox" },
+    data: { name: "Data pulls", icon: "sr-i-fam-data", cls: "sr-fam-data" },
+    launch: { name: "Launches", icon: "sr-i-fam-launch", cls: "sr-fam-launch" },
+    sync: { name: "Sync", icon: "sr-i-fam-sync", cls: "sr-fam-sync" },
+    other: { name: "Other", icon: "sr-i-fam-other", cls: "sr-fam-other" }
+  };
+  function njFamilyOf(job) {
+    var f = job && job.family;
+    if (f && JOB_FAMILIES[f]) return f;
+    return JOB_KIND_FAMILY[String((job && job.kind) || "")] || "other";
+  }
+  // Same summary shape: the two auto-mover kinds are one shape (a run and its
+  // moves are one story), everything else groups per kind.
+  function njShapeKey(job) {
+    var k = String((job && job.kind) || "");
+    if (k === "auto_mover" || k === "auto_mover_move" || k === "variant_action") return "traffic_move";
+    return k;
+  }
+  function njBucket(job) {
+    var t = (job && (job.finished_at || job.started_at || job.created_at)) || "";
+    var s = String(t).trim().replace(" ", "T");
+    if (!s) return 0;
+    if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";
+    var ms = new Date(s).getTime();
+    if (isNaN(ms)) return 0;
+    return Math.floor(ms / 3600000);   // 60-minute bucket
+  }
+  function njNum(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function njCounts(job) {
+    return (job && job.counts && typeof job.counts === "object") ? job.counts : {};
+  }
+  // One sentence for a grouped row. Plain text — the caller escapes it.
+  function njGroupLabel(g) {
+    var jobs = g.jobs, n = jobs.length;
+    var boxes = 0, domains = 0;
+    jobs.forEach(function (j) {
+      var c = njCounts(j);
+      boxes += njNum(c.held_boxes) || njNum(c.boxes)
+        || (njNum(c.resumed) + njNum(c.smartlead_capped)) || njNum(c.paused) || 0;
+      domains += njNum(c.domains) || (Array.isArray(c.domains_list) ? c.domains_list.length : 0);
+    });
+    var dPart = domains > 0 ? (" across " + domains + " domain" + (domains === 1 ? "" : "s")) : "";
+    if (g.shape === "traffic_move") {
+      var moves = jobs.filter(function (j) { return j.kind !== "auto_mover"; }).length;
+      var parent = jobs.filter(function (j) { return j.kind === "auto_mover"; })[0];
+      var reviewed = null;
+      if (parent) {
+        var m = /reviewing\s+(\d+)/i.exec(String(parent.label || ""));
+        if (m) reviewed = Number(m[1]);
+      }
+      if (parent && reviewed != null) {
+        return "Auto-mover moved traffic on " + moves + " of " + reviewed + " campaigns reviewed";
+      }
+      return "Moved traffic to the winner on " + moves + " campaign" + (moves === 1 ? "" : "s");
+    }
+    if (g.shape === "warmup_resume") {
+      return "Woke up " + boxes + " inbox" + (boxes === 1 ? "" : "es")
+        + (dPart || " across " + n + " run" + (n === 1 ? "" : "s"));
+    }
+    if (g.shape === "warmup_pause") {
+      return "Rested " + boxes + " inbox" + (boxes === 1 ? "" : "es")
+        + (dPart || " across " + n + " run" + (n === 1 ? "" : "s"));
+    }
+    if (g.shape === "rest_enforce") {
+      return "Re-parked " + boxes + " mailbox" + (boxes === 1 ? "" : "es")
+        + (domains > 0 ? " on " + domains + " domain" + (domains === 1 ? "" : "s") : "");
+    }
+    if (g.shape === "bounce_pause") return "Paused " + boxes + " inboxes (high bounce)";
+    if (g.shape === "bounce_resume") return "Resumed " + boxes + " inboxes";
+    if (g.shape === "verify") return "Checked emails on " + n + " campaigns";
+    if (g.shape === "remove_bad") return "Cleaned bad leads on " + n + " campaigns";
+    if (g.shape === "pool_pull") return "Pulled more leads " + n + " times";
+    return (JOB_FAMILIES[g.family] || JOB_FAMILIES.other).name + " — " + n + " updates";
+  }
+  /* Collapse consecutive-in-time jobs of the same family + status + shape that
+     finished inside the same 60-minute bucket. Returns a flat list of items:
+     {group:false, job} or {group:true, family, shape, status, key, jobs, label}. */
+  function njGroupJobs(list) {
+    var out = [], run = [];
+    function flush() {
+      if (!run.length) return;
+      if (run.length === 1) { out.push({ group: false, job: run[0] }); run = []; return; }
+      var g = { group: true, family: njFamilyOf(run[0]), shape: njShapeKey(run[0]),
+                status: run[0].status, key: "g-" + run[0].id, jobs: run.slice() };
+      g.label = njGroupLabel(g);
+      out.push(g);
+      run = [];
+    }
+    (list || []).forEach(function (j) {
+      if (!run.length) { run.push(j); return; }
+      var a = run[run.length - 1];
+      var same = njFamilyOf(a) === njFamilyOf(j) && njShapeKey(a) === njShapeKey(j)
+        && String(a.status) === String(j.status) && njBucket(a) === njBucket(j);
+      if (same) run.push(j); else { flush(); run.push(j); }
+    });
+    flush();
+    return out;
+  }
+  /*__JOBS_GROUP_END__*/
+
   /* Split Rail: one plain-English sentence per job — verbs + one big number,
      never raw counts keys. Falls back to the job label for unknown kinds. */
   function jobSentence(job) {
@@ -604,6 +719,22 @@ function setupChartTooltip(wrap) {
 .sr-mark.sr-stop { background: var(--red-bg, #F7DCD5); border-color: #EFC7BB; color: var(--red, #C2371F); }
 .sr-mark.sr-live { background: var(--amber-bg, #F8EAC4); border-color: #EBD79E; color: #8F6600; }
 .sr-mark.sr-idle { background: var(--bg-sunken, #F7F7F6); border-color: var(--line-2, #DDDDDA); color: var(--ink-3, #6B6055); }
+/* Family accents: the icon carries the family colour; failed stays red and
+   live stays amber, so state always outranks family. */
+.sr-mark.sr-fam-traffic { background: var(--orange-100, #FFE4D6); border-color: #F6C9B1; color: var(--orange-700, #A83100); }
+.sr-mark.sr-fam-mailbox { background: var(--green-bg, #E2F1E9); border-color: #C4E2D3; color: var(--green, #2E7D5B); }
+.sr-mark.sr-fam-data { background: #E6EDF9; border-color: #C9D8EF; color: #2A4E8C; }
+.sr-mark.sr-fam-launch { background: #EFE7F8; border-color: #DCCCEE; color: #5B3A87; }
+.sr-mark.sr-fam-sync { background: var(--bg-sunken, #F7F7F6); border-color: var(--line-2, #DDDDDA); color: var(--brown-500, #7A6A58); }
+.sr-mark.sr-fam-other { background: var(--bg-sunken, #F7F7F6); border-color: var(--line-2, #DDDDDA); color: var(--ink-3, #6B6055); }
+.sr-retry { color: #8F6600; font-weight: 600; }
+.sr-grow { cursor: pointer; }
+.sr-grow:hover { background: var(--bg-sunken, #F7F7F6); }
+.sr-count { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--bg-sunken, #F7F7F6); color: var(--ink-3, #6B6055); flex: none; }
+.sr-chev { color: var(--brown-400, #A89684); transition: transform 0.15s ease; flex: none; }
+.sr-chev.sr-open { transform: rotate(90deg); }
+.sr-kids { padding-left: 20px; border-left: 2px solid var(--line, #ECECEA); margin-left: 14px; }
+.sr-kids .sr-row { padding: 9px 2px; }
 .sr-spin { animation: sr-spin 2.4s linear infinite; transform-origin: center; }
 @keyframes sr-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .sr-spin { animation: none; } }
@@ -641,6 +772,13 @@ function setupChartTooltip(wrap) {
       <symbol id="sr-i-check" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="sr-i-loop" viewBox="0 0 16 16"><polyline points="13.5 2.5 13.5 6.5 9.5 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12.4 10a5.5 5.5 0 1 1-1.3-5.7l2.4 2.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
       <symbol id="sr-i-stop" viewBox="0 0 16 16"><path d="M8 3v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="12.4" r="1.3" fill="currentColor"/></symbol>
+      <symbol id="sr-i-fam-traffic" viewBox="0 0 16 16"><path d="M2 5h7l-2-2M14 11H7l2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-mailbox" viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M2.8 5 8 8.8 13.2 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-data" viewBox="0 0 16 16"><path d="M8 2.5v7m0 0 2.8-2.8M8 9.5 5.2 6.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.8 12.2h10.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="sr-i-fam-launch" viewBox="0 0 16 16"><path d="M14 2 2 7l4.6 1.6L8.4 13z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-sync" viewBox="0 0 16 16"><path d="M13 7A5 5 0 0 0 4 4.4M3 9a5 5 0 0 0 9 2.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M13 3v4h-4M3 13V9h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-other" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+      <symbol id="sr-i-chev" viewBox="0 0 16 16"><path d="M5.5 3.5 10.5 8l-5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
       <symbol id="sr-i-moon" viewBox="0 0 16 16"><path d="M12.6 9.7A5.4 5.4 0 0 1 6.3 3.4a5.4 5.4 0 1 0 6.3 6.3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>`;
     elRoot.appendChild(defs);
 
@@ -703,6 +841,27 @@ function setupChartTooltip(wrap) {
         .then(() => fetchJobs())
         .catch(() => { /* next poll reconciles */ })
         .finally(() => dismissing.delete(jid));
+      return;
+    }
+    const killGroup = e.target.closest(".nj-dismiss-group");
+    if (killGroup) {
+      const ids = (killGroup.getAttribute("data-jids") || "").split(",").filter(Boolean);
+      if (!ids.length) return;
+      killGroup.disabled = true;
+      const drop = new Set(ids);
+      jobs = jobs.filter((j) => !drop.has(j.id));   // optimistic
+      render();
+      // The per-job endpoint is the only dismiss door; a group is a handful of
+      // rows, so N small POSTs beat a new bulk route.
+      Promise.all(ids.map((jid) =>
+        fetch(`/api/jobs/${encodeURIComponent(jid)}/dismiss`, { method: "POST" }).catch(() => {})))
+        .then(() => fetchJobs()).catch(() => { /* next poll reconciles */ });
+      return;
+    }
+    const grow = e.target.closest(".sr-grow");
+    if (grow) {
+      const k = grow.getAttribute("data-gkey");
+      if (k) { srOpenGroups.has(k) ? srOpenGroups.delete(k) : srOpenGroups.add(k); render(); }
       return;
     }
     const resume = e.target.closest(".nj-resume-btn");
@@ -770,8 +929,11 @@ function setupChartTooltip(wrap) {
     const status = job.status || "queued";
     const live = status === "queued" || status === "running";
     const stopped = status === "failed" || status === "interrupted";
-    const markCls = live ? "sr-live" : stopped ? "sr-stop" : "sr-done";
-    const icon = live ? "sr-i-loop" : stopped ? "sr-i-stop" : "sr-i-check";
+    // Family accent: done rows wear their family's icon + colour; failed keeps
+    // the red stop state and live keeps the amber spinner (state outranks family).
+    const fam = JOB_FAMILIES[njFamilyOf(job)] || JOB_FAMILIES.other;
+    const markCls = live ? "sr-live" : stopped ? "sr-stop" : fam.cls;
+    const icon = live ? "sr-i-loop" : stopped ? "sr-i-stop" : fam.icon;
     const spin = status === "running" ? " sr-spin" : "";
     const mark = `<div class="sr-mark ${markCls}"><svg width="14" height="14" class="ic${spin}"><use href="#${icon}"/></svg></div>`;
 
@@ -787,6 +949,12 @@ function setupChartTooltip(wrap) {
         : queuePos <= 0 ? "Next up"
         : queuePos === 1 ? "Waiting · 1 ahead"
         : `Waiting · ${queuePos} ahead`);
+    }
+    // Auto-retry in flight: the continuation carries resume_count from the
+    // failed original, so the row says which attempt the user is watching.
+    const rc = Number(job.resume_count) || 0;
+    if (live && rc > 0 && job.auto_resumed) {
+      bits.push(`<span class="sr-retry">Retrying (${rc}/3)</span>`);
     }
     const timeStr = jRelTime(job.started_at || job.finished_at);
     if (timeStr) bits.push(timeStr);
@@ -822,6 +990,7 @@ function setupChartTooltip(wrap) {
     </div>`;
   }
 
+  const srOpenGroups = new Set();   // grouped rows the user has expanded
   const SR_SHOW = 5;
   let srExpanded = false;
 
@@ -841,6 +1010,27 @@ function setupChartTooltip(wrap) {
         .filter((j) => (j.status === "queued" || j.status === "running") && j.campaign_id != null)
         .map((j) => String(j.campaign_id)));
       const row = (j) => renderRow(j, posFor(j), j.campaign_id != null && busyCampaigns.has(String(j.campaign_id)));
+      // Same-family, same-shape, same-hour runs collapse into one row with a
+      // count; click expands to the individual jobs (each keeps its own ✕).
+      const rows = (list) => njGroupJobs(list).map((it) => {
+        if (!it.group) return row(it.job);
+        const open = srOpenGroups.has(it.key);
+        const fam = JOB_FAMILIES[it.family] || JOB_FAMILIES.other;
+        const stopped = it.status === "failed" || it.status === "interrupted";
+        const live = it.status === "queued" || it.status === "running";
+        const markCls = live ? "sr-live" : stopped ? "sr-stop" : fam.cls;
+        const icon = live ? "sr-i-loop" : stopped ? "sr-i-stop" : fam.icon;
+        const when = jRelTime(it.jobs[0].finished_at || it.jobs[0].started_at);
+        const ids = it.jobs.map((j) => j.id).join(",");
+        const kill = (!live)
+          ? `<button type="button" class="nj-dismiss-group" data-jids="${jEsc(ids)}" title="Remove these ${it.jobs.length} tasks" aria-label="Dismiss all">&times;</button>` : "";
+        return `<div class="sr-row sr-grow" data-gkey="${jEsc(it.key)}" role="button" aria-expanded="${open}">
+          <div class="sr-mark ${markCls}"><svg width="14" height="14"><use href="#${icon}"/></svg></div>
+          <div class="sr-txt"><b>${jEsc(it.label)}</b>${when ? `<div class="sr-when">${jEsc(fam.name)} · ${when}</div>` : `<div class="sr-when">${jEsc(fam.name)}</div>`}</div>
+          <div class="sr-side"><span class="sr-count">${it.jobs.length}</span>
+            <svg class="sr-chev${open ? " sr-open" : ""}" width="12" height="12"><use href="#sr-i-chev"/></svg>${kill}</div>
+        </div>` + (open ? `<div class="sr-kids">${it.jobs.map(row).join("")}</div>` : "");
+      }).join("");
 
       // Split Rail zones: Needs you → Happening now → Just finished.
       const needs = jobs.filter((j) => j.status === "failed" || j.status === "interrupted");
@@ -848,14 +1038,14 @@ function setupChartTooltip(wrap) {
       const fin = jobs.filter((j) => j.status === "done" || j.status === "cancelled");
       const two = (n) => String(n).padStart(2, "0");
       let html = "";
-      if (needs.length) html += `<div class="sr-zone">Needs you <span class="sr-zn">${two(needs.length)}</span></div>${needs.map(row).join("")}`;
+      if (needs.length) html += `<div class="sr-zone">Needs you <span class="sr-zn">${two(needs.length)}</span></div>${rows(needs)}`;
       html += `<div class="sr-zone">Happening now <span class="sr-zn">${two(now.length)}</span></div>`;
-      html += now.length ? now.map(row).join("")
+      html += now.length ? rows(now)
         : `<div class="sr-idlebox"><div class="sr-mark sr-idle"><svg width="14" height="14"><use href="#sr-i-moon"/></svg></div>Quiet right now.</div>`;
       if (fin.length) {
         html += `<div class="sr-zone">Just finished <span class="sr-zn">${two(fin.length)}</span></div>`;
         const shown = srExpanded ? fin : fin.slice(0, SR_SHOW);
-        html += shown.map(row).join("");
+        html += rows(shown);
         if (fin.length > SR_SHOW) {
           html += `<button type="button" class="sr-more">${srExpanded ? "Show less" : `Show earlier (${fin.length - SR_SHOW} more)`}</button>`;
         }
