@@ -964,6 +964,9 @@ def test_video_backstop_enforces_template():
     check("video backstop: variant wording normalised, drafter's company kept when none resolved",
           "where I could share some of the other ideas I had for insyghtful.ai?</div>" in fixed, fixed)
     check("video backstop: 'book in directly here' -> 'book in direct here'", "book in direct <a" in fixed and "directly" not in fixed, fixed)
+    dropped_in = variant.replace("book in directly <a", "book directly <a")
+    fixed_in = setter.ensure_video_where_clause(dropped_in, **kw)
+    check("video backstop: 'book directly here' (row 2614) -> 'book in direct here'", "suggest some times, or book in direct <a" in fixed_in and "directly" not in fixed_in, fixed_in)
     fixed = setter.ensure_video_where_clause(variant, **kw)
     check("video backstop: resolved company outranks the drafter's", "ideas I had for Zenon Wholesale?</div>" in fixed, fixed)
     freeform = head + f'<div>Would you be open to a call on {l1} or {l2} where we could run through all of this?</div><br><div>Bjion</div>'
