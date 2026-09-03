@@ -417,14 +417,18 @@ function setupChartTooltip(wrap) {
     });
     var dPart = domains > 0 ? (" across " + domains + " domain" + (domains === 1 ? "" : "s")) : "";
     if (g.shape === "traffic_move") {
-      var moves = jobs.filter(function (j) { return j.kind !== "auto_mover"; }).length;
+      // An auto-mover move mirrors itself as a variant_action row (same write,
+      // two rows) — count the move jobs, and only fall back to the door rows
+      // when there are no move jobs at all, so one move never counts twice.
+      var mv = jobs.filter(function (j) { return j.kind === "auto_mover_move"; }).length;
+      var moves = mv || jobs.filter(function (j) { return j.kind === "variant_action"; }).length;
       var parent = jobs.filter(function (j) { return j.kind === "auto_mover"; })[0];
       var reviewed = null;
       if (parent) {
         var m = /reviewing\s+(\d+)/i.exec(String(parent.label || ""));
         if (m) reviewed = Number(m[1]);
       }
-      if (parent && reviewed != null) {
+      if (parent && reviewed != null && reviewed >= moves) {
         return "Auto-mover moved traffic on " + moves + " of " + reviewed + " campaigns reviewed";
       }
       return "Moved traffic to the winner on " + moves + " campaign" + (moves === 1 ? "" : "s");
