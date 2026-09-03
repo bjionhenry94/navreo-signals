@@ -1195,33 +1195,34 @@ function setupChartTooltip(wrap) {
   //  • own-workspace clients (asteri/krg/grout) and the fleet sum (__all) →
   //    cap.capacity[wsKey], exact per-day
   //  • shared navreo-workspace clients → the real per-day series the cap crons
-  //    record (client_caps_daily), with any un-recorded day filled by the
-  //    navreo pool series scaled to the client's current cap.
+  //    record (client_caps_daily). Un-recorded days are filled from the
+  //    client's OWN recorded caps only: interpolated between two records,
+  //    carried flat before the first record and after the last. A client's
+  //    capacity is configuration that only changes when someone changes it —
+  //    while its mailboxes warm up before go-live nothing changes, so the
+  //    line must read flat. It used to borrow the navreo POOL's day-by-day
+  //    shape (scaled to the client's cap), so a client that went live on
+  //    Sep 2 showed the pool's 9k→44k swings across its whole warm-up
+  //    (Bjion 2026-09-03: "the way it drops up and down … something isn't
+  //    right"). The pool is now only a level (never a shape): when a client
+  //    has NO daily record at all, its live cap is carried flat across the
+  //    whole window.
   function capSeries(cap, name, wsKey) {
     if (!cap || !cap.capacity) return null;
     var own = wsKey && cap.capacity[wsKey];
     if (Array.isArray(own)) return own;                    // own-workspace: exact per-day
     var realRaw = ci(cap.client_caps_daily, name);
     var real = (Array.isArray(realRaw) && realRaw.some(function (v) { return v != null; })) ? realRaw : null;
-    var nav = cap.capacity.navreo, cur = ci(cap.client_caps, name), est = null;
-    // client_caps is today's LIVE per-client sweep — it can be empty {} when the
-    // restore sweep hasn't warmed (or is degraded), which strands the est scaling
-    // and drops the whole shared-client series to nulls on any un-recorded day.
-    // The 24H view reads ONE snapshot day, so a single missing cap-day there =
-    // "—" for every shared client (own-workspace clients are immune: they read
-    // capacity[wsKey], always complete). Fall back to the client's own latest
-    // RECORDED daily cap so est still fires and un-recorded days inherit a scaled
-    // navreo-pool cap. No-op when client_caps has the client (healthy state).
-    if (cur == null && Array.isArray(realRaw)) {
-      for (var ci2 = realRaw.length - 1; ci2 >= 0; ci2--) if (realRaw[ci2] != null) { cur = realRaw[ci2]; break; }
-    }
-    if (Array.isArray(nav) && cur != null) {
-      var navCur = null;
-      for (var i = nav.length - 1; i >= 0; i--) if (nav[i] != null) { navCur = nav[i]; break; }
-      if (navCur) { var r = cur / navCur; est = nav.map(function (v) { return v == null ? null : Math.round(v * r); }); }
-    }
-    if (!real) return est;
-    return real.map(function (v, i) { return v != null ? v : (est ? est[i] : null); });
+    if (real) return fillCap(real).map(function (v) { return v == null ? null : Math.round(v); });   // own records only, never the pool's shape
+    // No daily record at all (brand-new client, or the cron has not written yet):
+    // carry today's live per-client cap flat across the window. client_caps can be
+    // empty {} while the restore sweep warms; then there is nothing to say and
+    // every day stays null (the 24H view shows "—" rather than a made-up number).
+    var cur = ci(cap.client_caps, name);
+    var axisLen = (cap.days || cap.capacity.navreo || []).length;
+    if (cur == null || !axisLen) return null;
+    var flat = []; for (var i = 0; i < axisLen; i++) flat.push(Math.round(cur));
+    return flat;
   }
   // Re-key a (values,srcDays) series onto a target date axis — Analytics' alignCap.
   function alignTo(vals, srcDays, axis) {
