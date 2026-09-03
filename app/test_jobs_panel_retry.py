@@ -166,9 +166,13 @@ const a = src.indexOf("/*__JOBS_GROUP_START__*/"), b = src.indexOf("/*__JOBS_GRO
 if (a < 0 || b < 0) { console.error("markers missing"); process.exit(2); }
 eval(src.slice(a, b));
 const input = JSON.parse(process.argv[3]);
-console.log(JSON.stringify(njGroupJobs(input).map((it) =>
-  it.group ? { group: true, n: it.jobs.length, label: it.label, family: it.family }
-           : { group: false, id: it.job.id })));
+if (process.argv[4] === "visible") {
+  console.log(JSON.stringify(input.map((j) => ({ id: j.id, vis: njVisible(j) }))));
+} else {
+  console.log(JSON.stringify(njGroupJobs(input).map((it) =>
+    it.group ? { group: true, n: it.jobs.length, label: it.label, family: it.family }
+             : { group: false, id: it.job.id })));
+}
 """
 
 
@@ -194,10 +198,37 @@ class Grouping(unittest.TestCase):
         self.assertEqual(out.returncode, 0, out.stderr)
         return json.loads(out.stdout)
 
+    def visible(self, jobs):
+        out = subprocess.run(["node", self.harness, os.path.join(HERE, "shell.js"),
+                              json.dumps(jobs), "visible"], capture_output=True, text=True)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        return {r["id"]: r["vis"] for r in json.loads(out.stdout)}
+
+    def test_verify_jobs_hidden_all_states(self):
+        jobs = [{"id": "v1", "kind": "verify", "status": "done", "counts": {"checked": 40}},
+                {"id": "v2", "kind": "verify", "status": "failed", "counts": {}},
+                {"id": "v3", "kind": "verify", "status": "running"},
+                {"id": "k", "kind": "remove_bad", "status": "done", "counts": {"removed": 3}}]
+        v = self.visible(jobs)
+        self.assertFalse(v["v1"]); self.assertFalse(v["v2"]); self.assertFalse(v["v3"])
+        self.assertTrue(v["k"])
+
+    def test_zero_work_finished_hidden_but_failed_and_running_show(self):
+        jobs = [{"id": "z", "kind": "auto_mover", "status": "done", "counts": {"moved": 0, "reviewed": 16}},
+                {"id": "w", "kind": "warmup_resume", "status": "done", "counts": {"resumed": 0, "smartlead_capped": 0}},
+                {"id": "run", "kind": "auto_mover", "status": "running", "counts": {"moved": 0}},
+                {"id": "fail", "kind": "remove_bad", "status": "failed", "counts": {"removed": 0}},
+                {"id": "real", "kind": "auto_mover", "status": "done", "counts": {"moved": 3}},
+                {"id": "nocount", "kind": "auto_mover_move", "status": "done", "counts": {}}]
+        v = self.visible(jobs)
+        self.assertFalse(v["z"]); self.assertFalse(v["w"])
+        self.assertTrue(v["run"]); self.assertTrue(v["fail"])
+        self.assertTrue(v["real"]); self.assertTrue(v["nocount"])
+
     def test_auto_mover_run_and_moves_become_one_row(self):
         t = "2026-09-03T10:0%d:00Z"
         jobs = [{"id": "p", "kind": "auto_mover", "family": "traffic", "status": "done",
-                 "label": "Auto-mover: reviewing 16 campaigns", "finished_at": t % 0}]
+                 "label": "Checking 16 campaigns for the best email", "finished_at": t % 0}]
         jobs += [{"id": f"m{i}", "kind": "auto_mover_move", "family": "traffic",
                   "status": "done", "label": "Moved Email 1 to Version B",
                   "finished_at": t % (i + 1)} for i in range(4)]
@@ -206,7 +237,7 @@ class Grouping(unittest.TestCase):
         self.assertTrue(got[0]["group"])
         self.assertEqual(got[0]["n"], 5)
         self.assertEqual(got[0]["label"],
-                         "Auto-mover moved traffic on 4 of 16 campaigns reviewed")
+                         "Looked at 16 campaigns and improved 4")
 
     def test_wakeups_sum_their_counts(self):
         jobs = [{"id": f"w{i}", "kind": "warmup_resume", "family": "mailbox",
@@ -220,7 +251,7 @@ class Grouping(unittest.TestCase):
         jobs = [{"id": f"r{i}", "kind": "rest_enforce", "family": "mailbox",
                  "status": "done", "finished_at": "2026-09-03T12:0%d:00Z" % i,
                  "counts": {"boxes": 25, "domains": 1}} for i in range(2)]
-        self.assertEqual(self.group(jobs)[0]["label"], "Re-parked 50 mailboxes on 2 domains")
+        self.assertEqual(self.group(jobs)[0]["label"], "Rested 50 inboxes to keep them healthy on 2 domains")
 
     def test_different_families_never_merge(self):
         jobs = [{"id": "a", "kind": "auto_mover_move", "family": "traffic", "status": "done",
