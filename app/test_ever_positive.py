@@ -12,6 +12,12 @@ Covers the loop's Goal scenarios:
      (module 33 / routeB own that class) and is stamped 'positive-covered'
   3. never-positive -> negative stays silent, stamped 'no-positive-history'
   4. the same row delivered twice alerts once (marker holds across runs)
+  10-16. a "positive-re-reply" row bound for a client's SHARED channel is READ
+     first: negative -> the once-positive flip alert (client's flip channel,
+     real earlier category named, never the routeB label); still-positive ->
+     "replied again", never "New positive reply"; classifier down -> retry
+     inside the grace window, then a neutral post; auto-reply -> silent;
+     navreo-own rows never touch the classifier (routeB's alert owns them)
   plus: a hook failure leaves the row unstamped and a later run retries it;
   positive history in ANOTHER workspace does not trigger; a fresh
   null-category row is deferred inside the grace window while a stale one
@@ -83,7 +89,7 @@ class FakeSB:
                 em = unquote(params["email"][6:])
                 rows = [r for r in rows if (r.get("email") or "").lower() == em.lower()]
             if params.get("category", "").startswith("in.("):
-                cats = [unquote(c) for c in params["category"][4:-1].split(",")]
+                cats = [unquote(c).strip('"') for c in params["category"][4:-1].split(",")]
                 rows = [r for r in rows if r.get("category") in cats]
             ra = params.get("replied_at", "")
             if ra.startswith("gte."):
@@ -252,6 +258,149 @@ def test_no_supabase_skips():
     check("9 no Supabase -> skipped, no crash", res.get("skipped") is True)
 
 
+REVIVE_CAMP = {"smartlead_campaign_id": 333, "name": "REViVE | Pet | Cold - Aug26",
+               "client_id": "navreo"}
+RR_POS_HISTORY = {"id": 20, "workspace": "navreo", "smartlead_campaign_id": 333,
+                  "email": "sheila@livliga.test", "replied_at": _iso(hours_ago=10),
+                  "category": "Interested", "reply_body": "Not now",
+                  "notify_alerted_at": "2026-01-01T00:00:00+00:00"}
+RR_ROW = {"id": 21, "workspace": "navreo", "smartlead_campaign_id": 333,
+          "email": "sheila@livliga.test", "replied_at": _iso(minutes_ago=5),
+          "category": "positive-re-reply",
+          "reply_body": "We are no longer in the retail business.",
+          "notify_alerted_at": None}
+
+
+REAL_CLASSIFY = setter._ep_classify_re_reply   # tests below install fakes; 15 needs the real one
+
+
+def _wire_rr(verdict, rows=None, campaigns=None):
+    sb = FakeSB(rows or [dict(RR_POS_HISTORY), dict(RR_ROW)],
+                campaigns=campaigns or [dict(REVIVE_CAMP)])
+    http = FakeHTTP()
+    wire(sb, http)
+    calls = []
+
+    def fake_classify(row):
+        calls.append(dict(row))
+        return verdict
+    setter._ep_classify_re_reply = fake_classify
+    return sb, http, calls
+
+
+def _stamped(sb, rid, kind):
+    return any(r == rid and (b or {}).get("notify_kind") == kind for r, b in sb.patches)
+
+
+def test_re_reply_negative_becomes_flip():
+    sb, http, calls = _wire_rr("Not Interested")
+    res = setter.run_ever_positive_alerts()
+    body = http.posts[0][1] if http.posts else {}
+    text = body.get("text", "")
+    check("10a negative re-reply posts exactly one alert",
+          len(http.posts) == 1 and res["alerted"] == 1 and res["re_reply_flips"] == 1, str(res))
+    check("10b flip lands in the client's flip channel (revive -> shared)",
+          body.get("channel") == "C0BP9A6D28H", str(body.get("channel")))
+    check("10c wording is the once-positive flip, never a positive claim",
+          "ONCE-POSITIVE lead replied \u2014 now: Not Interested" in text
+          and "New positive reply" not in text and "positive-re-reply" not in text, text[:120])
+    check("10d names the earlier positive by its real category",
+          "Originally positive: Interested on" in text, text[:200])
+    check("10e stamped re-reply-flip-alerted after the hook accepted",
+          _stamped(sb, 21, "re-reply-flip-alerted"), str(sb.patches))
+    check("10f classifier was given the prior category",
+          bool(calls) and calls[0].get("prior_category") == "Interested", str(calls))
+
+
+def test_re_reply_positive_announced_as_re_reply():
+    sb, http, calls = _wire_rr("Information Request")
+    res = setter.run_ever_positive_alerts()
+    body = http.posts[0][1] if http.posts else {}
+    text = body.get("text", "")
+    check("11a positive re-reply posts once to the shared channel",
+          len(http.posts) == 1 and body.get("channel") == "C0BP9A6D28H", str(body)[:120])
+    check("11b header says replied again + verdict, never New positive reply",
+          text.startswith("\U0001F501 Interested lead replied again \u2014 Information Request")
+          and "New positive reply" not in text and "positive-re-reply" not in text, text[:120])
+    check("11c stamped positive-shared", _stamped(sb, 21, "positive-shared"), str(sb.patches))
+
+
+def test_re_reply_classifier_down_retries_then_neutral():
+    sb, http, calls = _wire_rr(None)
+    res = setter.run_ever_positive_alerts()
+    check("12a classifier down inside grace: no post, no stamp, deferred",
+          not http.posts and not sb.patches and res["deferred_classify"] == 1, str(res))
+    old = dict(RR_ROW, replied_at=_iso(minutes_ago=setter.EP_CLASSIFY_GRACE_MIN + 5))
+    sb, http, calls = _wire_rr(None, rows=[dict(RR_POS_HISTORY), old])
+    res = setter.run_ever_positive_alerts()
+    body = http.posts[0][1] if http.posts else {}
+    text = body.get("text", "")
+    check("12b past grace: neutral 'replied again' post with no category claim",
+          len(http.posts) == 1 and text.startswith("\U0001F501 Interested lead replied again\n")
+          and res["re_reply_unclassified"] == 1, text[:120])
+    check("12c stamped positive-shared-unclassified",
+          _stamped(sb, 21, "positive-shared-unclassified"), str(sb.patches))
+
+
+def test_re_reply_ooo_is_silent():
+    sb, http, calls = _wire_rr("Out Of Office")
+    setter.run_ever_positive_alerts()
+    check("13 auto-reply re-reply: no post, stamped re-reply-ooo",
+          not http.posts and _stamped(sb, 21, "re-reply-ooo"), str(sb.patches))
+
+
+def test_re_reply_navreo_own_unchanged():
+    sb, http, calls = _wire_rr("Not Interested", campaigns=[
+        {"smartlead_campaign_id": 333, "name": "Navreo | SaaS | Clay", "client_id": "navreo"}])
+    setter.run_ever_positive_alerts()
+    check("14 navreo-own re-reply: no post, classifier untouched, positive-covered",
+          not http.posts and not calls and _stamped(sb, 21, "positive-covered"), str(sb.patches))
+
+
+def test_classifier_parses_and_fails_closed():
+    setter._ep_classify_re_reply = REAL_CLASSIFY
+    setter._KEYS = {"OPENAI_API_KEY": "k"}
+    seen = {}
+
+    def fake_openai(body, key, **kw):
+        seen["body"] = body
+        return {"choices": [{"message": {"content": '{"category": "Not Interested"}'}}]}
+    setter._openai = fake_openai
+    v = setter._ep_classify_re_reply({"reply_body": "<p>We are no longer in retail.</p>",
+                                      "prior_category": "Interested"})
+    user = (seen.get("body") or {}).get("messages", [{}, {}])[1].get("content", "")
+    check("15a classifier returns the parsed category", v == "Not Interested", str(v))
+    check("15b classifier sends the cleaned body + prior category",
+          "no longer in retail" in user and "Interested" in user and "<p>" not in user, user[:160])
+    check("15c strict schema restricts the answer to the 8 categories",
+          (seen["body"].get("response_format") or {}).get("json_schema", {}).get("strict") is True)
+    setter._openai = lambda body, key, **kw: {"choices": [{"message": {"content": '{"category": "Maybe"}'}}]}
+    check("15d off-list answer -> None", setter._ep_classify_re_reply({"reply_body": "x"}) is None)
+
+    def boom(body, key, **kw):
+        raise OSError("down")
+    setter._openai = boom
+    check("15e classifier error -> None, never raises",
+          setter._ep_classify_re_reply({"reply_body": "x"}) is None)
+    setter._KEYS = {}
+    check("15f no key -> None", setter._ep_classify_re_reply({"reply_body": "x"}) is None)
+
+
+def test_flip_names_real_prior_not_label():
+    hist_real = dict(RR_POS_HISTORY, id=30, replied_at=_iso(hours_ago=20), category="Meeting Request")
+    hist_label = dict(RR_POS_HISTORY, id=31, replied_at=_iso(hours_ago=10), category="positive-re-reply")
+    neg = dict(NEG_ROW, id=32, email="sheila@livliga.test", smartlead_campaign_id=333,
+               replied_at=_iso(minutes_ago=50))
+    sb = FakeSB([hist_real, hist_label, neg], campaigns=[dict(REVIVE_CAMP)])
+    http = FakeHTTP()
+    wire(sb, http)
+    setter.run_ever_positive_alerts()
+    text = http.posts[0][1].get("text", "") if http.posts else ""
+    check("16 flip alert names the real earlier category, never the routeB label",
+          "Originally positive: Meeting Request on" in text and "positive-re-reply" not in text,
+          text[:200])
+
+
 if __name__ == "__main__":
     test_prev_positive_negative_alerts_once()
     test_prev_positive_positive_covered_elsewhere()
@@ -261,5 +410,12 @@ if __name__ == "__main__":
     test_workspace_scoping()
     test_null_category_grace_and_stale()
     test_post_cap_trips_loudly()
+    test_re_reply_negative_becomes_flip()
+    test_re_reply_positive_announced_as_re_reply()
+    test_re_reply_classifier_down_retries_then_neutral()
+    test_re_reply_ooo_is_silent()
+    test_re_reply_navreo_own_unchanged()
+    test_classifier_parses_and_fails_closed()
+    test_flip_names_real_prior_not_label()
     test_no_supabase_skips()
     sys.exit(1 if report() else 0)
