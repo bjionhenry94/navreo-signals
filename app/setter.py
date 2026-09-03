@@ -3794,7 +3794,10 @@ _TWO_TIMES_Q_RE = re.compile(r"(Would you be open to a call on\b.*?)(\s*\?)(?!\w
 # The value clause inside that question: from " where " to the end of the
 # question text. Hrefs never contain a space and slot labels never contain
 # the word "where", so the first " where " after the opener is the clause.
-_VIDEO_CLAUSE_RE = re.compile(r"\swhere\b.*$", re.I | re.S)
+# "when I could share ..." (row 2607) and other connectives count as the
+# clause too, else the fixed clause gets appended behind them.
+_VIDEO_CLAUSE_RE = re.compile(
+    r"\s(?:where|when|in which|so that|so I|so we|to share|to walk|to run|to show|to discuss|to go)\b.*$", re.I | re.S)
 # "...ideas I had for {X}" / "...ideas I have for {X}" - what the drafter
 # named the company as, when it wrote a company form at all.
 _VIDEO_CLAUSE_FOR_RE = re.compile(r"\bideas\s+I\s+(?:had|have)\s+for\s+(.+?)\s*$", re.I | re.S)
