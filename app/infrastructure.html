@@ -106,6 +106,32 @@
 .nudge a { color:var(--orange-600, #DB4100); font-weight:600; text-decoration:none; }
 .nudge a:hover { text-decoration:underline; text-underline-offset:3px; }
 .loading, .err { text-align:center; padding:60px 0; color:var(--ink-3); font-size:13.5px; }
+
+/* infrastructure-v2 (3 Sep 2026): several batches + supervised run log */
+.batches { display:flex; justify-content:center; gap:8px; flex-wrap:wrap; margin:0 0 26px; }
+.bpill { font:inherit; font-size:12.5px; color:var(--ink-3); background:#fff; border:1px solid var(--line-2);
+  border-radius:999px; padding:6px 14px; cursor:pointer; }
+.bpill:hover { color:var(--ink); }
+.bpill.on { color:var(--ink); font-weight:600; border-color:var(--orange); box-shadow:0 0 0 2px rgba(255,77,0,.14); }
+.runlog { margin-top:26px; background:#fff; border:1px solid var(--line); border-radius:14px; padding:18px 20px; }
+.runlog h3 { margin:0 0 4px; font-size:13px; font-weight:700; color:var(--ink); }
+.runlog .meta { font-size:12px; color:var(--brown-400, #A89684); margin-bottom:12px; }
+.runlog .meta b { color:var(--ink-3); font-weight:600; }
+.steps { display:grid; gap:6px; }
+.srow { display:flex; align-items:baseline; gap:10px; font-size:12.5px; color:var(--ink-2); }
+.srow .sn { width:38px; flex:0 0 38px; color:var(--brown-400, #A89684); font-variant-numeric:tabular-nums; }
+.srow .st { width:118px; flex:0 0 118px; font-weight:600; }
+.srow .st.passed { color:var(--green); } .srow .st.failed { color:#C62828; }
+.srow .st.running, .srow .st.waiting_approval { color:var(--orange-600, #DB4100); }
+.srow .st.skipped, .srow .st.pending { color:var(--brown-400, #A89684); font-weight:400; }
+.srow .snote { color:var(--ink-3); }
+.lanes { margin-top:12px; font-size:12px; color:var(--ink-3); display:flex; gap:14px; flex-wrap:wrap; }
+.lanes span b { color:var(--ink); font-weight:600; }
+.loglines { margin-top:12px; border-top:1px solid var(--line); padding-top:10px; max-height:220px; overflow:auto;
+  font-size:12px; color:var(--ink-3); line-height:1.55; }
+.loglines .t { color:var(--brown-400, #A89684); font-variant-numeric:tabular-nums; margin-right:8px; }
+.drow .lane { font-size:11px; color:var(--brown-400, #A89684); border:1px solid var(--line); border-radius:999px;
+  padding:1px 8px; margin-left:6px; }
 </style>
 </head>
 <body>
@@ -143,6 +169,8 @@
   var sub = document.getElementById("subline");
   var stage = document.getElementById("stage");
   var BATCH = null;
+  var BATCHES = [];
+  var SHOW_RUN = /(?:^|[?&])run=1/.test(location.search);  // run log open by default via ?run=1
 
   var STEPS = ["Setup", "Buying", "Mailboxes", "Warming", "Ready"];
   var STAGE_IDX = { setup: 0, buying: 1, mailboxes: 2, warming: 3, ready: 5 };
@@ -158,6 +186,7 @@
       case "mailboxes_building": return '<b class="live">Mailboxes being built</b>';
       case "warming":  return '<b>Warming</b><span class="when">· day ' + esc(d.warm_day || 1) + ' of 14' + (d.ready_date ? ' · ready ' + esc(d.ready_date) : '') + '</span>';
       case "ready":    return '<b class="ok">Ready ✓</b>' + (d.ready_date ? '<span class="when">' + esc(d.ready_date) + '</span>' : '');
+      case "failed":   return '<b style="color:#C62828">Needs a look</b>' + (d.note ? '<span class="when">' + esc(d.note) + '</span>' : '');
       default:         return '<b class="dim">' + esc(d.status || "–") + '</b>';
     }
   }
@@ -193,8 +222,11 @@
                  : 'Building your inboxes — 3 on each domain.',
                s: "Takes a few hours per domain. Nothing needed from you." };
     if (b.stage === "buying")
-      return { h: 'Buying your ' + n + ' domains quietly over 2 days.',
-               s: "Spread out and from different places — on purpose. Nothing needed from you." };
+      return { h: 'Buying your ' + n + ' domains now.',
+               s: "One at a time, a minute or so apart — on purpose. Nothing needed from you." };
+    if (b.stage === "setup" && n)
+      return { h: 'Planning ' + n + ' domains for ' + esc(b.workspace || "you") + '.',
+               s: "Nothing is bought until it’s approved." };
     return { h: "Setting up.", s: "" };
   }
 
@@ -206,27 +238,75 @@
     }).join("") + '</div>';
   }
 
+  /* ── Batch switcher: one pill per batch (newest first, from the API) ── */
+  function batchesHTML() {
+    if (BATCHES.length < 2) return '';
+    return '<div class="batches">' + BATCHES.map(function (b, i) {
+      return '<button class="bpill' + (b === BATCH ? ' on' : '') + '" data-i="' + i + '">' +
+             esc(b.label || b.id) + '</button>';
+    }).join("") + '</div>';
+  }
+
+  /* ── Run log: the orchestrator's supervised steps, lanes and log lines.
+     Hidden by default (founder view stays plain); "Show run log" or ?run=1. ── */
+  function fmtT(t) { var m = /T(\d\d:\d\d)/.exec(String(t || "")); return m ? m[1] + 'Z' : ''; }
+  function runlogHTML(b) {
+    var run = b.run || {};
+    var steps = run.steps || [], log = run.log || [];
+    var ds = b.domains || [];
+    var lanes = {};
+    ds.forEach(function (d) { var k = d.lane || "unassigned"; lanes[k] = (lanes[k] || 0) + 1; });
+    var laneHTML = Object.keys(lanes).map(function (k) {
+      return '<span><b>' + esc(lanes[k]) + '</b> ' + esc(k) + '</span>';
+    }).join("");
+    var stepsHTML = steps.length ? steps.map(function (s) {
+      return '<div class="srow"><span class="sn">' + esc(s.n) + '</span>' +
+             '<span class="st ' + esc(s.status || "pending") + '">' + esc(String(s.status || "pending").replace("_", " ")) +
+             (s.attempts > 1 ? ' ×' + esc(s.attempts) : '') + '</span>' +
+             '<span>' + esc(s.title || '') + (s.note ? ' <span class="snote">— ' + esc(s.note) + '</span>' : '') + '</span></div>';
+    }).join("") : '<div class="srow"><span class="snote">No run recorded for this batch yet.</span></div>';
+    var logHTML = log.length ? '<div class="loglines">' + log.slice().reverse().map(function (l) {
+      return '<div><span class="t">' + esc(fmtT(l.t)) + '</span>' + esc(l.msg) + '</div>';
+    }).join("") + '</div>' : '';
+    return '<div class="runlog"><h3>Run log</h3>' +
+      '<div class="meta">Loop Training Mode <b>' + esc(run.mode || "–") + '</b>' +
+      (run.updated ? ' · updated ' + esc(String(run.updated).replace("T", " ").replace(/:\d\dZ$/, "Z")) : '') +
+      (b.package ? ' · package <b>' + esc(b.package) + '</b>' : '') + '</div>' +
+      '<div class="steps">' + stepsHTML + '</div>' +
+      (laneHTML ? '<div class="lanes">' + laneHTML + '</div>' : '') + logHTML + '</div>';
+  }
+
   function renderBatch(extraHTML) {
     var b = BATCH;
     var head = headlineFor(b);
     hl.innerHTML = head.h;
     sub.textContent = head.s;
     var rows = (b.domains || []).map(function (d) {
-      return '<div class="drow"><span class="name">' + esc(d.name) + '</span>' +
+      return '<div class="drow"><span class="name">' + esc(d.name) +
+             (SHOW_RUN && d.lane ? '<span class="lane">' + esc(d.lane) + '</span>' : '') + '</span>' +
              '<span class="mbcount">' + mbHTML(d) + '</span>' +
              '<span class="status">' + statusHTML(d) + '</span></div>';
     }).join("");
     var isReady = b.stage === "ready";
     stage.innerHTML =
+      batchesHTML() +
       trackerHTML(STAGE_IDX[b.stage] != null ? STAGE_IDX[b.stage] : 2) +
       '<div class="dcard">' + rows + '</div>' +
       '<div class="foot"><div class="quiet">' +
         '<span><span class="tick">✓</span>Checked automatically</span>' +
         '<span><span class="tick">✓</span>In your <a href="mailboxes-hub.html">Inbox manager</a></span>' +
+        '<a href="#" id="runBtn">' + (SHOW_RUN ? 'Hide run log' : 'Show run log') + '</a>' +
       '</div><button class="ghost" id="addBtn">+ Add domains</button></div>' +
+      (SHOW_RUN ? runlogHTML(b) : '') +
       (isReady ? '<div class="nudge">They’re warmed and trusted — <a href="campaigns.html">add them to a campaign now →</a></div>' : '') +
       (extraHTML || '');
     document.getElementById("addBtn").addEventListener("click", intake);
+    document.getElementById("runBtn").addEventListener("click", function (e) {
+      e.preventDefault(); SHOW_RUN = !SHOW_RUN; renderBatch();
+    });
+    Array.prototype.forEach.call(stage.querySelectorAll(".bpill"), function (el) {
+      el.addEventListener("click", function () { BATCH = BATCHES[Number(el.getAttribute("data-i"))]; renderBatch(); });
+    });
   }
 
   /* ── Add-domains intake: the exact questions the orchestrator needs ── */
@@ -298,12 +378,30 @@
     .then(function (b) {
       var batches = (b && b.batches) || [];
       if (!batches.length) { intake(); return; }
-      BATCH = batches[0];
+      BATCHES = batches;
+      var want = /(?:^|[?&])batch=([^&]+)/.exec(location.search);
+      BATCH = (want && batches.filter(function (x) { return x.id === decodeURIComponent(want[1]); })[0]) || batches[0];
       renderBatch();
     })
     .catch(function (e) {
       stage.innerHTML = '<div class="err">Could not load (' + esc(String(e)) + '). Refresh to retry.</div>';
     });
+
+  /* Live supervision: re-read the batch state every 30 s while the run log is open
+     (the orchestrator writes the blob at every step boundary). */
+  setInterval(function () {
+    if (!SHOW_RUN || !BATCH) return;
+    fetch("/api/infrastructure/batches", { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (b) {
+        var batches = (b && b.batches) || [];
+        if (!batches.length) return;
+        var id = BATCH.id;
+        BATCHES = batches;
+        BATCH = batches.filter(function (x) { return x.id === id; })[0] || batches[0];
+        if (!document.getElementById("go")) renderBatch();  // never clobber an open intake form
+      }).catch(function () {});
+  }, 30000);
 })();
 </script>
 </body>
