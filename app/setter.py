@@ -3802,8 +3802,9 @@ _VIDEO_CLAUSE_FOR_RE = re.compile(r"\bideas\s+I\s+(?:had|have)\s+for\s+(.+?)\s*$
 # Studios walking through ..."): the same source the agent instructions tell
 # the drafter to use, read deterministically.
 _VIDEO_OUTREACH_COMPANY_RE = re.compile(
-    r"recorded\s+a\s+(?:quick\s+|short\s+|brief\s+|personal(?:ised|ized)\s+)?(?:video|loom)\s+for\s+"
-    r"(.+?)(?=\s+(?:walking|showing|going|covering|explaining|breaking|outlining|sharing|that|which|where|on|about|to)\b"
+    r"(?:recorded|made|put\s+together|filmed|created|prepared)\s+a\s+(?:quick\s+|short\s+|brief\s+|personal(?:ised|ized)\s+)?"
+    r"(?:video|loom)\s+for\s+"
+    r"(.+?)(?=\s+(?:walking|showing|going|covering|explaining|breaking|outlining|sharing|laying|setting|mapping|detailing|describing|demonstrating|highlighting|that|which|where|on|about|to)\b"
     r"|\s*[,:;!\n]|\.(?=\s|$)|\s+-\s|$)",
     re.I)
 # A short sign-off line: an optional courtesy ("Best,", "Thanks,") then one to
@@ -3816,16 +3817,23 @@ _LAST_DIV_RE = re.compile(r"<div\b[^>]*>((?:(?!<div\b).)*?)</div>\s*$", re.I | r
 _TRAILING_BREAKS_RE = re.compile(r"(?:\s*<br\s*/?>\s*)+$", re.I)
 
 
-def _video_company_for(row: dict) -> str:
+def _video_company_for(row: dict, *, weak: bool = False) -> str:
     """The lead's company name for the video template's where-clause (owner
     ruling 2026-09-03: "for {Company}", never "for you" while a company is
-    known). Resolution order mirrors the agent instructions: the row/lead
-    record (lead_company), then the company named by the original outreach
-    ("I recorded a quick video for Awe Studios walking through ..."), then
-    the companies table by the lead's domain. "" when nothing resolves - the
-    caller then keeps the "for you" fallback. Never raises."""
+    known). STRONG sources (default), in the order the agent instructions
+    give: the row/lead record (lead_company), then the company named by the
+    original outreach ("I recorded a quick video for Awe Studios walking
+    through ..."). With weak=True, ONLY the companies-table name by the
+    lead's domain - a weaker source (row 2605: engineerup.com is stored as
+    "Coretek"), so callers use it only when neither a strong source nor the
+    drafter itself named a company. "" when nothing resolves. Never raises."""
     try:
         row = row or {}
+        if weak:
+            domain = str(row.get("company_domain") or "").strip().lower()
+            if not domain and "@" in str(row.get("lead_email") or ""):
+                domain = str(row.get("lead_email")).split("@", 1)[1].strip().lower()
+            return str((_company_row(domain) or {}).get("name") or "").strip() if domain else ""
         name = str(row.get("lead_company") or "").strip()
         if name:
             return name
@@ -3835,13 +3843,6 @@ def _video_company_for(row: dict) -> str:
             cand = re.sub(r"\s+", " ", m.group(1)).strip(" \"'")
             if 0 < len(cand) <= 60 and len(cand.split()) <= 6:
                 return cand
-        domain = str(row.get("company_domain") or "").strip().lower()
-        if not domain and "@" in str(row.get("lead_email") or ""):
-            domain = str(row.get("lead_email")).split("@", 1)[1].strip().lower()
-        if domain:
-            name = str((_company_row(domain) or {}).get("name") or "").strip()
-            if name:
-                return name
         return ""
     except Exception:  # noqa: BLE001 - a lookup must never break the draft
         return ""
@@ -3880,7 +3881,7 @@ def _video_force_signoff(html: str, sender_first: str) -> str:
 
 
 def ensure_video_where_clause(html: str, *, sender_first: str = "", slots: list = None,
-                              booking_link: str = "", company: str = "") -> str:
+                              booking_link: str = "", company: str = "", company_fallback=None) -> str:
     """Deterministic backstop for the LOOM VIDEO template (Navreo agent), run
     after proofread on every drafting surface. Scoped to drafts that carry
     the template's fixed opening line ("Here is the video I recorded for
@@ -3907,6 +3908,11 @@ def ensure_video_where_clause(html: str, *, sender_first: str = "", slots: list 
        when live `slots` exist and the draft offers no times in any shape.
     5. SIGN-OFF (row 3264): the last line is exactly `sender_first`.
 
+    `company_fallback` (a string or a zero-arg callable, e.g. the companies-
+    table lookup) is used ONLY when neither `company` nor the drafter named
+    one - a weaker source must never overwrite a name the outreach/drafter
+    used (row 2605: the table calls engineerup.com "Coretek").
+
     `sender_first`/`slots`/`booking_link`/`company` are all optional so the
     original one-argument call keeps its original behaviour (clause only)."""
     try:
@@ -3928,13 +3934,15 @@ def ensure_video_where_clause(html: str, *, sender_first: str = "", slots: list 
                     drafted = re.sub(r"<[^>]+>", "", fm.group(1)).strip(" \"'")
                     if drafted and drafted.lower() not in ("you", "your team", "your business", "your company"):
                         name = drafted
+            if not name:
+                name = _video_weak_company(company_fallback)
             clause = _VIDEO_WHERE_CLAUSE_FMT.format(company=name or "you")
             head = q[:cm.start()] if cm else q
             new_q = head.rstrip() + " " + clause
             if new_q != q:
                 out = out[:m.start()] + new_q + m.group(2) + out[m.end():]
         elif len(slots) >= 2 and not _video_offers_times(out, slots):
-            clause = _VIDEO_WHERE_CLAUSE_FMT.format(company=company or "you")
+            clause = _VIDEO_WHERE_CLAUSE_FMT.format(company=company or _video_weak_company(company_fallback) or "you")
             para = (f'<div>Would you be open to a call on <a href="{slots[0]["link"]}">{slots[0]["label"]}</a> '
                     f'or <a href="{slots[1]["link"]}">{slots[1]["label"]}</a> {clause}?</div>')
             fallback = (_VIDEO_FALLBACK_LINKED_FMT.format(booking_link=booking_link)
@@ -3953,6 +3961,15 @@ def ensure_video_where_clause(html: str, *, sender_first: str = "", slots: list 
         return out
     except Exception:  # noqa: BLE001 - a repair must never break the draft
         return html
+
+
+def _video_weak_company(fallback) -> str:
+    """Resolve the weak company source lazily (it is usually a DB lookup)."""
+    try:
+        v = fallback() if callable(fallback) else fallback
+        return str(v or "").strip()
+    except Exception:  # noqa: BLE001
+        return ""
 
 
 def _video_offers_times(html: str, slots: list) -> bool:
@@ -3988,7 +4005,8 @@ def apply_video_backstop(html: str, row: dict, agent: dict, slots: list, sender_
             return html
         return ensure_video_where_clause(
             html, sender_first=sender_first or _sender_first_for(agent),
-            slots=slots, booking_link=_booking_link(agent), company=_video_company_for(row))
+            slots=slots, booking_link=_booking_link(agent), company=_video_company_for(row),
+            company_fallback=lambda: _video_company_for(row, weak=True))
     except Exception:  # noqa: BLE001
         return html
 

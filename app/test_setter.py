@@ -987,6 +987,18 @@ def test_video_backstop_enforces_template():
     check("video company: lead record outranks the outreach", co == "Awe Studios", co)
     co = setter._video_company_for({"first_outbound": "Hi Ron, hope you're well."})
     check("video company: nothing resolvable -> empty (no DB when no domain)", co == "", co)
+    co = setter._video_company_for({"first_outbound": "I made a short video for Engineer Up laying out exactly what we'd build"})
+    check("video company: 'made a short video for' is read too (row 2605)", co == "Engineer Up", co)
+    # the companies-table name is a WEAK source: it never outranks a company the drafter named
+    named = head + f'<div>Would you be open to a call on {l1} or {l2} where I could share some of the other ideas I had for Engineer Up?</div><br><div>Bjion</div>'
+    fixed = setter.ensure_video_where_clause(named, **{**kw, "company": "", "company_fallback": lambda: "Coretek"})
+    check("video backstop: weak company does not overwrite the drafter's", "ideas I had for Engineer Up?</div>" in fixed, fixed)
+    fixed = setter.ensure_video_where_clause(foryou, **{**kw, "company": "", "company_fallback": lambda: "Coretek"})
+    check("video backstop: weak company fills 'for you' when nothing else names one", "ideas I had for Coretek?</div>" in fixed, fixed)
+    fixed = setter.ensure_video_where_clause(bare, **{**kw, "company": "", "company_fallback": lambda: "Coretek"})
+    check("video backstop: weak company used in the appended paragraph", "ideas I had for Coretek?</div>" in fixed, fixed)
+    fixed = setter.ensure_video_where_clause(foryou, **{**kw, "company": "", "company_fallback": lambda: 1/0})
+    check("video backstop: a failing fallback degrades to 'for you'", "ideas I had for you?</div>" in fixed, fixed)
 
 
 def test_lint_draft():
