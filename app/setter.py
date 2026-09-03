@@ -7010,7 +7010,7 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 # modules 33/51) applies the same rule via campaign-name markers; this is
 # the sweep-side half.
 CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
-CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius")
+CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "remission")
 
 # A once-positive→negative FLIP (all this sweep ever alerts on — fresh
 # positives are excluded above and owned by the Make categoriser) routes to the
