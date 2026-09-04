@@ -517,7 +517,8 @@ function cardTopics(c) {
    after the sweep's first horizon pass, not after every card is redrafted
    - so it declared the whole pool fresh while dozens of cards still
    carried pre-teaching drafts. A card's own stamp is the only truth. */
-function caseFresh(c) {
+function caseFresh(c, opts) {
+  const withDeferred = !!(opts && opts.withDeferred); // predict freshness AFTER deferred answers activate (2026-09-03)
   if (c && c.taught_fact_missing) return false; // failed a taught-fact lint - never "fresh" (2026-09-03)
   if (pendingFeedbackSync > 0) return false;
   if (!lastFeedbackAt) return true;
@@ -526,7 +527,7 @@ function caseFresh(c) {
   // A sitting whose ledger predates this feature (or was lost) falls back
   // to one global teaching at the clock - the plain timestamp gate.
   const base = TEACHINGS.length ? TEACHINGS : [{ at: lastFeedbackAt, topics: [], global: true }];
-  const ledger = base.filter((t) => !t.d); // deferred filler answers gate the NEXT round
+  const ledger = withDeferred ? base : base.filter((t) => !t.d); // deferred filler answers gate the NEXT round
   if (!ledger.length) return true;
   const ct = cardTopics(c);
   return !ledger.some((t) => t.at > stamp
@@ -1657,7 +1658,11 @@ function renderRoundDone() {
   // round's teachings, a hold WOULD follow Start - so the question set is
   // the primary thing on this screen, its own button starts the round, and
   // the copy says so. The redraft runs behind the typing.
-  const holdComing = SHARE_MODE && ready && !spares.some((c) => caseFresh(c));
+  // Predict with the deferred answers INCLUDED - the Start click activates
+  // them, so a spare that is fresh today but stale against them means a
+  // hold WILL follow (live-verify 2026-09-03: the screen said 'drafted with
+  // everything you taught' and Start went straight into a hold).
+  const holdComing = SHARE_MODE && ready && !spares.some((c) => caseFresh(c, { withDeferred: true }));
   IV_GATE_MODE = holdComing;
 
   const disp = displayScore(score); // cosmetic /100 scale (owner ruling 2026-08-21)
