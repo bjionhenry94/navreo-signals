@@ -1147,6 +1147,13 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
   .clog-top #automove-controls { flex: 0 0 auto; }
   .clog-empty { padding: 34px 4px; text-align: center; color: var(--fg-subtle); font-size: 0.86rem; line-height: 1.5; max-width: 540px; margin: 0 auto; }
   .clog-more { margin: 14px 2px 0; font-size: 0.74rem; color: var(--fg-subtle); }
+  .clog-see-more { display: block; width: 100%; margin: 4px 0 0; padding: 11px 16px;
+    font: inherit; font-size: 0.82rem; font-weight: 600; color: var(--fg-muted); cursor: pointer;
+    background: var(--bg-elevated); border: 1px solid var(--border-strong); border-radius: var(--r-md);
+    transition: background var(--dur-2) var(--ease-out), border-color var(--dur-2) var(--ease-out); }
+  .clog-see-more:hover { border-color: var(--nav-ink-3); color: var(--fg); }
+  .clog-see-more:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+  .clog-see-count { font-weight: 500; color: var(--fg-subtle); }
   .clog-tl { position: relative; padding-left: 26px; margin-top: 6px; }
   .clog-tl::before { content: ""; position: absolute; left: 8px; top: 8px; bottom: 8px; width: 1px; background: var(--border-strong); }
   .clog-day { position: relative; padding-top: 16px; }
@@ -4765,8 +4772,12 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     try { return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); }
     catch (e) { return ""; }
   }
+  var CLOG_PAGE = 10;   /* show 10 at first, reveal 10 more per "See more" click */
   function hydrateChangeLog(c) {
     var id = c.id;
+    /* how many events are visible right now — remembered per campaign so a tab
+       switch back keeps the reader where they were, not reset to 10. */
+    STATE.changelogShown = STATE.changelogShown || {};
     var paint = function (d) {
       if (!onPage(id)) return;
       var root = document.getElementById("changelog-root");
@@ -4776,9 +4787,11 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         root.innerHTML = '<p class="clog-empty">No changes recorded on this campaign yet. Version moves, list audits, new positives and meetings booked will show up here as they happen.</p>';
         return;
       }
+      var shown = Math.min(STATE.changelogShown[id] || CLOG_PAGE, evs.length);
+      STATE.changelogShown[id] = shown;
       var out = ['<div class="clog-tl">'];
       var lastDay = null;
-      evs.forEach(function (e) {
+      evs.slice(0, shown).forEach(function (e) {
         var day = clogDayLabel(e.at);
         if (day !== lastDay) {
           if (lastDay !== null) out.push("</div>");
@@ -4798,8 +4811,23 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       });
       if (lastDay !== null) out.push("</div>");
       out.push("</div>");
-      if (d && d.truncated) out.push('<p class="clog-more">Showing the ' + evs.length + " most recent changes.</p>");
+      var remaining = evs.length - shown;
+      if (remaining > 0) {
+        var next = Math.min(CLOG_PAGE, remaining);
+        out.push('<button type="button" class="clog-see-more" id="clog-see-more">' +
+          "See more <span class=\"clog-see-count\">(" + next + " of " + remaining + " more)</span></button>");
+      } else if (evs.length > CLOG_PAGE) {
+        out.push('<p class="clog-more">That’s every change on this campaign — ' + evs.length + " in total." +
+          (d && d.truncated ? " Only the most recent are kept." : "") + "</p>");
+      }
       root.innerHTML = out.join("");
+      var more = document.getElementById("clog-see-more");
+      if (more) {
+        more.addEventListener("click", function () {
+          STATE.changelogShown[id] = shown + CLOG_PAGE;
+          paint(d);
+        });
+      }
     };
     STATE.changelog = STATE.changelog || {};
     if (STATE.changelog[id]) { paint(STATE.changelog[id]); return; }
