@@ -518,6 +518,7 @@ function cardTopics(c) {
    - so it declared the whole pool fresh while dozens of cards still
    carried pre-teaching drafts. A card's own stamp is the only truth. */
 function caseFresh(c) {
+  if (c && c.taught_fact_missing) return false; // failed a taught-fact lint - never "fresh" (2026-09-03)
   if (pendingFeedbackSync > 0) return false;
   if (!lastFeedbackAt) return true;
   const stamp = String((c && (c.redrafted_at || c.generated_at)) || "");
@@ -1950,11 +1951,22 @@ async function maybeOfferFillerQuestions() {
     // trainer had JUST filled in). Wait for in-flight answers to land, then
     // drop anything the local answered-ledger already covers.
     if (view !== "shortwait") return;
-    const iv = await fetchInterviewQuestions();  // instant when a set was prefetched (2026-09-02)
-    const qs = ((iv && iv.questions) || [])
-      .filter((q) => !ANSWERED_IV_LOCAL.ids.has(String(q.id))
-        && !ANSWERED_IV_LOCAL.texts.has(String(q.q || "").trim().toLowerCase()))
-      .slice(0, 5);
+    // Bounded retry (live-verify 2026-09-03): the first fetch can land while
+    // the intake's last streamed answers are still in flight - the server
+    // then re-serves that set's remainder, the local ledger filters it to
+    // nothing, and a single attempt burned the whole filler. Retry every
+    // 1.5s (max 8) until a genuinely NEW set arrives (the prefetched one is
+    // promoted the moment the current set is fully landed).
+    let qs = [];
+    for (let attempt = 0; attempt < 8; attempt++) {
+      const iv = await fetchInterviewQuestions();  // instant when a set was prefetched (2026-09-02)
+      qs = ((iv && iv.questions) || [])
+        .filter((q) => !ANSWERED_IV_LOCAL.ids.has(String(q.id))
+          && !ANSWERED_IV_LOCAL.texts.has(String(q.q || "").trim().toLowerCase()))
+        .slice(0, 5);
+      if (qs.length || view !== "shortwait") break;
+      await new Promise((res) => setTimeout(res, 1500));
+    }
     if (!qs.length || view !== "shortwait" || !document.getElementById("shortRoundWaitMsg")) return;
     const el = document.getElementById("trainApp");
     if (!el) return;
