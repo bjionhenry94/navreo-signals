@@ -15103,10 +15103,33 @@ def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: di
         # every us-side email is pipeline output, never hand-written.
         first_name = str(scenario.get("lead_first_name") or "").strip()
         camp_ids = [campaign_id] if campaign_id else (agent.get("campaign_ids") or [])
-        sample = _fetch_agent_outreach_sample(camp_ids, limit=1)
-        if sample:
-            o_subject = str(sample[0].get("subject") or "")
-            o_body = _swap_greeting_name(clean_body(sample[0].get("body") or ""), first_name)
+        # OUTREACH ROTATION (owner ask 2026-09-03: "draft the scenarios based
+        # off of the copy in those [live campaigns]"). The old limit=1 sample
+        # reused ONE real sent email for every synthetic card - 39 cards of
+        # "I noticed Oilserv..." with only the greeting changed. Now every
+        # scenario rotates through the agent's real sent seq-1 emails
+        # (deduped by body) AND its stored live campaign copy
+        # (training_outreach variants, merge tokens resolved per invented
+        # lead), indexed by the scenario's position so consecutive cards
+        # differ. Zero real sends and zero stored copy still falls back to
+        # the invention's own outreach exactly as before.
+        _real = []
+        _seen = set()
+        for s in _fetch_agent_outreach_sample(camp_ids, limit=12):
+            k = re.sub(r"\s+", " ", str(s.get("body") or ""))[:200]
+            if k and k not in _seen:
+                _seen.add(k)
+                _real.append(s)
+        _choices = [("real", s) for s in _real] + [("variant", v) for v in _training_outreach_pool(agent)]
+        if _choices:
+            _kind, _pick = _choices[int(idx or 0) % len(_choices)]
+            if _kind == "real":
+                o_subject = str(_pick.get("subject") or "")
+                o_body = _swap_greeting_name(clean_body(_pick.get("body") or ""), first_name)
+            else:
+                _company = str(scenario.get("lead_company") or "").strip()
+                o_subject = _resolve_outreach_tokens(str(_pick.get("subject") or ""), first_name, _company)
+                o_body = clean_body(_resolve_outreach_tokens(str(_pick.get("body") or ""), first_name, _company))
         else:
             o_subject = str(scenario.get("outreach_subject") or "")
             o_body = clean_body(str(scenario.get("outreach_body") or ""))
