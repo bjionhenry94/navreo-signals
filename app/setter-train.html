@@ -1991,18 +1991,17 @@ function renderShortRoundWait() {
   view = "shortwait";
   const el = document.getElementById("trainApp");
   if (!el || document.getElementById("shortRoundWaitMsg")) return;
-  // Empty waiting round = the serve gate is holding for the FIRST card
-  // redrafted with the trainer's answers. Owner ask 2026-08-31: a progress
-  // bar with honest live-training copy, not a spinner - and, since
-  // 2026-09-01, the pending follow-up questions render over it so the wait
-  // does double duty. A short round mid-top-up keeps the one-line spinner.
-  if (ROUND_IDS && ROUND_IDS.length === 0) {
-    paintPlainWaitBar();
-    maybeOfferFillerQuestions();
-    return;
-  }
-  el.innerHTML = `<div class="empty-flow"><div class="round-updating" id="shortRoundWaitMsg">`
-    + `<span class="spin"></span><span>Nice - your next scenario is just landing…</span></div></div>`;
+  // EVERY hold gets the same treatment (owner ruling 2026-09-03: "if the
+  // user ever has to wait, give them another round of questions"): the
+  // progress bar with honest live-training copy, and the pending follow-up
+  // questions rendered over it so the wait does double duty - whether the
+  // hold is the intake's first round, a mid-round card the paint gate is
+  // holding back after a teaching, or the round-done transition. A new hold
+  // resets the one-set-per-hold budget; the max-two-question-rounds cap per
+  // transition is unchanged (staged set + this one).
+  FILLER_TRIED = false;
+  paintPlainWaitBar();
+  maybeOfferFillerQuestions();
 }
 
 function growRoundIfShort() {
@@ -3100,7 +3099,10 @@ function submitAndAdvance(c) {
     // 2026-08-28: only the DISPLAYED card is protected (was the whole
     // round), so the round's unreached cards get redrafted with the newest
     // teaching while the trainer reads - the swap lands via the polls.
-    if (ROUND_IDS && ROUND_IDS.length) answerBody.round_ids = [c.id];
+    // Send the round's REMAINING cards (not just this one): the server now
+    // redrafts them FIRST after a teaching, so a held card lands in one pass
+    // (live-verify 2026-09-03). The displayed card is protected by its pin.
+    if (ROUND_IDS && ROUND_IDS.length) answerBody.round_ids = ROUND_IDS.filter((id) => !isAnswered(id) && String(id) !== String(c.id));
     if (p.verdict === "needs_work" && p.edited_body) answerBody.edited_body = p.edited_body;
   }
   // Snapshot of exactly what the trainer picked, so a failure restores this
