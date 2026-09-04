@@ -260,10 +260,13 @@ CORE_FOUR_CATEGORY_FILTER = "in.(" + ",".join(quote(f'"{c}"', safe="") for c in 
 # a status; it spans needs_review / sent / auto_sent (a booked-call thread must
 # stay visible after we reply, like the Sent tab) and only drops when the row
 # is DISMISSED (status=dismissed), which is the tab's one way to clear a row.
-# Value double-quoted THEN percent-encoded, same reasoning as CORE_FOUR above.
+# Value percent-encoded but NOT double-quoted: unlike in.(...), a PostgREST
+# eq. filter takes its value literally, so quoting it would match the literal
+# string `"Meeting Request"` (with quotes) and return zero rows. The space is
+# handled by percent-encoding alone.
 MEETING_REQUEST_CATEGORY = "Meeting Request"
 MEETING_REQUEST_QUEUE_FILTER = (
-    f'category=eq.{quote(chr(34) + MEETING_REQUEST_CATEGORY + chr(34), safe="")}'
+    f'category=eq.{quote(MEETING_REQUEST_CATEGORY, safe="")}'
     "&status=neq.dismissed"
 )
 
