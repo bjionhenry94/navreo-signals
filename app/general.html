@@ -241,7 +241,14 @@ function movesTable(rows){
     "<th>Before &rarr; after</th><th>Actor</th><th>Outcome</th><th>When</th>",
     "</tr></thead><tbody>"];
   rows.forEach(function(r){
-    var bad = r.outcome === "issue" || r.outcome === "failed" || r.issue_kind;
+    /* The OUTCOME decides the colour — nothing else. A moved row that carries
+       a note (thin_evidence, flap) is still a move that landed, and painting
+       it red said the opposite. The note rides beside it as a secondary pill:
+       amber for something to look at, neutral grey for "low confidence",
+       which is a caveat on a real move, not a fault. */
+    var kind = r.issue_kind || "";
+    var bad = r.outcome === "issue" || r.outcome === "failed";
+    var thin = kind === "thin_evidence";
     h.push("<tr>",
       "<td>", gCampaign(r.campaign_id), "</td>",
       "<td>", r.step == null ? "–" : "Email " + gEsc(r.step), "</td>",
@@ -252,7 +259,8 @@ function movesTable(rows){
       "<td>", gEsc(r.actor || "–"), "</td>",
       '<td><span class="pill ', (bad ? "bad" : "on"), '">',
         gEsc(r.outcome || "moved"), "</span>",
-        (r.issue_kind ? '<span class="pill warn sub-kind">' + gEsc(r.issue_kind) +
+        (kind ? '<span class="pill ' + (thin ? "off" : "warn") + ' sub-kind">' +
+          gEsc(thin ? "low confidence" : kind.replace(/_/g, " ")) +
           "</span>" : ""), "</td>",
       "<td>", gEsc(gAgo(r.created_at)), "</td>",
       "</tr>");
@@ -336,21 +344,31 @@ async function loadIssues(){
   }
 }
 
+/* Run now. A sweep takes minutes (10 moves, 20 seconds apart, each a Smartlead
+   round trip) so the server starts it in the background and acks straight away
+   — this button reports that the run has STARTED, never a made-up result. The
+   tables below refresh themselves a few times while it works. */
+function refreshTables(){ loadIssues(); loadThin(); loadMoves(); }
 document.getElementById("am-run").addEventListener("click", async function(){
   var btn = this, hint = document.getElementById("am-run-hint");
-  btn.disabled = true; hint.textContent = "Running…";
+  btn.disabled = true; hint.textContent = "Starting…";
   try {
     var r = await fetch("/api/auto-mover/run", { method: "POST" });
     var b = await r.json();
-    hint.textContent = b.started
-      ? ("Reviewed " + (b.reviewed || 0) + ", moved " + (b.moved || 0) +
-         (b.stopped ? " (stopped: " + b.stopped + ")" : ""))
-      : ("Nothing ran — " + (b.reason || "unknown"));
+    if (b.busy) {
+      hint.textContent = "A run is already going — it'll finish on its own.";
+    } else if (b.started) {
+      hint.textContent = "Run started. Every campaign it moves appears below and " +
+        "in the Tasks panel as it goes — this can take a few minutes.";
+      [5000, 20000, 60000, 150000].forEach(function(ms){ setTimeout(refreshTables, ms); });
+    } else {
+      hint.textContent = "Nothing ran — " + (b.reason || "unknown");
+    }
   } catch (e) {
     hint.textContent = "Couldn't run.";
   }
   btn.disabled = false;
-  loadIssues(); loadThin(); loadMoves();
+  refreshTables();
 });
 
 loadPrefs();

@@ -20292,6 +20292,170 @@ def auto_move_run(campaign_id=None, max_moves=None,
         _AUTO_MOVE_LOCK.release()
 
 
+# R14 backstop: every failed/issue move must reach Notion. `_am_notion` swallows
+# its own errors so a Notion outage can never sink a traffic move — which means
+# a run during an outage (or before the key was linked to this service, as on
+# 2 Sep 2026) leaves ledger rows with `notion_task_url` null and NOBODY told.
+# This sweep re-files exactly those rows. It is idempotent by construction: the
+# `[auto-mover:<cid>:<kind>]` marker in the title means a task that is already
+# open is reused, never duplicated.
+_AM_ISSUE_PRIORITY = {"save_failed": "High", "counter_drop": "High",
+                      "enqueue_rejected": "High"}
+_AM_ISSUE_WHAT = {
+    "save_failed": "Apply the recommended split by hand on the campaign's Messaging "
+                   "tab, or say why it should not be applied.",
+    "enqueue_rejected": "Apply the recommended split by hand on the campaign's "
+                        "Messaging tab, or say why it should not be applied.",
+    "counter_drop": "Check the version counters on this campaign, then decide "
+                    "whether the auto-mover can be switched back on.",
+    "flap": "Sanity-check the version data on this campaign - the winner keeps "
+            "changing.",
+    "human_owned": "Decide whether the auto-mover should keep managing Email 1 on "
+                   "this campaign, then either leave it (it stays paused for 14 "
+                   "days) or set the campaign switch back to inherit.",
+}
+_AM_ISSUE_HOW = {
+    "save_failed": "- Open the campaign's Messaging tab and use the 1-click button "
+                   "there.\n- If it fails again, the problem is upstream at "
+                   "Smartlead, not the split.",
+    "enqueue_rejected": "- Open the campaign's Messaging tab and use the 1-click "
+                        "button there.\n- If it is refused again, read the reason on "
+                        "Settings -> General; it is a rule, not an outage.",
+    "counter_drop": "- Compare the version table against Smartlead.\n- The breaker "
+                    "clears only by hand on Settings -> General.",
+    "flap": "- Look at the Messaging tab: are the versions genuinely neck and neck?\n"
+            "- If so, consider leaving the split alone until more data lands.",
+    "human_owned": "- Look at the campaign's Messaging tab and decide the intended "
+                   "split.\n- If the hand-set split should stand, leave it.\n- If the "
+                   "mover should take over again, flip the campaign switch.",
+}
+
+
+def _am_issue_title(kind: str, name: str, step: int) -> str:
+    if kind == "counter_drop":
+        return f"Auto-mover STOPPED: a counter dropped on {name}"
+    if kind == "flap":
+        return f"Auto-mover reversed itself on {name}"
+    if kind == "human_owned":
+        return f"Auto-mover paused on {name}: someone set the split by hand"
+    return f"Auto-mover could not move Email {step} on {name}"
+
+
+def _auto_mover_run_route(one: str, max_moves, actor: str) -> tuple:
+    """The Settings -> General "Run now" contract, extracted so it is testable.
+
+    A ?campaign=<id> probe stays INLINE — it is one campaign, it is short, and
+    its whole point is to answer with the exact skip/disposition. A full sweep
+    is different: 10 moves at 20s spacing, each a Smartlead round trip, is
+    minutes of work, and Render kills the request at ~9s. The old inline sweep
+    therefore 502'd the page while the run carried on in the dead request's
+    thread — an orphan job on the Tasks panel and no answer. So a sweep now
+    behaves EXACTLY like the cron route: busy -> {busy:true}; otherwise start
+    the SAME background runner and ack 202 {started:true} at once. The ledger,
+    the General tables and the Tasks panel fill in as it works.
+
+    Returns (http_status, body). For a sweep it returns BEFORE the runner does
+    any work — the whole point of the fix."""
+    one = str(one or "").strip()
+    if one:
+        return 200, auto_move_run(campaign_id=one, max_moves=max_moves or None)
+    if _AUTO_MOVE_LOCK.locked():
+        return 200, {"ok": True, "started": False, "busy": True,
+                     "reason": "already_running", "disposition": []}
+
+    def _bg(_m=max_moves or None, _actor=actor):
+        try:
+            r = auto_move_run(max_moves=_m)
+            log_activity("/api/auto-mover/run",
+                         payload={"reviewed": r.get("reviewed"),
+                                  "moved": r.get("moved"),
+                                  "stopped": r.get("stopped")},
+                         actor=_actor, action="auto_move_done", entity="campaigns")
+        except Exception as e:  # noqa: BLE001 — a failed run must be visible
+            log_activity("/api/auto-mover/run", payload={"error": str(e)[:200]},
+                         actor=_actor, action="auto_move_failed", entity="campaigns")
+    threading.Thread(target=_bg, daemon=True).start()
+    return 202, {"ok": True, "started": True, "disposition": []}
+
+
+def auto_mover_refile_issues(limit: int = 100) -> dict:
+    """Re-file the Notion Client Task for every auto_mover_moves row that failed
+    and never got one. Returns {ok, filed: [...], skipped: [...]}.
+
+    Judging-free: it reads what the runner already decided and files the task
+    the runner would have filed. It never touches Smartlead and never moves
+    traffic. `thin_evidence` rows are deliberately NOT filed — R14 sends those
+    to the General digest, not to Notion."""
+    try:
+        n = max(1, min(500, int(limit or 100)))
+    except (TypeError, ValueError):
+        n = 100
+    try:
+        rows = sb("GET", "auto_mover_moves?select=id,campaign_id,step,action,winner,"
+                  "mode,outcome,issue_kind,notion_task_url,created_at"
+                  "&outcome=in.(failed,issue)&notion_task_url=is.null"
+                  f"&order=created_at.asc&limit={n}")
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"ledger read failed: {str(e)[:200]}",
+                "filed": [], "skipped": []}
+    if not isinstance(rows, list):
+        return {"ok": False, "message": "ledger unreadable", "filed": [], "skipped": []}
+
+    filed: list = []
+    skipped: list = []
+    for r in rows:
+        rid = r.get("id")
+        cid = str(r.get("campaign_id") or "").strip()
+        kind = str(r.get("issue_kind") or "").strip() or "save_failed"
+        if not cid:
+            skipped.append({"id": rid, "reason": "no campaign id"})
+            continue
+        if kind == "thin_evidence":
+            skipped.append({"id": rid, "campaign_id": cid,
+                            "reason": "thin_evidence goes to the General digest, not Notion"})
+            continue
+        meta = _am_meta(cid)
+        name = meta.get("name") or f"Campaign {cid}"
+        client = meta.get("client") or ""
+        step = r.get("step") if r.get("step") is not None else _AM_STEP
+        action = str(r.get("action") or "a move")
+        why = (f"The mover asked for {action} on {r.get('created_at')} and it did not "
+               f"land ({kind}). Nothing has moved on Email {step} since, and the issue "
+               "was never raised because the Notion channel was unavailable at the time.")
+        if kind == "counter_drop":
+            why = (f"After the mover's {action} save on {r.get('created_at')} a version "
+                   "counter dropped. The whole feedback loop depends on those counters "
+                   "surviving our own writes.")
+        elif kind == "flap":
+            why = (f"The mover reversed itself on {r.get('created_at')} (now backing "
+                   f"{r.get('winner') or 'an even split'}) inside {_AM_FLAP_HOURS} hours. "
+                   "That is allowed - the mover always follows the latest data - but a "
+                   "rapid reversal usually means the versions are too close to separate.")
+        url = _am_notion(
+            cid, kind, _am_issue_title(kind, name, step), client,
+            _am_issue_body(cid, name,
+                           _AM_ISSUE_WHAT.get(kind, _AM_ISSUE_WHAT["save_failed"]),
+                           why,
+                           _AM_ISSUE_HOW.get(kind, _AM_ISSUE_HOW["save_failed"])),
+            _AM_ISSUE_PRIORITY.get(kind, "Medium"))
+        if not url:
+            skipped.append({"id": rid, "campaign_id": cid, "issue_kind": kind,
+                            "reason": "Notion did not return a task url"})
+            continue
+        stored = True
+        try:
+            sb("PATCH", f"auto_mover_moves?id=eq.{int(rid)}", {"notion_task_url": url})
+        except Exception as e:  # noqa: BLE001 — the task exists; say so honestly
+            stored = False
+            print(f"[auto-mover] refile: ledger write-back failed for {rid}: {e}",
+                  file=sys.stderr)
+        filed.append({"id": rid, "campaign_id": cid, "campaign": name,
+                      "client": client, "issue_kind": kind,
+                      "priority": _AM_ISSUE_PRIORITY.get(kind, "Medium"),
+                      "notion_task_url": url, "stored_on_row": stored})
+    return {"ok": True, "checked": len(rows), "filed": filed, "skipped": skipped}
+
+
 # ── Optimisation Queue (morning task routine) — config + daily run log ───────
 # Single source of truth for the team's morning optimisation routine (Settings →
 # Task Queue). Each person's Claude routine READS its kinds + client exclusions
@@ -25952,7 +26116,7 @@ class Handler(SimpleHTTPRequestHandler):
         "/api/cron/mailbox-sync", "/api/cron/audit-refresh", "/api/setter/poll",
         "/api/cron/reply-sync", "/api/cron/reply-caps", "/api/notify/positive-card",
         "/api/cron/booked-sweep", "/api/cron/intake-gate",
-        "/api/cron/auto-move", "/api/auto-mover/run",
+        "/api/cron/auto-move", "/api/auto-mover/run", "/api/auto-mover/refile-issues",
         "/api/deliverability/_audit/refresh", "/api/deliverability/_bundle/refresh",
         "/api/warmup-live",  # read-only Smartlead read — must not nuke SWR caches
         # act-state clicks touch only cockpit_action_assignments (whose GET is
@@ -26616,9 +26780,10 @@ class Handler(SimpleHTTPRequestHandler):
         # above; the two writers additionally demand their typed confirm token
         # and route through save_sequence_ids_intact (the one sequences door).
         if path == "/api/auto-mover/run":
-            # Settings -> General "Run now". Same function as the cron tick,
-            # session-gated instead of token-gated, and always inline so the
-            # page can show the disposition it just produced.
+            # Settings -> General "Run now". Same runner as the cron tick,
+            # session-gated instead of token-gated. The sweep-vs-inline-vs-busy
+            # decision lives in _auto_mover_run_route so it can be unit-tested
+            # without booting an HTTP server.
             from urllib.parse import parse_qs, urlparse
             _q = parse_qs(urlparse(self.path).query)
             _one = (_q.get("campaign") or [""])[0].strip()
@@ -26626,8 +26791,22 @@ class Handler(SimpleHTTPRequestHandler):
             _who = self._authed_email() or "app"
             log_activity(path, {"campaign": _one or None}, actor=_who,
                          action="auto_move_run", entity="campaigns")
-            return self._json(auto_move_run(campaign_id=_one or None,
-                                            max_moves=_max or None), 200)
+            status, body = _auto_mover_run_route(_one, _max or None, _who)
+            return self._json(body, status)
+        if path == "/api/auto-mover/refile-issues":
+            # R14 backstop: file the Notion Client Task for every failed move
+            # that never got one. Notion only — no Smartlead call, no traffic
+            # move, and the dedupe marker means a task that is already open is
+            # reused rather than duplicated.
+            from urllib.parse import parse_qs, urlparse
+            _q = parse_qs(urlparse(self.path).query)
+            _lim = (_q.get("limit") or [""])[0].strip()
+            _who = self._authed_email() or "app"
+            body = auto_mover_refile_issues(limit=_lim or 100)
+            log_activity(path, {"filed": len(body.get("filed") or []),
+                                "skipped": len(body.get("skipped") or [])},
+                         actor=_who, action="auto_move_refile", entity="campaigns")
+            return self._json(body, 200 if body.get("ok") else 502)
         if path.startswith("/api/campaigns/"):
             _va_rest = path[len("/api/campaigns/"):]
             if _va_rest.endswith("/auto-move") and len(_va_rest) > len("/auto-move"):
