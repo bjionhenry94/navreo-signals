@@ -1650,6 +1650,14 @@ function renderRoundDone() {
   // shows a build state - and that builds MORE, it never loops.
   const spares = CASES.filter((c) => !isAnswered(c.id));
   const ready = spares.length >= ROUND_SIZE;
+  // QUESTIONS-FIRST (owner ruling 2026-09-02: "as soon as we know we're
+  // about to go into another round of training, it should go straight into
+  // the other round of questions"). When no spare is fresh against this
+  // round's teachings, a hold WOULD follow Start - so the question set is
+  // the primary thing on this screen, its own button starts the round, and
+  // the copy says so. The redraft runs behind the typing.
+  const holdComing = SHARE_MODE && ready && !spares.some((c) => caseFresh(c));
+  IV_GATE_MODE = holdComing;
 
   const disp = displayScore(score); // cosmetic /100 scale (owner ruling 2026-08-21)
   let msg, buttons, updating = "";
@@ -1665,6 +1673,9 @@ function renderRoundDone() {
     msg = `That's a lot for one sitting - thank you! We're at ${disp} of the 100 goal. `
         + `We'll take it from here; come back any time with this same link to keep going.`;
     buttons = "";
+  } else if (ready && holdComing) {
+    msg = `We're at ${disp} of the 100 goal. We're training on what you just taught us - answer these while it works, and the next round opens the moment you're done.`;
+    buttons = `<button class="btn" id="doneGenerateBtn" type="button">Skip the questions and start round ${roundNum + 1}</button>`;
   } else if (ready) {
     msg = `We're at ${disp} of the 100 goal. The next round was drafted with everything you just taught us.`;
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
@@ -1676,19 +1687,33 @@ function renderRoundDone() {
     buttons = "";
   }
 
-  el.innerHTML = `
+  const _actions = `${updating}${buttons}${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what we've learned</button>` : ""}`;
+  el.innerHTML = holdComing
+    ? `
     <div class="done-banner ${trained ? "trained" : ""}">
       <div class="db-icon">${trained ? "🎉" : "✓"}</div>
       ${scoreLine}
       <div class="db-msg">${msg}</div>
-      ${updating}
-      ${buttons}
-      ${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what we've learned</button>` : ""}
+    </div>
+    <div id="interviewHost"></div>
+    <div class="done-banner" style="margin-top:12px">${_actions}</div>
+  `
+    : `
+    <div class="done-banner ${trained ? "trained" : ""}">
+      <div class="db-icon">${trained ? "🎉" : "✓"}</div>
+      ${scoreLine}
+      <div class="db-msg">${msg}</div>
+      ${_actions}
     </div>
     <div id="interviewHost"></div>
   `;
   const genBtn = document.getElementById("doneGenerateBtn");
-  if (genBtn) genBtn.addEventListener("click", () => startNextRoundOrGenerate());
+  if (genBtn) genBtn.addEventListener("click", () => {
+    // Starting past a mounted question set is a deliberate skip: the hold
+    // then shows the timer only, never the same questions again.
+    if (holdComing && document.getElementById("ivForm")) { ivDismissedForRound = currentRoundNum(); FILLER_TRIED = true; }
+    startNextRoundOrGenerate();
+  });
   const reviewBtn = document.getElementById("doneReviewBtn");
   if (reviewBtn) reviewBtn.addEventListener("click", () => startReview());
   if (!trained && !capped) {
@@ -1811,9 +1836,12 @@ let shortRoundPollHandle = null;
 function stopShortRoundPoll() {
   if (shortRoundPollHandle) { clearInterval(shortRoundPollHandle); shortRoundPollHandle = null; }
 }
+let shortRoundDeadline = 0;
+let shortRoundHardCap = 0;
 function startShortRoundPoll() {
   stopShortRoundPoll();
-  let deadline = Date.now() + 150000;
+  shortRoundDeadline = Date.now() + 150000;
+  shortRoundHardCap = Date.now() + 6 * 60 * 1000; // absolute bound (owner ask 2026-09-02: never bounce out of a hold while redrafting)
   let shortBusy = false; // F1
   shortRoundPollHandle = setInterval(async () => {
     // Keep polling while the round is short OR any unanswered round card is
@@ -1825,12 +1853,23 @@ function startShortRoundPoll() {
       const c = CASES.find((x) => String(x.id) === String(id));
       return c && !caseFresh(c);
     });
-    if (fillerFormActive() && Date.now() > deadline - 60000) {
+    if (fillerFormActive() && Date.now() > shortRoundDeadline - 60000) {
       // The trainer is mid-questions - never yank the form for a timeout
       // or an open; the round opens right after they submit or skip.
-      deadline = Date.now() + 120000;
+      shortRoundDeadline = Date.now() + 120000;
     }
-    if (!ROUND_IDS || (Date.now() > deadline && !fillerFormActive())
+    if (view === "shortwait" && Date.now() > shortRoundDeadline && Date.now() < shortRoundHardCap
+        && !(ROUND_IDS && ROUND_IDS.length && currentUnanswered().some((c) => caseFresh(c)))) {
+      // Still redrafting: keep the hold honest instead of bouncing to the
+      // round-done screen (owner report 2026-09-02: "it still didn't even
+      // launch the round"). One extension at a time up to the hard cap.
+      shortRoundDeadline = Date.now() + 60000;
+      const m = document.getElementById("shortRoundWaitMsg");
+      if (m && !document.getElementById("waitLongerNote")) {
+        m.insertAdjacentHTML("beforeend", `<div id="waitLongerNote" style="margin-top:10px;color:var(--ink-3);font-size:12.5px">Taking a little longer than usual - still training on what you taught us.</div>`);
+      }
+    }
+    if (!ROUND_IDS || (Date.now() > shortRoundDeadline && !fillerFormActive())
         || (!fillerFormActive() && ROUND_IDS.length >= ROUND_SIZE && !roundStale)) {
       stopShortRoundPoll();
       if (view === "shortwait") {
@@ -1910,11 +1949,8 @@ async function maybeOfferFillerQuestions() {
     // the server re-served the "unanswered" remainder of the set the
     // trainer had JUST filled in). Wait for in-flight answers to land, then
     // drop anything the local answered-ledger already covers.
-    for (let w = 0; w < 16 && pendingFeedbackSync > 0; w++) {
-      await new Promise((res) => setTimeout(res, 500));
-    }
     if (view !== "shortwait") return;
-    const iv = await fetchInterviewQuestions();
+    const iv = await fetchInterviewQuestions();  // instant when a set was prefetched (2026-09-02)
     const qs = ((iv && iv.questions) || [])
       .filter((q) => !ANSWERED_IV_LOCAL.ids.has(String(q.id))
         && !ANSWERED_IV_LOCAL.texts.has(String(q.q || "").trim().toLowerCase()))
@@ -1929,7 +1965,10 @@ async function maybeOfferFillerQuestions() {
           cta: "Send answers", skip: "Skip - just wait" })
       + `<div class="rp-bar-track" style="overflow:hidden;margin-top:16px"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
     startWaitBar();
-    const backToBar = () => { if (view === "shortwait") paintPlainWaitBar(); };
+    const backToBar = () => {
+      shortRoundDeadline = Date.now() + 150000; // fresh window after the questions (2026-09-02)
+      if (view === "shortwait") paintPlainWaitBar();
+    };
     const sb = document.getElementById("ivSubmitBtn");
     const sk = document.getElementById("ivSkipBtn");
     if (sb) sb.addEventListener("click", () => submitInterviewAnswers({ questions: qs }, backToBar));
@@ -2033,6 +2072,19 @@ function streamOneInterviewAnswer(inp) {
   const body = { agent_id: selectedAgentId, action: "answers",
                  answers: { [qid]: val }, questions: [q] };
   if (SHARE_MODE) body.share = SHARE_TOKEN;
+  // PREFETCH THE NEXT SET (owner ask 2026-09-02): the first answer of any
+  // set means training is coming, so generate the following question set
+  // now, in the background of the typing - a hold then opens on questions
+  // instantly instead of a 10-15s timer while a set is minted.
+  const _form = inp.closest("#ivForm");
+  if (_form && !_form.dataset.prefetched) {
+    _form.dataset.prefetched = "1";
+    const pb = { agent_id: selectedAgentId, action: "prefetch_next" };
+    if (SHARE_MODE) pb.share = SHARE_TOKEN;
+    fetchJson("/api/setter/training/interview", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pb),
+    });
+  }
   // The freshness clock MUST tick for streamed answers too (owner session
   // 2026-08-31: a fully-streamed intake left lastFeedbackAt empty - the
   // final Save had nothing unsent and returned before its own bump - so
@@ -2146,6 +2198,7 @@ let IV_CURRENT = null;        // latest fetched, still-unanswered question set
 let ivFetchedForRound = 0;    // one fetch per round
 let ivDismissedForRound = 0;  // client hit skip on this round
 let IV_TYPED = {};            // qid -> half-typed answer, survives re-renders
+let IV_GATE_MODE = false;     // round-done: a hold is coming, so the questions gate the next round (2026-09-02)
 
 function mountInterviewForm() {
   const host = document.getElementById("interviewHost");
@@ -2161,7 +2214,12 @@ function mountInterviewForm() {
   if (Object.keys(IV_CURRENT.answers || {}).length) return; // already answered
   if (ivDismissedForRound === currentRoundNum()) return;
   if (document.getElementById("ivForm")) return;            // already mounted
-  host.innerHTML = interviewFormHtml(IV_CURRENT, {
+  const rn = currentRoundNum();
+  host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
+    title: "Before the next round - a few quick questions",
+    sub: "We're training on what you just taught us. The next round opens the moment you send these.",
+    cta: `Send answers and start round ${rn + 1}`, skip: "Skip and wait for the round",
+  } : {
     title: "While that builds - a few quick questions",
     sub: "Your answers go straight into the next replies. One line each, skip any.",
   });
@@ -2175,6 +2233,7 @@ function mountInterviewForm() {
     IV_TYPED = {};
     const h = document.getElementById("interviewHost");
     if (h) h.innerHTML = "";
+    if (IV_GATE_MODE) { FILLER_TRIED = true; startNextRoundOrGenerate(); return; } // questions done -> the round (2026-09-02)
     if (view === "done") render();
   }));
   const skipBtn = document.getElementById("ivSkipBtn");
@@ -2182,6 +2241,7 @@ function mountInterviewForm() {
     ivDismissedForRound = currentRoundNum();
     IV_TYPED = {};
     host.innerHTML = "";
+    if (IV_GATE_MODE) { FILLER_TRIED = true; startNextRoundOrGenerate(); } // explicit skip -> timer only
   });
 }
 
