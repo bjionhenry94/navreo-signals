@@ -24058,9 +24058,21 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
             if deferred:
                 w["deferred_to_next_check"] = [f["domain"] for f in deferred]
             if park_now:
-                body, _st = api_warmup_job({"op": "pause",
-                                            "domains": [f["domain"] for f in park_now]})
-                w["job_id"] = (body or {}).get("job_id")
+                # Advisory mode (owner ruling 2026-09-04, Confidence Grade Step
+                # 2b): once the graded cap engine is armed (CAP_GRADE_V1), it is
+                # the SOLE park authority. The audit floor sweep then only FLAGS
+                # below-floor domains for the manager's floor view — it must NOT
+                # park them, or it would re-park exactly the noisy domains the
+                # grade chose to hold (grade C/D), undoing the grade. When the
+                # grade is unarmed the sweep parks as before.
+                if os.environ.get("CAP_GRADE_V1"):
+                    w["advisory"] = True
+                    w["note"] = ("advisory only — the graded cap engine "
+                                 "(provider_reply_caps) owns parking now")
+                else:
+                    body, _st = api_warmup_job({"op": "pause",
+                                                "domains": [f["domain"] for f in park_now]})
+                    w["job_id"] = (body or {}).get("job_id")
         except Exception as e:  # noqa: BLE001 — one half failing must not kill the other
             out["warmup"] = {"error": str(e)[:200]}
             out["ok"] = False
