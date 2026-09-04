@@ -7315,7 +7315,7 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 # modules 33/51) applies the same rule via campaign-name markers; this is
 # the sweep-side half.
 CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
-CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greenshift")
+CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greenshift", "greenmint")
 
 # A once-positive→negative FLIP (all this sweep ever alerts on — fresh
 # positives are excluded above and owned by the Make categoriser) routes to the
@@ -7326,6 +7326,7 @@ CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greensh
 # in one place).
 FLIP_NAME_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared)
+    "greenmint": "C0BUPQVBNFL",  # #greenmint-navreo (client-shared, onboarded 2026-09-04)
 }
 
 # A FRESH positive on a navreo-hosted client campaign has no path to that
@@ -7338,6 +7339,7 @@ FLIP_NAME_CHANNELS = {
 # #revive-navreo (Bjion 2026-09-02, "positives -> shared channel").
 POSITIVE_SHARED_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared, Slack Connect)
+    "greenmint": "C0BUPQVBNFL",  # #greenmint-navreo (client-shared, Slack Connect)
 }
 
 # A "positive-re-reply" row is routeB's label for "an already-positive lead

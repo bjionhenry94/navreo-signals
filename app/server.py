@@ -19013,6 +19013,7 @@ _SHARED_WS_CLIENTS = (
     ("greenshift", "Greenshift"),     # in-workspace client (Bjion 2026-09-02)
     ("altius", "Altius Reach"),       # in-workspace client (Bjion 2026-08-11)
     ("touchpoint", "TouchPoint"),     # in-workspace client (Bjion 2026-08-11)
+    ("greenmint", "Green Mint"),      # in-workspace client (onboarded 2026-09-04)
     ("acme", "Acme"),                 # DEMO client (Bjion 2026-07-29) — see _DEMO_CLIENT_LABELS
     ("navreo", "Navreo"),             # Navreo is now name-gated like every other client
 )
@@ -21969,6 +21970,7 @@ _RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags
     ("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
     ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang"),
     ("altius", "Altius Reach"), ("touchpoint", "TouchPoint"),
+    ("greenmint", "Green Mint"),
     ("acme", "Acme"),  # DEMO client — kept in sync with _SHARED_WS_CLIENTS
     ("navreo", "Navreo"),
 )
