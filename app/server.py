@@ -19672,13 +19672,31 @@ def _am_meta(cid: str) -> dict:
 
 def _am_splits(cid: str) -> dict:
     """{label: pct} for the opener step, FRESH from Smartlead (never a cache).
-    Pure transport: it reads the distribution, it never decides one."""
+    Pure transport: it reads the distribution, it never decides one.
+
+    A NULL `variant_distribution_percentage` is NOT 0. Smartlead serves null
+    for a share that was never set explicitly, and those variants really split
+    the REMAINING percentage evenly between them (its observed behaviour, the
+    same rule `even_split` and the write door already rely on). Reading a null
+    as 0 made the ledger record a live 50/50 step as `{B: 0, C: 0}` (campaign
+    3343012, 2 Sep 2026) — a "before" that says both versions were off when
+    both were sending half the traffic. That is only the recorded/displayed
+    number — the door itself was already null-safe, because `_find_step` calls
+    `_normalise_default_split` before any mutation — but the wrong number then
+    feeds the General page, the Change Logs tab, and R4's "did a human change
+    the split?" comparison, so it must be the factual share. Normalise here
+    with the SAME helper the door uses; an explicit 0 (human-off) is left at 0.
+    """
     data = _smartlead_json("GET", f"/campaigns/{cid}/sequences", timeout=20, attempts=2)
     steps = data if isinstance(data, list) else (data or {}).get("data") or []
     out: dict = {}
     for s in steps:
         if not isinstance(s, dict) or str(s.get("seq_number")) != str(_AM_STEP):
             continue
+        try:
+            _normalise_default_split(s)   # null share -> its factual even part
+        except Exception:  # noqa: BLE001 — an odd payload still reads raw below
+            pass
         for v in (s.get("sequence_variants") or []):
             lab = v.get("variant_label")
             if lab is None or v.get("is_deleted"):
