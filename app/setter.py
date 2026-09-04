@@ -254,6 +254,19 @@ CORE_FOUR = frozenset({"Interested", "Information Request", "Meeting Request",
 # instead of splitting on its internal space.
 CORE_FOUR_CATEGORY_FILTER = "in.(" + ",".join(quote(f'"{c}"', safe="") for c in sorted(CORE_FOUR)) + ")"
 
+# The "Meeting request" filter tab (owner ask 2026-09-04): a permanent, cross-
+# status view of every conversation the categoriser labelled "Meeting Request"
+# - the people actively asking for a call. Unlike the direction pills it is not
+# a status; it spans needs_review / sent / auto_sent (a booked-call thread must
+# stay visible after we reply, like the Sent tab) and only drops when the row
+# is DISMISSED (status=dismissed), which is the tab's one way to clear a row.
+# Value double-quoted THEN percent-encoded, same reasoning as CORE_FOUR above.
+MEETING_REQUEST_CATEGORY = "Meeting Request"
+MEETING_REQUEST_QUEUE_FILTER = (
+    f'category=eq.{quote(chr(34) + MEETING_REQUEST_CATEGORY + chr(34), safe="")}'
+    "&status=neq.dismissed"
+)
+
 # "positive-re-reply" is the categoriser routeB's ARCHIVE label for a fresh
 # reply landing on an already-positive thread - an internal marker, never the
 # lead's Smartlead category (routeB alerts + archives; it does not rewrite
@@ -10133,6 +10146,7 @@ def _compute_kpis_sync() -> dict:
             "c_auto_sent": lambda: _pill("status=eq.auto_sent"),
             "c_dismissed": lambda: _pill("status=eq.dismissed"),
             "c_all": lambda: _pill("id=not.is.null"),
+            "c_meeting_request": lambda: _pill(MEETING_REQUEST_QUEUE_FILTER),
         }
         results = {}
         # 5 workers, not len(tasks): each worker opens its own TLS connection
@@ -10176,7 +10190,7 @@ def _compute_kpis_sync() -> dict:
             # navreo-scoped, so only navreo reps have a direction verdict here.
             reps = [r for r in reps if (r.get("workspace") or "navreo") == "navreo"]
             dirs = rc.get("dir") or {}
-            n_nr = n_sent = n_auto = n_dis = 0
+            n_nr = n_sent = n_auto = n_dis = n_mr = 0
             for r in reps:
                 st = r.get("status")
                 if st == "needs_review":
@@ -10193,11 +10207,17 @@ def _compute_kpis_sync() -> dict:
                     n_auto += 1
                 elif st == "dismissed":
                     n_dis += 1
+                # Meeting-request tab (owner ask 2026-09-04): thread-collapsed,
+                # cross-status, everything but dismissed — mirrors the tab's
+                # own query so the badge matches the list.
+                if st != "dismissed" and str(r.get("category") or "").strip() == MEETING_REQUEST_CATEGORY:
+                    n_mr += 1
             kpis["counts"] = {
                 "needs_review": n_nr,
                 "sent": n_sent,
                 "auto_sent": n_auto,
                 "dismissed": n_dis,
+                "meeting_request": n_mr,
                 "all": len(reps),
             }
             kpis["needs_review"] = n_nr
@@ -10207,6 +10227,7 @@ def _compute_kpis_sync() -> dict:
                 "sent": _c_sent + _m_sent,
                 "auto_sent": _c_auto + _m_auto,
                 "dismissed": results.get("c_dismissed") or 0,
+                "meeting_request": results.get("c_meeting_request") or 0,
                 "all": results.get("c_all") or 0,
             }
             kpis["needs_review"] = _stay if _stay is not None else (results.get("needs_review") or 0)
@@ -10533,7 +10554,7 @@ def _light_rows_all():
             got = _SB("GET", f"{QUEUE_TABLE}?{_list_ws_filter()}&limit=1000&offset={page * 1000}"
                              "&order=created_at.desc,id.desc"
                              "&select=id,status,smartlead_campaign_id,lead_email,"
-                             "replied_at,created_at,is_test,workspace")
+                             "replied_at,created_at,is_test,workspace,category")
             if not isinstance(got, list):
                 # Failed fetch: last-good stale scan beats no collapse at all
                 # (ghost fix 2026-08-09, same rationale as the lock branch).
@@ -10797,6 +10818,12 @@ def _fetch_queue_rows(status: str, limit: int, before: str = None,
             fetched = _one_fetch(f"{base}&status=in.(sent,auto_sent,needs_review)")
         elif status in ("sent", "auto_sent"):
             fetched = _one_fetch(f"{base}&status=in.({status},needs_review)")
+        elif status == "meeting_request":
+            # Not a status: every non-dismissed conversation categorised
+            # "Meeting Request", across needs_review / sent / auto_sent (owner
+            # ask 2026-09-04). No direction reclass below — the tab is a
+            # permanent category view, so a row we've already replied to stays.
+            fetched = _one_fetch(f"{base}&{MEETING_REQUEST_QUEUE_FILTER}")
         elif status:
             fetched = _one_fetch(f"{base}&status=eq.{status}")
         else:  # All

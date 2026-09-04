@@ -1613,6 +1613,11 @@ const INBOX_PAGE_SIZE = 25;
 const FILTER_PILLS = [
   { key: "needs_review", label: "Needs review", count: "needs_review" },
   { key: "sent", label: "Sent", count: "sent" },
+  // "Meeting request" (owner ask 2026-09-04): a permanent, dismissible view of
+  // everyone the categoriser tagged "Meeting Request" — the people actively
+  // asking for a call. Not a status: it spans needs_review/sent/auto_sent and
+  // only clears on dismiss (the server filters category + status!=dismissed).
+  { key: "meeting_request", label: "Meeting request", count: "meeting_request" },
   { key: "dismissed", label: "Dismissed", count: "dismissed" },
   { key: "", label: "All", count: "all" },
 ];
@@ -2793,6 +2798,15 @@ function rowDirection(r) {
    corpus - powers zero-network pill switches. */
 function clientPillRows(all, status) {
   if (!status) return all.slice();
+  // "Meeting request" is a category view, not a status: every non-dismissed
+  // conversation the categoriser tagged "Meeting Request" (mirrors the server
+  // filter). Used only on the 502-fallback / search-corpus paths — a live
+  // switch fetches the server-filtered list.
+  if (status === "meeting_request") {
+    return (all || []).filter((r) => r && typeof r === "object"
+      && r.status !== "dismissed"
+      && String(r.category || "").trim() === "Meeting Request");
+  }
   return (all || []).filter((r) => {
     if (!r || typeof r !== "object") return false;
     if (r.status === "needs_review") {
@@ -3635,7 +3649,9 @@ function inboxItemHtml(row) {
   let statusChip = "";
   if (isSl && !row.status) {
     statusChip = `<span class="pill sl-pill">Not in setter</span>`;
-  } else if (currentStatus === "" || inboxSearchQuery.trim()) {
+  } else if (currentStatus === "" || currentStatus === "meeting_request" || inboxSearchQuery.trim()) {
+    // "All", search and the Meeting-request tab all mix statuses in one list,
+    // so each row wears its own status badge to stay readable.
     statusChip = `<span class="pill ${statusPillClass(row.status)}">${statusLabel(row.status)}</span>`;
   }
   // Owner ruling 2026-07-14: intaken rows may carry agent_id = null (a positive
