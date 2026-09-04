@@ -1237,8 +1237,7 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     // archive, which is complete for them.
     var ws = cwTrusted(state.client === "All" ? "__all" : state.client);
     if (ws && ws.replied) return alignDaily(ws.replied, CW.days, 0,
-        (state.client === "All" && HUB && HUB.series && HUB.series.__all)
-          ? HUB.series.__all.replies : null);
+        (HUB && HUB.series && HUB.series[ckey()]) ? HUB.series[ckey()].replies : null);
     // an exact window total exists but no TRUSTED daily line — never plot the
     // partial archive as the reply rhythm (round-3 panel: the chip said 9
     // while the funnel correctly said 182 in the same viewport)
@@ -1253,7 +1252,8 @@ function seriesFor(k) {   // full 30-day array for series k under current client
     // the chip say 413 next to a funnel saying 381. The archive series is the
     // fallback only for a key whose Smartlead pull failed.
     var cs2 = CW && CW.series && CW.series[ckey()];
-    if (cs2 && cs2.positives) return alignDaily(cs2.positives, CW.days, 0, null);
+    if (cs2 && cs2.positives) return alignDaily(cs2.positives, CW.days, 0,
+        (HUB && HUB.series && HUB.series[ckey()]) ? HUB.series[ckey()].interested : null);
   }
   var s = HUB && HUB.series && HUB.series[ckey()];
   return hubAligned(s && s[k]) || [];
