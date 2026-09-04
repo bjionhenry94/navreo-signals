@@ -1145,6 +1145,9 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
   .clog-top { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
   .clog-top-copy { min-width: 0; }
   .clog-top #automove-controls { flex: 0 0 auto; }
+  /* the change-log timeline flows straight on the page — no card box (Bjion,
+     4 Sep 2026), just spacing under the Auto Optimise card above it. */
+  .clog-section { margin: 8px 2px 0; }
   .clog-empty { padding: 34px 4px; text-align: center; color: var(--fg-subtle); font-size: 0.86rem; line-height: 1.5; max-width: 540px; margin: 0 auto; }
   .clog-more { margin: 14px 2px 0; font-size: 0.74rem; color: var(--fg-subtle); }
   .clog-see-more { display: block; width: 100%; margin: 4px 0 0; padding: 11px 16px;
@@ -4177,7 +4180,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       '<div class="card-title" style="margin:0">Auto Optimise</div>' +
       '<p class="card-subtitle">Let Navreo move Email&nbsp;1 traffic to the best-performing version automatically — the same move the optimiser recommends, done for you.</p>' +
       '</div><span id="automove-controls"></span></div>' +
-      '<div class="ov-card"><div class="card-title" style="margin:0 0 3px">Change log</div>' +
+      '<div class="clog-section"><div class="card-title" style="margin:0 0 3px">Change log</div>' +
       '<p class="card-subtitle">Everything that has happened on this campaign — version moves, list audits, new positives, meetings booked and status changes.</p>' +
       '<div id="changelog-root"><p class="lw-loading">Loading the change log&hellip;</p></div></div>' +
       "</div>");
