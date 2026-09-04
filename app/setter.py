@@ -16394,14 +16394,22 @@ def _redraft_training_pool(agent_id: str) -> int:
                         if not _is_case_answered(c.get("id"), answers)]
                 pool = pool[:TRAINING_REDRAFT_HORIZON]
         else:
+            # PRIORITY, not exclusion (live-verify 2026-09-03): the client's
+            # round ids used to be EXCLUDED as "under the client's eyes", but
+            # the portal now pins the displayed card by id and refuses to
+            # paint a stale one - so after a mid-round teaching the very card
+            # the paint gate was waiting for was the one this sweep would
+            # never touch (a hold that could only end at the hard cap). The
+            # remaining round cards now go FIRST in the window, then the rest
+            # of the pool in position order.
             in_round = {str(x) for x in (in_round_raw or [])}
-            pool = [c for c in cases
-                    if not _is_case_answered(c.get("id"), answers) and str(c.get("id")) not in in_round]
+            _un = [c for c in cases if not _is_case_answered(c.get("id"), answers)]
+            pool = ([c for c in _un if str(c.get("id")) in in_round]
+                    + [c for c in _un if str(c.get("id")) not in in_round])
             # Rolling window (bank ruling 2026-08-20): only the next
             # TRAINING_REDRAFT_HORIZON upcoming cases are rewritten per pass -
             # rounds consume fresh-first from the head, and every later
-            # feedback answer rolls the window forward. Position order = the
-            # order rounds will consume.
+            # feedback answer rolls the window forward.
             pool = pool[:TRAINING_REDRAFT_HORIZON]
         updated = 0
         _landed = set()  # ids persisted by _land_redraft (stability review C2/P3)
