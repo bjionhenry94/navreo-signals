@@ -19244,6 +19244,264 @@ def api_auto_mover_moves(limit: int = 50, issues_only: bool = False,
     return {"ok": True, "moves": rows, "count": len(rows)}
 
 
+# ── Campaign change log ──────────────────────────────────────────────────────
+# One unified, newest-first feed of every change made to ONE campaign, for the
+# campaign page's "Change Logs" tab (Bjion, 2026-09-04). Read-only. Sources:
+#   * auto_mover_moves        — auto-optimise traffic moves (the "variant" moves)
+#   * app_activity_log        — manual version edits, list-verify audits, status
+#                               changes, and auto-optimise switch flips
+#   * list_upload_qa_runs     — upload-gate list audits
+#   * qa_gate_runs            — reviewed upload-gate runs
+#   * replies (positive cats) — new positives, and meetings booked (Call Booked)
+# Each source is read in its own try, so one outage drops only that lane, never
+# the whole feed (same discipline as _report_auto_moves).
+_CLOG_POS_CATS = ("Interested", "Information Request", "Meeting Request")
+_CLOG_ALL_POS = ("Interested", "Information Request", "Meeting Request", "Call Booked")
+
+
+def _clog_pcts(before, after) -> str:
+    """A short 'A 20%->80%, B 80%->20%' line for a traffic move, or ''."""
+    if not isinstance(after, dict) or not after:
+        return ""
+    before = before if isinstance(before, dict) else {}
+    parts = []
+    for lab in sorted(after.keys()):
+        b = before.get(lab)
+        a = after.get(lab)
+        try:
+            a_i = int(round(float(a)))
+        except (TypeError, ValueError):
+            continue
+        try:
+            b_i = int(round(float(b)))
+        except (TypeError, ValueError):
+            b_i = None
+        if b_i is None or b_i == a_i:
+            parts.append(f"{lab} {a_i}%")
+        else:
+            parts.append(f"{lab} {b_i}% → {a_i}%")
+    return ", ".join(parts)
+
+
+def _clog_from_activity(row: dict):
+    """Map one app_activity_log row to (kind, title, detail, tag) or None."""
+    action = str(row.get("action") or "")
+    pl = row.get("payload") if isinstance(row.get("payload"), dict) else {}
+
+    def _email_step(default="1"):
+        e = pl.get("email")
+        return str(e) if e not in (None, "") else default
+
+    if action == "variant-action":
+        va = str(pl.get("action") or "")
+        lab = str(pl.get("variant_label") or "").strip()
+        step = _email_step()
+        titles = {
+            "scale_winner": f"Sent all of Email {step} to version {lab}",
+            "back_winner":  f"Sent most of Email {step} to version {lab}, kept testing the rest",
+            "disable":      f"Turned off version {lab} on Email {step}",
+            "enable":       f"Turned version {lab} back on for Email {step}",
+            "shift_share":  f"Shifted Email {step} traffic to version {str(pl.get('to_label') or lab)}",
+            "split_leaders": f"Split Email {step} evenly between the leading versions",
+        }
+        return ("variant", titles.get(va, f"Changed the version split on Email {step}"),
+                "", "Version edit")
+    if action in ("add_variant", "add-variant"):
+        step = _email_step()
+        lab = str(pl.get("label") or "").strip()
+        base = str(pl.get("base") or "").strip()
+        det = (f"Copied from version {base}" if base else "")
+        return ("variant", f"Added a new version to Email {step}"
+                + (f" (version {lab})" if lab else ""), det, "Version edit")
+    if action in ("draft", "draft-challenger"):
+        return ("variant", "Drafted a challenger version", "", "Version edit")
+    if action == "campaign-status":
+        st = str(pl.get("status") or "").upper()
+        m = {"START": "Set the campaign live",
+             "PAUSED": "Paused the campaign",
+             "STOPPED": "Marked the campaign completed"}
+        if st not in m:
+            return None
+        return ("status", m[st], "", "Status")
+    if action == "auto-move":
+        mode = str(pl.get("mode") or "").lower()
+        m = {"on": "Auto Optimise turned on for this campaign",
+             "off": "Auto Optimise turned off for this campaign",
+             "inherit": "Auto Optimise set to follow the tool-wide switch"}
+        if mode not in m:
+            return None
+        return ("switch", m[mode], "", "Auto Optimise")
+    if action == "verify_run":
+        total = _sc_int(pl.get("total"))
+        bad = _sc_int(pl.get("bad"))
+        det = ""
+        if pl.get("removed") is not None:
+            det = f"{_sc_int(pl.get('removed'))} risky leads removed"
+        return ("audit", f"Audited the list for deliverability — checked {total:,}, "
+                f"{bad:,} flagged", det, "List audit")
+    if action == "remove_bad":
+        removed = _sc_int(pl.get("removed"))
+        if not removed and not pl.get("cancelled"):
+            return None
+        return ("audit", f"Removed {removed:,} risky leads from the list", "", "List audit")
+    return None
+
+
+def campaign_change_log(cid: str, limit: int = 200) -> tuple:
+    """GET /api/campaigns/{cid}/change-log — the campaign's whole change history,
+    newest first, as a plain-English event feed."""
+    from urllib.parse import quote
+    try:
+        n = int(str(cid).strip())
+    except (TypeError, ValueError):
+        return 400, {"ok": False, "message": "campaign id must be numeric"}
+    scid = str(n)
+    events: list = []
+
+    def _add(at, kind, title, detail="", who="", tag=""):
+        if not at or not title:
+            return
+        events.append({"at": str(at), "kind": kind, "title": title,
+                       "detail": detail or "", "who": who or "", "tag": tag or ""})
+
+    # 1 — auto-optimise traffic moves (the "variant" changes)
+    try:
+        rows = sb("GET", "auto_mover_moves?select=winner,mode,leaders,outcome,"
+                  "pcts_before,pcts_after,actor,created_at"
+                  f"&campaign_id=eq.{scid}&order=created_at.desc&limit=120") or []
+        for r in (rows if isinstance(rows, list) else []):
+            mode = str(r.get("mode") or "")
+            win = r.get("winner")
+            leaders = [str(x) for x in (r.get("leaders") or [])]
+            if str(r.get("outcome") or "") != "moved":
+                title = "Auto Optimise reviewed the versions and made no change"
+            elif mode == "tie" and leaders:
+                title = "Split Email 1 evenly between the tied versions (" + ", ".join(leaders) + ")"
+            elif mode == "partial" and win:
+                title = f"Sent most of Email 1 to the best version ({win}), kept testing the rest"
+            elif win:
+                title = f"Sent all of Email 1 to the best version ({win})"
+            else:
+                title = "Adjusted the version split on Email 1"
+            _add(r.get("created_at"), "optimise", title,
+                 _clog_pcts(r.get("pcts_before"), r.get("pcts_after")),
+                 r.get("actor") or "auto-optimise@navreo.ai", "Auto Optimise")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 2 — activity log: manual edits, list-verify audits, status + switch flips
+    try:
+        rows = sb("GET", "app_activity_log?select=ts,actor,action,payload"
+                  f"&entity_id=eq.{scid}&order=ts.desc&limit=200") or []
+        for r in (rows if isinstance(rows, list) else []):
+            ev = _clog_from_activity(r)
+            if ev:
+                _add(r.get("ts"), ev[0], ev[1], ev[2], r.get("actor") or "", ev[3])
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3a — upload-gate list audits
+    try:
+        rows = sb("GET", "list_upload_qa_runs?select=rows_in,rows_uploaded,verdict,run_at"
+                  f"&campaign_id=eq.{scid}&order=run_at.desc&limit=40") or []
+        for r in (rows if isinstance(rows, list) else []):
+            n_in = _sc_int(r.get("rows_in"))
+            n_up = _sc_int(r.get("rows_uploaded"))
+            verdict = str(r.get("verdict") or "").strip()
+            det = f"{n_up:,} of {n_in:,} leads passed the gate" if n_in else ""
+            title = "Audited a list before upload" + (f" — {verdict}" if verdict else "")
+            _add(r.get("run_at"), "audit", title, det, "upload-gate", "List audit")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 3b — reviewed upload-gate runs
+    try:
+        rows = sb("GET", "qa_gate_runs?select=campaign_name,run,created_at"
+                  f"&campaign_id=eq.{scid}&order=created_at.desc&limit=40") or []
+        for r in (rows if isinstance(rows, list) else []):
+            run = r.get("run") if isinstance(r.get("run"), dict) else {}
+            n_in = _sc_int(run.get("rows_in"))
+            det = f"{n_in:,} leads reviewed" if n_in else ""
+            _add(r.get("created_at"), "audit", "Ran the upload-gate list review",
+                 det, "upload-gate", "List audit")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # 4 — new positives + meetings booked, from the reply archive
+    try:
+        cats = ",".join(quote(f'"{c}"') for c in _CLOG_ALL_POS)
+        rows = sb("GET", "replies?select=email,category,replied_at,reply_subject,raw"
+                  f"&smartlead_campaign_id=eq.{scid}&category=in.({cats})"
+                  "&order=replied_at.desc&limit=200") or []
+        rows = rows if isinstance(rows, list) else []
+        # one cheap name lookup for every replier without an invitee_name
+        need = sorted({(r.get("email") or "").strip().lower() for r in rows
+                       if (r.get("email") or "").strip()})
+        people: dict = {}
+        for i in range(0, len(need), 100):
+            chunk = ",".join(quote(f'"{e}"') for e in need[i:i + 100])
+            pr = sb("GET", "people?select=email,first_name,last_name,title,company_domain"
+                    f"&email=in.({chunk})") or []
+            for p in (pr if isinstance(pr, list) else []):
+                people[(p.get("email") or "").strip().lower()] = p
+
+        def _name(r):
+            raw = r.get("raw") if isinstance(r.get("raw"), dict) else {}
+            if (raw.get("invitee_name") or "").strip():
+                return raw["invitee_name"].strip()
+            em = (r.get("email") or "").strip().lower()
+            p = people.get(em) or {}
+            nm = " ".join(x for x in [(p.get("first_name") or "").strip(),
+                                      (p.get("last_name") or "").strip()] if x).strip()
+            if nm:
+                return nm
+            local = em.split("@", 1)[0].replace(".", " ").replace("_", " ").strip()
+            return local.title() if local else "A lead"
+
+        def _company(r):
+            em = (r.get("email") or "").strip().lower()
+            p = people.get(em) or {}
+            dom = (p.get("company_domain") or "").strip()
+            if not dom and "@" in em:
+                dom = em.split("@", 1)[1]
+            return dom
+
+        for r in rows:
+            cat = str(r.get("category") or "")
+            nm = _name(r)
+            comp = _company(r)
+            p = people.get((r.get("email") or "").strip().lower()) or {}
+            title_role = (p.get("title") or "").strip()
+            if cat == "Call Booked":
+                bits = [b for b in [title_role, comp] if b]
+                _add(r.get("replied_at"), "booked", f"Meeting booked with {nm}",
+                     " · ".join(bits), "", "Booked")
+            else:
+                bits = [b for b in [title_role, comp] if b]
+                _add(r.get("replied_at"), "positive", f"New positive reply from {nm}",
+                     " · ".join(bits), "", cat)
+    except Exception:  # noqa: BLE001
+        pass
+
+    def _ts(e):
+        s = str(e.get("at") or "").strip().replace(" ", "T")
+        if s and not s.endswith("Z") and "+" not in s[10:] and "-" not in s[10:]:
+            s += "+00:00"
+        try:
+            from datetime import datetime
+            return datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+        except Exception:  # noqa: BLE001
+            return 0.0
+
+    events.sort(key=_ts, reverse=True)
+    try:
+        limit = max(1, min(500, int(limit or 200)))
+    except (TypeError, ValueError):
+        limit = 200
+    return 200, {"ok": True, "campaign_id": n, "count": len(events),
+                 "truncated": len(events) > limit, "events": events[:limit]}
+
+
 # ── Notion Client Tasks — one helper, factored from sync_booked.py's REST ────
 # Data source 2776e755-98d9-806a-88af-000b091e215e ("Client Tasks"). Property
 # keys are exact and fussy: `Client ` carries a TRAILING SPACE, Status is a
@@ -25222,6 +25480,12 @@ class Handler(SimpleHTTPRequestHandler):
             # per-campaign auto-mover switch: inherit | on | off + last move
             cid = path[len("/api/campaigns/"):-len("/auto-move")]
             status, body = api_campaign_auto_move_get(cid)
+            return self._json(body, status)
+        if path.startswith("/api/campaigns/") and path.endswith("/change-log"):
+            # Campaign page "Change Logs" tab: the whole change history of one
+            # campaign as a newest-first event feed.
+            cid = path[len("/api/campaigns/"):-len("/change-log")]
+            status, body = campaign_change_log(cid)
             return self._json(body, status)
         if path.startswith("/api/campaigns/") and "/variant-action-status/" in path:
             # background variant-action job poll: /api/campaigns/{cid}/variant-action-status/{job}

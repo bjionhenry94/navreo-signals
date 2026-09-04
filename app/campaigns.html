@@ -1139,6 +1139,34 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
   }
   .am-seg button:disabled { opacity: 0.55; cursor: default; }
   .am-last { font-size: 0.72rem; color: var(--fg-subtle); white-space: nowrap; }
+  /* Change Logs tab (Bjion 4 Sep 2026): the Auto Optimise control pinned to the
+     top, then a newest-first timeline of every change on the campaign. The rail
+     borrows the report page; every colour is a theme-aware semantic token. */
+  .clog-top { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; }
+  .clog-top-copy { min-width: 0; }
+  .clog-top #automove-controls { flex: 0 0 auto; }
+  .clog-empty { padding: 34px 4px; text-align: center; color: var(--fg-subtle); font-size: 0.86rem; line-height: 1.5; max-width: 540px; margin: 0 auto; }
+  .clog-more { margin: 14px 2px 0; font-size: 0.74rem; color: var(--fg-subtle); }
+  .clog-tl { position: relative; padding-left: 26px; margin-top: 6px; }
+  .clog-tl::before { content: ""; position: absolute; left: 8px; top: 8px; bottom: 8px; width: 1px; background: var(--border-strong); }
+  .clog-day { position: relative; padding-top: 16px; }
+  .clog-day:first-child { padding-top: 2px; }
+  .clog-dlab { font-size: 0.66rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; color: var(--fg-subtle); margin: 0 0 9px; }
+  .clog-e { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 12px; align-items: start;
+    background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px 14px; margin-bottom: 8px; }
+  .clog-ico { width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; flex: none; }
+  .clog-ico svg { width: 15px; height: 15px; }
+  .clog-ico.clog-opt { background: var(--nav-orange-100); color: var(--nav-orange); }
+  .clog-ico.clog-aud { background: var(--border); color: var(--fg-muted); }
+  .clog-ico.clog-pos, .clog-ico.clog-bk { background: var(--success-bg); color: var(--success); }
+  .clog-ico.clog-st { background: var(--warning-bg); color: var(--warning); }
+  .clog-main { min-width: 0; }
+  .clog-title { font-size: 0.9rem; font-weight: 600; color: var(--fg); line-height: 1.4; }
+  .clog-detail { font-size: 0.78rem; color: var(--fg-muted); margin-top: 2px; word-break: break-word; }
+  .clog-meta { font-size: 0.72rem; color: var(--fg-subtle); margin-top: 4px; }
+  .clog-tag { align-self: center; font-size: 0.67rem; font-weight: 600; color: var(--fg-muted);
+    border: 1px solid var(--border-strong); border-radius: var(--r-pill); padding: 3px 10px; white-space: nowrap; }
+  @media (max-width: 620px) { .clog-tag { display: none; } }
   .cstat-ctl { position: relative; display: inline-flex; }
   .cstat-btn {
     font: inherit; font-size: 0.8rem; font-weight: 600; cursor: pointer; white-space: nowrap;
@@ -4043,7 +4071,6 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       '<a href="#/" class="back-link">&larr; Campaigns</a>' +
       '<span class="cstat-bar"><span id="cstat-sr" class="cstat-sr" aria-live="polite"></span>' +
       '<span id="cstat-controls"></span>' +
-      '<span id="automove-controls"></span>' +
       '<a class="action-link" href="' + esc(c.smartleadUrl) + '" target="_blank" rel="noopener">Open in Smartlead</a></span>' +
       "</div>");
     /* The dial always renders when ANY completion source can answer — a
@@ -4079,7 +4106,8 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         var pl = STATE.platformLeads[c.id];
         var n = (pl && pl.total != null) ? pl.total : st.leads;
         return n != null ? ' <span class="tab-count tnum">(' + fmtInt(n) + ")</span>" : "";
-      })() + "</a></nav>");
+      })() + "</a>" +
+      '<a href="#/c/' + esc(c.id) + '/changes" class="campaign-tab' + (tab === "changes" ? " is-active" : "") + '" data-tab="changes">Change Logs</a></nav>');
     h.push('<div class="campaign-page-body">');
 
     /* overview */
@@ -4132,6 +4160,19 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       '<div id="draft-sources-root"></div><div id="sources-root"><p class="lw-loading">Loading&hellip;</p></div>' +
       '<div id="sources-empty"></div>' +
       '<button class="add-tile" id="al-add" title="Copies the add-more-leads brief for this campaign — paste it into Claude Code"><span class="plus">＋</span> Add more leads</button></div>' +
+      "</div>");
+
+    /* change logs — every change made to this campaign, newest first. The Auto
+       Optimise switch (moved out of the topbar, Bjion 4 Sep 2026) is pinned to
+       the top of this tab; the timeline below is fed by /change-log. */
+    h.push('<div class="tab-panel" data-tab="changes"' + (tab !== "changes" ? " hidden" : "") + ">" +
+      '<div class="ov-card clog-top"><div class="clog-top-copy">' +
+      '<div class="card-title" style="margin:0">Auto Optimise</div>' +
+      '<p class="card-subtitle">Let Navreo move Email&nbsp;1 traffic to the best-performing version automatically — the same move the optimiser recommends, done for you.</p>' +
+      '</div><span id="automove-controls"></span></div>' +
+      '<div class="ov-card"><div class="card-title" style="margin:0 0 3px">Change log</div>' +
+      '<p class="card-subtitle">Everything that has happened on this campaign — version moves, list audits, new positives, meetings booked and status changes.</p>' +
+      '<div id="changelog-root"><p class="lw-loading">Loading the change log&hellip;</p></div></div>' +
       "</div>");
 
     h.push("</div></article>");
@@ -4688,6 +4729,88 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       });
     };
     fetchIt(false);
+  }
+
+  /* ── Change Logs tab ─────────────────────────────────────────────────────
+     A newest-first feed of every change on this campaign, from the server's
+     unified /change-log endpoint (auto-optimise moves, manual version edits,
+     list audits, new positives, meetings booked, status + switch changes).
+     Cached per campaign for the SPA's lifetime. The Auto Optimise control that
+     now sits at the top of this tab hydrates separately (hydrateAutoMoveControl,
+     via attachPageHandlers), so it works whether or not this tab is open. */
+  var CLOG_ICONS = {
+    optimise: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
+    variant: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h13"/><path d="M3 12h9"/><path d="M3 18h13"/><path d="M18 9l3 3-3 3"/></svg>',
+    audit: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/><path d="M9 12l2 2 4-4"/></svg>',
+    positive: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>',
+    booked: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><path d="M9 16l2 2 4-4"/></svg>',
+    status: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 14"/></svg>',
+    switch: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="6" width="22" height="12" rx="6"/><circle cx="16" cy="12" r="3"/></svg>'
+  };
+  var CLOG_KIND_CLASS = {
+    optimise: "clog-opt", switch: "clog-opt", variant: "clog-opt",
+    audit: "clog-aud", positive: "clog-pos", booked: "clog-bk", status: "clog-st"
+  };
+  function clogDayLabel(iso) {
+    try {
+      var d = new Date(iso);
+      var today = new Date(); var y = new Date(); y.setDate(today.getDate() - 1);
+      var sameDay = function (a, b) { return a.toDateString() === b.toDateString(); };
+      if (sameDay(d, today)) return "Today";
+      if (sameDay(d, y)) return "Yesterday";
+      return new Intl.DateTimeFormat(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" }).format(d);
+    } catch (e) { return String(iso || "").slice(0, 10); }
+  }
+  function clogTimeLabel(iso) {
+    try { return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit" }).format(new Date(iso)); }
+    catch (e) { return ""; }
+  }
+  function hydrateChangeLog(c) {
+    var id = c.id;
+    var paint = function (d) {
+      if (!onPage(id)) return;
+      var root = document.getElementById("changelog-root");
+      if (!root) return;
+      var evs = (d && d.events) || [];
+      if (!evs.length) {
+        root.innerHTML = '<p class="clog-empty">No changes recorded on this campaign yet. Version moves, list audits, new positives and meetings booked will show up here as they happen.</p>';
+        return;
+      }
+      var out = ['<div class="clog-tl">'];
+      var lastDay = null;
+      evs.forEach(function (e) {
+        var day = clogDayLabel(e.at);
+        if (day !== lastDay) {
+          if (lastDay !== null) out.push("</div>");
+          out.push('<div class="clog-day"><p class="clog-dlab">' + esc(day) + "</p>");
+          lastDay = day;
+        }
+        var kc = CLOG_KIND_CLASS[e.kind] || "clog-opt";
+        var ico = CLOG_ICONS[e.kind] || CLOG_ICONS.status;
+        out.push('<div class="clog-e">' +
+          '<span class="clog-ico ' + kc + '">' + ico + "</span>" +
+          '<div class="clog-main"><div class="clog-title">' + esc(e.title) + "</div>" +
+          (e.detail ? '<div class="clog-detail">' + esc(e.detail) + "</div>" : "") +
+          '<div class="clog-meta">' + esc(clogTimeLabel(e.at)) +
+          (e.who ? " &middot; " + esc(e.who) : "") + "</div></div>" +
+          (e.tag ? '<span class="clog-tag">' + esc(e.tag) + "</span>" : "") +
+          "</div>");
+      });
+      if (lastDay !== null) out.push("</div>");
+      out.push("</div>");
+      if (d && d.truncated) out.push('<p class="clog-more">Showing the ' + evs.length + " most recent changes.</p>");
+      root.innerHTML = out.join("");
+    };
+    STATE.changelog = STATE.changelog || {};
+    if (STATE.changelog[id]) { paint(STATE.changelog[id]); return; }
+    getJSON("/api/campaigns/" + encodeURIComponent(id) + "/change-log").then(function (d) {
+      STATE.changelog[id] = d;
+      paint(d);
+    }).catch(function () {
+      if (!onPage(id)) return;
+      var root = document.getElementById("changelog-root");
+      if (root) root.innerHTML = '<p class="clog-empty">The change log could not be loaded right now. Reload the page to try again.</p>';
+    });
   }
 
   function hydrateMessaging(c) {
@@ -6547,12 +6670,12 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     /* (the #/optimisations embedded Priority Report was removed 2026-08-02 —
        notifications.html is gone; the inline Review-N badges + panels on the
        list are the optimisation surface) */
-    var m = hash.match(/^#\/c\/(\d+)(?:\/(messaging|leads|sources))?$/);
+    var m = hash.match(/^#\/c\/(\d+)(?:\/(messaging|leads|sources|changes))?$/);
     var viewList = document.getElementById("view-list");
     var viewCamp = document.getElementById("view-campaign");
     if (!m) {
       /* legacy slug support */
-      var lm = hash.match(/^#\/([a-z]+)(?:\/(messaging|leads|sources))?$/);
+      var lm = hash.match(/^#\/([a-z]+)(?:\/(messaging|leads|sources|changes))?$/);
       if (lm && lm[1] !== "") {
         var slug = lm[1];
         var hit = null;
@@ -6601,6 +6724,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     }
     if (tab === "messaging") { hydrateMessaging(c); hydrateSequenceCopy(c); }
     if (tab === "leads") { hydrateDetail(c); hydratePlatformLeads(c); }
+    if (tab === "changes") { hydrateChangeLog(c); }
     document.title = c.name + " · The cockpit";
     window.scrollTo(0, 0);
   }
@@ -7384,7 +7508,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
 
       var lab = document.createElement("span");
       lab.className = "am-label";
-      lab.textContent = "Auto-move";
+      lab.textContent = "Auto Optimise";
       ctl.appendChild(lab);
 
       var seg = document.createElement("span");
@@ -7399,10 +7523,10 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         b.disabled = busy;
         b.setAttribute("aria-pressed", state.mode === m[0] ? "true" : "false");
         b.title = m[0] === "inherit"
-          ? "Follow the tool-wide auto-mover switch (Settings → General)"
+          ? "Follow the tool-wide Auto Optimise switch (Settings → General)"
           : (m[0] === "on"
-             ? "Auto-move this campaign whenever the tool-wide switch is on"
-             : "Never auto-move this campaign, even when the tool-wide switch is on");
+             ? "Auto-optimise this campaign whenever the tool-wide switch is on"
+             : "Never auto-optimise this campaign, even when the tool-wide switch is on");
         b.addEventListener("click", function () { save(m[0], state); });
         seg.appendChild(b);
       });
@@ -7412,7 +7536,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       last.className = "am-last";
       var lm = state.last_auto_move;
       last.textContent = lm && lm.created_at
-        ? "last auto-move: " + amAgo(lm.created_at) : "";
+        ? "last optimised: " + amAgo(lm.created_at) : "";
       ctl.appendChild(last);
 
       root.appendChild(ctl);
