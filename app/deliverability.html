@@ -915,7 +915,18 @@ function axisEndingYesterday(days) {
   }
   return [];
 }
-function chartAxisDays() { return axisEndingYesterday((HUB && HUB.days) || (CW && CW.days) || []); }
+// Normally the axis ends YESTERDAY, so every average, legend sum, reply-rate and
+// capacity figure ignores today's still-ramping partial day. The chart and its
+// hover, however, DRAW today's column too (team ask, 2026-09-04): while they plot
+// we point the axis at the full day list through _AXIS_OVERRIDE, and a try/finally
+// always restores it — so no NUMBER ever sees today, only the drawn bar/line does.
+var _AXIS_OVERRIDE = null;
+function chartAxisDays() {
+  if (_AXIS_OVERRIDE) return _AXIS_OVERRIDE;
+  return axisEndingYesterday((HUB && HUB.days) || (CW && CW.days) || []);
+}
+// The raw day list, running through today — the plotting axis for the chart/hover.
+function chartPlotDays() { return (HUB && HUB.days) || (CW && CW.days) || []; }
 // A raw analytics-hub series is keyed to HUB.days, which still runs to today.
 // Cut it to the chart axis so index i always describes axis day i.
 function hubAligned(arr) {
@@ -1389,6 +1400,12 @@ function renderTrend() {
   $("hero-kick").textContent = "Day by day · " + rangeLabel() +
     (state.client === "All" ? "" : " · " + state.client);
   setStamp("hero-stamp", (CW && CW.asof) || (HUB && HUB.asof), 6);
+  // Draw today's column too: point the axis at the full day list for the whole
+  // plotting pass, and restore it (try/finally) before any number is computed
+  // below, so the legend/averages/capacity stay ended yesterday.
+  _AXIS_OVERRIDE = chartPlotDays();
+  var capMode, sentFull;
+  try {
   // Axis = the hub's day list, or client-windows' aligned day list while the hub
   // RPC is still in flight. Either one lets the chart draw; only when BOTH are
   // missing do we show the loading frame.
@@ -1562,6 +1579,7 @@ function renderTrend() {
     s += '<text x="' + (e.x + 8).toFixed(1) + '" y="' + (pos[ii] + 3.5).toFixed(1) + '" font-size="10.5" font-weight="600" fill="' + COL[e.k] + '">' + NAME[e.k] + "</text>";
   });
   $("trend-svg").innerHTML = s;
+  } finally { _AXIS_OVERRIDE = null; }   // axis back to ending-yesterday for all numbers below
   var cw = cwFor(state.client);
   var sentTot = cw ? cw.sent : slice(fleetSeries().sent).reduce(function (a, b) { return a + b; }, 0);
   var bTot = cw ? cw.bounced : slice(fleetSeries().bounceN).reduce(function (a, b) { return a + b; }, 0);
@@ -1653,6 +1671,8 @@ function hideTip() {
 function trendMove(ev) {
   var svg = $("trend-svg"), r = svg.getBoundingClientRect();
   if (!r.width) return;
+  _AXIS_OVERRIDE = chartPlotDays();   // hover reads the same to-today axis the bars were drawn on
+  try {
   var allD = slice(chartAxisDays());
   if (!allD.length) return;
   var keep = chartKeep(allD);
@@ -1719,6 +1739,7 @@ function trendMove(ev) {
   if (maxTop > 0 && top > maxTop) top = maxTop;
   tip.style.left = left.toFixed(0) + "px";
   tip.style.top = top.toFixed(0) + "px";
+  } finally { _AXIS_OVERRIDE = null; }
 }
 
 /* ── funnel + leak (lifetime, per client, from the scorecard) ── */
