@@ -17715,6 +17715,29 @@ def route_training_interview(payload):
                 if served:
                     return 200, {"questions": served, "ready": True,
                                  "asked_at": latest.get("asked_at") or ""}
+            # PROMOTE A PREFETCHED SET (owner ask 2026-09-02: "as soon as we
+            # know we're about to go into another round of training, go
+            # straight into the other round of questions"). The page asks for
+            # the NEXT set while the trainer is still answering the current
+            # one (action=prefetch_next below); it waits in interview_next and
+            # becomes the live set the moment the current one is exhausted -
+            # so the questions are on screen instantly, never after a timer.
+            _nxt = doc.get("interview_next")
+            if isinstance(_nxt, dict) and (_nxt.get("questions") or []):
+                with _get_training_doc_lock(agent_id):
+                    doc = _load_training(agent_id, strict=True)
+                    _nxt = doc.get("interview_next") if isinstance(doc.get("interview_next"), dict) else {}
+                    _pq = [q for q in ((_nxt or {}).get("questions") or []) if isinstance(q, dict)]
+                    doc["interview_next"] = None
+                    _at_p = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+                    if _pq:
+                        interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+                        interviews.append({"questions": _pq, "answers": {}, "asked_at": _at_p})
+                        doc["interviews"] = interviews[-12:]
+                    _save_training(agent_id, doc)
+                served = _drop_banned_interview_questions(_pq)
+                if served:
+                    return 200, {"questions": served, "ready": True, "asked_at": _at_p}
             # PEEK (owner ruling 2026-08-25, CSM gate): a read-only probe that
             # NEVER runs the model. The first-launch page uses it so the CSM
             # sees either instant questions or a static "still being built"
@@ -17747,6 +17770,30 @@ def route_training_interview(payload):
                 served = _drop_banned_interview_questions(questions)
                 return 200, {"questions": served, "ready": True, "asked_at": at2}
             return 200, {"questions": questions, "asked_at": at2}
+
+        if action == "prefetch_next":
+            # Generate the NEXT question set now, in the background of the
+            # trainer's typing (owner ask 2026-09-02), so no hold ever starts
+            # with a bare timer. Stored in interview_next; the questions
+            # action promotes it when the current set is exhausted. One per
+            # agent at a time (iv lock, non-blocking); a set already staged
+            # is left alone.
+            _ivlock = _get_training_iv_lock(agent_id)
+            if not _ivlock.acquire(blocking=False):
+                return 200, {"ok": True, "staged": False, "reason": "busy"}
+            try:
+                doc = _load_training(agent_id)
+                if isinstance(doc.get("interview_next"), dict) and (doc["interview_next"].get("questions") or []):
+                    return 200, {"ok": True, "staged": True, "reason": "exists"}
+                questions_text = _generate_interview_questions(agent, doc)
+                questions = [{"id": f"q-{uuid.uuid4().hex[:6]}", "q": q} for q in (questions_text or [])]
+                with _get_training_doc_lock(agent_id):
+                    doc = _load_training(agent_id, strict=True)
+                    doc["interview_next"] = {"questions": questions, "generated_at": at}
+                    _save_training(agent_id, doc)
+                return 200, {"ok": True, "staged": bool(questions), "n": len(questions)}
+            finally:
+                _ivlock.release()
 
         if action == "answers":
             raw = payload.get("answers")
@@ -18063,6 +18110,11 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
         prior = []
         answered_qs = []          # every question the owner actually answered
         answered_rounds = 0       # interview sets with at least one answer
+        _nxt = doc.get("interview_next")
+        if isinstance(_nxt, dict):
+            for q in (_nxt.get("questions") or []):
+                if isinstance(q, dict) and q.get("q"):
+                    prior.append({"q": str(q.get("q") or ""), "a": ""})  # staged, not yet asked (2026-09-02)
         for interview in (doc.get("interviews") or []):
             if not isinstance(interview, dict):
                 continue
