@@ -412,7 +412,7 @@
   /* Admin cluster (Autopilot pill / Agents / Settings) is not the on-the-go
      job - hidden on phones for a clean triage view (owner ask 2026-07-22).
      Reachable on desktop, where config actually happens. */
-  .setter-head-row #autopilotPill, .setter-head-row #openAgentsBtn { display: none; }
+  .setter-head-row #autopilotPill, .setter-head-row #openAgentsBtn, .setter-head-row #clientTourBtn { display: none; }
 
   /* Full-screen reply card: give the body room for the pinned action bar
      (the bar measures ~160px once the gate hint wraps — 150px used to let the
@@ -1202,6 +1202,34 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
 .share-url-row input { flex: 1; }
 .share-url-row .btn { flex: none; }
 
+/* ── CLIENT_MODE (setter-client-view) ──────────────────────────────────────
+   Every rule below is scoped to body.client-mode, which is only ever set when
+   a ?share= token opened the page. Not one existing rule is edited, so the
+   owner page is byte-identical. */
+/* .ii-line3 .client-pill { margin-left: auto } (line 364) is the ONLY thing
+   right-anchoring the list row's third line, and CLIENT_MODE renders no
+   client pill. Hand the job to the age badge here rather than touching 364,
+   so the row keeps its right edge and the owner rule stays untouched. */
+body.client-mode .ii-line3 .ii-age { margin-left: auto; }
+
+/* ── First-visit tutorial overlay (copied verbatim from setter-train.html:
+   256-271) ────────────────────────────────────────────────────────────────
+   A dim layer plus one floating card per step. Spotlit elements get
+   .tut-spot, which lifts them above the dim with position/z-index only -
+   no layout change, so nothing jumps. Only ever rendered in client mode. */
+.tut-dim { position: fixed; inset: 0; background: rgba(20, 18, 14, 0.55); z-index: 500; }
+.tut-spot { position: relative !important; z-index: 501 !important; background: var(--cream, #fff); border-radius: 10px; box-shadow: 0 0 0 6px var(--cream, #fff); }
+.tut-card {
+  position: fixed; z-index: 502; width: min(340px, calc(100vw - 32px));
+  background: var(--cream, #fff); border: 1px solid var(--line); border-radius: 14px;
+  padding: 16px 18px; box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+.tut-card .tc-step { font-size: 10.5px; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 6px; }
+.tut-card .tc-title { font-family: var(--font-sans); font-weight: 600; font-size: 15px; margin: 0 0 6px; }
+.tut-card .tc-body { font-size: 13px; color: var(--ink-2); line-height: 1.55; margin: 0 0 12px; }
+.tut-card .tc-row { display: flex; align-items: center; gap: 10px; }
+.tut-card .tc-skip { font-size: 12px; color: var(--ink-3); text-decoration: underline; cursor: pointer; margin-left: auto; }
+
 </style>
 </head>
 <body>
@@ -1369,11 +1397,56 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
 
 <script src="shell.js"></script>
 <script>
-document.getElementById("rail").outerHTML = renderRail("setter");
+/* ── Client share-link mode (setter-client-view, 2026-09-04) ───────────────
+   A ?share=<token> URL means a CLIENT opened this page with no Navreo login,
+   to read and approve the replies to their OWN campaigns - see setter.py's
+   mint/verify_client_share and server.py's _CLIENT_SHARE_GET/_AUTH_PUBLIC_POST.
+   The token is the whole scope: every allowlisted call carries it and the
+   server re-scopes the read to that one client's campaigns.
+
+   CLIENT_MODE only ever REMOVES nodes and SUPPRESSES render branches. It is
+   false whenever ?share= is absent, so the owner page below is untouched -
+   no owner branch, default or CSS rule changes. Same derivation shape as
+   setter-train.html:307-335. */
+const SHARE_TOKEN = new URLSearchParams(location.search).get("share") || "";
+const CLIENT_MODE = !!SHARE_TOKEN;
+if (CLIENT_MODE) {
+  document.body.classList.add("client-mode");
+  /* .remove() - not display:none - so the markup is genuinely absent from the
+     client's DOM, not merely invisible in it. Everything here is owner-only
+     config or account-wide telemetry (spec §2 rows g, h, i). The unresolved
+     follow-up tray (#subseqTray) deliberately STAYS: its endpoint is scoped
+     to the token's own campaigns server-side. */
+  ["openAgentsBtn", "agentsDrawerOverlay", "agentModalOverlay",
+   "teachAgentModalOverlay", "shareTrainModalOverlay",
+   "statsInline", "lastCheckedNote", "clientFilterSel"].forEach((id) => {
+    const e = document.getElementById(id);
+    if (e) e.remove();
+  });
+  /* The tour replay control takes the slot the settings gear just vacated -
+     same flex slot, same .btn.icon-btn box, so the header geometry is
+     unchanged. Built here rather than in the markup so the owner page never
+     carries a hidden node. */
+  const headRow = document.querySelector(".setter-head-row");
+  if (headRow) {
+    const tourBtn = document.createElement("button");
+    tourBtn.className = "btn icon-btn";
+    tourBtn.id = "clientTourBtn";
+    tourBtn.type = "button";
+    tourBtn.title = "Show me around";
+    tourBtn.setAttribute("aria-label", "Show me around");
+    tourBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.4-2.6 4"/><path d="M12 17.4h.01"/></svg>`;
+    tourBtn.addEventListener("click", () => startTutorial());
+    headRow.appendChild(tourBtn);
+  }
+}
+if (CLIENT_MODE) document.getElementById("rail").remove();
+else document.getElementById("rail").outerHTML = renderRail("setter");
 
 /* ── State ─────────────────────────────────────────────── */
 let LAST_CHECKED = null;  // ISO time of the last COMPLETED reply-check (server-supplied)
 function renderLastChecked() {
+  if (CLIENT_MODE) return;   // ops telemetry, not client value (spec §2 row h)
   const el = document.getElementById("lastCheckedNote");
   if (!el) return;
   // Shown as a stat pill matching the auto-sent / avg-response chips; the full
@@ -1780,6 +1853,9 @@ function clientHue(name) {
   return h % 360;
 }
 function clientPillHtml(row) {
+  // One-client view, and the pill is exactly where another client's name
+  // would surface (spec §2 row f). Kills both call sites - list row + header.
+  if (CLIENT_MODE) return "";
   const name = clientForRow(row);
   if (!name) return "";
   const hue = clientHue(name);
@@ -1814,6 +1890,13 @@ function buildCampaignClientMap(unifiedRes, clientsRes) {
    20+/day before the 2026-07-30 fix) last a few seconds, so one jittered
    retry rides most windows out instead of surfacing a scary banner. */
 async function fetchJson(url, opts) {
+  // Every /api/ call a client share makes carries its token on the QUERY
+  // string - GET and POST alike - so the server can re-scope the read to that
+  // one client. Covers all 47 call sites at once; the only /api/ call that
+  // bypasses this helper is the unload sendBeacon, patched at its own site.
+  if (CLIENT_MODE && String(url).startsWith("/api/")) {
+    url += (String(url).includes("?") ? "&" : "?") + "share=" + encodeURIComponent(SHARE_TOKEN);
+  }
   const o = opts || {};
   const timeoutMs = o._timeoutMs || 0;
   const retries = o._retries || 0;
@@ -1883,7 +1966,11 @@ async function loadAgentsAndCampaigns() {
   // Only agents + campaigns BLOCK the first paint (panel fix 2026-08-01) —
   // the other three feed labels/filters, not the list render, and gating on
   // all five held the whole page blank behind one slow /api/clients.
-  const labelsP = Promise.all([
+  // CLIENT_MODE skips this whole batch (spec §2 row i): campaigns-unified,
+  // clients and workspaces each return EVERY client's names, none of them is
+  // allowlisted for a share token, and all three would 403-spam. The maps
+  // they feed stay {} - every consumer already tolerates that.
+  const labelsP = CLIENT_MODE ? Promise.resolve() : Promise.all([
     fetchJson("/api/campaigns-unified", _ro),
     fetchJson("/api/clients", _ro),
     fetchJson("/api/workspaces", _ro),
@@ -1910,11 +1997,18 @@ async function loadAgentsAndCampaigns() {
     if (listEl) listEl.scrollTop = keepScroll;
     refreshOpenDetail();
   }).catch(() => { /* labels are cosmetic; the list stands without them */ });
+  // /api/setter/agents returns every agent's full instructions, pricing and
+  // resource links plus the global settings blob - owner-only, never
+  // allowlisted (spec §2 row 24). /api/setter/campaigns IS allowlisted and
+  // server-scoped to the token's own campaigns, so the name map still fills.
   const [agentsRes, campaignsRes] = await Promise.all([
-    fetchJson("/api/setter/agents", _ro),
+    CLIENT_MODE ? Promise.resolve({ ok: false, error: "" })
+                : fetchJson("/api/setter/agents", _ro),
     fetchJson("/api/setter/campaigns", _ro),
   ]);
-  if (agentsRes.ok) {
+  if (CLIENT_MODE) {
+    AGENTS = []; SETTINGS = {};
+  } else if (agentsRes.ok) {
     AGENTS = agentsRes.data.agents || [];
     SETTINGS = agentsRes.data.settings || {};
   } else {
@@ -1932,9 +2026,12 @@ async function loadAgentsAndCampaigns() {
     campaignMap[c.id] = c.name;
     if (c.parent_id != null) campaignParentMap[String(c.id)] = String(c.parent_id);
   });
-  renderAutopilotSwitch();
-  renderAgents();
-  renderSettings();
+  // All three paint into drawer nodes CLIENT_MODE removed at boot.
+  if (!CLIENT_MODE) {
+    renderAutopilotSwitch();
+    renderAgents();
+    renderSettings();
+  }
   // The queue may have painted BEFORE these names landed (both fetches run in
   // parallel) — without this repaint every row showed "Campaign <id>" clients
   // bucketed under "Other" until the next timer tick (owner report 2026-08-09).
@@ -2341,7 +2438,12 @@ function trayRowHtml(r) {
       ${["none", "none_at_send"].includes(r.subsequence_decision) ? `<span class="pill n tray-none-tag">No follow-up</span>` : ""}
       <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence &#9662;</button>
       ${["none", "none_at_send"].includes(r.subsequence_decision) ? "" : `<button class="tray-none-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>`}
-      <button class="tray-dismiss-btn sg-dismiss" type="button" data-id="${esc(r.id)}" title="Remove from this reminder list">Dismiss</button>
+      ${CLIENT_MODE ? ""
+        // The tray itself STAYS in client mode (its endpoint is scoped to the
+        // token's own campaigns), but its Dismiss drops a row from OUR
+        // reminder list - internal housekeeping, not the client's call. The
+        // per-row retro Dismiss in the detail pane keeps the affordance.
+        : `<button class="tray-dismiss-btn sg-dismiss" type="button" data-id="${esc(r.id)}" title="Remove from this reminder list">Dismiss</button>`}
     </div>
     <div class="tray-row-picker" id="sgPicker-${esc(r.id)}" style="display:none"></div>
   </div>`;
@@ -2705,6 +2807,9 @@ function clientPillRows(all, status) {
 
 /* ── Slim stats row ────────────────────────────────────── */
 function renderKpis() {
+  // #statsInline is removed at boot in CLIENT_MODE and the share response
+  // carries no kpis block at all - the strip is ops telemetry (spec §2 row h).
+  if (CLIENT_MODE) return;
   const el = document.getElementById("statsInline");
   const avg = KPIS.avg_response_mins_7d;
   // Raw minutes past an hour read as noise ("1778m" — panel report
@@ -2743,6 +2848,11 @@ function renderQueueFilters() {
     .filter((r) => !r.is_test && r.status === "needs_review"
       && (r.workspace || "navreo") !== "navreo").length;
   wrap.innerHTML = FILTER_PILLS.map((p) => {
+    // A share response deliberately carries no kpis block: _compute_kpis() is
+    // account-wide (every client's counts) and re-deriving it per client would
+    // be ~10 extra reads a request. counts is {} in client mode, so the badge
+    // simply doesn't render - exactly what the owner page does whenever the
+    // KPI block is missing. The pill markup, labels and order are untouched.
     let n = counts[p.count];
     if (typeof n === "number" && p.key === "needs_review") n += testNeeds + clientNeeds;
     const badge = (typeof n === "number") ? ` <b class="n">${fmt(n)}</b>` : "";
@@ -2753,7 +2863,8 @@ function renderQueueFilters() {
   // lens instead of switching server status.
   const uncatN = (ALL_ROWS.length ? ALL_ROWS : QUEUE_ROWS)
     .filter((r) => isUncategorised(r) && r.status === "needs_review").length;
-  if (uncatN || UNCAT_ONLY) {
+  // The uncategorised lens exposes categoriser failures (spec §2 row 13).
+  if (!CLIENT_MODE && (uncatN || UNCAT_ONLY)) {
     wrap.innerHTML += `<a role="button" tabindex="0" class="chip ${UNCAT_ONLY ? "on" : ""}" id="uncatOnlyChip" title="Only replies the auto-categoriser failed on">Uncategorised <b class="n">${fmt(uncatN)}</b></a>`;
   }
   const uncatChipEl = document.getElementById("uncatOnlyChip");
@@ -2805,6 +2916,11 @@ function renderQueueFilters() {
    it's still present in the fresh row set; otherwise falls back to "All
    clients" so the dropdown never shows a stale/vanished option as selected. */
 function renderClientFilter() {
+  // #clientFilterSel is removed at boot (spec §2 row i) - it is the one place
+  // other clients' names would list. The CATEGORY menu below it survives
+  // (its options are the client's own reply categories, ruling 4.7), and
+  // this function is its only repaint hook, so hand that on before leaving.
+  if (CLIENT_MODE) { renderCategoryFilter(); return; }
   const sel = document.getElementById("clientFilterSel");
   if (!sel) return;
   const clients = Array.from(new Set(QUEUE_ROWS.map((r) => clientForRow(r))))
@@ -2924,7 +3040,12 @@ function inboxRowsBeforeCategory() {
   // surfaces, the inbox is real replies only.
   const q = inboxSearchQuery.trim().toLowerCase();
   const source = q ? ALL_ROWS : QUEUE_ROWS;
-  let rows = source.filter((r) => !r.is_test);
+  // In CLIENT_MODE the SERVER decides: a plain client token is pinned to
+  // is_test=eq.false, so nothing test-shaped ever arrives, and a TEST-flagged
+  // QA token (mint_client_share test=True, Navreo-internal) deliberately does
+  // send them - filtering here again would silently swallow the very rows
+  // that token exists to show.
+  let rows = source.filter((r) => CLIENT_MODE || !r.is_test);
   if (UNCAT_ONLY) {
     // Uncategorised-only lens (ship 2026-07-20): the alert's deep link and
     // the toolbar chip narrow the list to unresolved uncategorised replies.
@@ -3048,6 +3169,10 @@ function renderQueue() {
    blocks or reorders them. Hits that ALSO live in the setter open through
    the NORMAL row path (full controls); never-ingested ones open READ-ONLY. */
 function scheduleSmartleadSearch() {
+  // /api/setter/search-smartlead queries EVERY enabled workspace's master
+  // inbox - one query would return other clients' leads (spec §2 row 17).
+  // The local #inboxSearch over ALL_ROWS is client-scoped and stays.
+  if (CLIENT_MODE) return;
   const q = inboxSearchQuery.trim();
   if (_slSearchTimer) clearTimeout(_slSearchTimer);
   if (q.length < 3) { SL_SEARCH = { q: "", loading: false, results: [], error: "" }; return; }
@@ -3238,7 +3363,9 @@ function renderInboxList() {
         ? `<div class="empty"><span class="btnspin"></span> Loading replies…</div>`
         : (slFoot
             ? ""   // the footer's "Searching all of Smartlead…" carries the state
-            : `<div class="empty">No replies here. New ones will show up after the next check.</div>`))
+            : `<div class="empty">${CLIENT_MODE
+                ? "No replies yet. New replies to your campaigns land here automatically, usually within a few minutes of arriving - nothing for you to do until one appears."
+                : "No replies here. New ones will show up after the next check."}</div>`))
     : paged.rows.map(inboxItemHtml).join(""))
     + slFoot;
   // Identical-HTML skip (perf pass R2): only touch the DOM when the markup
@@ -3384,6 +3511,7 @@ function fetchCategories() {
 }
 
 async function hydrateUncatBanner() {
+  if (CLIENT_MODE) return;   // no uncategorised triage in client mode (§2 row 13)
   const sel = document.getElementById("uncatCatSel");
   if (!sel) return;
   const cats = await fetchCategories();
@@ -3398,6 +3526,7 @@ async function hydrateUncatBanner() {
 }
 
 async function applyRecategorise() {
+  if (CLIENT_MODE) return;   // Smartlead is Navreo's system of record (§2 row 12/13)
   const sel = document.getElementById("uncatCatSel");
   const btn = document.getElementById("uncatApplyBtn");
   const hint = document.getElementById("uncatHint");
@@ -3488,7 +3617,9 @@ function inboxItemHtml(row) {
   // this SAME function so it looks identical to a queue row; it carries no
   // stable id, so it's keyed by data-slkey and its selection tracks SL_OPEN.
   const isSl = !!row.__sl;
-  const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
+  // TEST chip (§2 row 18), "No agent" chip (row 14) and the UNCATEGORISED
+  // pill (row 13) are all internal plumbing - suppressed in client mode.
+  const testChip = (!CLIENT_MODE && row.is_test) ? `<span class="pill qc-test-chip">TEST</span>` : "";
   const snippet = esc(cleanBody(row.reply_body).replace(/\s+/g, " "));
   const selected = isSl
     ? (SL_OPEN === row.__slkey ? "selected" : "")
@@ -3507,8 +3638,8 @@ function inboxItemHtml(row) {
   // from a campaign with no assigned agent). Same subtle neutral pill as the
   // status chip above - no colour shouting, just a flag that no brain is set.
   // (Suppressed on Smartlead-only rows — "no agent" is a queue concept.)
-  const noAgentChip = (isSl || row.agent_id) ? "" : `<span class="pill n">No agent</span>`;
-  const uncatChip = (!isSl && isUncategorised(row) && !["sent", "auto_sent"].includes(row.status))
+  const noAgentChip = (CLIENT_MODE || isSl || row.agent_id) ? "" : `<span class="pill n">No agent</span>`;
+  const uncatChip = (!CLIENT_MODE && !isSl && isUncategorised(row) && !["sent", "auto_sent"].includes(row.status))
     ? `<span class="pill uncat-pill">UNCATEGORISED</span>` : "";
   const handle = isSl ? `data-slkey="${esc(row.__slkey)}"` : `data-id="${esc(row.id)}"`;
   // Reason/verdict text and the right-side "X ago" time were removed (owner ask):
@@ -3726,20 +3857,24 @@ function renderDetail(row) {
     const prevCur = el.querySelector(".thread-msg.current");
     if (prevCur) _anchorDelta = prevCur.getBoundingClientRect().top - el.getBoundingClientRect().top;
   }
-  const testChip = row.is_test ? `<span class="pill qc-test-chip">TEST</span>` : "";
+  const testChip = (!CLIENT_MODE && row.is_test) ? `<span class="pill qc-test-chip">TEST</span>` : "";
 
   // A genuine processing error is surfaced right away (distinct from the
   // routine "needs review" hold reason, which lives in the sidebar's "The
   // decision" section instead of a top banner).
+  // row.error is server-internal, stack-ish text (§2 row 22): the container
+  // stays, the copy becomes friendly connectivity wording (ruling 4.9).
   const errorBannerHtml = (row.status === "error" && row.error)
-    ? `<div class="err-banner" style="display:block;margin:10px 0">${esc(row.error)}</div>` : "";
+    ? `<div class="err-banner" style="display:block;margin:10px 0">${CLIENT_MODE
+        ? "We couldn't prepare a reply for this one yet. We're on it - nothing was sent."
+        : esc(row.error)}</div>` : "";
 
   // Uncategorised triage banner (ship 2026-07-20): pick the real Smartlead
   // category right here. A positive category re-runs the normal pipeline
   // (draft and all); anything else removes the row from the Setter. Either
   // way Smartlead is updated first - it stays the system of record.
   let uncatBannerHtml = "";
-  if (isUncategorised(row) && !["sent", "auto_sent"].includes(row.status)) {
+  if (!CLIENT_MODE && isUncategorised(row) && !["sent", "auto_sent"].includes(row.status)) {
     const wasDismissed = row.status === "dismissed";
     uncatBannerHtml = `<div class="uncat-banner" id="uncatBanner">
       <div><b>Uncategorised reply</b> - ${wasDismissed
@@ -3836,7 +3971,14 @@ function renderDetail(row) {
         </div>
       </div>
       <div class="dh-band">
-        <div class="dh-campaign" title="${esc(campaignNameFor(row))}"><span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>
+        ${CLIENT_MODE
+          // The NAME goes (§2 row 21: campaign names carry our internal
+          // "Client / Mechanism / v3" convention). The .dh-campaign box itself
+          // stays, empty: it is `flex: 1 1 auto` and the only thing holding the
+          // quick links at the right of the band, and §9 forbids moving a kept
+          // element. Same box, same geometry, no name.
+          ? `<div class="dh-campaign"></div>`
+          : `<div class="dh-campaign" title="${esc(campaignNameFor(row))}"><span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>`}
         <div class="dh-actions">
           <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
           <button type="button" class="lp-panel-toggle" id="panelToggleBtn" aria-pressed="true" title="Hide lead details">${ICON_PANEL}</button>
@@ -3991,6 +4133,9 @@ function renderDetail(row) {
    (empty when there's no verdict), shared by the Try-it drawer and the sidebar
    so the two never drift on the wording. */
 function autoSendVerdictHtml(row, terse) {
+  // Autopilot machinery and hold reasons (spec §2 row d). One choke point:
+  // both wrappers are `if (verdict)`-guarded, so nothing is orphaned.
+  if (CLIENT_MODE) return "";
   if (row.would_auto_send == null) return "";
   if (row.status === "auto_sent") return "<b>Yes</b> - it sent automatically.";
   if (row.held_only_by_master_switch) return "<b>Yes</b> - every check passed; only the master switch (off) held it back.";
@@ -4234,7 +4379,8 @@ function leadQuickLinksHtml(row) {
   const slHref = row.lead_map_id
     ? `https://app.smartlead.ai/app/master-inbox?leadMap=${encodeURIComponent(row.lead_map_id)}`
     : `https://app.smartlead.ai/app/master-inbox?search=${encodeURIComponent(row.lead_email || "")}`;
-  const smartleadBtn = row.lead_email
+  // Our sending platform, and the master inbox behind it (spec §2 row e).
+  const smartleadBtn = (!CLIENT_MODE && row.lead_email)
     ? `<a class="lp-qbtn" href="${slHref}" target="_blank" rel="noopener" title="${row.lead_map_id ? "Open this exact conversation in Smartlead" : "Open this lead's conversation in Smartlead's master inbox"}">${ICON_EXTERNAL}<span>Smartlead</span></a>` : "";
   // One-tap dial from the always-visible bar (SDR panel gripe 2026-08-15:
   // on phones the sidebar phone was toggle-then-tap - two taps).
@@ -4282,7 +4428,7 @@ function categoryControlInner(row, compact) {
         <div class="lp-label">Lead category</div>
         <div class="lp-cat-now">${catPill}</div>
       </div>
-      ${(() => {
+      ${CLIENT_MODE ? "" : (() => {
         const monitor = (row.workspace || "navreo") !== "navreo";
         // Segmented tiles (owner ask 2026-08-22): the two file-and-clear labels
         // (NQ, OOO) now sit beside a POSITIVE Call-booked tile as three equal
@@ -4332,7 +4478,9 @@ function leadPanelHtml(row) {
   // read as "it can't identify the campaign". State the real situation
   // instead, mirroring the send gate's own wording.
   const wsMon = (row.workspace || "navreo") !== "navreo";
-  const noAgentHtml = row.agent_id ? "" : (wsMon ? `
+  // Agent plumbing, and the monitor branch names the client workspace
+  // (spec §2 row b).
+  const noAgentHtml = (CLIENT_MODE || row.agent_id) ? "" : (wsMon ? `
     <div class="lp-section">
       <div class="lp-line muted lp-noagent">${esc(clientForRow(row))} is a monitor-only workspace — replies surface here for review and are answered in Smartlead directly, so no agent drafts for this campaign.</div>
     </div>` : `
@@ -4378,6 +4526,8 @@ function leadPanelHtml(row) {
    re-render (unlike the company/client blocks) so in-progress typing is never
    clobbered - hydration fills it only when empty. */
 function notesSectionHtml(row) {
+  // "the team sees this" - an internal scratchpad (spec §2 row a).
+  if (CLIENT_MODE) return "";
   const notes = String(warmcallFor(row).notes || "");
   return `<div class="lp-section lp-notes" id="lpNotes">
     <div class="lp-label">Notes</div>
@@ -4444,6 +4594,7 @@ function wireLeadNotes(scope, row) {
    hydrateLeadContact swaps each block in place by id so a category pick in
    progress is never clobbered. */
 function crmTopHtml(row) {
+  if (CLIENT_MODE) return "";   // the Notion CRM is internal (spec §2 row 11)
   const cl = warmcallFor(row).client || row.client_info || {};
   const email = String(row.lead_email || "").toLowerCase();
   const dbUrl = cl.crm_url || CRM_DB[email] || "";
@@ -4496,7 +4647,9 @@ function companySectionHtml(row) {
   const chipLabel = q.verdict === "likely" ? "Likely qualified"
     : q.verdict === "unlikely" ? "Unlikely fit"
     : wc.done ? "Fit unknown" : "";
-  const verdictHtml = chipLabel
+  // Our private judgement on their lead ("Unlikely fit") - these lines only;
+  // the rest of the Profile block stays (spec §2 row 15).
+  const verdictHtml = (chipLabel && !CLIENT_MODE)
     ? `<div class="lp-verdict-row"><span class="lp-qual lp-qual-${esc(q.verdict || "unknown")}">${chipLabel}</span>${q.reason ? `<span class="lp-qual-reason-inline">${esc(q.reason)}</span>` : ""}</div>`
     : "";
   const fact = (label, val) => `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
@@ -4516,6 +4669,9 @@ function companySectionHtml(row) {
   </div>`;
 }
 function clientSectionHtml(row) {
+  // Our internal offer/notes summary about the account (spec §2 row c);
+  // it also carries the second CRM link (row 11).
+  if (CLIENT_MODE) return "";
   const cl = warmcallFor(row).client || row.client_info || {};
   // The client is the CAMPAIGN's client, not the workspace (owner fix
   // 2026-08-17: every navreo-workspace row said "About Navreo" even when
@@ -4620,6 +4776,8 @@ const CRM_LINK_TRIED = new Set();
    database-root link. Re-renders only the CRM blocks, only for the open row -
    never the whole panel (a category pick in progress must survive). */
 async function hydrateCrmLink(row) {
+  // Early-return so /api/setter/crm-link is never called (spec §2 row 11).
+  if (CLIENT_MODE) return;
   if (!row || row.is_test) return;
   const email = String(row.lead_email || "").toLowerCase();
   if (!email || CRM_LEAD[email]) return;      // resolved already
@@ -4756,6 +4914,7 @@ function onCategoryPicked(block, row) {
    it and drops it from the queue (discarded). Scoped to the passed .lp-cat
    block so it works from the sidebar or the sticky bar. */
 async function applyCategory(block, override) {
+  if (CLIENT_MODE) return;   // only Navreo re-files a lead (spec §2 row 12)
   if (!block) return;
   const sel = block.querySelector(".lp-cat-sel");
   const btn = override ? block.querySelector(override.btnSel || ".lp-cat-nq") : block.querySelector(".lp-cat-btn");
@@ -4933,6 +5092,7 @@ function wireLeadPanelEvents(root, row) {
    into an unrelated agent edit. */
 let PENDING_ASSIGN_CAMPAIGN = null;
 function startAssignAgent(campaignId, campaignName) {
+  if (CLIENT_MODE) return;   // the drawer it opens is removed (spec §2 row b)
   if (!campaignId) return;
   PENDING_ASSIGN_CAMPAIGN = { id: String(campaignId), name: campaignName || `Campaign ${campaignId}` };
   renderAssignPrompt();
@@ -4943,6 +5103,7 @@ function clearAssignAgent() {
   renderAssignPrompt();
 }
 function renderAssignPrompt() {
+  if (CLIENT_MODE) return;
   const el = document.getElementById("assignPrompt");
   if (!el) return;
   if (!PENDING_ASSIGN_CAMPAIGN) { el.style.display = "none"; el.innerHTML = ""; return; }
@@ -5148,8 +5309,17 @@ function needsComposerActions(row) {
    While the gate is locked, a "Pick a follow-up track first (why?)" hint
    sits beside the buttons (P2's gate-hint); updateApproveButton toggles it
    with the selection state. */
+/* Dismiss STAYS in client mode (ruling 4.i) - a client saying "no reply
+   needed" is a real decision. Only the tooltip goes: it names our internal
+   queue process and our sending platform (spec §2 row 23). */
+const DISMISS_TITLE_ATTR = CLIENT_MODE ? ""
+  : ` title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead."`;
 function gateLockHintHtml(rowId, hidden) {
-  return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}" ${hidden ? 'style="display:none"' : ""}>Pick a follow-up track first
+  // The single wording change permitted anywhere in client mode (ruling 4.ii):
+  // "track" is our word for a subsequence. Everything else - chip labels,
+  // button labels, the gate label, the "(why?)" body - is verbatim.
+  const lockLabel = CLIENT_MODE ? "Pick a follow-up first" : "Pick a follow-up track first";
+  return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}" ${hidden ? 'style="display:none"' : ""}>${lockLabel}
     <span class="why">(why?<span class="tooltip">Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.</span>)</span>
   </span>`;
 }
@@ -5170,7 +5340,7 @@ function composerActionsHtml(row) {
     <span class="qc-split">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="Regenerate with feedback" aria-label="Regenerate with feedback">&#9662;</button>
     </span>
-    <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+    <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>Dismiss</button>
     ${gateApplies ? gateLockHintHtml(row.id, !!sel) : ""}
   </div>`;
 }
@@ -5199,7 +5369,8 @@ function retroFollowupHtml(row) {
     ${failTag}${noneTag}
     <button class="btn primary qc-retro-add" data-id="${esc(row.id)}" type="button">Add to subsequence</button>
     ${isNone ? "" : `<button class="btn qc-retro-none" data-id="${esc(row.id)}" type="button">No follow-up needed</button>`}
-    <button class="btn qc-retro-dismiss" data-id="${esc(row.id)}" type="button" title="Remove from the follow-up reminder list">Dismiss</button>
+    <button class="btn qc-retro-dismiss" data-id="${esc(row.id)}" type="button"${CLIENT_MODE ? ""
+      : ` title="Remove from the follow-up reminder list"`}>Dismiss</button>
   </div>`;
 }
 function retroFollowupPickerHtml(row) {
@@ -5384,6 +5555,10 @@ document.addEventListener("keydown", (e) => {
    the whole review pane (localStorage), not a per-reply choice. The Teach
    modal and the training page ignore it - those are always teaching. */
 function trainingModeOn() {
+  // Ruling 4.iv: regenerate-with-feedback STAYS in client mode, but training
+  // is forced off there - a client's one-off note must never become a
+  // standing rule in the agent's brain.
+  if (CLIENT_MODE) return false;
   return (localStorage.getItem("setterTrainingMode") || "on") === "on";
 }
 /* The switch this whole pane reads had no writer until 2026-07-17 - the mode
@@ -5400,6 +5575,9 @@ function setTrainingMode(on) {
    never touched it), and the OFF-state exception (the write-a-lesson link
    still teaches, so "nothing is learned" would be false). */
 function learnBarHtml(row) {
+  // The copy names "the agent" and the switch writes standing training rules
+  // (spec §2 row 19).
+  if (CLIENT_MODE) return "";
   // Agentless rows have no brain to teach, so the switch would be a lie.
   if (!needsComposerActions(row) || !row.agent_id) return "";
   return `${learnIntroHtml()}<div class="learn-bar">
@@ -5419,6 +5597,7 @@ function learnHintText() {
    static grey line can reach someone who has rightly stopped reading. */
 function learnIntroSeen() { return localStorage.getItem("setterLearnIntroSeen") === "1"; }
 function learnIntroHtml() {
+  if (CLIENT_MODE) return "";
   if (learnIntroSeen()) return "";
   return `<div class="learn-intro" id="learnIntro">
     <div><b>New:</b> when you rewrite a draft and approve it, the agent now learns from your edit - it becomes a standing rule for every future reply. A message will confirm each lesson, with one-click Undo. Untick the box below to keep an edit one-off.</div>
@@ -5426,6 +5605,7 @@ function learnIntroHtml() {
   </div>`;
 }
 function feedbackPlaceholder() {
+  if (CLIENT_MODE) return "";
   return trainingModeOn()
     ? "Tell it what to change - it'll remember going forward"
     : "Tell it what to change - applies to this reply only";
@@ -5436,6 +5616,8 @@ function feedbackPlaceholder() {
    Regenerate's arrow already teaches by default (feedback IS teaching), so
    the old On/Off switch is gone. */
 function teachToggleHtml(row) {
+  // Opens the teach-the-agent modal, whose markup is removed at boot (§2 row g).
+  if (CLIENT_MODE) return "";
   return row.agent_id
     ? `<button class="teach-link" id="teachAgentBtn" type="button" data-id="${esc(row.id)}" data-agent-id="${esc(row.agent_id)}" title="Type a lesson in your own words. Always remembered, whatever the Learn switch says.">Write a lesson in my own words</button>`
     : "";
@@ -5493,14 +5675,14 @@ function composerHtml(row) {
   if (row.status === "no_action" || row.status === "dismissed") {
     const label = row.status === "dismissed" ? "Dismissed." : "No action needed.";
     const cat = row.category ? ` Category: ${esc(row.category)}.` : "";
-    const anywayBtn = row.status === "no_action"
+    const anywayBtn = (!CLIENT_MODE && row.status === "no_action")
       ? `<button class="btn qc-draft-anyway" data-id="${esc(row.id)}" type="button" style="margin-top:10px">Draft a reply anyway</button>` : "";
     return `<div class="small muted">${label}${cat}</div>${anywayBtn}`;
   }
   if (row.status === "error") {
     return `<div class="qc-actions">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Try again</button>
-      <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button" title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead.">Dismiss</button>
+      <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>Dismiss</button>
     </div>`;
   }
   return "";
@@ -6082,7 +6264,11 @@ window.addEventListener("beforeunload", () => {
   Object.keys(SAVE_TIMERS).forEach((id) => {
     if (EDITED_DRAFTS[id] === undefined || SAVED_DRAFTS[id] === EDITED_DRAFTS[id]) return;
     clearTimeout(SAVE_TIMERS[id]);
-    navigator.sendBeacon("/api/setter/queue/action", new Blob(
+    // fetchJson appends share= for every other /api/ call; this one builds
+    // its URL itself, and without the token the beacon 403s and the draft is
+    // silently lost (leak/UX risk 11).
+    navigator.sendBeacon("/api/setter/queue/action"
+      + (CLIENT_MODE ? "?share=" + encodeURIComponent(SHARE_TOKEN) : ""), new Blob(
       [JSON.stringify({ id: Number(id), action: "save_draft", body: EDITED_DRAFTS[id] })],
       { type: "application/json" }));
   });
@@ -6350,6 +6536,9 @@ function plainWords(html) {
 
 let LESSON_POLL = null;
 async function watchForEditLesson(rowId) {
+  // /edit-lesson is not allowlisted, and the toast it raises announces a
+  // standing rule written into the agent's brain (spec §2 row 19).
+  if (CLIENT_MODE) return;
   if (LESSON_POLL) clearTimeout(LESSON_POLL);
   let tries = 0;
   const poll = async () => {
@@ -7057,9 +7246,12 @@ if (document.documentElement.classList.contains("headless")) {
 function openDrawer(id) { document.getElementById(id).classList.add("on"); }
 function closeDrawer(id) { document.getElementById(id).classList.remove("on"); }
 
-document.getElementById("openAgentsBtn").addEventListener("click", () => { clearAssignAgent(); openDrawer("agentsDrawerOverlay"); });
-document.getElementById("agentsDrawerClose").addEventListener("click", () => { closeDrawer("agentsDrawerOverlay"); clearAssignAgent(); });
-document.getElementById("agentsDrawerOverlay").addEventListener("click", (e) => {
+// Owner-only chrome: CLIENT_MODE removes these nodes at boot, so every
+// binding below is null-guarded. In owner mode each id always resolves, so
+// the behaviour is unchanged.
+document.getElementById("openAgentsBtn")?.addEventListener("click", () => { clearAssignAgent(); openDrawer("agentsDrawerOverlay"); });
+document.getElementById("agentsDrawerClose")?.addEventListener("click", () => { closeDrawer("agentsDrawerOverlay"); clearAssignAgent(); });
+document.getElementById("agentsDrawerOverlay")?.addEventListener("click", (e) => {
   if (e.target.id === "agentsDrawerOverlay") { closeDrawer("agentsDrawerOverlay"); clearAssignAgent(); }
 });
 
@@ -7184,6 +7376,7 @@ function agentInstructionsMetaLabel(agent) {
 
 function renderAgents() {
   const el = document.getElementById("agentsList");
+  if (!el) return;   // owner-only drawer; removed at boot in CLIENT_MODE
   if (!AGENTS.length) {
     el.innerHTML = `<div class="empty">No agents yet. Add one to start drafting replies for a campaign.</div>`;
     return;
@@ -7266,11 +7459,11 @@ async function openShareTrainModal(agentId, btn) {
 function closeShareTrainModal() {
   document.getElementById("shareTrainModalOverlay").classList.remove("on");
 }
-document.getElementById("shareTrainCloseBtn").addEventListener("click", closeShareTrainModal);
-document.getElementById("shareTrainModalOverlay").addEventListener("click", (e) => {
+document.getElementById("shareTrainCloseBtn")?.addEventListener("click", closeShareTrainModal);
+document.getElementById("shareTrainModalOverlay")?.addEventListener("click", (e) => {
   if (e.target.id === "shareTrainModalOverlay") closeShareTrainModal();
 });
-document.getElementById("shareTrainCopyBtn").addEventListener("click", async () => {
+document.getElementById("shareTrainCopyBtn")?.addEventListener("click", async () => {
   const urlInput = document.getElementById("shareTrainUrl");
   const url = urlInput.value.trim();
   if (!url) return;
@@ -7440,14 +7633,14 @@ function showAgentModalErr(msg) {
   el.textContent = msg; el.style.display = "block";
 }
 
-document.getElementById("newAgentBtn").addEventListener("click", () => openAgentModal(null));
-document.getElementById("agentCancelBtn").addEventListener("click", closeAgentModal);
-document.getElementById("agentModalOverlay").addEventListener("click", (e) => {
+document.getElementById("newAgentBtn")?.addEventListener("click", () => openAgentModal(null));
+document.getElementById("agentCancelBtn")?.addEventListener("click", closeAgentModal);
+document.getElementById("agentModalOverlay")?.addEventListener("click", (e) => {
   if (e.target.id === "agentModalOverlay") closeAgentModal();
 });
 
 let agentSaveArmed = false;
-document.getElementById("agentSaveBtn").addEventListener("click", async () => {
+document.getElementById("agentSaveBtn")?.addEventListener("click", async () => {
   const name = document.getElementById("agName").value.trim();
   if (!name) { showAgentModalErr("Give the agent a name."); return; }
   // Switching an agent INTO Autopilot mode gets the same deliberate two-click
@@ -7523,7 +7716,7 @@ function showWebhookWarnings(webhooks) {
   el.style.display = "block";
 }
 
-document.getElementById("agentDeleteBtn").addEventListener("click", async () => {
+document.getElementById("agentDeleteBtn")?.addEventListener("click", async () => {
   if (!editingAgentId) return;
   const btn = document.getElementById("agentDeleteBtn");
   const restore = busyBtn(btn, "Deleting…");
@@ -7561,11 +7754,11 @@ function showTeachAgentErr(msg) {
   el.textContent = msg; el.style.display = "block";
 }
 
-document.getElementById("teachAgentCancelBtn").addEventListener("click", closeTeachAgentModal);
-document.getElementById("teachAgentModalOverlay").addEventListener("click", (e) => {
+document.getElementById("teachAgentCancelBtn")?.addEventListener("click", closeTeachAgentModal);
+document.getElementById("teachAgentModalOverlay")?.addEventListener("click", (e) => {
   if (e.target.id === "teachAgentModalOverlay") closeTeachAgentModal();
 });
-document.getElementById("teachAgentSaveBtn").addEventListener("click", async () => {
+document.getElementById("teachAgentSaveBtn")?.addEventListener("click", async () => {
   const text = document.getElementById("teachAgentText").value.trim();
   if (!text) { showTeachAgentErr("Write what it should learn first."); return; }
   const btn = document.getElementById("teachAgentSaveBtn");
@@ -7588,6 +7781,7 @@ document.getElementById("teachAgentSaveBtn").addEventListener("click", async () 
    in code, no longer user-facing). */
 function renderSettings() {
   const el = document.getElementById("settingsBody");
+  if (!el) return;   // owner-only drawer; removed at boot in CLIENT_MODE
   const connected = !!SETTINGS.calendly_connected;
   el.innerHTML = `
     <div class="field">
@@ -7864,6 +8058,9 @@ document.addEventListener("click", (e) => {
    paths, so /api/setter/queue/locate falls back to the lead's latest row
    rather than a dead link. #uncategorised keeps its meaning untouched. */
 function permalinkFor(row) {
+  // A bare owner URL with no share= on it: it 404s for the recipient
+  // (spec §2 row 16). The #copyLinkBtn is already ternary-guarded on this.
+  if (CLIENT_MODE) return "";
   const email = String((row && row.lead_email) || "").trim().toLowerCase();
   if (!email) return "";
   const mid = String((row && (row.message_id || row.source_message_id)) || "").trim();
@@ -7922,12 +8119,17 @@ async function openPermalink() {
   // Stamp of the last completed sweep BEFORE this page kicks its own, so the
   // boot wait below can tell "finished" from "was already finished". Fired as
   // a promise, never awaited here - first paint must not wait on it.
-  const bootStampP = pollStamp().catch(() => null);
+  // The reply-sweep POST, its stamp read and the whole kick-then-report block
+  // below are ACCOUNT-WIDE (every client's inbox) and owner-only routes: they
+  // would 403-spam and leak our poll cadence (spec §2 row 25). A client's
+  // replies still arrive - the sweep runs on its own cron either way.
+  const bootStampP = CLIENT_MODE ? Promise.resolve(null) : pollStamp().catch(() => null);
   // Real-inbox freshness (owner ruling 2026-07-15): every page load STILL
   // kicks a reply-check automatically - it's just off the critical path now,
   // fire-and-forget, so it no longer blocks first paint. The delayed reload
   // picks up whatever the sweep queued (same 2.5s the manual button uses).
-  const kickP = fetchJson("/api/setter/poll", { method: "POST" });
+  const kickP = CLIENT_MODE ? Promise.resolve({ ok: false })
+                            : fetchJson("/api/setter/poll", { method: "POST" });
   await loadAgentsAndCampaigns();
   await loadQueue(queueP);
   // Chat permalinks (#/r/<email>[/<message_id>], 2026-08-09): a Slack card's
