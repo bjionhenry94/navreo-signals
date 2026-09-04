@@ -16387,12 +16387,13 @@ def _redraft_training_pool(agent_id: str) -> int:
         # know which card is under its eyes.
         in_round_raw = doc.get("client_round_ids")
         if in_round_raw is None:
-            if answers:
-                pool = []
-            else:
-                pool = [c for c in cases
-                        if not _is_case_answered(c.get("id"), answers)]
-                pool = pool[:TRAINING_REDRAFT_HORIZON]
+            # No round ids on record: redraft the unanswered head in position
+            # order. (The old 'answers present -> redraft nothing' guard
+            # protected a card under the client's eyes; the portal now pins
+            # the displayed card and refuses stale paints, so a sweep that
+            # does nothing only ever strands a hold - live-verify 2026-09-03.)
+            pool = [c for c in cases if not _is_case_answered(c.get("id"), answers)]
+            pool = pool[:TRAINING_REDRAFT_HORIZON]
         else:
             # PRIORITY, not exclusion (live-verify 2026-09-03): the client's
             # round ids used to be EXCLUDED as "under the client's eyes", but
@@ -18213,7 +18214,11 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
             # booking-link question is guaranteed - it leads the set so the
             # agent is wired before the first scenario is ever rated. Same
             # for a missing phone number, second.
-            _first_iv = not any((i or {}).get("answers") for i in (doc.get("interviews") or []) if isinstance(i, dict))
+            # "First interview" = no set has been ASKED yet (live-verify
+            # 2026-09-03: judging by answers re-pinned the booking question
+            # into a set prefetched while the intake's answers were still in
+            # flight - a reworded re-ask of what the trainer had just typed).
+            _first_iv = not any((i or {}).get("questions") for i in (doc.get("interviews") or []) if isinstance(i, dict))
             if _first_iv:
                 _pins = []
                 if not str(agent.get("booking_link") or "").strip() and not any("booking" in q.lower() for q in out):
