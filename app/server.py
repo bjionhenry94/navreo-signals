@@ -22528,20 +22528,97 @@ CAP_EXCLUDED_WORKSPACES = {"asteri"}
 
 # One profile per provider. Separate tiers, separate floors, separate parking
 # posture, separate crons — but ONE engine, so the two can never drift apart.
+# reduced_cap (owner ruling 2026-09-04, Confidence Grade Step 2): the cap the
+# engine drops a would-park domain to when the confidence grade is B (70-90%
+# sure it is below floor) — cap DOWN instead of parking to 0. Outlook -> its
+# lowest tier (1/day), Google -> 10, Maildoso -> 10 (below its flat 15). Only
+# grade A (>=90% sure) parks; C/D hold the domain's current cap.
 CAP_PROFILES = {
     "GOOGLE": {"account_type": "GMAIL", "tiers": GOOGLE_CAP_TIERS,
                "pause": GOOGLE_CAP_PAUSE, "min_sends": GOOGLE_CAP_MIN_SENDS,
-               "park_min_sends": GOOGLE_CAP_PARK_MIN_SENDS},
+               "park_min_sends": GOOGLE_CAP_PARK_MIN_SENDS, "reduced_cap": 10},
     "OUTLOOK": {"account_type": "OUTLOOK", "tiers": OUTLOOK_CAP_TIERS,
                 "pause": OUTLOOK_CAP_PAUSE, "min_sends": OUTLOOK_CAP_MIN_SENDS,
-                "park_min_sends": OUTLOOK_CAP_PARK_MIN_SENDS},
+                "park_min_sends": OUTLOOK_CAP_PARK_MIN_SENDS, "reduced_cap": 1},
     # Maildoso (owner ruling 2026-08-30): single flat tier 15 down to 0.4%,
     # park below 0.4%. No 20/day bump. Shares the engine's floors + park gate.
     "MAILDOSO": {"account_type": "SMTP", "tiers": MAILDOSO_CAP_TIERS,
                  "pause": MAILDOSO_CAP_PAUSE, "min_sends": MAILDOSO_CAP_MIN_SENDS,
                  "park_min_sends": MAILDOSO_CAP_PARK_MIN_SENDS,
-                 "host_contains": MAILDOSO_HOST_CONTAINS},
+                 "host_contains": MAILDOSO_HOST_CONTAINS, "reduced_cap": 10},
 }
+
+# ── Confidence grade (owner ruling 2026-09-04, Mailbox Confidence Grade Step 2)
+# The crude tier parks any domain below the lowest rate floor. But a reply rate
+# is a rare event: at ~590 Outlook sends/week a true-1% domain reads below 0.8%
+# about a quarter of the time, so the floor kept parking healthy domains on
+# unlucky weeks (62% of parks Aug 23–Sep 4 were on domains healthy over 30d).
+# The grade is the posterior probability the domain is TRULY below its floor,
+# given its trailing-30d sent/replies and an empirical-Bayes prior fit from that
+# provider+workspace's own domains. Only a domain we are >=90% sure about (grade
+# A) is parked; B is capped DOWN to reduced_cap; C/D hold current cap. Gated by
+# env CAP_GRADE_V1 (preview → arm), exactly like CAP_PARK_V2.
+CAP_GRADE_A = 0.90   # >= : park (7-day rest)
+CAP_GRADE_B = 0.70   # >= : cap down one tier, keep sending
+CAP_GRADE_C = 0.50   # >= : hold at current cap and watch; below = leave (noise)
+# Fallback priors (Beta a,b) per provider if a live empirical fit is degenerate
+# — fitted 2026-09-04 on domains with >=500 sends: Outlook 1.53%, Gmail 2.04%,
+# Maildoso 0.63% fleet means. The live per-workspace fit supersedes these.
+CAP_GRADE_FALLBACK_PRIOR = {"GOOGLE": (6.5, 313.0), "OUTLOOK": (5.06, 325.5),
+                            "MAILDOSO": (5.87, 924.2)}
+
+
+def _reg_incomplete_beta(a: float, b: float, x: float, steps: int = 1600) -> float:
+    """Regularized incomplete beta I_x(a,b) = P(Beta(a,b) <= x), by midpoint
+    integration — enough precision for a park/cap-down verdict and cheap at a
+    few hundred domains a run. Used as the posterior CDF at the floor."""
+    from math import lgamma, exp, log
+    if x <= 0:
+        return 0.0
+    if x >= 1:
+        return 1.0
+    lb = lgamma(a + b) - lgamma(a) - lgamma(b)
+    tot = 0.0
+    h = x / steps
+    for i in range(steps):
+        t = (i + 0.5) * h
+        tot += exp(lb + (a - 1) * log(t) + (b - 1) * log(1 - t)) * h
+    return 1.0 if tot > 1.0 else (0.0 if tot < 0 else tot)
+
+
+def _fit_beta_prior(rates: list, fallback: tuple):
+    """Empirical-Bayes Beta prior by method of moments over per-domain reply
+    fractions. Falls back to `fallback` when the sample is thin or degenerate
+    (a client with too few domains borrows the provider-global prior)."""
+    import statistics as _st
+    rs = [r for r in rates if r is not None and 0.0 <= r < 1.0]
+    if len(rs) < 8:
+        return fallback
+    m = _st.mean(rs)
+    v = _st.pvariance(rs)
+    if v <= 0 or m <= 0 or m >= 1:
+        return fallback
+    k = m * (1 - m) / v - 1
+    if k <= 1:
+        return fallback
+    a, b = m * k, (1 - m) * k
+    # Guard against an over-confident prior swamping real data: cap the prior's
+    # effective weight (a+b) at 400 sends, so any domain with real volume (500+)
+    # is judged mostly on its own data, and the prior only anchors thin samples.
+    if a + b > 400:
+        scale = 400.0 / (a + b)
+        a, b = a * scale, b * scale
+    return (a, b)
+
+
+def _cap_grade(sent: int, replies: int, floor_frac: float, prior: tuple):
+    """(letter, P) where P = posterior probability the domain's true reply rate
+    is below `floor_frac`, under Beta `prior` + observed (sent, replies)."""
+    a0, b0 = prior
+    P = _reg_incomplete_beta(a0 + replies, b0 + max(sent - replies, 0), floor_frac)
+    letter = "A" if P >= CAP_GRADE_A else "B" if P >= CAP_GRADE_B \
+        else "C" if P >= CAP_GRADE_C else "D"
+    return letter, round(P, 3)
 
 
 def _cap_for(reply_rate: float, prof: dict):
@@ -22636,6 +22713,24 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
         e["replies"] += int(s.get("replies_30d") or 0)
         e["boxes"].append(b)
 
+    # Confidence-grade priors (Step 2): an empirical-Bayes Beta prior per
+    # workspace, fit from this provider's own domains (>= min_sends), so a thin
+    # sample is shrunk toward its OWN fleet's mean (KRG Outlook runs ~0.8%,
+    # Navreo ~1.5% — one global prior would misjudge both). A workspace with too
+    # few domains borrows the provider-global fit, then the hardcoded fallback.
+    _grade_on = bool(os.environ.get("CAP_GRADE_V1"))
+    _floor_frac = prof["tiers"][-1][0] / 100.0
+    _ws_rates: dict = {}
+    _all_rates: list = []
+    for (_ws, _dom), _e in agg.items():
+        if _e["sent"] >= prof["min_sends"] and _e["sent"] > 0:
+            _fr = _e["replies"] / _e["sent"]
+            _ws_rates.setdefault(_ws, []).append(_fr)
+            _all_rates.append(_fr)
+    _fallback = CAP_GRADE_FALLBACK_PRIOR.get(provider, (5.0, 400.0))
+    _global_prior = _fit_beta_prior(_all_rates, _fallback)
+    _ws_prior = {w: _fit_beta_prior(rs, _global_prior) for w, rs in _ws_rates.items()}
+
     plan, skipped, changes = [], [], []
     for (ws, dom), e in sorted(agg.items()):
         rate = (e["replies"] * 100.0 / e["sent"]) if e["sent"] else 0.0
@@ -22657,6 +22752,37 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
             # report it and leave the domain exactly as it is.
             skipped.append({**row, "reason": "below lowest tier — left untouched"})
             continue
+        # Confidence grade (Step 2, owner ruling 2026-09-04): the crude tier
+        # above would PARK this domain (cap == pause) because its rate is below
+        # the lowest floor. A rate below floor on a small sample is usually
+        # noise, so park ONLY when we are >= 90% sure the TRUE rate is below
+        # floor (grade A); grade B/C/D are capped DOWN to reduced_cap and keep
+        # sending. The grade is recorded on every would-park row in preview so
+        # the plan is auditable; it only CHANGES the cap when CAP_GRADE_V1 is
+        # set (preview -> arm, exactly like CAP_PARK_V2). The 500-send park
+        # floor below still applies to a grade-A park, so a thin sample is never
+        # parked, grade or no grade.
+        if cap == prof.get("pause"):
+            _prior = _ws_prior.get(ws) or _global_prior
+            _letter, _P = _cap_grade(e["sent"], e["replies"], _floor_frac, _prior)
+            row["grade"], row["grade_p"] = _letter, _P
+            if _grade_on:
+                # A: >=90% sure below floor -> park (falls through to the park
+                #    floor + CAP_PARK_V2 gates below, same as before).
+                # B: 70-90% -> cap DOWN one tier (reduced_cap), keep sending.
+                # C/D: <70% -> HOLD; the dip is within noise, so leave the
+                #    domain's current cap untouched rather than throttle a
+                #    probably-healthy domain on one bad window.
+                if _letter == "B":
+                    cap = prof.get("reduced_cap", prof["tiers"][-1][1])
+                    row["grade_capdown"] = cap
+                    row["reason_grade"] = (f"grade B: P(below {_floor_frac * 100:.1f}%)"
+                                           f"={_P:.0%} — capped to {cap}/day, not parked")
+                elif _letter in ("C", "D"):
+                    skipped.append({**row, "reason": f"grade {_letter}: "
+                                    f"P(below {_floor_frac * 100:.1f}%)={_P:.0%} "
+                                    "— held at current cap, not parked"})
+                    continue
         # Park fair-chance floor (owner ruling 2026-08-22): a domain must have
         # SENT >= park_min_sends before it can be auto-parked. Under it, a park
         # verdict is withheld and the domain is left exactly as it is — a fresh
@@ -22691,10 +22817,16 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
                                 "from_cap": b.get("message_per_day"), "to_cap": cap})
 
     tiers = list(prof["tiers"]) + ([(0, prof["pause"])] if prof["pause"] is not None else [])
+    _graded = [r for r in (plan + skipped) if r.get("grade")]
     out = {"ok": True, "provider": provider, "mode": mode, "domains": len(plan),
            "skipped": skipped, "mailboxesToChange": len(changes), "plan": plan,
            "tierCount": {str(c): sum(1 for r in plan if r["new_cap"] == c)
-                         for _, c in tiers}}
+                         for _, c in tiers},
+           # Confidence-grade summary (Step 2): of the domains the crude tier
+           # would park, how many each grade — A parks, B/C/D cap down.
+           "gradeOn": _grade_on,
+           "gradeCount": {g: sum(1 for r in _graded if r.get("grade") == g)
+                          for g in ("A", "B", "C", "D")}}
     if mode != "apply" or not changes:
         return out
 
