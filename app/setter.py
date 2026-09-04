@@ -16445,6 +16445,8 @@ def _redraft_training_pool(agent_id: str) -> int:
                     c = futs[fut]
                     try:
                         fut.result()
+                        if c.get("taught_fact_missing"):
+                            continue  # stays stale on purpose (taught-fact freshness, 2026-09-03)
                         c["redrafted_at"] = stamp
                         updated += 1
                         _land_redraft(c)
@@ -16715,6 +16717,16 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         case["decision_reason"] = reason
         case["draft_html"] = draft_html
         case["updated_by_feedback"] = True
+        # TAUGHT-FACT FRESHNESS (live-verify 2026-09-03): a redraft that
+        # still fails a taught-fact lint (the taught price missing, a wiring
+        # admission, a bare figure) after its retries is NOT fresh - the
+        # manual's old posture usually beats the digest until the merge
+        # rewrites it. Flag it so the sweep leaves its stamp alone (it stays
+        # stale, the chain re-sweeps once the merge lands) and the portal
+        # never serves it as "drafted with what you taught".
+        case["taught_fact_missing"] = bool(
+            not lint_ok and re.search(r"instructions state a concrete figure|Never tell the lead a phone number|"
+                                      r"A bare figure", str(lint_reason or "")))
     except Exception:  # noqa: BLE001 - one bad case must never abort the whole retrain pass
         pass
 
@@ -17358,7 +17370,7 @@ def _training_retrain_worker(agent_id: str, redraft: bool = True):
                             # every card stale.
                             for cid in unanswered_ids:
                                 case = cases_by_id.get(cid)
-                                if isinstance(case, dict):
+                                if isinstance(case, dict) and not case.get("taught_fact_missing"):
                                     case["redrafted_at"] = _stamp
 
             # Lost-update protection: reload the doc fresh right before the
