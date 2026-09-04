@@ -22887,6 +22887,76 @@ def outlook_reply_caps(mode: str = "preview") -> dict:
     return provider_reply_caps("OUTLOOK", mode)
 
 
+_GRADES_CACHE = {"data": None, "ts": 0.0}
+_GRADES_TTL_S = 600
+
+
+def _health_letter(p_healthy: float) -> str:
+    """A-E domain-health grade from P(true reply rate at/above floor). A is the
+    healthiest, E the least healthy — and the bands line up with the cap
+    engine's action: A/B/C keep sending, D caps down, E parks."""
+    return ("A" if p_healthy >= 0.90 else "B" if p_healthy >= 0.50
+            else "C" if p_healthy >= 0.30 else "D" if p_healthy >= 0.10 else "E")
+
+
+def grades_get(force: bool = False) -> tuple[dict, int]:
+    """An A-E health grade for every sending domain, for the Inbox & Domain
+    Manager. A = clearly healthy, E = confidently below its reply floor. Built
+    from the SAME posterior + per-provider/workspace prior the cap engine grades
+    on, so the letter agrees with the park/cap-down/hold action the engine takes
+    (A/B/C keep sending, D caps down, E parks). Runs the three providers' preview
+    (nothing is written), keyed by domain. Cached 10 min — the preview reads the
+    whole mirror per provider, so it is not recomputed on every hub paint."""
+    from datetime import datetime, timezone
+    ent = _GRADES_CACHE
+    if not force and ent["data"] and (time.time() - ent["ts"]) < _GRADES_TTL_S:
+        return ent["data"], 200
+    grades: dict = {}
+    errs: dict = {}
+    for prov in ("OUTLOOK", "GOOGLE", "MAILDOSO"):
+        prof = CAP_PROFILES.get(prov) or {}
+        try:
+            r = provider_reply_caps(prov, "preview")
+        except Exception as e:  # noqa: BLE001 — one provider must not void the rest
+            errs[prov] = str(e)[:160]
+            continue
+        rows = (r.get("plan") or []) + (r.get("skipped") or [])
+        floor = (prof.get("tiers") or ((0.7, 0),))[-1][0] / 100.0
+        min_sends = prof.get("min_sends") or 300
+        # Same empirical-Bayes prior the engine uses, refit from this preview's
+        # own rows (per workspace, provider-global fallback).
+        ws_rates: dict = {}
+        allr: list = []
+        for row in rows:
+            s = row.get("sent_30d") or 0
+            if s >= min_sends:
+                fr = (row.get("replies_30d") or 0) / s
+                ws_rates.setdefault(row.get("workspace") or "navreo", []).append(fr)
+                allr.append(fr)
+        fb = CAP_GRADE_FALLBACK_PRIOR.get(prov, (5.0, 400.0))
+        gp = _fit_beta_prior(allr, fb)
+        wp = {w: _fit_beta_prior(rs, gp) for w, rs in ws_rates.items()}
+        for row in rows:
+            s = int(row.get("sent_30d") or 0)
+            if s <= 0:
+                continue  # no 30-day sends -> no grade (shows blank in the UI)
+            rep = int(row.get("replies_30d") or 0)
+            a0, b0 = wp.get(row.get("workspace") or "navreo") or gp
+            # P(healthy) = P(true rate >= floor); steps=800 is plenty for a badge.
+            p_h = 1.0 - _reg_incomplete_beta(a0 + rep, b0 + max(s - rep, 0), floor, 800)
+            g = _health_letter(p_h)
+            grades[str(row.get("domain") or "").lower()] = {
+                "grade": g, "p_healthy": round(p_h, 3),
+                "action": "park" if g == "E" else "cap_down" if g == "D" else "keep",
+                "reply_rate": row.get("reply_rate"), "sent_30d": s,
+                "workspace": row.get("workspace"), "provider": prov}
+    out = {"ok": True, "gradeOn": bool(os.environ.get("CAP_GRADE_V1")),
+           "grades": grades, "errors": errs, "count": len(grades),
+           "generated_at": datetime.now(timezone.utc).isoformat()}
+    _GRADES_CACHE.update(data=out, ts=time.time())
+    return out, 200
+
+
 def maildoso_reply_caps(mode: str = "preview") -> dict:
     """Maildoso SMTP boxes: flat 15/day down to 0.4%, park below 0.4% (owner
     ruling 2026-08-30, supersedes the 20/15/park-below-0.5% tiering of
@@ -26108,6 +26178,14 @@ class Handler(SimpleHTTPRequestHandler):
                 days = PARK_CHURN_DAYS
             force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
             body, status = park_churn_get(days=days, force=force)
+            return self._json(body, status)
+        if path == "/api/deliverability/grades":
+            # Per-domain confidence grade (A park / B cap-down / C-D hold) for
+            # the manager's floor view — the same grade the cap engine applies.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            force = (q.get("refresh") or ["0"])[0] in ("1", "true", "yes")
+            body, status = grades_get(force=force)
             return self._json(body, status)
         if path == "/api/cron/rest-enforce":
             # Manual/preview entry for rest enforcement (the daily apply rides
