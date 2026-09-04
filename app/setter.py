@@ -7326,6 +7326,7 @@ CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greensh
 # in one place).
 FLIP_NAME_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared)
+    "kedia": "C0C0J298KCY",    # #kedia-navreo (client-shared, onboarded 2026-09-04)
 }
 
 # A FRESH positive on a navreo-hosted client campaign has no path to that
@@ -7338,6 +7339,7 @@ FLIP_NAME_CHANNELS = {
 # #revive-navreo (Bjion 2026-09-02, "positives -> shared channel").
 POSITIVE_SHARED_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared, Slack Connect)
+    "kedia": "C0C0J298KCY",    # #kedia-navreo (client-shared, Slack Connect)
 }
 
 # A "positive-re-reply" row is routeB's label for "an already-positive lead
