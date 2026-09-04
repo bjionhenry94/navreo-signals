@@ -10458,7 +10458,7 @@ def _collapse_threads(rows: list) -> list:
 # exists), so the collapse is computed from one light all-status fetch and
 # the winning ids filter each pill's full fetch. Same TTL-dict pattern as
 # _POLL_TS_CACHE; _bust_read_caches clears it on mutations.
-_REP_IDS_TTL = 10.0
+_REP_IDS_TTL = 30.0   # was 10: _bust_read_caches clears it on local mutations; cross-instance intake lands within the 5-min poll anyway (egress audit 2026-09-03)
 _REP_IDS_CACHE = {"at": 0.0, "val": None}
 
 
