@@ -68,13 +68,22 @@ class SupabaseUnavailable(RuntimeError):
     every row. Surfaced to the UI by do_POST as a plain 'try again' message."""
 
 
-def _pg_docs(table: str, only_doc: bool = False, strict: bool = False) -> list | None:
+def _pg_docs(table: str, only_doc: bool = False, strict: bool = False,
+             meta_view: str | None = None) -> list | None:
     """All doc payloads from a jsonb-doc table. A non-list means Supabase was
     unreachable: read-only callers get None (and fall back to the frozen JSON
     file); write callers pass strict=True and get a SupabaseUnavailable raise so
-    they abort rather than persist an empty snapshot."""
+    they abort rather than persist an empty snapshot.
+    meta_view: read this view instead (e.g. `sources_meta` = doc minus the
+    `prospects` arrays, 391 KB vs 31 MB - egress audit 2026-09-03) for callers
+    that never touch prospects; falls back to the base table if the view is
+    missing or errors, so a deploy ahead of the migration still works."""
     q = f"{table}?select=doc" + ("&doc=not.is.null" if only_doc else "")
-    rows = sb("GET", q)
+    rows = None
+    if meta_view:
+        rows = sb("GET", f"{meta_view}?select=doc" + ("&doc=not.is.null" if only_doc else ""))
+    if not isinstance(rows, list):
+        rows = sb("GET", q)
     if not isinstance(rows, list):
         if strict:
             raise SupabaseUnavailable(
@@ -221,7 +230,14 @@ def http_json(method: str, url: str, headers: dict, body: dict | None = None, ti
     )
     try:
         with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
-            raw = resp.read().decode()
+            raw = resp.read()
+            # Egress audit 2026-09-03: sb() now asks for gzip (Supabase egress
+            # is billed on the bytes that leave, and urllib never negotiates
+            # compression on its own - every response was paid at full size).
+            if (resp.headers.get("Content-Encoding") or "").lower() == "gzip":
+                import gzip as _gzip
+                raw = _gzip.decompress(raw)
+            raw = raw.decode()
             # A 2xx with an empty body (PostgREST `return=minimal`, HTTP 204) is
             # SUCCESS, not a failure — returning {} here stops sb() from mis-reading
             # it as a JSONDecodeError and firing a pointless retry. Under load
@@ -660,7 +676,9 @@ def sb(method: str, path: str, body=None, prefer: str = "", headers: dict | None
         try:
             return http_json(method, f"{url}/rest/v1/{path}",
                              {"apikey": key, "Authorization": f"Bearer {key}",
-                              "Prefer": prefer or "return=minimal", **(headers or {})}, body,
+                              "Prefer": prefer or "return=minimal",
+                              "Accept-Encoding": "gzip",   # http_json decompresses; ~5-8x fewer egress bytes
+                              **(headers or {})}, body,
                              timeout=_SB_TIMEOUT_S)
         except Exception as e:  # noqa: BLE001
             last_exc = e
@@ -2935,11 +2953,11 @@ _POOL_PULLS_SWR = _SWRCache(
     name="pool-pulls")
 
 
-_SOURCES_TTL_S = 30
+_SOURCES_TTL_S = 120  # was 30; every write path mark_stale()s this, so only the idle refresh cadence changed (egress audit 2026-09-03)
 
 
 def _compute_sources_full() -> tuple:
-    docs = _pg_docs("sources")
+    docs = _pg_docs("sources", meta_view="sources_meta")   # prospects stripped below anyway
     fetch_failed = docs is None
     drafts = docs if docs is not None else _file_list(DRAFTS)
     result = sources_for_ui(drafts)
@@ -3022,7 +3040,8 @@ def read_drafts(strict: bool = False) -> list:
     return r if r is not None else _file_list(DRAFTS)
 
 
-_DRAFTS_READ_TTL_S = 30  # /api/leads[-batch] call read_drafts() just to map campaign_id -> source
+_DRAFTS_READ_TTL_S = 120  # was 30 - this one still carries full prospects (~31 MB raw); write paths mark_stale() it.
+                          # /api/leads[-batch] call read_drafts() just to map campaign_id -> source
                           # ids/prospects - a single Supabase GET fetching every source's full doc
                           # (prospects arrays included). That read is the actual cost behind "an
                           # invalid campaign_id still burns 3-5s" (the expensive part runs before
@@ -3333,7 +3352,7 @@ def _compute_lead_counts() -> dict:
     campaigns; {campaign_id: {leads, sent}}."""
     # Mirror read_drafts() but keep the Supabase failure visible: an outage must
     # come back as _degraded, not as "zero leads on every campaign".
-    docs = _pg_docs("sources")
+    docs = _pg_docs("sources", meta_view="sources_meta")   # only id + campaign_id are read
     drafts = docs if docs is not None else _file_list(DRAFTS)
     by_src = {str(d["id"]): str(d.get("campaign_id"))
               for d in drafts if d.get("id") and d.get("campaign_id")}
@@ -26945,7 +26964,7 @@ def _boot_ledger_start():
     def _heartbeat():
         from datetime import datetime, timezone
         while _BOOT_LEDGER_ID[0] is not None:
-            time.sleep(60)
+            time.sleep(300)   # was 60: restart-vs-crash attribution needs minutes, not seconds (1,440 -> 288 writes/day)
             try:
                 sb("PATCH", f"server_boot_ledger?id=eq.{_BOOT_LEDGER_ID[0]}",
                    {"last_seen_at": datetime.now(timezone.utc).isoformat()})
