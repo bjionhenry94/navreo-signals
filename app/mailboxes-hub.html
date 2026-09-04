@@ -18,6 +18,17 @@
    /api/tag-performance (tag table). Every section degrades to a representative
    placeholder if its endpoint is empty/unreachable, so the page never blanks. */
 .mbx-head{max-width:1240px;padding:8px 0 4px}
+/* Confidence-grade badge (A healthiest … E least healthy), shown left of the
+   domain in the manager tables. Colours ramp green → red with the grade. */
+.grade-badge{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:5px;font:600 11px/1 var(--mono,"JetBrains Mono",monospace);margin-right:9px;vertical-align:middle;flex:0 0 auto;cursor:default}
+.grade-badge.gr-A{background:#D6EBDD;color:#14512F}
+.grade-badge.gr-B{background:#E8F0D2;color:#47570F}
+.grade-badge.gr-C{background:#F8EAC4;color:#6B4A00}
+.grade-badge.gr-D{background:#F6DFC9;color:#8A3D0E}
+.grade-badge.gr-E{background:#F7DCD5;color:#861E10}
+.grade-badge.gr-x{background:#F2F2F0;color:#8A857D}
+.grade-legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.grade-legend .gi{display:inline-flex;align-items:center;gap:6px}
 .mbx-head h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
 .mbx-head .sub{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
 .hub{max-width:1240px}
@@ -198,7 +209,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // win: heat-map range. Default 1 = the last-24h snapshot (real-time, owner
   // 2026-08-28). 24H reads the most recent day of the day-wise series client-
   // side (see winData) — the sample fallback is never the default view.
-  var S = { client: "All", win: 1, deliv: null, cw: null, tags: null, labels: {}, vol: {} };
+  var S = { client: "All", win: 1, deliv: null, cw: null, tags: null, labels: {}, vol: {}, grades: null };
   try { var v = localStorage.getItem(LS); if (v) S.client = v; } catch (e) {}
 
   /* ---------- helpers ---------- */
@@ -916,6 +927,25 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       (foot ? '<div style="padding:11px 16px;font-size:11.5px;color:var(--ink-3)">' + foot + '</div>' : '');
   }
   function pill(cls, txt) { return '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(txt) + '</span>'; }
+  // Confidence-grade badge for a domain: A (healthiest) → E (confidently below
+  // floor). Reads the /api/deliverability/grades map (same grade the cap engine
+  // acts on). Blank while the map is still loading; a muted "–" once loaded if
+  // the domain has no 30-day sends to grade.
+  function gradeBadge(dom) {
+    if (!S.grades || !S.grades.grades) return '';
+    var g = S.grades.grades[String(dom || "").toLowerCase()];
+    if (!g || !g.grade) return '<span class="grade-badge gr-x" title="Not graded — no sends in the last 30 days">–</span>';
+    var pct = (g.p_healthy != null) ? Math.round(g.p_healthy * 100) + '% likely healthy' : '';
+    var act = g.action === 'park' ? 'rests' : g.action === 'cap_down' ? 'capped down' : 'keeps sending';
+    return '<span class="grade-badge gr-' + esc(g.grade) + '" title="Grade ' + esc(g.grade) + (pct ? ' · ' + pct : '') + ' · ' + act + '">' + esc(g.grade) + '</span>';
+  }
+  function gradeLegend() {
+    if (!S.grades || !S.grades.grades) return '';
+    var items = [["A", "healthy"], ["B", "likely healthy"], ["C", "watch"], ["D", "cap down"], ["E", "rest"]];
+    return '<div class="grade-legend"><span class="t-mut">Grade:</span>' + items.map(function (i) {
+      return '<span class="gi"><span class="grade-badge gr-' + i[0] + '">' + i[0] + '</span>' + i[1] + '</span>';
+    }).join("") + '</div>';
+  }
   function actBtn(act, domain, id, label, primary) {
     var attrs = 'data-act="' + act + '"' + (domain != null ? ' data-domain="' + esc(domain) + '"' : '') + (id != null ? ' data-id="' + esc(id) + '"' : '');
     // Design-system button (navreo.css): .btn.sm base, .primary for the orange emphasis variant.
@@ -960,7 +990,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       // Every domain here has live sends below the floor (paused ones are filtered out
       // in floorList and live in the In warm-up tab), so the only action is Warm up.
       var action = actBtn("warmup", d.domain, null, "Warm up domain", true);
-      return '<tr><td class="mono">' + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+      return '<tr><td class="mono">' + gradeBadge(d.domain) + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + comma(d.sent) + '</td>' +
         '<td class="num">' + comma(d.lead || 0) + '</td>' +
         '<td class="num t-r">' + (d.reply_rate).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
@@ -969,7 +999,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         '<td style="text-align:right">' + action + '</td></tr>';
     }).join("");
     var spF = domSpread(rows);
-    return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Leads</th><th class="num">Reply rate</th><th class="num">Positive</th><th class="num">Bounce</th><th style="text-align:right">Action</th>', body, null,
+    return gradeLegend() + tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Leads</th><th class="num">Reply rate</th><th class="num">Positive</th><th class="num">Bounce</th><th style="text-align:right">Action</th>', body, null,
       rows.length + ' row(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) across ' + spF.domains + ' domain(s)' +
       (spF.dupes ? ' · ' + spF.dupes + ' domain(s) send from two workspaces' : '') +
       ' · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + MGR_WIN + ' days. One button rests every mailbox on the domain.');
@@ -1489,6 +1519,16 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       .catch(function () { if (pcTries < 8) { pcTries++; setTimeout(loadParkChurn, 3000); } });
   }
 
+  // Confidence grades (A healthiest … E least healthy) — the same grade the cap
+  // engine acts on, one map keyed by domain. Loads after paint and re-renders
+  // the manager so the badges fill in; the tables never block on it.
+  function loadGrades() {
+    return fetch("/api/deliverability/grades", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.ok && j.grades) { S.grades = j; renderMgrTabs(); } })
+      .catch(function () { });
+  }
+
   // paint immediately with placeholders/representative, then fill as data lands
   hydrateMcmFromCache();   // apply last-known mailbox→client map instantly (before any fetch)
   renderChips(); renderAll();
@@ -1500,6 +1540,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   loadCap();
   loadWarmCap();
   loadParkChurn();
+  loadGrades();
 })();
 </script>
 </body>
