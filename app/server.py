@@ -24325,6 +24325,13 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
                      # are deliberately NOT public (owner-session only, via
                      # setter.POST_ROUTES; their share-token logic stays for
                      # a future re-opening).
+                     # Client setter share (setter-client-view): approve /
+                     # edit-save / no-follow-up / dismiss and Regenerate are
+                     # posted from the logged-out client page. The share=<token>
+                     # rides the QUERY STRING and is verified in the dispatch
+                     # below - a public POST with no valid token is 403'd
+                     # before the route ever runs.
+                     "/api/setter/queue/action", "/api/setter/queue/redraft",
                      "/api/trigify-webhook", "/api/qa-gate/runs"}
 
 # GET endpoints the public /app/setter-train.html share page calls WITHOUT a
@@ -24334,6 +24341,16 @@ _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email
 # whether do_GET's normal login gate is allowed to let the request through
 # at all. No session, no share -> still gated exactly as before.
 _TRAIN_SHARE_GET = {"/api/setter/training", "/api/setter/training/share-info"}
+
+# Same idea for the CLIENT share link (setter-client-view): the setter page and
+# the reads it makes load WITHOUT a login, but only when share=<token> rides
+# the URL. What the token actually buys is decided inside setter.py
+# (verify_client_share + setter.CLIENT_SHARE_GET + the per-client campaign
+# scope); this set only decides whether do_GET's login gate lets the request
+# reach it at all. No token -> gated exactly as before. /app/shell.js,
+# /app/navreo.css, /app/fonts/ and /app/icons/ are already public above, so
+# /app/setter.html is the only page that needs adding.
+_CLIENT_SHARE_GET = set(setter.CLIENT_SHARE_GET) | {"/app/setter.html"}
 
 
 def _auth_secret() -> bytes:
@@ -25177,6 +25194,10 @@ class Handler(SimpleHTTPRequestHandler):
         send_body = body
         self.send_response(200)
         self.send_header("Content-Type", ctype)
+        # A share token lives in the URL, so the page must never hand it to
+        # whatever a lead's reply links out to (setter-client-view risk #12).
+        if "share=" in self.path:
+            self.send_header("Referrer-Policy", "no-referrer")
         if etag:
             self.send_header("ETag", etag)
         if use_gzip:
@@ -25583,8 +25604,13 @@ class Handler(SimpleHTTPRequestHandler):
             # the token itself is verified inside the /api/report/data handler.
             _report_share = (path in ("/api/report/data", "/app/report.html")
                              and "share=" in self.path)
+            # Client setter share (setter-client-view): the setter page + the
+            # allowlisted reads load logged-out ONLY with a share= token; the
+            # token is verified (and the client scope applied) in the
+            # /api/setter/ dispatch below and inside setter.py's routes.
+            _client_share = (path in _CLIENT_SHARE_GET and "share=" in self.path)
             if not (path in _TRAIN_SHARE_GET and "share=" in self.path) \
-                    and not _strat_share and not _report_share:
+                    and not _strat_share and not _report_share and not _client_share:
                 if not self._gate(path):
                     return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
@@ -26345,29 +26371,51 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(data)
             return
         if path.startswith("/api/setter/"):
-            if path == "/api/setter/queue":
-                # Heavy full-hydrate corpus (~6MB): served via setter's memoized,
-                # single-flighted serialize/gzip so a boot burst can't peg the
-                # instance (see setter.queue_response). Bytes are pre-built.
-                from urllib.parse import parse_qs, urlparse
-                params = parse_qs(urlparse(self.path).query)
-                status, enc, body = setter.queue_response(params, self._accepts_gzip())
-                self.send_response(status)
-                self.send_header("Content-Type", "application/json")
-                self.send_header("Cache-Control", "no-store")
-                if enc:
-                    self.send_header("Content-Encoding", enc)
-                    self.send_header("Vary", "Accept-Encoding")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                if self.command != "HEAD":
-                    self.wfile.write(body)
-                return
-            fn = setter.GET_ROUTES.get(path)
-            if fn:
-                from urllib.parse import parse_qs, urlparse
-                status, body = fn(parse_qs(urlparse(self.path).query))
-                return self._json(body, status)
+            from urllib.parse import parse_qs, urlparse
+            params = parse_qs(urlparse(self.path).query)
+            # Client share link (setter-client-view): NO owner session plus a
+            # share=<token> means this request runs, for its whole lifetime,
+            # under exactly one client's campaign scope. An owner session
+            # ignores the parameter entirely, so the owner path is untouched.
+            # The scope is always cleared in the finally - a worker thread must
+            # never inherit it into the next request it serves.
+            # Keyed on the ROUTE, not merely on "a share= is present": the
+            # training-share routes carry their own (different) token family
+            # and must keep reaching route_training_get untouched. Every path
+            # in CLIENT_SHARE_GET is otherwise unreachable without a session,
+            # so requiring a valid CLIENT token here is fail-closed - a bad or
+            # missing one can never fall through to an unscoped read.
+            _share_tok = (params.get("share") or [""])[0]
+            _in_share = (not self._authed_email()) and path in setter.CLIENT_SHARE_GET
+            if _in_share:
+                gate = setter.client_share_enter(path, _share_tok)
+                if gate is not None:
+                    return self._json(gate[1], gate[0])
+            try:
+                if path == "/api/setter/queue":
+                    # Heavy full-hydrate corpus (~6MB): served via setter's memoized,
+                    # single-flighted serialize/gzip so a boot burst can't peg the
+                    # instance (see setter.queue_response). Bytes are pre-built.
+                    # (A share request bypasses that memo inside queue_response.)
+                    status, enc, body = setter.queue_response(params, self._accepts_gzip())
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Cache-Control", "no-store")
+                    if enc:
+                        self.send_header("Content-Encoding", enc)
+                        self.send_header("Vary", "Accept-Encoding")
+                    self.send_header("Content-Length", str(len(body)))
+                    self.end_headers()
+                    if self.command != "HEAD":
+                        self.wfile.write(body)
+                    return
+                fn = setter.GET_ROUTES.get(path)
+                if fn:
+                    status, body = fn(params)
+                    return self._json(setter.share_sanitise(body), status)
+            finally:
+                if _in_share:
+                    setter.client_share_clear()
         return self._serve_static()
 
     # POSTs that mutate NOTHING the UI caches read at request time — pure
@@ -27470,14 +27518,37 @@ class Handler(SimpleHTTPRequestHandler):
             # a bare JSON list) falls through to the route's own try/except
             # exactly as it did before this flag existed, instead of a raw
             # TypeError here.
+            # ___client_id is SERVER-SET or absent, full stop: strip whatever
+            # the body claimed before anything can read it (setter-client-view).
+            if isinstance(payload, dict):
+                payload.pop("___client_id", None)
+            _in_share = False
             if not self._authed_email() and isinstance(payload, dict):
                 payload["___public"] = True
+                # Client share link: the token rides the QUERY STRING (so the
+                # body shape is unchanged), and a public POST to one of the
+                # client-writable routes with NO valid token is 403'd here,
+                # before the route runs.
+                if path in setter.CLIENT_SHARE_POST:
+                    from urllib.parse import parse_qs as _pq, urlparse as _up
+                    _tok = (_pq(_up(self.path).query).get("share") or [""])[0]
+                    gate = setter.client_share_enter(path, _tok, write=True)
+                    if gate is not None:
+                        return self._json(gate[1], gate[0])
+                    _in_share = True
+                    payload["___client_id"] = setter._share_client()
             # The training share token is a bearer credential - never persist
             # it to the activity ledger, even truncated.
             log_payload = {k: v for k, v in payload.items() if k != "share"} \
                 if isinstance(payload, dict) else payload
             log_activity(path, log_payload, action=path.rsplit("/", 1)[-1], entity="setter")
-            status, body = setter_route(payload)
+            try:
+                status, body = setter_route(payload)
+                if _in_share:
+                    body = setter.share_sanitise(body)
+            finally:
+                if _in_share:
+                    setter.client_share_clear()
             return self._json(body, status)
         lists_route = LISTS_POST_ROUTES.get(path)
         if lists_route:

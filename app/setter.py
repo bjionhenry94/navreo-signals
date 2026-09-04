@@ -9411,6 +9411,11 @@ def route_subsequences_get(params):
         campaign_id = _qp(params, "campaign_id", "")
         if not campaign_id:
             return 400, {"error": "campaign_id is required"}
+        # This route takes a RAW campaign_id and had no scoping of its own
+        # (setter-client-view risk #8): a share may only ask about its own
+        # campaigns.
+        if not _scope_campaign_ok(campaign_id):
+            return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
         subs = _subsequences_for_campaign_cached(campaign_id)
         if subs is None:
             return 503, {"error": "Couldn't check this campaign's subsequences in Smartlead just now - please try again.", "retryable": True}
@@ -9659,7 +9664,10 @@ def route_subsequence_unresolved(_params):
         cols = ("id,lead_email,lead_first_name,lead_last_name,company_domain,reply_body,"
                 "sent_at,smartlead_campaign_id,subsequence_decision,added_to_subsequence,"
                 "category,message_id,source_message_id,workspace,agent_id")
-        rows = _SB("GET", f"{QUEUE_TABLE}?{_list_ws_filter()}&status=in.(sent,auto_sent)"
+        # The tray lists 14 days of SENT rows across the whole workspace
+        # filter - other clients' sends, with lead emails (setter-client-view
+        # risk #7). Scoped in the query and re-asserted in Python below.
+        rows = _SB("GET", f"{QUEUE_TABLE}?{_list_ws_filter()}{_scope_sql()}&status=in.(sent,auto_sent)"
                           f"&sent_at=gte.{quote(since, safe='')}&order=sent_at.desc&limit=200&select={cols}")
         if not isinstance(rows, list):
             # sb() answers None on a failed fetch (it is best-effort by
@@ -9682,7 +9690,7 @@ def route_subsequence_unresolved(_params):
         # fake thread.
         best, no_email = {}, []
         for r in rows:
-            if not isinstance(r, dict):
+            if not isinstance(r, dict) or not _scope_ok(r):
                 continue
             email = str(r.get("lead_email") or "").strip().lower()
             if not email:
@@ -9928,7 +9936,15 @@ def _campaigns_list_cached() -> list:
 
 def route_campaigns_get(_params):
     try:
-        return 200, _campaigns_list_cached()
+        out = _campaigns_list_cached()
+        ids = _share_scope()
+        if ids is not None:
+            # Campaign names carry client prefixes (setter-client-view risk
+            # #10), so the picker/name source is filtered to the token's own
+            # campaigns before it leaves the building.
+            out = [c for c in out
+                   if isinstance(c, dict) and str(c.get("id") or "") in ids]
+        return 200, out
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -10411,7 +10427,12 @@ def _reclassify_queue(rows: list, requested: str) -> list:
                 if inbound:
                     kept.append(r)
             else:  # sent / auto_sent: only answered rows routed to this pill
-                if not inbound and pill == requested:
+                # A client share folds auto_sent into sent (see _share_scrub),
+                # so ITS Sent pill keeps both pills' answered rows.
+                want = (("sent", "auto_sent")
+                        if (_share_scope() is not None and requested in ("sent", "auto_sent"))
+                        else (requested,))
+                if not inbound and pill in want:
                     kept.append(r)
         else:
             # already-stored rows for this pill (sent/auto_sent) pass through
@@ -10666,6 +10687,9 @@ _QUEUE_RESP_TTL = _ROWS_TTL    # align with the rows SWR window
 _QUEUE_RESP_MAX_STALE_S = 120.0
 # Single-flight for the rare non-needs_review pill builds (H7).
 _PILL_BUILD_LOCK = threading.Lock()
+# Share-link queue builds get their OWN bound so a client page can never pin
+# the owner's pill lock (and the owner path stays byte-identical).
+_SHARE_BUILD_LOCK = threading.Lock()
 
 
 def _rows_lock(key):
@@ -10723,7 +10747,11 @@ def _fetch_queue_rows(status: str, limit: int, before: str = None,
         # all-but-empty list, owner report 2026-08-30). Excluding test rows in
         # the query realigns the list with the count and frees the window for
         # real conversations. Training/QA rows live on their own surfaces.
-        base = (f"{_list_ws_filter()}&is_test=eq.false&order=created_at.desc&limit={limit}{cursor}"
+        # _scope_sql() is "" for an owner request, so this string stays
+        # byte-for-byte what it was; a client share ANDs its own campaign ids
+        # onto the workspace filter (setter-client-view).
+        base = (f"{_list_ws_filter()}&is_test=eq.false{_scope_sql()}"
+                f"&order=created_at.desc&limit={limit}{cursor}"
                 f"&select={QUEUE_LIST_COLUMNS}")
         # For the direction-aware pills (needs_review / sent / auto_sent) the
         # membership depends on who spoke last, computed at read time from
@@ -10747,7 +10775,12 @@ def _fetch_queue_rows(status: str, limit: int, before: str = None,
         # sent/auto_sent pills must also consider needs_review rows we've
         # already answered - one in.() query, not two serial round trips
         # (panel fix, #5: two calls also made the effective cap 2x limit).
-        if status in ("sent", "auto_sent"):
+        if _share_scope() is not None and status in ("sent", "auto_sent"):
+            # A client is never shown "auto-sent" as a state of its own (the
+            # response serves auto_sent as plain `sent`), so one Sent pill has
+            # to fetch BOTH stored states.
+            fetched = _one_fetch(f"{base}&status=in.(sent,auto_sent,needs_review)")
+        elif status in ("sent", "auto_sent"):
             fetched = _one_fetch(f"{base}&status=in.({status},needs_review)")
         elif status:
             fetched = _one_fetch(f"{base}&status=eq.{status}")
@@ -10778,7 +10811,10 @@ def _fetch_queue_rows(status: str, limit: int, before: str = None,
         if status in ("needs_review", "sent", "auto_sent"):
             rows = _reclassify_queue(rows, status)
         rows.sort(key=lambda r: (r or {}).get("created_at") or "", reverse=True)
-    out = [_annotate_queue_row(r) for r in rows if isinstance(r, dict)]
+    # Belt and braces: re-assert the share scope in Python, so a PostgREST
+    # filter typo is never the only thing between two clients.
+    out = [_annotate_queue_row(r) for r in rows
+           if isinstance(r, dict) and _scope_ok(r)]
     _attach_campaign_names(out)
     return (out, raw_len) if return_raw_count else out
 
@@ -10807,7 +10843,9 @@ def _queue_rows_cached(status: str, limit: int) -> list:
     # limit comes off the query string, so caching per-limit let any authed
     # client mint up to 500 permanent full-row-list entries — an OOM walk on
     # the 512MB box. Odd limits just fetch through.
-    if status != "needs_review" or limit != 200:
+    if status != "needs_review" or limit != 200 or _share_scope() is not None:
+        # A share request ALWAYS fetches through: _ROWS_CACHE is keyed
+        # (status, limit) only and holds the owner's whole corpus.
         rows = _fetch_queue_rows(status, limit)
         return [] if rows is None else rows
     key = (status, limit)
@@ -10998,6 +11036,11 @@ def route_queue_get(params):
         # the slim QUEUE_LIST_COLUMNS select never fetches `thread`, so list
         # and default responses are identical (threads come from
         # /api/setter/thread, cache-first).
+        if _share_scope() is not None:
+            # _compute_kpis() is ACCOUNT-WIDE (every client's counts) and
+            # _last_poll_done_at() is an internal sweep clock. Neither is a
+            # client's to see, and the client page renders neither.
+            return 200, {"rows": rows}
         return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -11131,6 +11174,27 @@ def queue_response(params, accept_gzip: bool):
         limit = max(1, min(int(_qp(params, "limit", "200") or 200), 500))
     except (ValueError, TypeError):
         limit = 200
+    if _share_scope() is not None:
+        # HIGHEST-SEVERITY guard (setter-client-view risk #1): _QUEUE_RESP_MEMO
+        # is keyed (status, limit) ONLY and holds the OWNER's full corpus - a
+        # client served off it would get every client's conversations verbatim.
+        # So a share request never reads it, never writes it, never persists
+        # it. Build fresh under a share-only lock (the owner's pill lock stays
+        # untouched) and scrub the body before it is serialized.
+        if not _SHARE_BUILD_LOCK.acquire(timeout=20.0):
+            return 503, None, json.dumps(
+                {"error": "That view is busy building - retry in a moment."}).encode()
+        try:
+            st, body = route_queue_get(params)
+        finally:
+            _SHARE_BUILD_LOCK.release()
+        raw = json.dumps(share_sanitise(body)).encode()
+        if st != 200:
+            return st, None, raw
+        gz = gzip.compress(raw, 1 if len(raw) > 262144 else 6)
+        if accept_gzip and len(raw) >= 512:
+            return 200, "gzip", gz
+        return 200, None, raw
     # Full-trim (owner ask 2026-07-29): only the UI's own shape
     # (needs_review, limit 200) is memoized — odd limits joined the pill path
     # 2026-08-01 so a query-string fan-out can't mint memo entries or pay the
@@ -11335,9 +11399,11 @@ def route_queue_row_get(params):
         if not qid:
             return 400, {"error": "id is required"}
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(str(qid), safe='')}"
-                          f"&{_list_ws_filter()}&select=*") if _SB else None
+                          f"&{_list_ws_filter()}{_scope_sql()}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
-        if not row:
+        # 404 (never 403) on an out-of-scope id: ids are sequential, so a
+        # distinguishable answer would let a share enumerate the whole table.
+        if not row or not _scope_ok(row):
             return 404, {"error": "Queue row not found."}
         return 200, {"row": _annotate_queue_row(row)}
     except Exception as e:  # noqa: BLE001
@@ -11362,15 +11428,18 @@ def route_queue_locate_get(params):
         if mid:
             rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=ilike.{quote(email, safe='')}"
                               f"&message_id=eq.{quote(mid, safe='')}"
-                              f"&{_list_ws_filter()}&select=*&limit=1")
+                              f"&{_list_ws_filter()}{_scope_sql()}&select=*&limit=1")
             row = rows[0] if isinstance(rows, list) and rows else None
         matched = "message_id" if row else "email"
         if not row:
             rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=ilike.{quote(email, safe='')}"
-                              f"&{_list_ws_filter()}&select=*"
+                              f"&{_list_ws_filter()}{_scope_sql()}&select=*"
                               f"&order=replied_at.desc.nullslast&limit=1")
             row = rows[0] if isinstance(rows, list) and rows else None
-        if not row:
+        # Any pasted prospect email used to resolve a full row from ANY client
+        # here (setter-client-view risk #2). Scoped in the query AND re-checked;
+        # 404 either way, so a miss and a wrong-client hit look identical.
+        if not row or not _scope_ok(row):
             return 404, {"error": "Conversation not found."}
         out = _annotate_queue_row(row)
         _attach_campaign_names([out])
@@ -11746,9 +11815,9 @@ def route_thread_get(params):
         # client-workspace conversation open (the 'history doesn't work on
         # client conversations' report).
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{_q(str(qid), safe='')}"
-                          f"&{_list_ws_filter()}&select=*") if _SB else None
+                          f"&{_list_ws_filter()}{_scope_sql()}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
-        if not row:
+        if not row or not _scope_ok(row):
             return 404, {"error": "Queue row not found."}
         if row.get("is_test"):
             return 200, {"thread": row.get("thread") or [], "refreshed": False, "cached": True}
@@ -11793,11 +11862,12 @@ def route_thread_batch_get(params):
         if not ids or not _SB:
             return 200, {"threads": {}}
         in_list = ",".join(quote(str(i), safe="") for i in ids)
-        rows = _SB("GET", f"{QUEUE_TABLE}?id=in.({in_list})&{_list_ws_filter()}&select=*")
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=in.({in_list})"
+                          f"&{_list_ws_filter()}{_scope_sql()}&select=*")
         out = {}
         if isinstance(rows, list):
             for r in rows:
-                if not isinstance(r, dict):
+                if not isinstance(r, dict) or not _scope_ok(r):
                     continue
                 stored = r.get("thread") or []
                 if not stored:
@@ -12581,10 +12651,10 @@ def route_lead_contact_get(params):
         if not qid:
             return 400, {"error": "id is required"}
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(str(qid), safe='')}"
-                          f"&{_list_ws_filter()}"
+                          f"&{_list_ws_filter()}{_scope_sql()}"
                           "&select=lead_email,is_test,smartlead_campaign_id,company_domain,workspace") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
-        if not row:
+        if not row or not _scope_ok(row):
             return 404, {"error": "Queue row not found."}
         email = (row.get("lead_email") or "").strip()
         campaign_id = row.get("smartlead_campaign_id")
@@ -12853,6 +12923,13 @@ def route_queue_action(payload):
         action = payload.get("action")
         if not qid or not action:
             return 400, {"error": "id and action are required"}
+        # Share links: prove the row is this client's BEFORE anything else.
+        # The async send wrapper below answers 202 and runs the real branch on
+        # a worker thread (which does not inherit the request's scope), so the
+        # check cannot live further down. 403 on a write outside scope.
+        denied = _share_guard_row(payload.get("id"), payload.get("identity"))
+        if denied:
+            return denied
         if action in ("send", "send_followup") and payload.get("async"):
             # Send-as-a-job (owner report 2026-07-28: "Couldn't send the reply:
             # Request failed (502)"). Same disease the redraft had: a send that
@@ -12885,7 +12962,8 @@ def route_queue_action(payload):
             # provisional entry.
             with _REDRAFT_JOBS_LOCK:
                 _redraft_jobs_gc()
-                _REDRAFT_JOBS[job_id] = {"state": "running", "at": _time.time()}
+                _REDRAFT_JOBS[job_id] = {"state": "running", "at": _time.time(),
+                                         "client": _share_client()}
             with _SEND_INFLIGHT_LOCK:
                 existing = _SEND_INFLIGHT.get(qid)
                 if existing is None:
@@ -12905,8 +12983,12 @@ def route_queue_action(payload):
                     # arriving between the two must find the finished job,
                     # never a gap that mints a second real send.
                     with _REDRAFT_JOBS_LOCK:
+                        # Carry the share stamp forward or the finished job
+                        # would be readable by any share (route_redraft_status).
+                        _owner = (_REDRAFT_JOBS.get(job_id) or {}).get("client")
                         _REDRAFT_JOBS[job_id] = {"state": "done" if status == 200 else "error",
-                                                 "status": status, "body": body, "at": _time.time()}
+                                                 "status": status, "body": body, "at": _time.time(),
+                                                 "client": _owner}
                 finally:
                     with _SEND_INFLIGHT_LOCK:
                         if _SEND_INFLIGHT.get(qid) == job_id:
@@ -13258,8 +13340,9 @@ def _redraft_job_worker(job_id: str, payload: dict):
         print(f"[setter] redraft job {job_id} crashed: {e}", file=sys.stderr)
     finally:
         with _REDRAFT_JOBS_LOCK:
+            _owner = (_REDRAFT_JOBS.get(job_id) or {}).get("client")
             _REDRAFT_JOBS[job_id] = {"state": state, "status": status, "body": body,
-                                     "at": _time.time()}
+                                     "at": _time.time(), "client": _owner}
 
 
 def route_redraft_status(params):
@@ -13276,6 +13359,11 @@ def route_redraft_status(params):
             job = _REDRAFT_JOBS.get(job_id)
         if not job:
             return 200, {"state": "unknown"}
+        # A job body carries the drafted reply. Job ids are random 16-hex, but
+        # a share is still pinned to the jobs IT started - an owner session
+        # (client None) still reads every job exactly as before.
+        if _share_scope() is not None and job.get("client") != _share_client():
+            return 200, {"state": "unknown"}
         if job.get("state") == "running":
             return 200, {"state": "running"}
         out = {"state": job.get("state"), "status": job.get("status")}
@@ -13291,6 +13379,9 @@ def route_queue_redraft(payload):
     it, behaviour is byte-for-byte what it always was, so older clients and
     every existing test are unaffected."""
     payload = payload or {}
+    denied = _share_guard_row(payload.get("id"), payload.get("identity"))   # same pre-check as the action route
+    if denied:
+        return denied
     if not payload.get("async"):
         return _redraft_sync(payload)
     if not payload.get("id"):
@@ -13298,7 +13389,8 @@ def route_queue_redraft(payload):
     job_id = uuid.uuid4().hex[:16]
     with _REDRAFT_JOBS_LOCK:
         _redraft_jobs_gc()
-        _REDRAFT_JOBS[job_id] = {"state": "running", "at": _time.time()}
+        _REDRAFT_JOBS[job_id] = {"state": "running", "at": _time.time(),
+                                 "client": _share_client()}
     threading.Thread(target=_redraft_job_worker, args=(job_id, payload),
                     daemon=True, name="setter-redraft").start()
     return 202, {"job_id": job_id, "state": "running"}
@@ -13986,6 +14078,357 @@ def verify_training_share(token: str):
 
 
 _SHARE_EXPIRED_MSG = "This training link has expired. Ask for a fresh one."
+
+
+# ── public CLIENT share links (setter-client-view, 2026-09-04) ───────────────
+# The owner mints a per-CLIENT link so a client can watch (and act on) their
+# OWN conversations in the setter without a Navreo login. Same stateless-HMAC
+# idiom as the training share directly above, one family apart: the payload
+# prefix ("client" vs "train") is the separator, so a client token can never
+# train an agent (verify_training_share refuses anything whose parts[0] is not
+# "train") and a training token can never read a queue. Identical secret,
+# expiry shape and never-raises contract.
+#
+# A client token only ever proves "this bearer may see client <client_id>'s own
+# conversations until <exp>". It carries no owner scope: every allowlisted read
+# and write is re-scoped, SERVER SIDE, to that client's own Smartlead campaign
+# ids - as a PostgREST filter beside the existing workspace filter AND as a
+# second assertion in Python, so a filter typo can never widen the scope.
+
+def mint_client_share(client_id: str, days: int = 90) -> str:
+    import base64
+    import hashlib
+    import hmac
+    import time
+    exp = int(time.time()) + max(1, int(days or 90)) * 86400
+    payload = f"client|{client_id}|{exp}".encode()
+    sig = hmac.new(_share_secret(), payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+def verify_client_share(token: str):
+    """The client_id a client share token is valid for, or None. Checks the
+    HMAC signature, the "client" prefix, and expiry - never raises, so a
+    malformed or tampered token is just treated as 'not valid' everywhere it
+    is used (exactly like verify_training_share)."""
+    import base64
+    import hashlib
+    import hmac
+    import time
+    try:
+        token = str(token or "")
+        if not token or "." not in token:
+            return None
+        b64, _sep, sig = token.rpartition(".")
+        payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        expect = hmac.new(_share_secret(), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expect, sig):
+            return None
+        parts = payload.decode(errors="replace").split("|")
+        if len(parts) != 3 or parts[0] != "client":
+            return None
+        _prefix, client_id, exp = parts
+        if not client_id or not exp.isdigit() or int(exp) < time.time():
+            return None
+        return client_id
+    except Exception:  # noqa: BLE001 - a bad token is just "not valid"
+        return None
+
+
+_CLIENT_SHARE_BAD_MSG = ("This link isn't valid any more. Ask your Navreo "
+                         "contact for a fresh one.")
+_CLIENT_SHARE_DENIED_MSG = "This link doesn't have access to that."
+
+# The ONLY routes a client share token can reach. Anything else is 403, even
+# with a perfectly valid token - fail-closed by construction, so a new setter
+# route is private until someone deliberately adds it here.
+CLIENT_SHARE_GET = frozenset({
+    "/api/setter/queue",                    # the LIST (scoped + memo-bypassed)
+    "/api/setter/queue/row",
+    "/api/setter/queue/locate",
+    "/api/setter/thread",
+    "/api/setter/thread/batch",
+    "/api/setter/lead-contact",
+    "/api/setter/campaigns",                # campaign NAMES, scoped subset
+    "/api/setter/subsequences",
+    "/api/setter/subsequence/unresolved",
+    "/api/setter/queue/redraft/status",
+})
+CLIENT_SHARE_POST = frozenset({
+    "/api/setter/queue/action",             # approve / edit-save / no-follow-up / dismiss
+    "/api/setter/queue/redraft",
+})
+
+# ── client_id -> the Smartlead campaign ids that client owns ────────────────
+# `client_id` is stamped onto a campaigns-unified Smartlead row from its
+# campaign_drafts doc, keyed `camp-sl-<smartlead_campaign_id>` (server.py's
+# _compute_campaigns_unified). We read the SAME join straight from
+# campaign_drafts rather than calling campaigns-unified: that compute fans out
+# a live Smartlead /campaigns read per enabled workspace, which is exactly the
+# per-request crawl a 512MB box cannot afford. One narrow jsonb-path select,
+# cached for _CLIENT_CAMPAIGNS_TTL, is ~a few KB.
+_CLIENT_CAMPAIGNS_TTL = 300.0
+_CLIENT_CAMPAIGNS_CACHE = {"at": 0.0, "map": None}
+_CLIENT_CAMPAIGNS_LOCK = threading.Lock()
+
+
+def _client_campaign_map(force: bool = False) -> dict:
+    """{client_id: frozenset(str(smartlead_campaign_id))}, cached. Returns the
+    last-good map (or {}) on any failure - NEVER a partial map cached as
+    truth, because a half-read here would silently shrink a client's scope."""
+    now = _time.time()
+    c = _CLIENT_CAMPAIGNS_CACHE
+    if not force and c["map"] is not None and (now - c["at"]) < _CLIENT_CAMPAIGNS_TTL:
+        return c["map"]
+    if not _SB:
+        return c["map"] or {}
+    with _CLIENT_CAMPAIGNS_LOCK:
+        # A peer may have rebuilt it while we waited on the lock.
+        if not force and c["map"] is not None and (_time.time() - c["at"]) < _CLIENT_CAMPAIGNS_TTL:
+            return c["map"]
+        rows = None
+        try:
+            # Narrow jsonb-path select (egress + memory): id + the three doc
+            # keys we need, not the whole draft doc (copy, prospects, ...).
+            rows = _SB("GET", "campaign_drafts?select=id,client_id:doc->>client_id,"
+                              "superseded_by:doc->>superseded_by,deleted_at:doc->>deleted_at")
+            if isinstance(rows, dict):   # PostgREST rejected the alias select
+                print("[setter] client-share draft select rejected - falling back to doc",
+                      file=sys.stderr)
+                rows = None
+            if rows is None:
+                docs = _SB("GET", "campaign_drafts?select=doc")
+                rows = [d.get("doc") for d in docs
+                        if isinstance(d, dict) and isinstance(d.get("doc"), dict)] \
+                    if isinstance(docs, list) else None
+        except Exception as e:  # noqa: BLE001 - an outage keeps the last-good map
+            print(f"[setter] client-share campaign map read failed: {e}", file=sys.stderr)
+            rows = None
+        if not isinstance(rows, list):
+            return c["map"] or {}
+        base = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            if r.get("superseded_by") or r.get("deleted_at"):
+                continue
+            cid = str(r.get("client_id") or "").strip()
+            key = str(r.get("id") or "")
+            if not cid or not key.startswith("camp-sl-"):
+                continue
+            plat = key[len("camp-sl-"):].strip()
+            if plat:
+                base.setdefault(cid.lower(), set()).add(plat)
+        # Parent hop: a reply can land on a SUBSEQUENCE campaign, which carries
+        # no draft doc of its own. Every campaign whose Smartlead parent is in
+        # a client's base set belongs to that client too - the same reason
+        # route_campaigns_get ships parent_id (owner report 2026-08-09).
+        try:
+            pmap = _parent_map()
+        except Exception:  # noqa: BLE001 - a Smartlead blip just means no children
+            pmap = {}
+        if isinstance(pmap, dict):
+            for child, parent in pmap.items():
+                p = str(parent)
+                for cid, ids in base.items():
+                    if p in ids:
+                        ids.add(str(child))
+        out = {k: frozenset(v) for k, v in base.items() if v}
+        c.update(at=_time.time(), map=out)
+        return out
+
+
+def _client_campaign_ids(client_id) -> frozenset:
+    """The Smartlead campaign ids `client_id` owns. An unknown client, an
+    empty result or an unreachable map all answer frozenset() - and every
+    caller treats that as FAIL CLOSED (403), never as 'no filter'."""
+    cid = str(client_id or "").strip().lower()
+    if not cid:
+        return frozenset()
+    try:
+        return _client_campaign_map().get(cid) or frozenset()
+    except Exception:  # noqa: BLE001
+        return frozenset()
+
+
+# ── per-request share scope (thread-local) ──────────────────────────────────
+# server.py enters the scope for one allowlisted request and always clears it
+# in a finally. Owner requests never enter it, so _share_scope() is None and
+# every filter/guard below is a no-op - the owner path stays byte-identical.
+# Background threads deliberately do NOT inherit the scope: an SWR rebuild or
+# a thread re-hydrate kicked off by a client request is an owner-scope refresh
+# of a row that was already proven in-scope.
+_SHARE_LOCAL = threading.local()
+
+
+def _share_scope():
+    return getattr(_SHARE_LOCAL, "ids", None)
+
+
+def _share_client():
+    return getattr(_SHARE_LOCAL, "client", None)
+
+
+def _scope_sql(prefix: str = "&") -> str:
+    """PostgREST fragment pinning a queue read to the share's campaign ids.
+    "" for an owner request. An empty scope emits a filter that matches
+    nothing rather than no filter at all."""
+    ids = _share_scope()
+    if ids is None:
+        return ""
+    # is_test rides along: the LIST already pins it, and pinning it HERE means
+    # every per-row share read/write inherits the same rule from one place.
+    if not ids:
+        return f"{prefix}smartlead_campaign_id=in.(0)&is_test=eq.false"
+    return (prefix + "smartlead_campaign_id=in.("
+            + ",".join(quote(str(i), safe="") for i in sorted(ids))
+            + ")&is_test=eq.false")
+
+
+def _scope_ok(row) -> bool:
+    """Belt-and-braces re-assertion in Python (the idiom
+    route_subsequence_unresolved already uses): a PostgREST filter typo must
+    never be the only thing standing between two clients."""
+    ids = _share_scope()
+    if ids is None:
+        return True
+    if not isinstance(row, dict) or row.get("is_test"):
+        return False
+    return str(row.get("smartlead_campaign_id") or "") in ids
+
+
+def _share_guard_row(qid, identity=None):
+    """None when the share may ACT on queue row `qid`, else the (403, body) the
+    caller must return. Owner requests are waved straight through. Read FIRST,
+    act second: the async send/redraft wrappers answer 202 before the handler
+    body ever loads a row, so the scope has to be proven up front.
+
+    `identity` is the reply's own {workspace, smartlead_campaign_id,
+    lead_email, message_id} the client sends alongside the id so a re-intake
+    id swap can still be acted on (see route_queue_action). It is CLIENT
+    SUPPLIED, so its campaign must clear the same scope check - both when the
+    id resolves and when it is the only thing left to go on."""
+    if _share_scope() is None:
+        return None
+    if not _SB:
+        return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+    ident_ok = (isinstance(identity, dict)
+                and _scope_campaign_ok(identity.get("smartlead_campaign_id")))
+    if isinstance(identity, dict) and not ident_ok:
+        return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+    try:
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(str(qid or ''), safe='')}"
+                          f"&{_list_ws_filter()}{_scope_sql()}"
+                          "&select=id,smartlead_campaign_id,is_test,workspace")
+    except Exception:  # noqa: BLE001 - a failed check is a REFUSED check
+        return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+    row = rows[0] if isinstance(rows, list) and rows else None
+    if row and _scope_ok(row):
+        return None
+    # The id missed (re-intake swap, or it was never ours). Only an identity
+    # that is itself in scope may carry the action.
+    if ident_ok:
+        return None
+    return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+
+
+def _scope_campaign_ok(campaign_id) -> bool:
+    ids = _share_scope()
+    if ids is None:
+        return True
+    return str(campaign_id or "") in ids
+
+
+# Keys a share response must NEVER carry. Everything here is either agent
+# brain (instructions echoed through a decision reason / LLM classification),
+# internal team text (the shared lead note), or a Navreo-internal verdict.
+# `guardrails` is not dropped outright - the draft UI needs two neutral facts
+# out of it - it is rebuilt from _SHARE_GUARDRAIL_KEEP below.
+_SHARE_STRIP_KEYS = frozenset({
+    "notes", "decision_reason", "classification",
+    "held_only_by_master_switch", "would_auto_send",
+    "qualified", "client", "instructions", "settings", "agent",
+})
+_SHARE_GUARDRAIL_KEEP = ("tz_confident", "slot_status", "slot_reason")
+
+
+def _share_scrub(obj):
+    """Recursively drop _SHARE_STRIP_KEYS, narrow `guardrails`, and serve
+    auto_sent rows as plain `sent` (a client is told the reply went out, never
+    that a machine sent it)."""
+    if isinstance(obj, list):
+        return [_share_scrub(v) for v in obj]
+    if not isinstance(obj, dict):
+        return obj
+    out = {}
+    for k, v in obj.items():
+        if k in _SHARE_STRIP_KEYS:
+            continue
+        if k == "guardrails":
+            g = v if isinstance(v, dict) else {}
+            out[k] = {kk: g[kk] for kk in _SHARE_GUARDRAIL_KEEP if kk in g}
+            continue
+        out[k] = _share_scrub(v)
+    if out.get("status") == "auto_sent" and "smartlead_campaign_id" in out:
+        out["status"] = "sent"
+    return out
+
+
+def share_sanitise(body):
+    """Applied by server.py to every share-path response body. A no-op for an
+    owner request."""
+    if _share_scope() is None:
+        return body
+    try:
+        return _share_scrub(body)
+    except Exception:  # noqa: BLE001 - a scrub failure must fail CLOSED
+        return {"error": _CLIENT_SHARE_DENIED_MSG}
+
+
+def client_share_enter(path: str, token: str, write: bool = False):
+    """Resolve a share= token for ONE request. Returns None when the request
+    may proceed (the thread-local scope is now set), else the (status, body)
+    the caller must return as-is. server.py always pairs this with
+    client_share_clear() in a finally."""
+    client_share_clear()
+    cid = verify_client_share(token)
+    if not cid:
+        return 403, {"error": _CLIENT_SHARE_BAD_MSG}
+    if path not in (CLIENT_SHARE_POST if write else CLIENT_SHARE_GET):
+        return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+    ids = _client_campaign_ids(cid)
+    if not ids:
+        # Unknown client, no campaigns stamped to it, or the map is
+        # unreachable: fail closed on EVERYTHING rather than fall through
+        # unscoped.
+        return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+    _SHARE_LOCAL.ids = ids
+    _SHARE_LOCAL.client = cid
+    return None
+
+
+def client_share_clear() -> None:
+    _SHARE_LOCAL.ids = None
+    _SHARE_LOCAL.client = None
+
+
+def _client_permalink(email: str, client_id: str, message_id: str = "") -> str:
+    """Sibling of _chat_permalink for a CLIENT share link: the same deep link,
+    with a freshly minted client token on the QUERY STRING - before the hash,
+    or the page's `new URLSearchParams(location.search)` at boot never sees it.
+    Deliberately wired to nothing yet (Slack alerts still use _chat_permalink);
+    it exists so the composer has one correct shape to call."""
+    email = (email or "").strip().lower()
+    cid = str(client_id or "").strip()
+    if not email or not cid:
+        return ""
+    url = (f"{DEFAULT_BASE_URL}/app/setter.html"
+           f"?share={quote(mint_client_share(cid), safe='')}"
+           f"#/r/{quote(email, safe='')}")
+    mid = str(message_id or "").strip()
+    if mid:
+        url += f"/{quote(mid, safe='')}"
+    return url
 
 
 def _resolve_share_scope(agent_id, share_token: str, public: bool = False):
@@ -18687,3 +19130,58 @@ POST_ROUTES = {
     "/api/setter/edit-lesson/undo": route_edit_lesson_undo,
     "/api/setter/lead-note": route_lead_note_post,
 }
+
+
+# ── CLI: mint a client share link ───────────────────────────────────────────
+#   python3 app/setter.py --mint-client-share <client_id> [days]
+# Prints the full URL a client opens. The token is signed with _share_secret(),
+# which derives from SUPABASE_SERVICE_ROLE_KEY - so the SAME key that is set on
+# Render must be in the environment (or ~/.navreo-keys.env) here, or the token
+# will not verify once it gets there. `client_id` is the campaigns-unified /
+# campaign_drafts client_id (the /api/clients row id): amplifyy, touchpoint,
+# arnic, navreo, ...
+def _cli_load_keys() -> dict:
+    """Same env-first, file-fallback shape as server.load_keys(), inlined so
+    this CLI never has to import server (which boots caches and warm-ups)."""
+    import pathlib
+    keys = {}
+    env_file = pathlib.Path.home() / ".navreo-keys.env"
+    try:
+        if env_file.exists():
+            for line in env_file.read_text().splitlines():
+                m = re.match(r"^(?:export\s+)?([A-Z0-9_]+)=(\S+)", line.strip())
+                if m:
+                    keys[m.group(1)] = m.group(2).strip("\"'")
+    except Exception:  # noqa: BLE001 - a missing/unreadable file just means env-only
+        pass
+    for k, v in os.environ.items():
+        if v and (k in keys or re.search(r"(_KEY|_TOKEN|_URL)$", k)):
+            keys[k] = v
+    return keys
+
+
+def _cli_main(argv) -> int:
+    if len(argv) < 2 or argv[0] != "--mint-client-share":
+        print("usage: python3 app/setter.py --mint-client-share <client_id> [days]",
+              file=sys.stderr)
+        return 2
+    client_id = argv[1].strip()
+    try:
+        days = int(argv[2]) if len(argv) > 2 else 90
+    except ValueError:
+        print("days must be a whole number of days", file=sys.stderr)
+        return 2
+    global _KEYS
+    _KEYS = _cli_load_keys()
+    if not _KEYS.get("SUPABASE_SERVICE_ROLE_KEY"):
+        print("SUPABASE_SERVICE_ROLE_KEY is not set - the token would not verify "
+              "on the server. Set it (env or ~/.navreo-keys.env) and re-run.",
+              file=sys.stderr)
+        return 1
+    token = mint_client_share(client_id, days)
+    print(f"{DEFAULT_BASE_URL}/app/setter.html?share={quote(token, safe='')}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_cli_main(sys.argv[1:]))
