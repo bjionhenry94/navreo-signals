@@ -301,7 +301,10 @@ window.addEventListener('hashchange',()=>{const r=runIdFromHash();if(r!==RUN_ID)
 // what stays GTME-only is the ACTIONS: the Build button and the share block
 // never render for a client. 'live' key kept for state compat; label = Launch.
 const TABS_ALL=[['tgt','Targeting'],['first','Icebreaker'],['copy','Copy'],['build','Preview'],['live','Launch']];
-const TABS=TABS_ALL;
+// A run may set hideLaunch:true to drop the Launch page entirely (e.g. a
+// client-facing preview that shouldn't show the build/launch step). TABS is
+// recomputed from RUN_META on each data load (see fetchRun).
+let TABS=TABS_ALL;
 const ICEB=[["Safe opener", true, "A polite, personal-feeling opening line that always works. Our best performer.", "Apologies if this isn't relevant, wasn't sure who at {company} was the best person for this."], ["Company detail", false, "References something specific we found about their company.", "Saw {company} covers three states now. Growth like that usually strains the pipeline side."], ["Colleague mention", false, "Names a colleague we found, only where we're confident it's right.", "I wasn't sure if you or {colleague} was the right person to ask at {company}."]];
 // Pre-launch checks live on the Live page (wizard-summary-restage, 2026-08-02):
 // third field = already done at this stage (1) vs happens before launch (0),
@@ -1139,7 +1142,9 @@ async function fetchRun(){
     if(fp===lastFP)return;
     const first=lastFP===null;
     IDEAS=ideas;client=run.client||run.clientLabel||client;SIG=run.signature||null;
-    RUN_META={checks:(run&&run.checks)||{},solo:!!(run&&run.solo)};
+    RUN_META={checks:(run&&run.checks)||{},solo:!!(run&&run.solo),hideLaunch:!!(run&&run.hideLaunch)};
+    TABS=RUN_META.hideLaunch?TABS_ALL.filter(t=>t[0]!=='live'):TABS_ALL;
+    if(RUN_META.hideLaunch&&tab==='live')tab='build';
     PEOPLE=run.people||{};COLLEAGUES=run.colleagues||{};
     if(active>=IDEAS.length)active=0;
     if(first)restoreView();
