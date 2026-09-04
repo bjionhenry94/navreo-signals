@@ -23764,7 +23764,22 @@ def api_restore_live(p: dict):
 # ============================================================================
 _AUTO_DOMAIN_FIRST_DELAY_S = 5 * 60
 _AUTO_DOMAIN_INTERVAL_S = 6 * 3600
-_AUTO_DOMAIN_MAILDOSO_FLOOR = 0.5   # mirrors deliverability-tab.js MAILDOSO_FLOOR
+# Owner ruling 2026-09-04 (Mailbox Confidence Grade plan, Step 1). The floor
+# sweep used to flag a domain that dipped below the cutoff on ANY of a 7/14/30-
+# day window — but a week of Outlook sends (~590) is far too small a sample to
+# judge a ~1% reply rate on, so the sweep kept parking domains that were healthy
+# over 30 days (62% of parks since 23 Aug were on domains at/above 0.8% on the
+# trailing 30 days). Step 1: judge on a SINGLE trailing-30-day window, align the
+# sweep's park floors to the in-tool cap engine (0.7% / Maildoso 0.4%, was
+# 0.8% / 0.5%), and raise the eligibility gate to 1,000 backend sends. The audit
+# backend's domain-health counts sent ~2.1x the mirror (rates match, only the
+# denominator is inflated), so 1,000 backend ~ 500 real sends — the fair-chance
+# floor the sweep was skipping. The sweep only ever REDUCES parking now; the cap
+# engine (provider_reply_caps) still tiers weak domains down on the same window.
+_AUTO_DOMAIN_WINDOWS = (30,)        # single trailing window; was (7, 14, 30)
+_AUTO_DOMAIN_CUTOFF = 0.7          # park floor, aligned to the cap engine (was blob 0.8)
+_AUTO_DOMAIN_PARK_MIN_SENT = 1000  # backend sends (~500 real after the 2.1x count)
+_AUTO_DOMAIN_MAILDOSO_FLOOR = 0.4   # aligned to MAILDOSO_CAP_TIERS park floor (was 0.5)
 _AUTO_DOMAIN_MAX_PARKS = 6          # per check; worst rates first, rest defer 6h
 _AUTO_DOMAIN = {"running": False, "last": None, "history": []}
 _AUTO_DOMAIN_LOCK = threading.Lock()
@@ -23807,12 +23822,16 @@ def _auto_domain_flagged():
     rows below the reply floor on >=minSent sends, minus anything already
     resting (backend resting map, live rest-due date, undismissed ledger row)
     and minus recently-restored domains (see _auto_domain_recent_restores).
-    Same dhFlag maths as the manager tab; the window union exists because a
-    slow bleed only crosses the send floor on the wider windows."""
+    Same dhFlag maths as the manager tab, but on a SINGLE trailing-30-day
+    window (owner ruling 2026-09-04) — the old 7/14/30 union crossed the floor
+    on a bad week and parked domains that were healthy over 30 days."""
     from datetime import date, timedelta
     blob_dh = ((_DELIV_AUDIT.get("blob") or {}).get("domainHealth") or {})
-    min_sent = int(blob_dh.get("minSent") or 500)
-    cutoff = float(blob_dh.get("cutoff") or 0.7)
+    # Park gate + floor are the sweep's own constants now, not the blob's
+    # display values — so the sweep parks only what the cap engine would, on a
+    # sample big enough to mean something. See _AUTO_DOMAIN_* above.
+    min_sent = _AUTO_DOMAIN_PARK_MIN_SENT
+    cutoff = _AUTO_DOMAIN_CUTOFF
     today = date.today()
     ledger = set()
     if not _deliv_mock_on():
@@ -23825,7 +23844,7 @@ def _auto_domain_flagged():
     recent = set() if _deliv_mock_on() else _auto_domain_recent_restores()
     mbx = {} if _deliv_mock_on() else (_restore_mailboxes() or {})
     flagged: dict = {}
-    for days in (7, 14, 30):
+    for days in _AUTO_DOMAIN_WINDOWS:
         dh = _deliv_backend_get(
             "domain-health?start=%s&end=%s&minSent=%s&cutoff=%s"
             % ((today - timedelta(days=days)).isoformat(), today.isoformat(),
@@ -23860,7 +23879,7 @@ def _auto_domain_flagged():
         try:
             fed = {"views": {}, "dh": {}}
             _deliv_merge_client_ws(fed)
-            for days in (7, 14, 30):
+            for days in _AUTO_DOMAIN_WINDOWS:
                 for d in (((fed.get("dh") or {}).get(str(days)) or {}).get("rows") or []):
                     dom = str(d.get("domain") or "").lower()
                     ws = d.get("workspace")
@@ -24011,6 +24030,12 @@ def api_domain_auto_status():
                 "running": _AUTO_DOMAIN["running"],
                 "first_delay_s": _AUTO_DOMAIN_FIRST_DELAY_S,
                 "interval_s": _AUTO_DOMAIN_INTERVAL_S,
+                # Operative park config (Step 1) — surfaced so a deploy can be
+                # verified live: window_days 30, cutoff 0.7, gate 1000, mdso 0.4.
+                "park_config": {"window_days": list(_AUTO_DOMAIN_WINDOWS),
+                                "cutoff": _AUTO_DOMAIN_CUTOFF,
+                                "park_min_sent": _AUTO_DOMAIN_PARK_MIN_SENT,
+                                "maildoso_floor": _AUTO_DOMAIN_MAILDOSO_FLOOR},
                 "last": _AUTO_DOMAIN["last"],
                 "history": _AUTO_DOMAIN["history"][:5]}, 200
 
