@@ -3377,6 +3377,10 @@ function renderInboxList() {
     el.innerHTML = html;
     el._lastHtml = html;
   }
+  // The client tour auto-runs from the render path (train's rule), so it
+  // starts the moment the first real reply lands and never over an empty
+  // list. No-op for the owner, and after the first completed run.
+  maybeStartTutorial();
   // One DELEGATED click listener for BOTH kinds of row (perf pass R2): local
   // queue rows open via selectRow, Smartlead-section hits via openSmartleadHit
   // (which routes in-setter hits back through selectRow itself). Bound once, so
@@ -4117,6 +4121,10 @@ function renderDetail(row) {
     }
   }
   updateApproveButton(row.id);
+  // Same auto-run hook as the list paint: a client who lands straight on a
+  // conversation (deep link, or a row auto-selected on load) still gets the
+  // tour on their first visit. No-op for the owner, and once it has run.
+  maybeStartTutorial();
 }
 
 /* "How this was decided" - content builder for the fixed lead-info sidebar
@@ -8102,6 +8110,294 @@ async function openPermalink() {
   selectRow(row.id);
   return true;
 }
+
+/* ══ First-visit tour (CLIENT_MODE only) ══════════════════════════════════
+   Mechanics reused verbatim from setter-train.html's tutorial: the same
+   {title, cta, body(), target()} step shape, the same renderTutStep() dim +
+   spotlight + one floating card, the same tutNext()/endTutorial(), and the
+   same .tut-dim / .tut-spot / .tut-card / .tc-* classes (copied into the
+   stylesheet above). One tour style in the product, not two.
+
+   Five stops walk a client from "a reply came in" to the one decision the
+   page actually needs from them. Stop 5 is BLOCKING: the follow-up choice is
+   the only thing standing between a draft and a sent email, so the tour waits
+   there until a chip is really chosen rather than narrating past it.
+
+   Copy law: client language throughout - never "queue", "subsequence",
+   "gate" or "agent". */
+const TUT_KEY = "setterTut:" + SHARE_TOKEN.slice(0, 24);
+let tutActive = false;
+let tutStep = 0;
+let tutRun = 0;                // generation: a deferred end must not close a LATER run
+let tutObserver = null;        // watches the reply pane during the blocking stop
+let tutRerenderTimer = null;
+let tutSpotEl = null;          // the node stop 5 last spotlit (identity check)
+
+/* The row the tour talks about. Stops 3-5 need one open; stop 2 only needs
+   one to exist. */
+function tutFirstRowId() {
+  const el = document.querySelector("#inboxList .inbox-item[data-id]");
+  return el ? el.getAttribute("data-id") : null;
+}
+function tutRowId() { return selectedRowId || tutFirstRowId(); }
+function tutGateEl() {
+  const id = tutRowId();
+  return id ? document.getElementById("gate-" + id) : null;
+}
+/* A gate with nothing but the dashed "None" chip = this campaign has no
+   follow-up sequences set up. Still blocking - "None" is a real decision -
+   but the sentence has to say so, or the stop reads as a broken step. */
+function tutGateNoneOnly() {
+  const g = tutGateEl();
+  return !!g && g.querySelectorAll(".sg-chip").length === 1 && !!g.querySelector(".sg-none");
+}
+/* Fail-open fallback: sendGateHtml returns "" for a row with no campaign, and
+   loadSendGate REMOVES the gate when the lookup fails (cached === "failed").
+   With no gate there is no decision to wait for, so stop 5 stops blocking and
+   re-anchors on Approve itself. */
+/* A choice is ALREADY made (a replay after the client picked a chip, or a
+   selection restored on a repaint). The stop still explains the rule, but it
+   has nothing left to wait for - so it renders as an ordinary "Got it" card
+   instead of flashing up and closing itself. */
+function tutGateChosen() {
+  const g = tutGateEl();
+  return !!g && !!g.querySelector(".sg-chip.on");
+}
+function tutGateMissing() {
+  const g = tutGateEl();
+  if (!g) return true;
+  // A gate still waiting on its chips is NOT missing - the chips arriving are
+  // themselves a mutation the observer below sees. Only an absent node is.
+  return false;
+}
+
+const TUT_STEPS = [
+  { title: "Welcome", cta: "Show me around", target: () => null,
+    body: () => "When someone replies to one of your campaigns, we write the reply for you — you read it, approve it, and we send it." },
+  { title: "Everyone who replied", cta: "Next", advanceOnRowClick: true,
+    target: () => document.querySelector("#inboxList .inbox-item"),
+    body: () => "Every person who has replied to you is listed here — newest first, and only your own campaigns." },
+  { title: "The whole conversation", cta: "Next", needsRow: true,
+    target: () => document.querySelector(".convo") || document.querySelector(".msg-card"),
+    body: () => "This is the whole email conversation, so you can see exactly what they said before you decide." },
+  { title: "The reply we wrote", cta: "Next", needsRow: true,
+    target: () => document.querySelector(".qc-draft"),
+    body: () => "This is the reply we've written in your voice — click straight into it and change any word you like before it goes." },
+  { title: "What happens next", needsRow: true, blocking: true,
+    cta: () => ((tutGateMissing() || tutGateChosen()) ? "Got it" : "Waiting for your choice…"),
+    target: () => tutGateEl()
+      || document.querySelector('.qc-send[data-id="' + (window.CSS && CSS.escape ? CSS.escape(String(tutRowId())) : tutRowId()) + '"]')
+      || document.querySelector(".qc-send"),
+    body: () => (tutGateMissing()
+      ? "Approve sends the reply — you'll see it in the conversation straight away."
+      : tutGateNoneOnly()
+        ? "This campaign has no follow-up sequences, so choose <b>None</b> — one reply, no chasing — and Approve unlocks."
+        : "Before this reply can go out, tell us what happens next: pick a follow-up sequence, or pick <b>None</b> if this person should just get this one reply — then Approve unlocks.") },
+];
+
+/* Auto-run guard, mirroring train's maybeStartTutorial: called from the RENDER
+   path (renderInboxList / renderDetail), so the tour starts the moment the
+   first real reply lands and never over an empty list. */
+function maybeStartTutorial() {
+  if (!CLIENT_MODE || tutActive) return;
+  if (!document.querySelector("#inboxList .inbox-item")) return;
+  let seen = null;
+  try { seen = localStorage.getItem(TUT_KEY); } catch { /* ignore */ }
+  if (!seen) startTutorial();
+}
+
+function startTutorial() {
+  if (!CLIENT_MODE || tutActive) return;
+  if (!document.querySelector("#inboxList .inbox-item")) return;
+  tutActive = true;
+  tutRun++;
+  tutStep = 0;
+  renderTutStep();
+}
+
+function endTutorial() {
+  tutActive = false;
+  clearTutDom();
+  // Written only here (and by "Skip the tour", which calls this): a
+  // half-finished tour re-offers itself on the next visit.
+  try { localStorage.setItem(TUT_KEY, "1"); } catch { /* ignore */ }
+}
+
+function clearTutDom() {
+  if (tutObserver) { tutObserver.disconnect(); tutObserver = null; }
+  if (tutRerenderTimer) { clearTimeout(tutRerenderTimer); tutRerenderTimer = null; }
+  tutSpotEl = null;
+  document.querySelectorAll(".tut-dim, .tut-card").forEach((n) => n.remove());
+  document.querySelectorAll(".tut-spot").forEach((n) => n.classList.remove("tut-spot"));
+}
+
+function tutNext() {
+  tutStep++;
+  if (tutStep >= TUT_STEPS.length) { endTutorial(); return; }
+  renderTutStep();
+}
+
+function renderTutStep() {
+  if (!tutActive) return;
+  clearTutDom();
+  const step = TUT_STEPS[tutStep];
+  if (!step) { endTutorial(); return; }
+
+  // Stops 3-5 talk about an OPEN reply. If the client is still on the list,
+  // open the first one and let the detail pane paint before anchoring.
+  if (step.needsRow && !selectedRowId) {
+    const first = tutFirstRowId();
+    if (first) {
+      selectRow(first);
+      tutRerenderTimer = setTimeout(() => { tutRerenderTimer = null; renderTutStep(); }, 350);
+      return;
+    }
+  }
+
+  const dim = document.createElement("div");
+  dim.className = "tut-dim";
+  document.body.appendChild(dim);
+
+  const target = step.target();
+  if (target) {
+    target.classList.add("tut-spot");
+    try { target.scrollIntoView({ block: "center", behavior: "instant" }); } catch { /* ignore */ }
+  }
+  tutSpotEl = target || null;
+
+  const cta = typeof step.cta === "function" ? step.cta() : step.cta;
+  // Blocking only while there is really something to wait for: with no gate
+  // (fail-open) stop 5 becomes an ordinary "Got it" card.
+  const blocking = !!step.blocking && !tutGateMissing() && !tutGateChosen();
+
+  const card = document.createElement("div");
+  card.className = "tut-card";
+  // body() returns our own authored markup (the <b> around "None"), so it is
+  // inserted as HTML; title and cta stay escaped exactly as train does them.
+  card.innerHTML = `
+    <div class="tc-step">Step ${tutStep + 1} of ${TUT_STEPS.length}</div>
+    <div class="tc-title">${esc(step.title)}</div>
+    <div class="tc-body">${step.body()}</div>
+    <div class="tc-row">
+      <button class="btn primary" id="tutNextBtn" type="button" ${blocking ? "disabled" : ""}>${esc(cta)}</button>
+      <a class="tc-skip" id="tutSkipBtn" role="button">Skip the tour</a>
+    </div>`;
+  card.style.visibility = "hidden";
+  document.body.appendChild(card);
+
+  // Position: centred when there's no target; otherwise BELOW the target,
+  // flipping above when there's no room (train's rule). Added here: when the
+  // target is tall enough that neither band clears it, the card goes to
+  // whichever SIDE has room - a card must never sit on top of the thing it is
+  // pointing at.
+  const ch = card.offsetHeight, cw = card.offsetWidth;
+  if (!target) {
+    card.style.top = `calc(50% - ${Math.round(ch / 2)}px)`;
+    card.style.left = `calc(50% - ${Math.round(cw / 2)}px)`;
+  } else {
+    const r = target.getBoundingClientRect();
+    const gap = 12;
+    let top, left = Math.min(Math.max(gap, r.left), window.innerWidth - cw - gap);
+    if (r.bottom + gap + ch <= window.innerHeight - gap) {
+      top = r.bottom + gap;                                  // below
+    } else if (r.top - gap - ch >= gap) {
+      top = r.top - ch - gap;                                // above
+    } else {
+      // Neither band fits: sit beside it, on the roomier side, vertically
+      // centred on the target and clamped to the viewport.
+      top = Math.min(Math.max(gap, r.top + r.height / 2 - ch / 2), window.innerHeight - ch - gap);
+      const roomRight = window.innerWidth - r.right, roomLeft = r.left;
+      left = (roomRight >= roomLeft)
+        ? Math.min(r.right + gap, window.innerWidth - cw - gap)
+        : Math.max(gap, r.left - cw - gap);
+    }
+    card.style.top = `${Math.round(top)}px`;
+    card.style.left = `${Math.round(left)}px`;
+  }
+  card.style.visibility = "";
+
+  const nextBtn = document.getElementById("tutNextBtn");
+  if (nextBtn && !blocking) nextBtn.addEventListener("click", () => tutNext());
+  document.getElementById("tutSkipBtn").addEventListener("click", () => endTutorial());
+  // "Skip the tour" is available at EVERY stop, blocking one included - the
+  // card above always renders it, and it always ends the tour.
+
+  if (blocking) armTutGateWatch();
+}
+
+/* ── Blocking stop 5: watch for a real follow-up choice ───────────────────
+   Two paths reach a choice and only one of them is a click:
+   - selectGateChip is also driven by the 1-5 keyboard handler, which fires no
+     click at all, so a MutationObserver on the chips' `class` is the primary
+     detection.
+   - a bare click is not proof either: clicking the SELECTED chip DESELECTS it
+     (toggleGateChip), so the click path re-checks GATE_SELECTION after a beat.
+
+   The observer is attached to the reply PANE, not to #gate-<id>: loadSendGate
+   replaces the gate node wholesale (el.outerHTML = ...) when the chips land,
+   which would orphan an observer bound to the old node. Watching the pane also
+   lets us notice the swap and re-anchor the card, and notice a fail-open
+   teardown and drop the block. */
+function armTutGateWatch() {
+  const pane = document.getElementById("inboxRight");
+  if (!pane || typeof MutationObserver === "undefined") return;
+  const rowId = tutRowId();
+  const finish = () => {
+    if (!tutActive) return;
+    if (tutObserver) { tutObserver.disconnect(); tutObserver = null; }
+    // A 400ms beat, then out - never leave the dim sitting over a chip they
+    // just pressed. Nothing is scheduled after this: a DOUBLE-click selects
+    // AND sends, so the tour must be gone before the send repaints the pane.
+    // The generation check stops this late timer closing a REPLAY the client
+    // started in the meantime (the replay button is a couple of clicks away).
+    const run = tutRun;
+    setTimeout(() => {
+      if (!tutActive || tutRun !== run) return;
+      // Re-verify at fire time: if they UNDID the choice inside the beat
+      // (clicking a selected chip deselects it), there is no decision yet -
+      // keep the stop up and start watching again.
+      const g = document.getElementById("gate-" + rowId);
+      if ((g && g.querySelector(".sg-chip.on")) || GATE_SELECTION[rowId]) { endTutorial(); return; }
+      armTutGateWatch();
+    }, 400);
+  };
+  const check = () => {
+    if (!tutActive || TUT_STEPS[tutStep] !== TUT_STEPS[TUT_STEPS.length - 1]) return;
+    const gate = document.getElementById("gate-" + rowId);
+    if (gate && gate.querySelector(".sg-chip.on")) { finish(); return; }
+    // The gate node was swapped in (chips arrived) or torn down (fail-open):
+    // re-render the stop so the card re-anchors, or drops its block.
+    if (gate !== tutSpotEl && !tutRerenderTimer) {
+      tutRerenderTimer = setTimeout(() => { tutRerenderTimer = null; renderTutStep(); }, 60);
+    }
+  };
+  tutObserver = new MutationObserver(check);
+  tutObserver.observe(pane, { subtree: true, childList: true,
+                              attributes: true, attributeFilter: ["class"] });
+  check();
+}
+
+/* Capture phase so the chip's own handler still runs; the 400ms re-check
+   against GATE_SELECTION is what tells a selection from a deselection. */
+document.addEventListener("click", (e) => {
+  if (!tutActive || !e.target.closest) return;
+  const step = TUT_STEPS[tutStep];
+  if (!step) return;
+  if (step.advanceOnRowClick && e.target.closest("#inboxList .inbox-item")) {
+    setTimeout(() => { if (tutActive && TUT_STEPS[tutStep] === step) tutNext(); }, 400);
+    return;
+  }
+  if (step.blocking && e.target.closest(".sg-chip")) {
+    const rowId = tutRowId();
+    const run = tutRun;
+    setTimeout(() => {
+      if (!tutActive || tutRun !== run || TUT_STEPS[tutStep] !== step) return;
+      // Clicking the SELECTED chip DESELECTS it (toggleGateChip), so a bare
+      // click is not proof of a decision - the live selection is.
+      if (GATE_SELECTION[rowId]) endTutorial();
+    }, 400);
+  }
+}, true);
 
 (async function init() {
   wireListSidebar();   // restore + wire the persisted list width/collapse first — pure DOM, no network
