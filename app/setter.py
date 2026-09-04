@@ -9789,6 +9789,15 @@ def _subsequence_choice_worker(row: dict, sub_sequence_id_override):
     for the send path). Never raises: any failure lands as subsequence_decision
     'push_failed', which is exactly what the unresolved banner watches for."""
     try:
+        if row.get("is_test"):
+            # Same rule _send_reply applies to the send itself: a SIMULATED
+            # row never touches Smartlead, so it must not enrol a (nonexistent)
+            # lead in a real subsequence either. Recorded as pushed, exactly
+            # like the dry-run send records itself as sent. Reachable since the
+            # test-flagged client share (mint_client_share test=True).
+            _apply_patch(row, {"added_to_subsequence": True,
+                               "subsequence_decision": "pushed"})
+            return
         campaign_id = row.get("smartlead_campaign_id")
         sub_id, err = _resolve_subsequence_id(campaign_id, sub_sequence_id_override)
         if err:
@@ -10750,7 +10759,13 @@ def _fetch_queue_rows(status: str, limit: int, before: str = None,
         # _scope_sql() is "" for an owner request, so this string stays
         # byte-for-byte what it was; a client share ANDs its own campaign ids
         # onto the workspace filter (setter-client-view).
-        base = (f"{_list_ws_filter()}&is_test=eq.false{_scope_sql()}"
+        # The is_test pin is the OWNER's rule and stays literal for every
+        # owner request (byte-identical string). Only a test-flagged share
+        # token drops it, and then _scope_sql() has already dropped its own
+        # copy too - see mint_client_share / _share_test_ok.
+        _test_pin = "" if (_share_scope() is not None and _share_test_ok()) \
+            else "&is_test=eq.false"
+        base = (f"{_list_ws_filter()}{_test_pin}{_scope_sql()}"
                 f"&order=created_at.desc&limit={limit}{cursor}"
                 f"&select={QUEUE_LIST_COLUMNS}")
         # For the direction-aware pills (needs_review / sent / auto_sent) the
@@ -14095,22 +14110,31 @@ _SHARE_EXPIRED_MSG = "This training link has expired. Ask for a fresh one."
 # ids - as a PostgREST filter beside the existing workspace filter AND as a
 # second assertion in Python, so a filter typo can never widen the scope.
 
-def mint_client_share(client_id: str, days: int = 90) -> str:
+def mint_client_share(client_id: str, days: int = 90, test: bool = False) -> str:
+    """`test=True` mints a QA link that ALSO carries the client's is_test rows
+    (payload tail "|t"). It is a Navreo-only affordance for proving the client
+    view end-to-end without touching a real prospect: a test row's send is
+    forced dry by _send_reply, so nothing it approves can ever reach Smartlead.
+    A plain (test=False) token is byte-identical to before and keeps the
+    is_test=eq.false pin everywhere."""
     import base64
     import hashlib
     import hmac
     import time
     exp = int(time.time()) + max(1, int(days or 90)) * 86400
-    payload = f"client|{client_id}|{exp}".encode()
+    payload = (f"client|{client_id}|{exp}|t" if test
+               else f"client|{client_id}|{exp}").encode()
     sig = hmac.new(_share_secret(), payload, hashlib.sha256).hexdigest()
     return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
 
 
 def verify_client_share(token: str):
-    """The client_id a client share token is valid for, or None. Checks the
-    HMAC signature, the "client" prefix, and expiry - never raises, so a
-    malformed or tampered token is just treated as 'not valid' everywhere it
-    is used (exactly like verify_training_share)."""
+    """(client_id, test_flag) for a valid client share token, else None.
+    Checks the HMAC signature, the "client" prefix, and expiry - never raises,
+    so a malformed or tampered token is just treated as 'not valid' everywhere
+    it is used (exactly like verify_training_share). The test flag is part of
+    the SIGNED payload, so a client cannot grant it to themselves by editing
+    the URL."""
     import base64
     import hashlib
     import hmac
@@ -14125,12 +14149,15 @@ def verify_client_share(token: str):
         if not hmac.compare_digest(expect, sig):
             return None
         parts = payload.decode(errors="replace").split("|")
-        if len(parts) != 3 or parts[0] != "client":
+        if len(parts) not in (3, 4) or parts[0] != "client":
             return None
-        _prefix, client_id, exp = parts
+        client_id, exp = parts[1], parts[2]
+        test = len(parts) == 4 and parts[3] == "t"
+        if len(parts) == 4 and not test:
+            return None      # unknown tail: refuse rather than guess
         if not client_id or not exp.isdigit() or int(exp) < time.time():
             return None
-        return client_id
+        return client_id, test
     except Exception:  # noqa: BLE001 - a bad token is just "not valid"
         return None
 
@@ -14269,6 +14296,13 @@ def _share_client():
     return getattr(_SHARE_LOCAL, "client", None)
 
 
+def _share_test_ok() -> bool:
+    """True only for a share whose SIGNED token carried the test flag. Used in
+    exactly two places (_scope_sql, _scope_ok) so "does this share see test
+    rows?" has one answer, not two that can drift."""
+    return bool(getattr(_SHARE_LOCAL, "test", False))
+
+
 def _scope_sql(prefix: str = "&") -> str:
     """PostgREST fragment pinning a queue read to the share's campaign ids.
     "" for an owner request. An empty scope emits a filter that matches
@@ -14278,11 +14312,14 @@ def _scope_sql(prefix: str = "&") -> str:
         return ""
     # is_test rides along: the LIST already pins it, and pinning it HERE means
     # every per-row share read/write inherits the same rule from one place.
+    # A test-flagged token (Navreo QA only, see mint_client_share) drops the
+    # pin so simulated rows come through; every other token keeps it.
+    test = "" if _share_test_ok() else "&is_test=eq.false"
     if not ids:
-        return f"{prefix}smartlead_campaign_id=in.(0)&is_test=eq.false"
+        return f"{prefix}smartlead_campaign_id=in.(0){test}"
     return (prefix + "smartlead_campaign_id=in.("
             + ",".join(quote(str(i), safe="") for i in sorted(ids))
-            + ")&is_test=eq.false")
+            + ")" + test)
 
 
 def _scope_ok(row) -> bool:
@@ -14292,7 +14329,9 @@ def _scope_ok(row) -> bool:
     ids = _share_scope()
     if ids is None:
         return True
-    if not isinstance(row, dict) or row.get("is_test"):
+    if not isinstance(row, dict):
+        return False
+    if row.get("is_test") and not _share_test_ok():
         return False
     return str(row.get("smartlead_campaign_id") or "") in ids
 
@@ -14391,9 +14430,10 @@ def client_share_enter(path: str, token: str, write: bool = False):
     the caller must return as-is. server.py always pairs this with
     client_share_clear() in a finally."""
     client_share_clear()
-    cid = verify_client_share(token)
-    if not cid:
+    verified = verify_client_share(token)
+    if not verified:
         return 403, {"error": _CLIENT_SHARE_BAD_MSG}
+    cid, test = verified
     if path not in (CLIENT_SHARE_POST if write else CLIENT_SHARE_GET):
         return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
     ids = _client_campaign_ids(cid)
@@ -14404,12 +14444,14 @@ def client_share_enter(path: str, token: str, write: bool = False):
         return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
     _SHARE_LOCAL.ids = ids
     _SHARE_LOCAL.client = cid
+    _SHARE_LOCAL.test = bool(test)
     return None
 
 
 def client_share_clear() -> None:
     _SHARE_LOCAL.ids = None
     _SHARE_LOCAL.client = None
+    _SHARE_LOCAL.test = False
 
 
 def _client_permalink(email: str, client_id: str, message_id: str = "") -> str:
@@ -19133,7 +19175,7 @@ POST_ROUTES = {
 
 
 # ── CLI: mint a client share link ───────────────────────────────────────────
-#   python3 app/setter.py --mint-client-share <client_id> [days]
+#   python3 app/setter.py --mint-client-share <client_id> [days] [--test]
 # Prints the full URL a client opens. The token is signed with _share_secret(),
 # which derives from SUPABASE_SERVICE_ROLE_KEY - so the SAME key that is set on
 # Render must be in the environment (or ~/.navreo-keys.env) here, or the token
@@ -19161,9 +19203,14 @@ def _cli_load_keys() -> dict:
 
 
 def _cli_main(argv) -> int:
+    # --test mints the QA variant that also carries the client's is_test rows
+    # (NEVER hand one to a client - see mint_client_share).
+    argv = list(argv)
+    test = "--test" in argv
+    argv = [a for a in argv if a != "--test"]
     if len(argv) < 2 or argv[0] != "--mint-client-share":
-        print("usage: python3 app/setter.py --mint-client-share <client_id> [days]",
-              file=sys.stderr)
+        print("usage: python3 app/setter.py --mint-client-share <client_id> "
+              "[days] [--test]", file=sys.stderr)
         return 2
     client_id = argv[1].strip()
     try:
@@ -19178,7 +19225,10 @@ def _cli_main(argv) -> int:
               "on the server. Set it (env or ~/.navreo-keys.env) and re-run.",
               file=sys.stderr)
         return 1
-    token = mint_client_share(client_id, days)
+    token = mint_client_share(client_id, days, test=test)
+    if test:
+        print("TEST-FLAGGED link: it also shows this client's simulated "
+              "(is_test) rows. Internal QA only.", file=sys.stderr)
     print(f"{DEFAULT_BASE_URL}/app/setter.html?share={quote(token, safe='')}")
     return 0
 

@@ -15,6 +15,20 @@ function isHeadless() {
   } catch (_) { return false; }
 }
 
+/* ── Client share-link mode (setter-client-view) ────────────────────────────
+   A ?share=<token> URL is a logged-OUT client viewing exactly one surface
+   (currently the setter inbox). The app rail links to Campaigns / Analytics /
+   Mailboxes / Deliverability - every one of them login-gated and none of them
+   theirs - and the floating "Tasks" panel polls the owner-only /api/jobs.
+   Both are suppressed here.
+   Deliberately NOT isHeadless(): that sets html.headless, which rewrites every
+   external link to copy-to-clipboard and adds the a.lp-qbtn::after glyph. */
+function isClientShare() {
+  try {
+    return new URLSearchParams(location.search).has("share");
+  } catch (_) { return false; }
+}
+
 if (isHeadless()) {
   document.documentElement.classList.add("headless");
   const s = document.createElement("style");
@@ -55,6 +69,7 @@ const NAV = [
 
 function renderRail(active) {
   if (isHeadless()) return "";  // headless/embed: no sidebar rail at all
+  if (isClientShare()) return "";  // client share link: no app nav at all
   const items = NAV.map(([href, key, label]) =>
     `<a class="nav-i ${key === active ? "on" : ""}" href="${href}" title="${label}">${ICONS[key]}</a>`
   ).join("");
@@ -1181,6 +1196,9 @@ function setupChartTooltip(wrap) {
 
   function init() {
     if (isHeadless()) return;  // embed mode: no floating "Tasks" chrome
+    // Client share link: no DOM built (so no #nav-jobs-tab) and, crucially,
+    // no fetchJobs() - /api/jobs is owner-only and would 403 on a loop.
+    if (isClientShare()) return;
     injectStyle();
     buildDom();
     if (isOpenSaved()) setOpen(true);
