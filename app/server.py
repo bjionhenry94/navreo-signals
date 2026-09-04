@@ -21214,7 +21214,50 @@ def _client_win_build():
         gated = True
         daywise_errs.append(f"all {len(shared_expected)} shared-client series missing — build gated")
         print(f"[client-win] all shared-client daily series missing — build gated", file=sys.stderr)
+    # ── Today's partial sent, per client (drawn as the still-ramping current-
+    # day bar ONLY) ──────────────────────────────────────────────────────────
+    # Every window total, average, reply-rate and capacity-used figure still
+    # ends YESTERDAY (owner ruling 2026-09-02) — those read `series`/`windows`,
+    # which are untouched. This extra block is a live overlay the chart paints on
+    # top of the drawn axis so today's column stops reading empty (team ask via
+    # Asad, 2026-09-04: "still not showing live stats"). One day-wise call per
+    # workspace + one scoped call per shared client; additive and fail-safe, it
+    # never gates the build and an absent value just leaves that client's today
+    # column empty as before.
+    today_iso = _dtmod.date.today().isoformat()
+    today_sent: dict = {}
+    try:
+        ws_today: dict = {}
+        for ws in ws_ids:
+            key = ws_key(ws)
+            if not key:
+                continue
+            try:
+                ws_today[ws] = int((_daywise_series(
+                    key, [today_iso], today_iso, today_iso).get("sent") or [0])[0] or 0)
+            except Exception as e:  # noqa: BLE001 — additive, never fatal
+                print(f"[client-win] today ws {ws} failed: {e}", file=sys.stderr)
+        for ws, val in ws_today.items():
+            if ws == "navreo":
+                continue                      # navreo's own line rides __all
+            lbl = _client_win_label(ws, None)
+            if not _client_hidden(lbl):
+                today_sent[lbl] = val
+        if nav_key and ids_by_client:
+            for cl, ids in ids_by_client.items():
+                try:
+                    today_sent[cl] = int((_daywise_series(
+                        nav_key, [today_iso], today_iso, today_iso,
+                        campaign_ids=ids).get("sent") or [0])[0] or 0)
+                except Exception as e:  # noqa: BLE001 — additive, never fatal
+                    print(f"[client-win] today client {cl} failed: {e}", file=sys.stderr)
+        if ws_today:
+            today_sent["__all"] = sum(ws_today.values())
+    except Exception as e:  # noqa: BLE001 — the today overlay must never kill the build
+        print(f"[client-win] today block failed: {e}", file=sys.stderr)
     data = {"days": days_out, "series": out_series, "windows": windows,
+            "today": {"date": today_iso, "sent": today_sent,
+                      "asof": _dtmod.datetime.utcnow().isoformat() + "Z"},
             "_series_gated": gated, "first_touch": first_touch,
             "campaigns": campaigns, "ws_labels": ws_labels,
             "asof": _dtmod.datetime.utcnow().isoformat() + "Z",
