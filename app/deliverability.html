@@ -982,7 +982,23 @@ function rateMinSent() { return state.client === "All" ? 1000 : 100; }
 // no daily line, so split the Navreo-workspace daily series by this client's
 // share of the window total — the window total stays exact, only the daily
 // SHAPE is estimated (Bjion: per-day sent per client is super important).
+// Overlay today's live partial sent (CW.today, refreshed by the client-windows
+// cron) onto the drawn bar. chartAxisDays() carries today ONLY during the
+// plotting pass (_AXIS_OVERRIDE); every number path runs with the axis ended
+// yesterday, so today is a no-op there and no figure ever counts it.
 function sentDailyFull() {
+  var arr = _sentDailyBase();
+  if (!arr || !CW || !CW.today || !CW.today.sent) return arr;
+  var key = state.client === "All" ? "__all" : state.client;
+  var val = CW.today.sent[key];
+  if (val == null) return arr;
+  var ax = chartAxisDays(), t = todayUTC(), out = arr.slice();
+  for (var i = 0; i < ax.length; i++) {
+    if (i < out.length && String(ax[i] || "").slice(0, 10) === t) out[i] = val;
+  }
+  return out;
+}
+function _sentDailyBase() {
   if (!CW || !CW.series) return null;
   var key = state.client === "All" ? "__all" : state.client;
   var s = cwTrusted(key);
