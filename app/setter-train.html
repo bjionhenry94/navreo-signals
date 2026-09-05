@@ -1966,14 +1966,14 @@ function startShortRoundPoll() {
     // 10-SECOND FALLBACK (owner 2026-09-05: no loader over 10s): nothing
     // fresh and no questions to answer -> release cards held back only by
     // style-level teachings, with an honest note on the card.
-    if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 6000
+    if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 4000
         && !currentUnanswered().some((c) => caseFresh(c))) {
       // Candidates: the round while it still has unanswered cards, else the
       // whole pool (live 2026-09-05: an exhausted round left both tiers with
       // nothing to release and the hold ran 78s).
       const cand = currentUnanswered().length ? currentUnanswered() : CASES.filter((c) => !isAnswered(c.id));
       let rel = cand.filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
-      if (!rel.length && Date.now() - shortRoundStartedAt > 8000) {
+      if (!rel.length && Date.now() - shortRoundStartedAt > 6000) {
         // Tier 2 (skill setter-wait-elimination, Step 3): still nothing
         // servable at 10s - release the least-stale cards that no booking or
         // phone teaching touches and that passed their taught-fact lint,
