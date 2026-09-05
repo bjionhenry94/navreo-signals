@@ -4951,6 +4951,12 @@ function companySectionHtml(row) {
   const fact = (label, val) => (CLIENT_MODE && val === dash)
     ? ""
     : `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
+  // Founder panel fix 8 (2026-09-06): with every blank row folded away (R6
+  // above) an un-enriched lead left a "PROFILE" heading over a single "Name"
+  // row repeating the name already in the header - the panel read it as a
+  // half-loaded page. When nothing but the name would survive, drop the whole
+  // section. Client only; the owner keeps the dashes and the full table.
+  if (CLIENT_MODE && !role && !name && !site && !hc && !loc && !descShown) return "";
 
   return `<div class="lp-section lp-company" id="lpCompany">
     ${verdictHtml}
