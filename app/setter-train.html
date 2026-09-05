@@ -2305,7 +2305,8 @@ function mountInterviewForm() {
     setTimeout(() => {
       // Terminal state (panel round 6): stop implying eventual success.
       const lv = document.getElementById("ivLive");
-      if (lv && view === "done") lv.textContent = `Retraining is taking too long - round ${rn + 1} will start on what we've learned so far.`;
+      if (lv && view === "done") lv.textContent = `Retraining is taking too long - round ${rn + 1} will start on what we've learned so far.`;  // spinner stops with the promise
+      if (sb && view === "done") sb.textContent = `Start round ${rn + 1} now`;
     }, 150000);
     const _narrow = window.matchMedia && window.matchMedia("(max-width: 520px)").matches;
     document.querySelectorAll("#ivForm .iv-q input").forEach((inp, i) => {
@@ -2323,6 +2324,12 @@ function mountInterviewForm() {
   });
   const submitBtn = document.getElementById("ivSubmitBtn");
   if (submitBtn) submitBtn.addEventListener("click", () => {
+    if (IV_GATE_MODE) {
+      // Acknowledge the press at once (panel: one button, no pending state
+      // invited double submits); the round opener takes over from here.
+      submitBtn.disabled = true;
+      submitBtn.textContent = `Starting round ${currentRoundNum() + 1}…`;
+    }
     if (IV_GATE_MODE && ![...document.querySelectorAll("#ivForm .iv-q input")].some((i) => i.value.trim())) {
       // Nothing typed: the single button IS the skip (timer only, never these questions again).
       ivDismissedForRound = currentRoundNum(); IV_TYPED = {}; host.innerHTML = "";
