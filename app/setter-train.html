@@ -1717,7 +1717,7 @@ function renderRoundDone() {
     ? `
     <div class="round-strip" id="roundStrip">
       <span class="rs-check">✓</span>
-      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${(ROUND_START_DISP != null && disp > ROUND_START_DISP) ? `+${disp - ROUND_START_DISP} toward your 100 · ` : ""}${total && right < total ? `the ${total - right} we got wrong now train${total - right === 1 ? "s" : ""} round ${roundNum + 1}` : `all ${total || "three"} now train round ${roundNum + 1}`}</span>
+      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${(ROUND_START_DISP != null && ROUND_START_DISP > 0 && disp > ROUND_START_DISP) ? `+${disp - ROUND_START_DISP} toward your 100 · ` : ""}${total && right < total ? `the ${total - right} we got wrong now train${total - right === 1 ? "s" : ""} round ${roundNum + 1}` : `all ${total || "three"} now train round ${roundNum + 1}`}</span>
       <span class="db-msg" id="doneMsg" hidden>${msg}</span>
     </div>
     <div id="interviewHost"></div>
@@ -2267,7 +2267,7 @@ function mountInterviewForm() {
   const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
     title: _nq === 1 ? "One optional question" : `${_nq} optional questions`,
-    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Press the button any time - round ${rn + 1} starts as soon as retraining finishes, and your answer goes with it.</span>`,
+    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Start round ${rn + 1} whenever you like; your answer goes with it.</span>`,
     cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
@@ -2285,7 +2285,8 @@ function mountInterviewForm() {
       const strip = document.getElementById("roundStrip");
       const link = document.createElement("a");
       link.className = "db-review"; link.id = "doneReviewLink"; link.setAttribute("role", "button");
-      link.textContent = "Review rated replies";
+      const { right: _r, total: _t } = roundScore();
+      link.textContent = _t && _r < _t ? (_t - _r === 1 ? "See the one we got wrong" : "See the ones we got wrong") : "Review rated replies";
       link.addEventListener("click", () => startReview());
       if (strip) strip.appendChild(link);
       rb.remove();
