@@ -1951,7 +1951,18 @@ function startShortRoundPoll() {
     // style-level teachings, with an honest note on the card.
     if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 7400
         && !currentUnanswered().some((c) => caseFresh(c))) {
-      const rel = currentUnanswered().filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
+      let rel = currentUnanswered().filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
+      if (!rel.length && Date.now() - shortRoundStartedAt > 9500) {
+        // Tier 2 (skill setter-wait-elimination, Step 3): still nothing
+        // servable at 10s - release the least-stale cards that no booking or
+        // phone teaching touches and that passed their taught-fact lint,
+        // with the honest note. Newest stamp first.
+        const wiring = TEACHINGS.some((t) => !t.d && ((t.topics || []).includes("booking") || (t.topics || []).includes("phone")));
+        rel = currentUnanswered()
+          .filter((c) => !c.taught_fact_missing && !(wiring && (cardTopics(c).includes("booking") || cardTopics(c).includes("phone"))))
+          .sort((a, b) => String(b.redrafted_at || b.generated_at || "").localeCompare(String(a.redrafted_at || a.generated_at || "")))
+          .slice(0, ROUND_SIZE);
+      }
       if (rel.length) {
         rel.forEach((c) => STALE_OK.add(String(c.id)));
         if (!ROUND_IDS || !ROUND_IDS.length) ROUND_IDS = rel.map((c) => c.id);
