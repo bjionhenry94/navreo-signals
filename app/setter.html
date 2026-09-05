@@ -1559,7 +1559,9 @@ if (CLIENT_MODE) {
        silently no-ops with an empty inbox (it has no row to point at), so
        say so rather than letting the click do nothing. */
     tourBtn.addEventListener("click", () => {
-      if (tutActive) endTutorial();
+      // quiet: this teardown is immediately followed by a restart, so the
+      // "Replay it any time" note would flash over the tour it just reopened.
+      if (tutActive) endTutorial(true);
       if (!document.querySelector("#inboxList .inbox-item")) {
         const note = document.createElement("div");
         note.className = "tour-wait-note";
@@ -8653,13 +8655,13 @@ function startTutorial() {
   renderTutStep();
 }
 
-function endTutorial() {
+function endTutorial(quiet) {
   tutActive = false;
   clearTutDom();
   // Written only here (and by "Skip the tour", which calls this): a
   // half-finished tour re-offers itself on the next visit.
   try { localStorage.setItem(TUT_KEY, "1"); } catch { /* ignore */ }
-  tutReplayNote();
+  if (!quiet) tutReplayNote();
 }
 
 /* Founder panel fix 5b (2026-09-06): skipping or finishing the tour ended in
