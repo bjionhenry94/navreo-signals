@@ -2469,8 +2469,10 @@ function sortedTrayRows() {
 }
 function trayRowHtml(r) {
   const h = unresolvedAgeHours(r);
+  // T3: "push" is our API verb and means nothing to a client.
   const failTag = r.subsequence_decision === "push_failed"
-    ? `<span class="pill r">push failed — retry</span>` : "";
+    ? `<span class="pill r">${CLIENT_MODE ? "Follow-up didn't save — try again" : "push failed — retry"}</span>` : "";
+
   const company = r.company_domain ? `<span class="muted small">${esc(r.company_domain)}</span>` : "";
   return `<div class="tray-row ${h >= 24 ? "old" : ""}" data-id="${esc(r.id)}">
     <div class="tray-row-main" role="button" tabindex="0" data-id="${esc(r.id)}" title="Open the full conversation">
@@ -2485,7 +2487,8 @@ function trayRowHtml(r) {
     <div class="tray-row-actions">
       ${failTag}
       ${["none", "none_at_send"].includes(r.subsequence_decision) ? `<span class="pill n tray-none-tag">No follow-up</span>` : ""}
-      <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence &#9662;</button>
+      <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">${CLIENT_MODE ? "Add a follow-up" : "Add to subsequence"} &#9662;</button>
+
       ${["none", "none_at_send"].includes(r.subsequence_decision) ? "" : `<button class="tray-none-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>`}
       ${CLIENT_MODE ? ""
         // The tray itself STAYS in client mode (its endpoint is scoped to the
@@ -2521,7 +2524,10 @@ function renderUnresolvedTray() {
   _lastTrayCount = nUndecided;
   tray.style.display = "";
   tray.classList.toggle("open", trayOpen);
-  document.getElementById("trayTitle").textContent = `Sent without follow-up (${n})`;
+  // T2: "Sent without follow-up" reads to a client as a report of our own error.
+  document.getElementById("trayTitle").textContent = CLIENT_MODE
+    ? `Waiting on a follow-up choice (${n})` : `Sent without follow-up (${n})`;
+
   document.getElementById("trayBadge").textContent = n;
   const body = document.getElementById("trayBody");
   // Keep the reviewer's place (bounce fix 2026-08-01): the wholesale
@@ -2692,12 +2698,16 @@ async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
       || "Smartlead didn't respond just now — please try again in a moment.";
     const retryable = res.status === 503 || res.status === 502
       || (res.data && res.data.retryable);
-    showError("Couldn't add to subsequence: " + msg
-      + (retryable ? " You can try again." : ""));
+    // T7: the raw tail names Smartlead. Client mode gets one friendly line.
+    showError(CLIENT_MODE
+      ? "Couldn't add the follow-up — try again in a moment."
+      : "Couldn't add to subsequence: " + msg + (retryable ? " You can try again." : ""));
+
     return;
   }
   clearError();
-  protoNote("Pushed to Smartlead subsequence");
+  protoNote(CLIENT_MODE ? "Follow-up added" : "Pushed to Smartlead subsequence");   // T6
+
   // Progress-to-next (owner ask 2026-08-01): resolve the next person BEFORE
   // this row leaves, update the tray optimistically (no awaited round trip —
   // that network wait + full rebuild was the bounce), open the next
@@ -2786,7 +2796,7 @@ function renderTrayPicker(id, subs) {
   const picker = document.getElementById(`sgPicker-${id}`);
   if (!picker) return;
   picker.style.display = "block";
-  picker.innerHTML = `<div class="small muted" style="margin:4px 0">This campaign has more than one subsequence — pick one:</div>
+  picker.innerHTML = `<div class="small muted" style="margin:4px 0">${CLIENT_MODE ? "This campaign has more than one follow-up — pick one:" : "This campaign has more than one subsequence — pick one:"}</div>
     <div class="sg-chips">${(subs || []).map((s) =>
       `<button type="button" class="chip sg-picker-chip" data-id="${esc(id)}" data-sub-id="${esc(s.id)}">${esc(s.name || "Follow-up")}</button>`
     ).join("")}</div>`;
@@ -5288,7 +5298,8 @@ function convoMsgHtml(who, when, body, emphasize, inbound) {
 function subseqNoteHtml(when) {
   return `<div class="thread-note" style="text-align:center;margin:10px 0;">
     <span class="small" style="display:inline-block;padding:4px 12px;border-radius:999px;background:var(--bg-sunken);border:1px solid var(--line);color:var(--ink-3);">
-      &#10227; Added to a follow-up subsequence${when ? ` &middot; ${pulledAgo(when)}` : ""}</span>
+      &#10227; ${CLIENT_MODE ? "Added to an automatic follow-up" : "Added to a follow-up subsequence"}${when ? ` &middot; ${pulledAgo(when)}` : ""}</span>
+
   </div>`;
 }
 function convoHtml(row) {
@@ -5417,8 +5428,14 @@ function needsComposerActions(row) {
 /* Dismiss STAYS in client mode (ruling 4.i) - a client saying "no reply
    needed" is a real decision. Only the tooltip goes: it names our internal
    queue process and our sending platform (spec §2 row 23). */
-const DISMISS_TITLE_ATTR = CLIENT_MODE ? ""
+/* G8: stripping the owner tooltip left a bare "Dismiss" with no way to tell
+   whether it deletes the reply, unsubscribes the person or just files it.
+   Client mode gets its own party-neutral label + title. */
+const DISMISS_TITLE_ATTR = CLIENT_MODE
+  ? ` title="Files this conversation away. Nothing is sent, and you can still find it under Dismissed."`
   : ` title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead."`;
+const DISMISS_LABEL = CLIENT_MODE ? "No reply needed" : "Dismiss";
+
 function gateLockHintHtml(rowId, hidden) {
   // The single wording change permitted anywhere in client mode (ruling 4.ii):
   // "track" is our word for a subsequence. Everything else - chip labels,
@@ -5451,7 +5468,7 @@ function composerActionsHtml(row) {
     <span class="qc-split">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="Regenerate with feedback" aria-label="Regenerate with feedback">&#9662;</button>
     </span>
-    <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>Dismiss</button>
+    <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>${DISMISS_LABEL}</button>
     ${gateApplies ? gateLockHintHtml(row.id, !!sel) : ""}
   </div>`;
 }
@@ -5473,15 +5490,16 @@ function needsRetroFollowup(row) {
 function retroFollowupHtml(row) {
   if (!needsRetroFollowup(row)) return "";
   const isNone = ["none", "none_at_send"].includes(row.subsequence_decision);
-  const failTag = row.subsequence_decision === "push_failed"
-    ? `<span class="pill r">push failed — retry</span>` : "";
+  const failTag = row.subsequence_decision === "push_failed"   // T3
+    ? `<span class="pill r">${CLIENT_MODE ? "Follow-up didn't save — try again" : "push failed — retry"}</span>` : "";
   const noneTag = isNone ? `<span class="pill n">No follow-up</span>` : "";
   return `<div class="qc-actions">
     ${failTag}${noneTag}
-    <button class="btn primary qc-retro-add" data-id="${esc(row.id)}" type="button">Add to subsequence</button>
+    <button class="btn primary qc-retro-add" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Add a follow-up" : "Add to subsequence"}</button>
     ${isNone ? "" : `<button class="btn qc-retro-none" data-id="${esc(row.id)}" type="button">No follow-up needed</button>`}
     <button class="btn qc-retro-dismiss" data-id="${esc(row.id)}" type="button"${CLIENT_MODE ? ""
-      : ` title="Remove from the follow-up reminder list"`}>Dismiss</button>
+      : ` title="Remove from the follow-up reminder list"`}>${CLIENT_MODE ? "Skip the follow-up" : "Dismiss"}</button>
+
   </div>`;
 }
 function retroFollowupPickerHtml(row) {
@@ -5492,7 +5510,7 @@ function renderDetailRetroPicker(id, subs) {
   const picker = document.getElementById(`sgDetailPicker-${id}`);
   if (!picker) return;
   picker.style.display = "block";
-  picker.innerHTML = `<div class="small muted" style="margin:4px 0">This campaign has more than one subsequence — pick one:</div>
+  picker.innerHTML = `<div class="small muted" style="margin:4px 0">${CLIENT_MODE ? "This campaign has more than one follow-up — pick one:" : "This campaign has more than one subsequence — pick one:"}</div>
     <div class="sg-chips">${(subs || []).map((s) =>
       `<button type="button" class="chip sg-detail-picker-chip" data-id="${esc(id)}" data-sub-id="${esc(s.id)}">${esc(s.name || "Follow-up")}</button>`
     ).join("")}</div>`;
@@ -5803,7 +5821,7 @@ function composerHtml(row) {
   if (row.status === "error") {
     return `<div class="qc-actions">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Try again</button>
-      <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>Dismiss</button>
+      <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>${DISMISS_LABEL}</button>
     </div>`;
   }
   return "";
@@ -7132,7 +7150,8 @@ async function doSubsequence(chk) {
   // lead was added, so the action is visible on the conversation. Only when
   // the push actually took — mirror the checkbox's server-confirmed state.
   if (chk.checked) graftSubseqNote(row, id);
-  protoNote(checked ? "Pushed to Smartlead subsequence" : "Saved");
+  protoNote(checked ? (CLIENT_MODE ? "Follow-up added" : "Pushed to Smartlead subsequence") : "Saved");   // T6
+
 }
 
 /* Graft the "added to subsequence" note onto the local thread and repaint the
@@ -7240,8 +7259,11 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   // never runs, and it names our sending platform to a client (spec §2 row
   // 12/13). Search-scope audit 2026-09-05: a client's search only ever filters
   // the rows the scoped queue already handed this page.
+  // L2: a client's search only ever filters the rows of the CURRENT pill, so
+  // "your conversations" over-promises the scope. Say what it actually does.
   if (note && searching) note.textContent = CLIENT_MODE
-    ? "searching your conversations" : "+ searching all of Smartlead";
+    ? "searching this tab only" : "+ searching all of Smartlead";
+
   scheduleSmartleadSearch();
   if (_localSearchTimer) clearTimeout(_localSearchTimer);
   _localSearchTimer = setTimeout(() => {
