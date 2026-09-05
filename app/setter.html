@@ -1211,6 +1211,10 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
    client pill. Hand the job to the age badge here rather than touching 364,
    so the row keeps its right edge and the owner rule stays untouched. */
 body.client-mode .ii-line3 .ii-age { margin-left: auto; }
+/* Automated follow-up section (Bjion 2026-09-05): sits between the draft
+   and Approve in client mode and carries a one-line explanation. */
+body.client-mode .send-gate { margin-top: 12px; }
+body.client-mode .send-gate .sg-intro { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; margin: -2px 0 10px; }
 
 /* ── First-visit tutorial overlay (copied verbatim from setter-train.html:
    256-271) ────────────────────────────────────────────────────────────────
@@ -1404,9 +1408,12 @@ body.client-mode .ii-line3 .ii-age { margin-left: auto; }
    The token is the whole scope: every allowlisted call carries it and the
    server re-scopes the read to that one client's campaigns.
 
-   CLIENT_MODE only ever REMOVES nodes and SUPPRESSES render branches. It is
-   false whenever ?share= is absent, so the owner page below is untouched -
-   no owner branch, default or CSS rule changes. Same derivation shape as
+   CLIENT_MODE only ever REMOVES nodes and SUPPRESSES render branches - with
+   one owner-approved exception (Bjion 2026-09-05): the Automated follow-up
+   section renders ABOVE the actions row with a client-worded heading (see
+   the composer template and sendGateChipsHtml). It is false whenever
+   ?share= is absent, so the owner page below is untouched - no owner
+   branch, default or CSS rule changes. Same derivation shape as
    setter-train.html:307-335. */
 const SHARE_TOKEN = new URLSearchParams(location.search).get("share") || "";
 const CLIENT_MODE = !!SHARE_TOKEN;
@@ -4024,9 +4031,14 @@ function renderDetail(row) {
       ${repliedBackHtml}
       ${noSlotsHint}
       ${composerHtml(row)}
+      ${/* Client mode (Bjion 2026-09-05): the Automated follow-up section
+           sits BETWEEN the draft and Approve. Below the actions row it
+           rendered off-screen on a 720px viewport and read as missing.
+           The owner order below is untouched. */
+        CLIENT_MODE ? sendGateHtml(row) : ""}
       ${composerActionsHtml(row)}
       ${composerFeedbackHtml(row)}
-      ${sendGateHtml(row)}
+      ${CLIENT_MODE ? "" : sendGateHtml(row)}
       ${learnBarHtml(row)}
     </div>
   `;
@@ -5440,7 +5452,12 @@ function sendGateChipsHtml(row, subs) {
   const note = (subs || []).length === 0
     ? `<div class="small muted" style="margin-bottom:6px">This campaign has no follow-up sequences set up — choose None to unlock Approve.</div>` : "";
   return `<div class="send-gate" id="gate-${esc(row.id)}">
-    <div class="sg-label">Choose the automated follow-up sequence — pick one to unlock Approve</div>
+    ${CLIENT_MODE
+      // Client language (Bjion 2026-09-05): a titled section that says what
+      // the follow-ups ARE before asking for the choice. Owner label unchanged.
+      ? `<div class="sg-label">Automated follow-up</div>
+    <div class="sg-intro">After your reply goes out, we keep following up for you automatically. Pick the follow-up sequence this person should get — or <b>None</b> for just this one reply. Approve unlocks once you've chosen.</div>`
+      : `<div class="sg-label">Choose the automated follow-up sequence — pick one to unlock Approve</div>`}
     ${note}
     <div class="sg-chips">${chips.join("")}</div>
     ${gateHintHtml()}
@@ -8135,9 +8152,10 @@ async function openPermalink() {
    stylesheet above). One tour style in the product, not two.
 
    Five stops walk a client from "a reply came in" to the one decision the
-   page actually needs from them. Stop 5 is BLOCKING: the follow-up choice is
-   the only thing standing between a draft and a sent email, so the tour waits
-   there until a chip is really chosen rather than narrating past it.
+   page actually needs from them. Stop 5, "Automated follow-up", is BLOCKING
+   (Bjion 2026-09-05: the section itself is the stop): the follow-up choice
+   is the only thing standing between a draft and a sent email, so the tour
+   waits there until a chip is really chosen rather than narrating past it.
 
    Copy law: client language throughout - never "queue", "subsequence",
    "gate" or "agent". */
@@ -8199,7 +8217,7 @@ const TUT_STEPS = [
   { title: "The reply we wrote", cta: "Next", needsRow: true,
     target: () => document.querySelector(".qc-draft"),
     body: () => "This is the reply we've written in your voice — click straight into it and change any word you like before it goes." },
-  { title: "What happens next", needsRow: true, blocking: true,
+  { title: "Automated follow-up", needsRow: true, blocking: true,
     cta: () => ((tutGateMissing() || tutGateChosen()) ? "Got it" : "Waiting for your choice…"),
     target: () => tutGateEl()
       || document.querySelector('.qc-send[data-id="' + (window.CSS && CSS.escape ? CSS.escape(String(tutRowId())) : tutRowId()) + '"]')
@@ -8207,8 +8225,8 @@ const TUT_STEPS = [
     body: () => (tutGateMissing()
       ? "Approve sends the reply — you'll see it in the conversation straight away."
       : tutGateNoneOnly()
-        ? "This campaign has no follow-up sequences, so choose <b>None</b> — one reply, no chasing — and Approve unlocks."
-        : "Before this reply can go out, tell us what happens next: pick a follow-up sequence, or pick <b>None</b> if this person should just get this one reply — then Approve unlocks.") },
+        ? "After your reply goes out we can keep following up automatically — but this campaign has no follow-up sequences yet, so choose <b>None</b> (one reply, no chasing) and Approve unlocks."
+        : "After your reply goes out, we keep following up for you automatically. Pick the follow-up sequence this person should get, or <b>None</b> if they should get just this one reply — then Approve unlocks.") },
 ];
 
 /* Auto-run guard, mirroring train's maybeStartTutorial: called from the RENDER

@@ -7386,6 +7386,25 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
 CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greenshift")
 
+# Campaign-name marker -> the client_id a CLIENT SHARE token scopes to. The same
+# "name contains X" law server.py's _SHARED_WS_CLIENTS applies to Analytics /
+# Mailboxes attribution (Bjion 2026-07-29). A navreo-hosted client's campaigns
+# carry client_id 'navreo' in BOTH the registry and campaign_drafts (REViVE: all
+# seven), so the name is the only thing that says whose they are. First match
+# wins; an explicit non-navreo client_id always beats the name (see
+# _client_id_of). Navreo itself is deliberately absent: a Navreo-own campaign
+# never belongs to a client link.
+CLIENT_NAME_CLIENT_IDS = (
+    ("amplif", "amplifyy"),
+    ("arnic", "arnic"),
+    ("qwintiq", "qwintiq"),
+    ("thunderbird", "thunderbird"),
+    ("revive", "revive"),
+    ("greenshift", "greenshift"),
+    ("altius", "altius reach"),
+    ("touchpoint", "touchpoint"),
+)
+
 # A once-positive→negative FLIP (all this sweep ever alerts on — fresh
 # positives are excluded above and owned by the Make categoriser) routes to the
 # client's own dedicated channel. Keyed by campaign-name marker; checked BEFORE
@@ -7523,10 +7542,13 @@ def _ep_name_channel(mapping, workspace, campaign_id):
     return None
 
 
-def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = None) -> str:
+def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = None,
+                             channel: str = None) -> str:
     """Client-facing positive alert for a shared channel — no internal
     workspace labelling (the client reads this). `header` replaces the
-    "New positive reply" line for re-replies, which are never new."""
+    "New positive reply" line for re-replies, which are never new. `channel`
+    is where it will be posted: a client-facing channel gets the client's
+    own share link (see _alert_chat_link)."""
     cat = row.get("category") or "positive"
     lines = [
         header or f"\U0001F3AF New positive reply \u2014 {cat}",
@@ -7535,7 +7557,7 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
         f"Campaign: {cname}",
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
-    chat = _chat_permalink(row.get("email") or "", row.get("smartlead_message_id") or "")
+    chat = _alert_chat_link(row, channel)
     if chat:
         lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
@@ -7671,7 +7693,7 @@ def _ep_smartlead_link(campaign_id, email: str) -> str:
     return ""
 
 
-def _ep_compose(row: dict, prior: dict, camp_names: dict) -> str:
+def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -> str:
     cid = str(row.get("smartlead_campaign_id") or "")
     cname = camp_names.get(cid) or f"campaign {cid}"
     if cname in ("Interested Reply", "Meeting Request"):
@@ -7691,7 +7713,7 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict) -> str:
          f"Originally positive: {prior.get('category') or 'earlier in this thread'}"),
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
-    chat = _chat_permalink(row.get("email") or "", row.get("smartlead_message_id") or "")
+    chat = _alert_chat_link(row, channel)
     if chat:
         lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
@@ -7774,10 +7796,10 @@ def run_ever_positive_alerts() -> dict:
                             names = _ep_campaign_names(
                                 ws, [row.get("smartlead_campaign_id"),
                                      prior.get("smartlead_campaign_id")])
+                            chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
                             payload = {"event_type": "EVER_POSITIVE_ALERT",
                                        "text": _ep_compose(dict(row, category=verdict),
-                                                           prior, names)}
-                            chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
+                                                           prior, names, channel=chan)}
                             if chan:
                                 payload["channel"] = chan
                             payload.update(_ep_thread_fields(row, re_reply=True))
@@ -7798,7 +7820,7 @@ def run_ever_positive_alerts() -> dict:
                     text = _ep_positive_shared_text(
                         row, cname,
                         _ep_smartlead_link(row.get("smartlead_campaign_id"), email),
-                        header=header)
+                        header=header, channel=shared)
                     _sp = {"event_type": "EVER_POSITIVE_ALERT",
                            "text": text, "channel": shared}
                     _sp.update(_ep_thread_fields(row, re_reply=(cat == _RE_REPLY_LABEL)))
@@ -7830,10 +7852,10 @@ def run_ever_positive_alerts() -> dict:
             names = _ep_campaign_names(
                 ws, [row.get("smartlead_campaign_id"),
                      prior.get("smartlead_campaign_id")])
-            text = _ep_compose(row, prior, names)
+            chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
+            text = _ep_compose(row, prior, names, channel=chan)
             payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
             payload.update(_ep_thread_fields(row, re_reply=True))
-            chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
             if chan:
                 payload["channel"] = chan   # client campaign — default is #interested-replies
             posted = False
@@ -7896,6 +7918,39 @@ CLIENT_ALERT_CHANNELS = {
     "krg": "C0A7EJ4DL9K",     # #krg-advisors-navreo
 }
 
+# Every channel a CLIENT reads: their Slack Connect shared channel or their own
+# alert channel. An alert composed for one of these carries the client's share
+# link, not the login-only owner permalink (Bjion 2026-09-05: "whichever chat
+# it is for, that is the client - it should only show their messages").
+# #client-interested-replies and #interested-replies are internal and absent.
+CLIENT_FACING_CHANNELS = (frozenset(POSITIVE_SHARED_CHANNELS.values())
+                          | frozenset(FLIP_NAME_CHANNELS.values())
+                          | frozenset(CLIENT_ALERT_CHANNELS.values()))
+
+
+def _alert_chat_link(row: dict, channel) -> str:
+    """The setter deep link for one Slack alert. Into a client-facing channel it
+    is the CLIENT share link (_client_permalink): the recipient opens the
+    client view, scoped server-side to their own campaigns, no login. Into an
+    internal lane it stays the owner permalink. The client is resolved from
+    the campaign through the SAME map the share scope uses, so a link is only
+    ever minted for a client whose view can actually show the row; when no
+    client resolves the alert keeps the owner link (status quo) rather than
+    guessing. Never raises."""
+    email = row.get("email") or ""
+    mid = row.get("smartlead_message_id") or ""
+    if channel and channel in CLIENT_FACING_CHANNELS:
+        try:
+            client = _client_id_for_campaign(row.get("smartlead_campaign_id"))
+            if client:
+                link = _client_permalink(email, client, mid)
+                if link:
+                    return link
+        except Exception as e:  # noqa: BLE001 - the link is decoration, never load-bearing
+            print(f"[setter] client share link failed, owner link used: {e}",
+                  file=sys.stderr)
+    return _chat_permalink(email, mid)
+
 
 def _cp_smartlead_link(campaign_id, email: str) -> str:
     """Master-inbox deep link resolved with the OWNING client's key
@@ -7913,7 +7968,7 @@ def _cp_smartlead_link(campaign_id, email: str) -> str:
     return ""
 
 
-def _cp_compose(row: dict, cname: str, link: str) -> str:
+def _cp_compose(row: dict, cname: str, link: str, channel: str = None) -> str:
     ws = row.get("workspace") or "client"
     cat = row.get("category") or "positive"
     lines = [
@@ -7924,7 +7979,7 @@ def _cp_compose(row: dict, cname: str, link: str) -> str:
         f"Workspace: {ws} (client)",
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
-    chat = _chat_permalink(row.get("email") or "", row.get("smartlead_message_id") or "")
+    chat = _alert_chat_link(row, channel)
     if chat:
         lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
@@ -7980,12 +8035,13 @@ def run_client_positive_alerts() -> dict:
             names = _ep_campaign_names(ws, [cid])
             cname = names.get(str(cid or "")) or (f"campaign {cid}" if cid else "unknown campaign")
             link = _cp_smartlead_link(cid, email)
-            text = _cp_compose(row, cname, link)
-            payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
             # Mapped workspace -> its own channel; every other client workspace
             # -> #client-interested-replies (ruling 2026-08-18: the hook's
             # #interested-replies default is Navreo-own only).
-            payload["channel"] = CLIENT_ALERT_CHANNELS.get(ws) or CLIENT_INTERNAL_CHANNEL
+            chan = CLIENT_ALERT_CHANNELS.get(ws) or CLIENT_INTERNAL_CHANNEL
+            text = _cp_compose(row, cname, link, channel=chan)
+            payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
+            payload["channel"] = chan
             payload.update(_ep_thread_fields(row, re_reply=False))
             posted = False
             try:
@@ -14336,6 +14392,7 @@ def _client_campaign_map(force: bool = False) -> dict:
             # Narrow jsonb-path select (egress + memory): id + the three doc
             # keys we need, not the whole draft doc (copy, prospects, ...).
             rows = _SB("GET", "campaign_drafts?select=id,client_id:doc->>client_id,"
+                              "name:doc->>name,"
                               "superseded_by:doc->>superseded_by,deleted_at:doc->>deleted_at")
             if isinstance(rows, dict):   # PostgREST rejected the alias select
                 print("[setter] client-share draft select rejected - falling back to doc",
@@ -14357,13 +14414,39 @@ def _client_campaign_map(force: bool = False) -> dict:
                 continue
             if r.get("superseded_by") or r.get("deleted_at"):
                 continue
-            cid = str(r.get("client_id") or "").strip()
             key = str(r.get("id") or "")
-            if not cid or not key.startswith("camp-sl-"):
+            if not key.startswith("camp-sl-"):
                 continue
             plat = key[len("camp-sl-"):].strip()
-            if plat:
-                base.setdefault(cid.lower(), set()).add(plat)
+            cid = _client_id_of(r.get("client_id"), r.get("name"))
+            if plat and cid:
+                base.setdefault(cid, set()).add(plat)
+        # Second source: the campaigns REGISTRY (Bjion 2026-09-05, "whichever
+        # chat it is for, that is the client - it should only show their
+        # messages"). Drafts alone missed most of a client's rows: a client
+        # with its OWN Smartlead workspace (krg, grout, asteri) owns every
+        # campaign in it, drafted or not (KRG: 3 of 6 sampled queue campaigns
+        # had no draft), and a navreo-hosted client (REViVE, Greenshift, ...)
+        # is client_id 'navreo' everywhere, so only the NAME says whose it is.
+        try:
+            reg = _SB("GET", "campaigns?select=workspace,smartlead_campaign_id,client_id,name")
+        except Exception as e:  # noqa: BLE001 - a registry blip: the drafts still stand
+            print(f"[setter] client-share registry read failed: {e}", file=sys.stderr)
+            reg = None
+        if isinstance(reg, list):
+            for r in reg:
+                if not isinstance(r, dict):
+                    continue
+                plat = str(r.get("smartlead_campaign_id") or "").strip()
+                ws = str(r.get("workspace") or "").strip().lower()
+                if not plat or not ws:
+                    continue
+                if ws in EP_WORKSPACES:
+                    cid = _client_id_of(r.get("client_id"), r.get("name"))
+                else:
+                    cid = ws     # a client's own workspace: every campaign in it is theirs
+                if cid:
+                    base.setdefault(cid, set()).add(plat)
         # Parent hop: a reply can land on a SUBSEQUENCE campaign, which carries
         # no draft doc of its own. Every campaign whose Smartlead parent is in
         # a client's base set belongs to that client too - the same reason
@@ -14381,6 +14464,37 @@ def _client_campaign_map(force: bool = False) -> dict:
         out = {k: frozenset(v) for k, v in base.items() if v}
         c.update(at=_time.time(), map=out)
         return out
+
+
+def _client_id_of(client_id, name) -> str:
+    """A campaign's client for share-scope purposes. An explicit non-navreo
+    client_id wins; otherwise the first CLIENT_NAME_CLIENT_IDS marker in the
+    campaign name; otherwise "" - Navreo-own, or nobody's. Lower-cased, the
+    shape mint_client_share / verify_client_share carry."""
+    cid = str(client_id or "").strip().lower()
+    if cid and cid != "navreo":
+        return cid
+    nm = str(name or "").lower()
+    for marker, client in CLIENT_NAME_CLIENT_IDS:
+        if marker in nm:
+            return client
+    return ""
+
+
+def _client_id_for_campaign(campaign_id) -> str:
+    """The client whose share scope contains `campaign_id` ("" when none) -
+    the inverse of _client_campaign_map, so a link minted from it always opens
+    on a view that can show the row. Never raises."""
+    cid = str(campaign_id or "").strip()
+    if not cid:
+        return ""
+    try:
+        for client, ids in sorted(_client_campaign_map().items()):
+            if cid in ids:
+                return client
+    except Exception:  # noqa: BLE001
+        pass
+    return ""
 
 
 def _client_campaign_ids(client_id) -> frozenset:
@@ -14576,8 +14690,8 @@ def _client_permalink(email: str, client_id: str, message_id: str = "") -> str:
     """Sibling of _chat_permalink for a CLIENT share link: the same deep link,
     with a freshly minted client token on the QUERY STRING - before the hash,
     or the page's `new URLSearchParams(location.search)` at boot never sees it.
-    Deliberately wired to nothing yet (Slack alerts still use _chat_permalink);
-    it exists so the composer has one correct shape to call."""
+    Wired through _alert_chat_link (2026-09-05): every alert composed for a
+    CLIENT-FACING channel carries it; internal lanes keep _chat_permalink."""
     email = (email or "").strip().lower()
     cid = str(client_id or "").strip()
     if not email or not cid:
