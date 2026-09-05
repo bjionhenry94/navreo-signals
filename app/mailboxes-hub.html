@@ -946,6 +946,22 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       return '<span class="gi"><span class="grade-badge gr-' + i[0] + '">' + i[0] + '</span>' + i[1] + '</span>';
     }).join("") + '</div>';
   }
+  function gradeOf(dom) {
+    var G = S.grades && S.grades.grades, g = G && G[String(dom || "").toLowerCase()];
+    return (g && g.grade) || null;
+  }
+  // Grade-informed Repeat-parks recommendation: Replace / Repair / Keep, from
+  // the health grade (A healthiest … E confidently below floor) plus how many
+  // verified rest cycles the domain has churned through. Returns [label, pill
+  // class, why]. Falls back to the cycle count while grades are still loading.
+  function parkRec(dom, cycAll) {
+    var g = gradeOf(dom);
+    if (g === "E") return ["Replace", "r", "grade E — confidently below the reply floor"];
+    if (g === "D") return cycAll >= 3 ? ["Replace", "r", "grade D and parked " + cycAll + "× — keeps failing after every rest"] : ["Repair", "a", "grade D — weak; one more cap-down cycle before replacing"];
+    if (g === "C") return ["Repair", "a", "grade C — marginal; watch and re-grade"];
+    if (g === "A" || g === "B") return ["Keep", "g", "grade " + g + " — healthy now; the churn was noise, stop cycling it"];
+    return cycAll >= 3 ? ["Replace", "r", "parked " + cycAll + "× with no recent sends to grade"] : ["Keep", "g", "not enough recent data — keep for now"];
+  }
   function actBtn(act, domain, id, label, primary) {
     var attrs = 'data-act="' + act + '"' + (domain != null ? ' data-domain="' + esc(domain) + '"' : '') + (id != null ? ' data-id="' + esc(id) + '"' : '');
     // Design-system button (navreo.css): .btn.sm base, .primary for the orange emphasis variant.
@@ -1087,7 +1103,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var body = rows.slice(0, MGR_CAP).map(function (r) {
       var cyc = r.cycles || 0, cycAll = r.cycles_all != null ? r.cycles_all : cyc;
       cycTotal += cyc; cycAllTotal += cycAll;
-      var bad = cycAll >= 3; if (bad) retire++;
+      var rec = parkRec(r.domain, cycAll); if (rec[0] === "Replace") retire++;
       var rr;
       if (r.reply_rate_30d != null) rr = r.reply_rate_30d.toFixed(2) + '% <span class="t-mut">(' + comma(r.sent_30d || 0) + ' sent)</span>';
       else { var d = rrByDom[r.domain];
@@ -1096,7 +1112,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var status = r.resting_now
         ? pill("n", "resting now" + (r.resting_days ? " · day " + r.resting_days : "")) + (restDue[r.domain] ? ' ' + dueChip(restDue[r.domain]) : '')
         : pill("g", "live — sending");
-      var verdict = bad ? pill("r", "retire candidate") : cycAll >= 2 ? pill("a", "watch") : pill("n", "monitor");
+      var verdict = '<span class="pill ' + rec[1] + '" title="' + esc(rec[2]) + '">' + rec[0] + '</span>';
       var spans = Array.isArray(r.cycle_spans) && r.cycle_spans.length
         ? ' title="' + esc(r.cycle_spans.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
       var spansAll = Array.isArray(r.cycle_spans_all) && r.cycle_spans_all.length
@@ -1117,9 +1133,9 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       "verified against the daily cap snapshots (hover a number for the dates). Park orders that were undone before a rest was served are NOT counted. " +
       "A rest still in progress shows as a countdown and is not a cycle until the domain is back. " +
       "<b>Reply rate (30d)</b> = Smartlead's rolling 30-day replies ÷ sent across every mailbox on the domain" + (asOf ? ", snapshot " + esc(asOf) : "") + ". " +
-      "A domain at 3+ completed cycles keeps failing after every real rest: retire or replace it. " +
-      (retire ? '<button class="btn sm primary" data-act="copy-park-prompt-all">Copy a retire prompt for the ' + retire + ' candidate(s)</button> — paste it into Claude Code to work through them.' : '');
-    return tableWrap('<th>Domain</th><th class="num">Completed rest cycles (' + days + 'd)</th><th class="num">All time</th><th class="num">Last ordered</th><th class="num">Reply rate (30d)</th><th>Status</th><th>Verdict</th>', body, null, foot);
+      "<b>Recommendation</b> pairs the health grade with the cycle count: <b>Replace</b> = grade E, or grade D parked 3+ times; <b>Repair</b> = grade C/D worth one more cap-down cycle; <b>Keep</b> = grade A/B, where the churn was just noise. " +
+      (retire ? '<button class="btn sm primary" data-act="copy-park-prompt-all">Copy a replace prompt for the ' + retire + ' Replace candidate(s)</button> — paste it into Claude Code to work through them.' : '');
+    return gradeLegend() + tableWrap('<th>Domain</th><th class="num">Completed rest cycles (' + days + 'd)</th><th class="num">All time</th><th class="num">Last ordered</th><th class="num">Reply rate (30d)</th><th>Status</th><th>Recommendation</th>', body, null, foot);
   }
   // ---- Not warming (old flow "notwarming"): Domain / mailbox·Batch·Warmup·Action(Re-enable)
   function mgrWarmupOff() {
@@ -1338,9 +1354,10 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     var b = e.target.closest("[data-act]"); if (!b) return;
     var act = b.getAttribute("data-act");
     if (act === "copy-park-prompt-all") {
-      // Retire candidates (3+ completed rest cycles) first; fall back to every flagged domain.
+      // Replace candidates (grade-informed: grade E, or grade D parked 3+ times,
+      // or a churner with no recent data) first; fall back to every flagged domain.
       var pcAll = parkChurnListC() || [];
-      var pcRows = pcAll.filter(function (r) { return ((r.cycles_all != null ? r.cycles_all : r.cycles) || 0) >= 3; });
+      var pcRows = pcAll.filter(function (r) { return parkRec(r.domain, (r.cycles_all != null ? r.cycles_all : r.cycles) || 0)[0] === "Replace"; });
       if (!pcRows.length) pcRows = pcAll;
       if (!pcRows.length) return;
       var pcOld = b.textContent;
