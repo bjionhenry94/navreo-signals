@@ -163,7 +163,7 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
 .round-strip .rs-sub { font-size: 12.5px; color: var(--ink-3); }
 .round-strip .rs-check { color: var(--orange-500, #D97A2B); font-weight: 600; }
 .round-strip .rs-text { font-weight: 600; }
-.round-strip .db-review { margin: 0 0 0 auto; color: var(--orange-600, #C4641F); }
+.round-strip .db-review { margin: 0 0 0 auto; color: var(--orange-600, #C4641F); font-size: 13px; }
 .done-banner .db-review { display: inline-block; margin-top: 10px; font-size: 12.5px; color: var(--ink-3); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 @media (max-width: 520px) { .interview .iv-row { flex-direction: column; align-items: stretch; } .interview .iv-row .btn { width: 100%; justify-content: center; } }
 .grade-btns .btn { flex: 1; justify-content: center; padding: 12px 14px; font-size: 13.5px; }
@@ -399,6 +399,7 @@ let generating = false; // guards the POST /training/generate and /training/rech
    2026-08-16, revision 2), so the client page is rating rounds only - no
    chat pane, no uploads. */
 let ROUND_IDS = null;
+let ROUND_START_DISP = null;   // displayed score when the current round opened (drives the "+N toward 100" delta)
 const ROUND_SIZE = 3;   // owner ruling 2026-08-20: rounds of 3, was 5
 const ROUND_CAP = 17;           // ~TRAINING_BANK_MAX(50) / ROUND_SIZE(3): consume the
                                 // whole pre-built pool, then end (owner ruling 2026-08-22)
@@ -1053,6 +1054,7 @@ function beginRoundIfNeeded() {
   }
   FILLER_TRIED = false; // each hold gets at most ONE filler set (max two question rounds per transition)
   ROUND_IDS = currentUnanswered().filter((c) => caseFresh(c)).slice(0, ROUND_SIZE).map((c) => c.id);
+  ROUND_START_DISP = displayScore(Number(READINESS.score) || 0);
   let n = 0, sitting = 0;
   try {
     n = Number(SS.get("trainRoundNum") || "0");
@@ -1715,7 +1717,7 @@ function renderRoundDone() {
     ? `
     <div class="round-strip" id="roundStrip">
       <span class="rs-check">✓</span>
-      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${total && right < total ? `the ${total - right} we got wrong now train${total - right === 1 ? "s" : ""} the next round` : "all three now train the next round"}</span>
+      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${(ROUND_START_DISP != null && disp > ROUND_START_DISP) ? `+${disp - ROUND_START_DISP} toward your 100 · ` : ""}${total && right < total ? `the ${total - right} we got wrong now train${total - right === 1 ? "s" : ""} round ${roundNum + 1}` : `all ${total || "three"} now train round ${roundNum + 1}`}</span>
       <span class="db-msg" id="doneMsg" hidden>${msg}</span>
     </div>
     <div id="interviewHost"></div>
@@ -2265,7 +2267,7 @@ function mountInterviewForm() {
   const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
     title: _nq === 1 ? "One optional question" : `${_nq} optional questions`,
-    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Your answer goes into round ${rn + 1}.</span>`,
+    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Press the button any time - round ${rn + 1} starts as soon as retraining finishes, and your answer goes with it.</span>`,
     cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
