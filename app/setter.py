@@ -1510,6 +1510,11 @@ _WIRING_ADMIT_RES = [
 ]
 
 
+_INTERNAL_VOICE_RE = re.compile(
+    r"\b(?:the\s+)?inbox\s+manager\b|\bthe\s+manual\b|\b(?:our|the|my)\s+instructions\s+(?:say|state|allow)"
+    r"|\bthe\s+(?:ai\s+)?assistant\b", re.IGNORECASE)
+
+
 def _text_admits_missing_wiring(text: str) -> bool:
     """True when the text tells the lead a phone number/booking link is
     missing, not set up, or unavailable."""
@@ -1673,6 +1678,16 @@ def lint_draft(html: str, ctx: dict):
                        "not set up, or unavailable. Answer with what you have - propose "
                        "the two times (using the [BOOKING LINK] placeholder rule when no "
                        "link exists) with zero comment about the gap.")
+    # INTERNAL-VOICE LEAK (live 2026-09-05: the merged manual said "the inbox
+    # manager may share a starter price range: 888$K+" and the redraft told
+    # the LEAD "the inbox manager may share a starter price range of 888$K+").
+    # The manual's third-person rules are never quoted to a prospect - the
+    # reply is written in first person, as the sender.
+    if _INTERNAL_VOICE_RE.search(_low_plain):
+        return False, ("Never refer to 'the inbox manager', 'the manual', 'the instructions' "
+                       "or 'the assistant' in a reply - the lead must never see our internal "
+                       "rules quoted back. Say the same fact in first person as the sender "
+                       "('I can share a starter range of ...').")
     # ANSWER-PRICING-FIRST (owner report 2026-08-27: a bare "What's your
     # price?" got an assessment preamble as paragraph one - "tone deaf, that
     # first paragraph is irrelevant". The answer-first prompt rule keeps
