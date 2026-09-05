@@ -3457,10 +3457,25 @@ function unifiedConvoKey(row) {
    array. When a hit and a local row are the same conversation the LOCAL row
    wins (it carries the stable queue id + full-control open) and the hit is
    dropped — that's the merge, and it's what kills the old double-render. */
+/* Founder panel fix 7 (2026-09-06): the queue list arrives ordered by the row's
+   created_at - when the PROSPECT wrote in - which is right for Needs review and
+   wrong for Sent: a reply sent this morning sat below one sent last week purely
+   because that person had written in earlier. On the Sent pill, in client mode
+   only, order by OUR own send time (sent_at, falling back to updated_at, both
+   present on the list payload), newest first. Every other pill, and the whole
+   owner page, keeps the server's order. */
+function clientSentOrder(rows) {
+  if (!CLIENT_MODE || currentStatus !== "sent") return rows;
+  return [...rows].sort((a, b) => {
+    const ta = String((a && (a.sent_at || a.updated_at)) || "");
+    const tb = String((b && (b.sent_at || b.updated_at)) || "");
+    return ta === tb ? 0 : (ta < tb ? 1 : -1);
+  });
+}
 function unifiedInboxRows() {
   const local = visibleInboxRows();
   const q = inboxSearchQuery.trim();
-  if (!q || q.length < 3 || SL_SEARCH.q !== q || !(SL_SEARCH.results || []).length) return local;
+  if (!q || q.length < 3 || SL_SEARCH.q !== q || !(SL_SEARCH.results || []).length) return clientSentOrder(local);
   const localKeys = new Set(local.map(unifiedConvoKey).filter(Boolean));
   const extra = [];
   for (const h of SL_SEARCH.results) {
@@ -3482,7 +3497,7 @@ function unifiedInboxRows() {
     const ka = unifiedConvoKey(a) || "", kb = unifiedConvoKey(b) || "";
     return ka < kb ? 1 : (ka > kb ? -1 : 0);
   });
-  return merged;
+  return clientSentOrder(merged);
 }
 /* A one-line, unobtrusive footer under the unified list — NOT a second result
    section. It only ever says "still searching Smartlead" or surfaces an error;
