@@ -1996,8 +1996,7 @@ async function maybeOfferFillerQuestions() {
           title: "While that trains - a few more quick questions",
           sub: "Answer these and the next scenarios are usually ready the moment you finish. Skipping just shows the timer.",
           cta: "Send answers", skip: "Skip - just wait" })
-      + `<div class="rp-bar-track" style="overflow:hidden;margin-top:16px"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
-    startWaitBar();
+      + `</div></div>`;  // no progress bar under the questions (owner ruling 2026-09-05) - the bar returns only if they skip
     const backToBar = () => {
       shortRoundDeadline = Date.now() + 150000; // fresh window after the questions (2026-09-02)
       if (view === "shortwait") paintPlainWaitBar();
@@ -2251,13 +2250,16 @@ function mountInterviewForm() {
     // Questions are now on screen: the copy may say so, and Start becomes a skip.
     const dm = document.getElementById("doneMsg");
     if (dm) dm.textContent = `We're at ${displayScore(Number(READINESS.score) || 0)} of the 100 goal. We're training on what you just taught us - answer these while it works, and the next round opens the moment you're done.`;
+    // The form's own skip starts the round, so the banner's Start would be
+    // a second button for the same action (owner: "buttons duplicated",
+    // 2026-09-05) - hide it while the questions are up.
     const gb = document.getElementById("doneGenerateBtn");
-    if (gb) { gb.textContent = `Skip the questions and start round ${rn + 1}`; gb.classList.remove("primary"); }
+    if (gb) gb.hidden = true;
   }
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
     title: "Before the next round - a few quick questions",
     sub: "We're training on what you just taught us. The next round opens the moment you send these.",
-    cta: `Send answers and start round ${rn + 1}`, skip: "Skip and wait for the round",
+    cta: `Send answers and start round ${rn + 1}`, skip: `Skip the questions and start round ${rn + 1}`,
   } : {
     title: "While that builds - a few quick questions",
     sub: "Your answers go straight into the next replies. One line each, skip any.",
