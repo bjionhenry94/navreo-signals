@@ -149,6 +149,7 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
   padding: 9px 11px; border: 1px solid var(--line-2); border-radius: 8px; }
 .interview .iv-row { display: flex; gap: 10px; align-items: center; margin-top: 4px; }
 .interview .iv-skip { font-size: 12.5px; color: var(--ink-3); cursor: pointer; }
+.interview .iv-skip.ready { font-size: 13px; color: var(--orange-600, #C4641F); text-decoration: none; }
 
 .train-verdict { border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; }
 .grade-q { margin: 0 0 18px; }
@@ -497,12 +498,29 @@ try {
   // answers activate immediately on the next visit.
   TEACHINGS.forEach((x) => { delete x.d; });
 } catch { TEACHINGS = []; }
-function recordTeaching(at, srcText, topicsOverride, deferred) {
+const TEACH_STOP = new Set("about above after again against being below between could every first found great " +
+  "having might never often other people place right should since still their there these thing think those " +
+  "three through under until where which while would write answer question please exact write paste inbox manager " +
+  "should lead leads reply replies default single number minutes minute".split(" "));
+function teachKeywords(text) {
+  return [...new Set(String(text || "").toLowerCase().replace(/https?:\/\/\S+/g, " ")
+    .split(/[^a-z0-9€£$%]+/).filter((w) => w.length >= 5 && !TEACH_STOP.has(w)))].slice(0, 24);
+}
+function recordTeaching(at, srcText, topicsOverride, deferred, kind) {
   if (!at) return;
   const topics = (Array.isArray(topicsOverride) && topicsOverride.length)
     ? [...new Set(topicsOverride)] : teachTopics(srcText);
-  const global = topics.length === 0 || topics.includes("booking") || topics.includes("phone");
+  // WAIT ELIMINATION (owner 2026-09-05): an INTERVIEW answer with no
+  // recognised topic used to be GLOBAL - one untopiced intake question
+  // ("minimum monthly spend?") made all 40 cards stale and the first round
+  // waited on a full-pool redraft. Such answers now gate only cards whose
+  // text shares a content word with the question/answer. Owner NOTES with
+  // no topic stay global (style rules shape every reply); booking/phone
+  // wiring stays global (it changes the times/links machinery everywhere).
+  const wiring = topics.includes("booking") || topics.includes("phone");
+  const global = wiring || (topics.length === 0 && kind !== "interview");
   const entry = { at, topics, global };
+  if (!global && topics.length === 0) entry.kw = teachKeywords(srcText);
   // FILLER PIPELINING (owner ask 2026-09-01): answers given while a hold
   // is on screen are DEFERRED - they must never extend the hold they were
   // given during. They activate when the next round composes, so the round
@@ -541,9 +559,34 @@ function caseFresh(c, opts) {
   const base = TEACHINGS.length ? TEACHINGS : [{ at: lastFeedbackAt, topics: [], global: true }];
   const ledger = withDeferred ? base : base.filter((t) => !t.d); // deferred filler answers gate the NEXT round
   if (!ledger.length) return true;
+  const id = String((c && c.id) || "");
+  if (id && STALE_OK.has(id)) return true; // served under the 10s fallback with an honest note
   const ct = cardTopics(c);
+  const ctext = cardText(c);
   return !ledger.some((t) => t.at > stamp
-    && (t.global || (t.topics || []).some((k) => ct.includes(k))));
+    && (t.global || (t.topics || []).some((k) => ct.includes(k))
+        || (t.kw || []).some((w) => ctext.includes(w))));
+}
+const STALE_OK = new Set();
+const CARD_TEXT_CACHE = {};
+function cardText(c) {
+  const id = String((c && c.id) || "");
+  if (id && CARD_TEXT_CACHE[id] !== undefined) return CARD_TEXT_CACHE[id];
+  const t = (String(((c && c.inbound) || {}).body || "") + " " + String((c && c.draft_html) || "")).toLowerCase();
+  if (id) CARD_TEXT_CACHE[id] = t;
+  return t;
+}
+/* Cards held back ONLY by untopiced/keyword teachings (never by a booking,
+   phone, pricing or other topic match) may be served after a 10s hold with
+   an honest note - the owner's wait budget outranks a style-only redraft. */
+function staleOnlyByStyle(c) {
+  const stamp = String((c && (c.redrafted_at || c.generated_at)) || "");
+  if (c && c.taught_fact_missing) return false;
+  const ct = cardTopics(c);
+  const newer = TEACHINGS.filter((t) => t.at > stamp && !t.d);
+  if (!newer.length) return false;
+  return newer.every((t) => !(t.topics || []).length || !(t.topics || []).some((k) => ct.includes(k)))
+    && !newer.some((t) => (t.topics || []).includes("booking") || (t.topics || []).includes("phone"));
 }
 
 /* ── Background-generation polling state ──────────────────────────────────
@@ -1591,6 +1634,13 @@ function render() {
   }
   DISPLAYED_CASE_ID = unanswered[idx] ? String(unanswered[idx].id) : null;
   renderCase(unanswered, idx);
+  if (DISPLAYED_CASE_ID && STALE_OK.has(DISPLAYED_CASE_ID)) {
+    // Honest note for a card released by the 10s fallback (owner 2026-09-05).
+    const host = document.querySelector("#trainApp .case-card, #trainApp .tcase, #trainApp .card") || document.getElementById("trainApp");
+    if (host && !document.getElementById("staleOkNote")) {
+      host.insertAdjacentHTML("afterbegin", `<div id="staleOkNote" style="font-size:12.5px;color:var(--ink-3);margin:0 0 10px">Drafted just before your latest note - the next replies carry it.</div>`);
+    }
+  }
   maybeStartTutorial(); // no-op once seen; waits for the first real card
 }
 
@@ -1872,8 +1922,10 @@ function stopShortRoundPoll() {
 }
 let shortRoundDeadline = 0;
 let shortRoundHardCap = 0;
+let shortRoundStartedAt = 0;
 function startShortRoundPoll() {
   stopShortRoundPoll();
+  shortRoundStartedAt = Date.now();
   shortRoundDeadline = Date.now() + 150000;
   shortRoundHardCap = Date.now() + 6 * 60 * 1000; // absolute bound (owner ask 2026-09-02: never bounce out of a hold while redrafting)
   let shortBusy = false; // F1
@@ -1887,6 +1939,26 @@ function startShortRoundPoll() {
       const c = CASES.find((x) => String(x.id) === String(id));
       return c && !caseFresh(c);
     });
+    // Questions on screen and the round is ready: say so on the skip link,
+    // so nobody is ever stuck behind an optional form (owner 2026-09-05).
+    if (fillerFormActive() && currentUnanswered().some((c) => caseFresh(c))) {
+      const sk = document.getElementById("ivSkipBtn");
+      if (sk && !sk.classList.contains("ready")) { sk.classList.add("ready", "btn"); sk.textContent = "Scenarios are ready - continue"; }
+    }
+    // 10-SECOND FALLBACK (owner 2026-09-05: no loader over 10s): nothing
+    // fresh and no questions to answer -> release cards held back only by
+    // style-level teachings, with an honest note on the card.
+    if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 10000
+        && !currentUnanswered().some((c) => caseFresh(c))) {
+      const rel = currentUnanswered().filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
+      if (rel.length) {
+        rel.forEach((c) => STALE_OK.add(String(c.id)));
+        if (!ROUND_IDS || !ROUND_IDS.length) ROUND_IDS = rel.map((c) => c.id);
+        stopShortRoundPoll();
+        DISPLAYED_CASE_ID = null; idx = 0; view = "stream"; render();
+        return;
+      }
+    }
     if (fillerFormActive() && Date.now() > shortRoundDeadline - 60000) {
       // The trainer is mid-questions - never yank the form for a timeout
       // or an open; the round opens right after they submit or skip.
@@ -1991,7 +2063,16 @@ async function maybeOfferFillerQuestions() {
     // 1.5s (max 8) until a genuinely NEW set arrives (the prefetched one is
     // promoted the moment the current set is fully landed).
     let qs = [];
-    for (let attempt = 0; attempt < 8; attempt++) {
+    // A set already in hand (staged by an earlier fetch, never answered)
+    // mounts at once - the bar is never the first thing on screen then.
+    const localIv = INTERVIEWS.slice().reverse().find((iv) => iv && (iv.questions || []).length
+      && !Object.keys(iv.answers || {}).length
+      && (iv.questions || []).some((q) => !ANSWERED_IV_LOCAL.ids.has(String(q.id))));
+    if (localIv) {
+      qs = (localIv.questions || []).filter((q) => !ANSWERED_IV_LOCAL.ids.has(String(q.id))
+        && !ANSWERED_IV_LOCAL.texts.has(String(q.q || "").trim().toLowerCase())).slice(0, 5);
+    }
+    for (let attempt = 0; attempt < 8 && !qs.length; attempt++) {
       const iv = await fetchInterviewQuestions();  // instant when a set was prefetched (2026-09-02)
       qs = ((iv && iv.questions) || [])
         .filter((q) => !ANSWERED_IV_LOCAL.ids.has(String(q.id))
@@ -2144,7 +2225,7 @@ function streamOneInterviewAnswer(inp) {
     if (res && res.ok) {
       const at = (res.data && res.data.at) || "";
       bumpLastFeedbackAt(at);
-      recordTeaching(at, q.q + " " + val, null, _defer);
+      recordTeaching(at, q.q + " " + val, null, _defer, "interview");
     } else delete IV_STREAM_SENT[qid]; /* retried by the final Save */
   }).catch(() => {
     pendingFeedbackSync = Math.max(0, pendingFeedbackSync - 1);
@@ -2222,7 +2303,7 @@ async function submitInterviewAnswers(iv, onDone) {
     if (res && res.ok) {
       bumpLastFeedbackAt((res.data && res.data.at) || "");
       (sentQuestions || []).forEach((sq) => {
-        if (unsent[sq.id] !== undefined) recordTeaching((res.data && res.data.at) || "", sq.q + " " + unsent[sq.id], null, _defer);
+        if (unsent[sq.id] !== undefined) recordTeaching((res.data && res.data.at) || "", sq.q + " " + unsent[sq.id], null, _defer, "interview");
       });
       if (LEARNED_CHIP && LEARNED_CHIP.kind === "interview") LEARNED_CHIP.pending = false;
     } else {

@@ -17215,6 +17215,18 @@ def _redraft_training_pool(agent_id: str) -> int:
         # missing round_ids is a stale page / third-party caller: keep the
         # conservative merge-only contract and redraft none, since we cannot
         # know which card is under its eyes.
+        # STALE-ONLY WINDOW (wait-elimination audit 2026-09-05, live: every
+        # pass redrafted the SAME 8 head cards - already fresh - while 42
+        # others never got a stamp, so the poll heal re-kicked a new pass
+        # every ~40s forever, the round's cards took 17 minutes to land and
+        # the portal sat on the loader). A card whose stamp is already at or
+        # past the newest teaching is done; only stale cards enter the
+        # window, so each pass advances it and the chain terminates.
+        _cov_sw = _training_newest_teaching_at(doc)
+        def _is_stale_card(c):
+            if not _cov_sw:
+                return True
+            return str((c or {}).get("redrafted_at") or (c or {}).get("generated_at") or "") < _cov_sw
         in_round_raw = doc.get("client_round_ids")
         if in_round_raw is None:
             # No round ids on record: redraft the unanswered head in position
@@ -17222,7 +17234,7 @@ def _redraft_training_pool(agent_id: str) -> int:
             # protected a card under the client's eyes; the portal now pins
             # the displayed card and refuses stale paints, so a sweep that
             # does nothing only ever strands a hold - live-verify 2026-09-03.)
-            pool = [c for c in cases if not _is_case_answered(c.get("id"), answers)]
+            pool = [c for c in cases if not _is_case_answered(c.get("id"), answers) and _is_stale_card(c)]
             pool = pool[:TRAINING_REDRAFT_HORIZON]
         else:
             # PRIORITY, not exclusion (live-verify 2026-09-03): the client's
@@ -17234,7 +17246,7 @@ def _redraft_training_pool(agent_id: str) -> int:
             # remaining round cards now go FIRST in the window, then the rest
             # of the pool in position order.
             in_round = {str(x) for x in (in_round_raw or [])}
-            _un = [c for c in cases if not _is_case_answered(c.get("id"), answers)]
+            _un = [c for c in cases if not _is_case_answered(c.get("id"), answers) and _is_stale_card(c)]
             pool = ([c for c in _un if str(c.get("id")) in in_round]
                     + [c for c in _un if str(c.get("id")) not in in_round])
             # Rolling window (bank ruling 2026-08-20): only the next
