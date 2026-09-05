@@ -66,8 +66,8 @@ NOTION_BASE = "https://api.notion.com/v1"
 NOTION_VERSION = "2022-06-28"
 SL_BASE = "https://server.smartlead.ai/api/v1"
 # Public base for the setter links we drop into Notion. Custom-domain aware:
-# reads SIGNALS_BASE_URL (app.navreo.ai), falls back to onrender.com.
-SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL", "https://navreo-signals.onrender.com").rstrip("/")
+# reads SIGNALS_BASE_URL, default https://app.navreo.ai (Bjion 2026-09-05: links are always app.navreo.ai).
+SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL", "https://app.navreo.ai").rstrip("/")
 CONFIG_PATH = Path(__file__).resolve().parent / "booked_sync_clients.json"
 DRY = os.environ.get("BOOKED_SYNC_DRY", "") == "1"
 # Campaign statuses that can never send again — everything else gets the pause

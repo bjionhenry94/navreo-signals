@@ -50,8 +50,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import server  # noqa: E402
 
 # Public base for the campaign links we hand back. Custom-domain aware: reads
-# SIGNALS_BASE_URL (app.navreo.ai), falls back to onrender.com.
-SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL", "https://navreo-signals.onrender.com").rstrip("/")
+# SIGNALS_BASE_URL, default https://app.navreo.ai (Bjion 2026-09-05: links are always app.navreo.ai).
+SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL", "https://app.navreo.ai").rstrip("/")
 
 # What actually feeds a campaign. The first four are SIGNALS — something happened
 # out there and the source goes back daily for the next lead; the tool arms a live

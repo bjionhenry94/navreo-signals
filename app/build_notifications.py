@@ -783,7 +783,7 @@ def fetch_booked_journey_labels(campaign_id) -> set:
 # an outage must never mass-resolve real findings.
 
 SIGNALS_BASE = os.environ.get("SIGNALS_BASE_URL",
-                              "https://navreo-signals.onrender.com").rstrip("/")
+                              "https://app.navreo.ai").rstrip("/")
 
 
 def _signals_cookie() -> str:
