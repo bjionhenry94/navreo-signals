@@ -159,6 +159,10 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
 .interview .iv-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 10px; }
 .interview .iv-live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .interview .iv-live .spin { width: 11px; height: 11px; border: 2px solid var(--line-2); border-top-color: var(--orange-500, #D97A2B); border-radius: 50%; animation: fastloop-spin .8s linear infinite; flex: none; }
+.round-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 4px 14px; font-size: 14px; color: var(--ink-1); }
+.round-strip .rs-check { color: var(--orange-500, #D97A2B); font-weight: 600; }
+.round-strip .rs-text { font-weight: 600; }
+.round-strip .db-review { margin: 0 0 0 auto; color: var(--orange-600, #C4641F); }
 .done-banner .db-review { display: inline-block; margin-top: 10px; font-size: 12.5px; color: var(--ink-3); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
 @media (max-width: 520px) { .interview .iv-row { flex-direction: column; align-items: stretch; } .interview .iv-row .btn { width: 100%; justify-content: center; } }
 .grade-btns .btn { flex: 1; justify-content: center; padding: 12px 14px; font-size: 13.5px; }
@@ -1708,10 +1712,10 @@ function renderRoundDone() {
   const _actions = `${updating}${buttons}${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what we've learned</button>` : ""}`;
   el.innerHTML = holdComing
     ? `
-    <div class="done-banner ${trained ? "trained" : ""}">
-      <div class="db-icon">${trained ? "🎉" : "✓"}</div>
-      ${scoreLine}
-      <div class="db-msg" id="doneMsg">${msg}</div>
+    <div class="round-strip" id="roundStrip">
+      <span class="rs-check">✓</span>
+      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span>
+      <span class="db-msg" id="doneMsg" hidden>${msg}</span>
     </div>
     <div id="interviewHost"></div>
     <div class="done-banner" style="margin-top:12px">${_actions}</div>
@@ -2259,8 +2263,8 @@ function mountInterviewForm() {
   }
   const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
-    title: _nq === 1 ? "One quick question" : `${_nq} quick questions`,
-    sub: `<span class="iv-live"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Round ${rn + 1} opens when this and your answer are done.</span>`,
+    title: _nq === 1 ? "One quick question - optional" : `${_nq} quick questions - optional`,
+    sub: `<span class="iv-live"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Your answer is sent with the round - round ${rn + 1} opens when both are done.</span>`,
     cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
@@ -2275,13 +2279,12 @@ function mountInterviewForm() {
     const rb = document.getElementById("doneReviewBtn");
     if (rb) {
       const banner = rb.closest(".done-banner");
-      const dmEl = document.getElementById("doneMsg");
-      const resultCard = dmEl && dmEl.closest(".done-banner");
+      const strip = document.getElementById("roundStrip");
       const link = document.createElement("a");
       link.className = "db-review"; link.id = "doneReviewLink"; link.setAttribute("role", "button");
       link.textContent = "Compare your rated replies: then vs now";
       link.addEventListener("click", () => startReview());
-      if (resultCard) resultCard.appendChild(link);
+      if (strip) strip.appendChild(link);
       rb.remove();
       if (banner && !banner.querySelector("button, a")) banner.remove();
     }
@@ -2290,16 +2293,9 @@ function mountInterviewForm() {
     const sb = document.getElementById("ivSubmitBtn");
     // Fixed label (panel round 2: a caption that mutates under the cursor is
     // a moving target). The rule is stated once, in words, under the input.
-    const row = document.querySelector("#ivForm .iv-row");
-    if (row) {
-      const hint = document.createElement("div");
-      hint.className = "iv-hint";
-      hint.textContent = "Whatever you type is sent with the round.";
-      row.parentNode.insertBefore(hint, row);
-    }
     const _narrow = window.matchMedia && window.matchMedia("(max-width: 520px)").matches;
     document.querySelectorAll("#ivForm .iv-q input").forEach((inp, i) => {
-      if (!inp.placeholder) inp.placeholder = "Optional - leave blank to skip";
+      if (!inp.placeholder) inp.placeholder = "Leave blank to skip";
       inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && sb) { e.preventDefault(); sb.click(); } });
       // Desktop only: focus the first field (a phone keyboard would push the
       // one button below the fold).
