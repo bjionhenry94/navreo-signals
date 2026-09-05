@@ -155,6 +155,7 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
 .grade-q-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
 .sr-hidden-label { display: none; }
 .grade-btns { display: flex; gap: 10px; }
+.interview .iv-sub-2 { display: block; color: var(--ink-3); margin-top: 2px; }
 .interview .iv-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 10px; }
 .interview .iv-live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .interview .iv-live .spin { width: 11px; height: 11px; border: 2px solid var(--line-2); border-top-color: var(--orange-500, #D97A2B); border-radius: 50%; animation: fastloop-spin .8s linear infinite; flex: none; }
@@ -1416,7 +1417,7 @@ function renderReadinessPanel(animate) {
             <div class="rp-label">${ready ? "Ready" : "Getting to 100"}</div>
             <div class="rp-explain">${ready
               ? "We've got your voice down and we're ready to reply for you. Keep going to sharpen it further."
-              : "How often we get the reply right first time. At 100 we've got your voice down and can reply for you."}</div>
+              : "How often we get the reply right first time. At 100 we can reply for you."}</div>
           </div>
         </div>
         <div class="rp-bar-wrap">
@@ -1642,8 +1643,7 @@ function renderRoundDone() {
   const capped = roundsThisSitting() >= ROUND_CAP;
   const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
   const scoreLine = total
-    ? `<div class="round-score">${right} of ${total} right</div>
-       <div class="db-msg">Round ${roundNum} done.</div>`
+    ? `<div class="round-score">Round ${roundNum}: ${right} of ${total} right</div>`
     : "";
 
   // Round-open gate (owner ruling 2026-08-25, bug #2 "Start round 2 goes in
@@ -2259,8 +2259,8 @@ function mountInterviewForm() {
   }
   const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
-    title: `Before round ${rn + 1} - ${_nq === 1 ? "one quick question" : `${_nq} quick questions`}`,
-    sub: `<span class="iv-live"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span> Answer this while it runs; round ${rn + 1} opens as soon as both are done.`,
+    title: _nq === 1 ? "One quick question" : `${_nq} quick questions`,
+    sub: `<span class="iv-live"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Round ${rn + 1} opens when this and your answer are done.</span>`,
     cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
@@ -2279,7 +2279,7 @@ function mountInterviewForm() {
       const resultCard = dmEl && dmEl.closest(".done-banner");
       const link = document.createElement("a");
       link.className = "db-review"; link.id = "doneReviewLink"; link.setAttribute("role", "button");
-      link.textContent = "See what we learned from your ratings";
+      link.textContent = "Compare your rated replies: then vs now";
       link.addEventListener("click", () => startReview());
       if (resultCard) resultCard.appendChild(link);
       rb.remove();
@@ -2294,11 +2294,12 @@ function mountInterviewForm() {
     if (row) {
       const hint = document.createElement("div");
       hint.className = "iv-hint";
-      hint.textContent = "Optional - leave it blank to skip. Anything you type is sent with the round.";
+      hint.textContent = "Whatever you type is sent with the round.";
       row.parentNode.insertBefore(hint, row);
     }
     const _narrow = window.matchMedia && window.matchMedia("(max-width: 520px)").matches;
     document.querySelectorAll("#ivForm .iv-q input").forEach((inp, i) => {
+      if (!inp.placeholder) inp.placeholder = "Optional - leave blank to skip";
       inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && sb) { e.preventDefault(); sb.click(); } });
       // Desktop only: focus the first field (a phone keyboard would push the
       // one button below the fold).
