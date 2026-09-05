@@ -1010,7 +1010,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     if (!rows.length) return '<div class="mgr-empty">✓ No domains over ' + BOUNCE_HOT + '% bounce in the last ' + MGR_WIN + ' days.</div>';
     var body = rows.map(function (d) {
       var bn = (typeof d.bounced === "number") ? d.bounced : Math.round((d.bounce_rate || 0) * (d.sent || 0) / 100);
-      return '<tr><td class="mono">' + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+      return '<tr><td class="mono">' + gradeBadge(d.domain) + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
         '<td class="num">' + comma(d.sent) + '</td>' +
         '<td class="num" style="font-weight:700">' + comma(bn) + '</td>' +
         '<td class="num t-r">' + (d.bounce_rate).toFixed(2) + '%</td>' +
@@ -1033,7 +1033,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       mbxTotal += e.boxes;
       if (e.hb) hbCount++;
       var mbx = e.boxes ? (' <span class="t-mut">· ' + e.boxes + ' mbx</span>') : '';
-      return '<tr><td class="mono">' + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') +
+      return '<tr><td class="mono">' + gradeBadge(dom) + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') +
         // resting AND over the bounce floor — the domain is listed in both tabs
         (e.hb ? ' <span class="pill a">also high bounce</span>' : '') + '</td>' +
         '<td class="num">' + (e.boxes || '—') + '</td>' +
@@ -1101,7 +1101,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         ? ' title="' + esc(r.cycle_spans.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
       var spansAll = Array.isArray(r.cycle_spans_all) && r.cycle_spans_all.length
         ? ' title="' + esc(r.cycle_spans_all.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
-      return '<tr><td class="mono">' + esc(r.domain) +
+      return '<tr><td class="mono">' + gradeBadge(r.domain) + esc(r.domain) +
         (r.workspace && r.workspace !== "navreo" ? ' <span class="pill n">' + esc(r.workspace) + '</span>' : '') + '</td>' +
         '<td class="num" style="font-weight:700"' + spans + '>' + cyc + '×</td>' +
         '<td class="num" style="font-weight:700"' + spansAll + '>' + cycAll + '×</td>' +
