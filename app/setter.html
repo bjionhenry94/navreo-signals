@@ -2254,7 +2254,16 @@ function bumpCounts(row, from, to) {
   // server's counts are the token's OWN scope, whatever workspace those
   // campaigns live in, so the workspace test would freeze the badge of every
   // client whose workspace isn't navreo until the next reload landed.
-  if (!row || row.is_test) return;
+  if (!row) return;
+  // Founder panel fix 6 (2026-09-06): THIS is why the client's tab badges
+  // trailed the list by 5-15s after every approve/dismiss. The server's
+  // client-scope counts (_share_counts -> _scope_ok) apply the TOKEN's own
+  // is_test rule, so a test-flagged QA share - which is what a client demo or
+  // panel actually runs on - counts its test rows in the badge. This guard
+  // skipped exactly those rows, so no optimistic delta was ever recorded and
+  // the badge sat still until the next /queue fetch landed. The owner rule is
+  // unchanged (owner counts really are test-free, and navreo-only).
+  if (!CLIENT_MODE && row.is_test) return;
   if (!CLIENT_MODE && (row.workspace || "navreo") !== "navreo") return;
   const counts = KPIS.counts || (KPIS.counts = {});
   const step = (key, d) => {
