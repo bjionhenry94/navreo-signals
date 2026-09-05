@@ -155,6 +155,11 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
 .grade-q-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
 .sr-hidden-label { display: none; }
 .grade-btns { display: flex; gap: 10px; }
+.interview .iv-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 10px; }
+.interview .iv-live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.interview .iv-live .spin { width: 11px; height: 11px; border: 2px solid var(--line-2); border-top-color: var(--orange-500, #D97A2B); border-radius: 50%; animation: fastloop-spin .8s linear infinite; flex: none; }
+.done-banner .db-review { display: inline-block; margin-top: 10px; font-size: 12.5px; color: var(--ink-3); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+@media (max-width: 520px) { .interview .iv-row { flex-direction: column; align-items: stretch; } .interview .iv-row .btn { width: 100%; justify-content: center; } }
 .grade-btns .btn { flex: 1; justify-content: center; padding: 12px 14px; font-size: 13.5px; }
 .grade-btns .btn.sel.big-yes { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
 /* Owner refinement 2026-08-17: the client portal's Correct button is solid
@@ -1411,7 +1416,7 @@ function renderReadinessPanel(animate) {
             <div class="rp-label">${ready ? "Ready" : "Getting to 100"}</div>
             <div class="rp-explain">${ready
               ? "We've got your voice down and we're ready to reply for you. Keep going to sharpen it further."
-              : "This score is how often we get the reply right first time: Correct nudges it up, Needs work holds it back. At 100 we've got your voice down and can reply for you."}</div>
+              : "How often we get the reply right first time. At 100 we've got your voice down and can reply for you."}</div>
           </div>
         </div>
         <div class="rp-bar-wrap">
@@ -1638,7 +1643,7 @@ function renderRoundDone() {
   const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
   const scoreLine = total
     ? `<div class="round-score">${right} of ${total} right</div>
-       <div class="db-msg">Round ${roundNum} done - we got ${right} of ${total} right this round.</div>`
+       <div class="db-msg">Round ${roundNum} done.</div>`
     : "";
 
   // Round-open gate (owner ruling 2026-08-25, bug #2 "Start round 2 goes in
@@ -1687,7 +1692,7 @@ function renderRoundDone() {
     // label the moment the questions land; if no set arrives the round
     // starts on its own - a founder is never left looking at a skip button
     // for questions that do not exist.
-    msg = `We're at ${disp} of the 100 goal. We're training on what you just taught us - the next round opens the moment it's ready.`;
+    msg = ``;  // the score panel above owns the number (UI/UX panel 2026-09-05)
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
   } else if (ready) {
     msg = `We're at ${disp} of the 100 goal. The next round was drafted with everything you just taught us.`;
@@ -2247,36 +2252,79 @@ function mountInterviewForm() {
   if (document.getElementById("ivForm")) return;            // already mounted
   const rn = currentRoundNum();
   if (IV_GATE_MODE) {
-    // Questions are now on screen: the copy may say so, and Start becomes a skip.
-    const dm = document.getElementById("doneMsg");
-    if (dm) dm.textContent = `We're at ${displayScore(Number(READINESS.score) || 0)} of the 100 goal. We're training on what you just taught us - answer these while it works, and the next round opens the moment you're done.`;
-    // The form's own skip starts the round, so the banner's Start would be
-    // a second button for the same action (owner: "buttons duplicated",
-    // 2026-09-05) - hide it while the questions are up.
+    // Remove, don't hide: the .btn display rule beats the [hidden] attribute
+    // (live 2026-09-05: the banner Start stayed visible under the form).
     const gb = document.getElementById("doneGenerateBtn");
-    if (gb) gb.hidden = true;
+    if (gb) gb.remove();
   }
+  const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
-    title: "Before the next round - a few quick questions",
-    sub: "We're training on what you just taught us. The next round opens the moment you send these.",
-    cta: `Send answers and start round ${rn + 1}`, skip: `Skip the questions and start round ${rn + 1}`,
+    title: `Before round ${rn + 1} - ${_nq === 1 ? "one quick question" : `${_nq} quick questions`}`,
+    sub: `<span class="iv-live"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span> Answer this while it runs; round ${rn + 1} opens as soon as both are done.`,
+    cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
     sub: "Your answers go straight into the next replies. One line each, skip any.",
   });
+  if (IV_GATE_MODE) {
+    // ONE decision (UI/UX panel 2026-09-05, three reviewers): a single
+    // state-aware primary. Nothing typed -> "Start round N" (the skip path:
+    // timer only). Something typed -> "Send and start round N". No separate
+    // skip link, no second banner. The review link is navigation, not part
+    // of this decision - it moves into the result card as a quiet text link.
+    const rb = document.getElementById("doneReviewBtn");
+    if (rb) {
+      const banner = rb.closest(".done-banner");
+      const dmEl = document.getElementById("doneMsg");
+      const resultCard = dmEl && dmEl.closest(".done-banner");
+      const link = document.createElement("a");
+      link.className = "db-review"; link.id = "doneReviewLink"; link.setAttribute("role", "button");
+      link.textContent = "See what we learned from your ratings";
+      link.addEventListener("click", () => startReview());
+      if (resultCard) resultCard.appendChild(link);
+      rb.remove();
+      if (banner && !banner.querySelector("button, a")) banner.remove();
+    }
+    const sk = document.getElementById("ivSkipBtn");
+    if (sk) sk.remove();
+    const sb = document.getElementById("ivSubmitBtn");
+    // Fixed label (panel round 2: a caption that mutates under the cursor is
+    // a moving target). The rule is stated once, in words, under the input.
+    const row = document.querySelector("#ivForm .iv-row");
+    if (row) {
+      const hint = document.createElement("div");
+      hint.className = "iv-hint";
+      hint.textContent = "Optional - leave it blank to skip. Anything you type is sent with the round.";
+      row.parentNode.insertBefore(hint, row);
+    }
+    const _narrow = window.matchMedia && window.matchMedia("(max-width: 520px)").matches;
+    document.querySelectorAll("#ivForm .iv-q input").forEach((inp, i) => {
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && sb) { e.preventDefault(); sb.click(); } });
+      // Desktop only: focus the first field (a phone keyboard would push the
+      // one button below the fold).
+      if (i === 0 && !_narrow) setTimeout(() => { inp.focus({ preventScroll: true }); host.scrollIntoView({ block: "nearest" }); }, 0);
+    });
+  }
   document.querySelectorAll("#ivForm .iv-q input").forEach((inp) => {
     const qid = inp.getAttribute("data-qid");
     if (IV_TYPED[qid]) inp.value = IV_TYPED[qid];
     inp.addEventListener("input", () => { IV_TYPED[qid] = inp.value; });
   });
   const submitBtn = document.getElementById("ivSubmitBtn");
-  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(IV_CURRENT, () => {
+  if (submitBtn) submitBtn.addEventListener("click", () => {
+    if (IV_GATE_MODE && ![...document.querySelectorAll("#ivForm .iv-q input")].some((i) => i.value.trim())) {
+      // Nothing typed: the single button IS the skip (timer only, never these questions again).
+      ivDismissedForRound = currentRoundNum(); IV_TYPED = {}; host.innerHTML = "";
+      FILLER_TRIED = true; startNextRoundOrGenerate(); return;
+    }
+    submitInterviewAnswers(IV_CURRENT, () => {
     IV_TYPED = {};
     const h = document.getElementById("interviewHost");
     if (h) h.innerHTML = "";
     if (IV_GATE_MODE) { FILLER_TRIED = true; startNextRoundOrGenerate(); return; } // questions done -> the round (2026-09-02)
     if (view === "done") render();
-  }));
+    });
+  });
   const skipBtn = document.getElementById("ivSkipBtn");
   if (skipBtn) skipBtn.addEventListener("click", () => {
     ivDismissedForRound = currentRoundNum();
