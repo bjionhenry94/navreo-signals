@@ -2264,8 +2264,12 @@ async function _loadQueueInner(prefetch) {
     if (!QUEUE_ROWS.length && _allRowsLoaded && ALL_ROWS.length) {
       QUEUE_ROWS = clientPillRows(ALL_ROWS, currentStatus);
     }
-    showError("Couldn't refresh the queue: " + res.error +
-      (QUEUE_ROWS.length ? " - showing the last loaded conversations." : ""));
+    // U5: "queue" is banned client vocabulary and the raw HTTP status helps nobody.
+    showError(CLIENT_MODE
+      ? "Couldn't refresh just now — showing the conversations we already loaded. Trying again shortly."
+      : "Couldn't refresh the queue: " + res.error +
+        (QUEUE_ROWS.length ? " - showing the last loaded conversations." : ""));
+
     // Self-heal (502 fix 2026-08-09): don't leave the banner sitting for the
     // full 60s poll gap — one gentle re-try in ~20s clears it as soon as the
     // restarting instance is back. Single-flight: never stacks timers.
@@ -2622,8 +2626,11 @@ async function openUnresolvedRow(id) {
   const res = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(id)}`);
   const row = res.ok && res.data && res.data.row;
   if (!row) {
-    if (t) showDetailError("Couldn't load the full conversation: " + (res.error || "row not found"));
-    else showError("Couldn't open that conversation: " + (res.error || "row not found"));
+    // U6: "row not found" is a database phrase.
+    const notFound = "Couldn't open that conversation — refresh the page and try again.";
+    if (t) showDetailError(CLIENT_MODE ? notFound : "Couldn't load the full conversation: " + (res.error || "row not found"));
+    else showError(CLIENT_MODE ? notFound : "Couldn't open that conversation: " + (res.error || "row not found"));
+
     return;
   }
   const idx = ALL_ROWS.findIndex((r) => String(r.id) === String(id));
@@ -4046,7 +4053,10 @@ function renderDetail(row) {
     // its own queue item. The "No reply from them since this was sent" line was
     // noise the owner asked to drop (2026-08-10).
     repliedBackHtml = later
-      ? `<div class="sent-line auto_sent">They replied ${pulledAgo(later.replied_at)} - it's in this queue as its own item.</div>`
+      ? `<div class="sent-line auto_sent">${CLIENT_MODE                                 /* G12 */
+          ? `They replied ${pulledAgo(later.replied_at)} — it's in your inbox as its own conversation.`
+          : `They replied ${pulledAgo(later.replied_at)} - it's in this queue as its own item.`}</div>`
+
       : "";
   }
 
@@ -5460,13 +5470,19 @@ function composerActionsHtml(row) {
   const sel = GATE_SELECTION[row.id];
   const gateApplies = !!row.smartlead_campaign_id;
   const disabled = (gateApplies && !sel) ? "disabled" : "";
-  const label = sel
-    ? (sel.choice === "push" ? `Approve + ${esc(sel.name || "Follow-up")}` : "Approve — no follow-up")
-    : "Approve";
+  // G5: "Approve + Meeting Request" reads as "approve the meeting request",
+  // the opposite of what it does. Client mode names the action, not the track.
+  const label = CLIENT_MODE
+    ? (sel ? (sel.choice === "push" ? "Send reply + follow-up" : "Send reply, no follow-up") : "Send reply")
+    : (sel
+        ? (sel.choice === "push" ? `Approve + ${esc(sel.name || "Follow-up")}` : "Approve — no follow-up")
+        : "Approve");
+
   return `<div class="qc-actions">
     <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button" ${disabled}>${label}</button>
     <span class="qc-split">
-      <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="Regenerate with feedback" aria-label="Regenerate with feedback">&#9662;</button>
+      <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Rewrite it" : "Regenerate"}</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}" aria-label="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}">&#9662;</button>
+
     </span>
     <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>${DISMISS_LABEL}</button>
     ${gateApplies ? gateLockHintHtml(row.id, !!sel) : ""}
@@ -5531,21 +5547,25 @@ function gateHintSeen() { return localStorage.getItem("setterGateHintSeen") === 
 function gateHintHtml() {
   if (CLIENT_MODE) return ""; // G2: never advertise double-click-to-send to a client
   if (gateHintSeen()) return "";
-
-  return `<div class="small muted sg-hint">Double-click a chip to pick it and send in one step - or press 1-5, then Enter.</div>`;
+  return
+ `<div class="small muted sg-hint">Double-click a chip to pick it and send in one step - or press 1-5, then Enter.</div>`;
 }
 function sendGateChipsHtml(row, subs) {
   const sel = GATE_SELECTION[row.id];
   const chips = (subs || []).map((s, i) => {
     const on = !!(sel && sel.choice === "push" && String(sel.subSequenceId) === String(s.id));
     return `<button type="button" class="chip sg-chip${on ? " on" : ""}" data-id="${esc(row.id)}"
-      data-choice="push" data-sub-id="${esc(s.id)}" data-name="${esc(s.name || "Follow-up")}" data-idx="${i}">${esc(s.name || "Follow-up")}</button>`;
+      data-choice="push" data-sub-id="${esc(s.id)}" data-name="${esc(s.name || "Follow-up")}" data-idx="${i}">${CLIENT_MODE ? "Follow-up: " : ""}${esc(s.name || "Follow-up")}</button>`;
+
   });
   const noneOn = !!(sel && sel.choice === "none");
   chips.push(`<button type="button" class="chip sg-chip sg-none${noneOn ? " on" : ""}" data-id="${esc(row.id)}"
     data-choice="none" data-idx="${(subs || []).length}">None</button>`);
   const note = (subs || []).length === 0
-    ? `<div class="small muted" style="margin-bottom:6px">This campaign has no follow-up sequences set up — choose None to unlock Approve.</div>` : "";
+    ? `<div class="small muted" style="margin-bottom:6px">${CLIENT_MODE
+        ? "No automatic follow-ups are set up for this campaign yet — choose None to send just this one reply."
+        : "This campaign has no follow-up sequences set up — choose None to unlock Approve."}</div>` : "";
+
   return `<div class="send-gate" id="gate-${esc(row.id)}">
     ${CLIENT_MODE
       // Client language (Bjion 2026-09-05): a titled section that says what
@@ -5554,7 +5574,8 @@ function sendGateChipsHtml(row, subs) {
       // only control on this page that sends anything. Party-neutral: the
       // reader may be the person doing the replying. Owner label unchanged.
       ? `<div class="sg-label">Automated follow-up</div>
-    <div class="sg-intro">Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Approve</b>, which unlocks once you've chosen.</div>`
+    <div class="sg-intro">Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Send reply</b>, which unlocks once you've chosen.</div>`
+
       : `<div class="sg-label">Choose the automated follow-up sequence — pick one to unlock Approve</div>`}
     ${note}
     <div class="sg-chips">${chips.join("")}</div>
@@ -5588,12 +5609,16 @@ function updateApproveButton(rowId) {
   }
   const sel = GATE_SELECTION[rowId];
   if (!sel) {
-    btn.disabled = true; btn.textContent = "Approve";
+    btn.disabled = true; btn.textContent = CLIENT_MODE ? "Send reply" : "Approve";   // G5
+
     if (hint) hint.style.display = "";
     return;
   }
   btn.disabled = false;
-  btn.textContent = sel.choice === "push" ? `Approve + ${sel.name || "Follow-up"}` : "Approve — no follow-up";
+  btn.textContent = CLIENT_MODE                                                       // G5
+    ? (sel.choice === "push" ? "Send reply + follow-up" : "Send reply, no follow-up")
+    : (sel.choice === "push" ? `Approve + ${sel.name || "Follow-up"}` : "Approve — no follow-up");
+
   if (hint) hint.style.display = "none";
 }
 function selectGateChip(rowId, chip) {
@@ -5744,7 +5769,10 @@ function learnIntroHtml() {
   </div>`;
 }
 function feedbackPlaceholder() {
-  if (CLIENT_MODE) return "";
+  // G7: dropping the owner's training wording left a client with a blank box
+  // and no idea what to type. Give guidance without promising it "learns".
+  if (CLIENT_MODE) return "What should be different? e.g. shorter, mention pricing";
+
   return trainingModeOn()
     ? "Tell it what to change - it'll remember going forward"
     : "Tell it what to change - applies to this reply only";
@@ -5772,7 +5800,8 @@ function composerFeedbackHtml(row) {
   const noteHtml = note ? `<div class="qc-note" id="note-${esc(row.id)}">${esc(note)}</div>` : "";
   return `${noteHtml}<div class="qc-feedback" id="fb-${esc(row.id)}" style="display:none">
     <input type="text" class="qc-feedback-input" data-id="${esc(row.id)}" placeholder="${feedbackPlaceholder()}">
-    <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">Regenerate with feedback</button>
+    <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Rewrite it" : "Regenerate with feedback"}</button>
+
   </div>`;
 }
 /* Manual link (owner ask 2026-07-17). The button sits with the "Your reply"
@@ -6521,8 +6550,13 @@ async function doSend(btn) {
       if (String(selectedRowId) === String(id)) renderDetail(row);
     }
     const msg = (res.data && (res.data.error || (res.data.row && res.data.row.error))) || res.error || "the send did not go through";
-    showError("Couldn't send the reply: " + msg);
-    showDetailError("Couldn't send the reply: " + msg);
+    // U7: the tail is whatever the server or Smartlead returned - drop it for clients.
+    const sendErr = CLIENT_MODE
+      ? "Couldn't send the reply just now — nothing went out. Try again in a moment."
+      : "Couldn't send the reply: " + msg;
+    showError(sendErr);
+    showDetailError(sendErr);
+
     return;
   }
   clearError();
@@ -6973,7 +7007,10 @@ function applyRedraftedRow(id, fresh) {
   // painted nothing and said nothing — the second click then "worked" only
   // because the cache TTL had passed. Every path now paints or explains.
   if (!fresh) {
-    showDetailError("The regeneration finished but returned nothing usable - click Regenerate once more.");
+    showDetailError(CLIENT_MODE                                                        // U9
+      ? "That didn't produce anything — press Rewrite it once more."
+      : "The regeneration finished but returned nothing usable - click Regenerate once more.");
+
     return;
   }
   let merged = null;
@@ -6998,8 +7035,12 @@ function applyRedraftedRow(id, fresh) {
   if (String(selectedRowId) === String(id)) {
     renderDetail(merged);
     if (merged.status === "needs_review" && !merged.draft_body) {
-      showDetailError("No draft came back: " +
-        (merged.decision_reason || "the drafter returned an empty reply - regenerate with feedback to steer it."));
+      // U8: decision_reason is our internal hold vocabulary.
+      showDetailError(CLIENT_MODE
+        ? "Nothing came back this time — press Rewrite it once more."
+        : "No draft came back: " +
+          (merged.decision_reason || "the drafter returned an empty reply - regenerate with feedback to steer it."));
+
     }
   }
 }
@@ -8245,7 +8286,10 @@ async function openPermalink() {
     }
   }
   if (!row) {
-    showError("Couldn't find that conversation — the link may be old, or the reply hasn't been pulled into the Setter yet.");
+    showError(CLIENT_MODE                                                              // U10
+      ? "Couldn't find that conversation — the link may be out of date."
+      : "Couldn't find that conversation — the link may be old, or the reply hasn't been pulled into the Setter yet.");
+
     return true;
   }
   clearError();   // a resolved link must not sit under a stale not-found banner
