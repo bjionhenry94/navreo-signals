@@ -1569,6 +1569,11 @@ _LINT_PRICE_RE = re.compile(
     r"|\b\d[\d,]*(?:\.\d+)?\s?[km]\b)", re.I)
 
 
+_LINT_PRICE_ASK_RE = re.compile(
+    r"how much|what(?:'s| is| are| does| would)?[^.?!\n]{0,40}\b(?:price|pricing|cost|fee|fees|charge)s?\b"
+    r"|\b(?:your|the) (?:price|pricing|fees?|rates?)\b|price (?:range|indication|point)|\bpricing\b|\bcost\?", re.I)
+
+
 def _lint_price_key(v: str) -> str:
     """'888$K+' / '$888k' / '888 k' -> '888k' - the comparable core of a price."""
     return re.sub(r"[£$€\s,+]", "", str(v or "").lower())
@@ -1694,7 +1699,14 @@ def lint_draft(html: str, ctx: dict):
     # losing to offer-context preambles, so enforce it): when the lead's
     # primary intent is pricing, the FIRST paragraph after the greeting must
     # itself be the pricing answer.
-    if str(ctx.get("primary_intent") or "") == "pricing":
+    # The lead's OWN words open the gate too (live 2026-09-05: "How much does
+    # it cost?" was classified under another intent, so every pricing check
+    # - answer-first, taught figure, bare value - was skipped and the reply
+    # carried no price at all). Quoted outreach is stripped first: our own
+    # emails talk about "cloud cost" on every line.
+    _lead_words = _strip_quoted(str(ctx.get("thread_text") or ""))[:600]
+    _lead_asks_price = bool(_LINT_PRICE_ASK_RE.search(_lead_words))
+    if str(ctx.get("primary_intent") or "") == "pricing" or _lead_asks_price:
         _pf_paras = [
             _TAG_RE.sub(" ", p).strip()
             for p in re.split(r"<br\s*/?>|</div>|</p>", text)
