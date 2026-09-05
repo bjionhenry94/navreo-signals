@@ -470,6 +470,13 @@
      (panel report 2026-08-09) — drain the colour too. */
   .inbox-shell.mobile-detail .qc-actions .qc-send:disabled { opacity: 0.6; filter: saturate(0.3); }
 
+  /* Founder panel fix 3a: on a phone the pinned bar gives .qc-send its own
+     full-width top line. In client mode the flex item is now the wrapper, so
+     the same two properties move onto it and the button fills it. */
+  body.client-mode .inbox-shell.mobile-detail .qc-actions .qc-send-wrap {
+    order: -1; flex: 1 1 100%; display: flex;
+  }
+  body.client-mode .inbox-shell.mobile-detail .qc-actions .qc-send-wrap .qc-send { flex: 1 1 auto; }
   /* Follow-up gate chips: touch-sized, sitting just above the pinned bar */
   .send-gate { margin-top: 12px; }
   .send-gate .sg-chip { min-height: 44px; }
@@ -1235,6 +1242,26 @@ body.client-mode .send-gate.sg-flash { box-shadow: 0 0 0 2px var(--accent, #2F6F
    Client only - the owner box keeps growing as it always has. */
 body.client-mode .qc-draft { max-height: 38vh; overflow-y: auto; }
 
+/* Founder panel fix 3a (2026-09-06): a DISABLED button dispatches no click at
+   all, so pressing the locked "Send reply" did precisely nothing - five of five
+   founders pressed it, twice, before hunting for the reason. In client mode the
+   button is wrapped and a transparent overlay sits on top of it WHILE it is
+   locked (CSS-driven off :disabled, so it disappears the instant a choice
+   unlocks the button - updateApproveButton only flips the property, it never
+   re-renders). The overlay carries data-gate-jump, so the existing client-boot
+   handler scrolls the chooser into view and flashes it. Owner markup unchanged. */
+body.client-mode .qc-send-wrap { position: relative; display: inline-flex; }
+body.client-mode .qc-send-lock {
+  display: none; position: absolute; inset: 0; z-index: 2;
+  cursor: pointer; border-radius: 8px; background: transparent;
+}
+body.client-mode .qc-send:disabled + .qc-send-lock { display: block; }
+/* Founder panel fix 3b: "(why?)" opened on HOVER only, so on a phone the one
+   explanation of the lock was unreachable. A tap toggles .open (handler in the
+   client-mode boot block); the hover rule above still works with a mouse. */
+body.client-mode .gate-hint .why { cursor: pointer; }
+body.client-mode .gate-hint .why.open .tooltip { display: block; }
+
 
 /* Automated follow-up section (Bjion 2026-09-05): sits between the draft
    and Approve in client mode and carries a one-line explanation. */
@@ -1492,6 +1519,21 @@ if (CLIENT_MODE) {
   };
   document.addEventListener("click", gateJump);
   document.addEventListener("keydown", gateJump);
+  /* Founder panel fix 3b (2026-09-06): "(why?)" showed its tooltip on :hover
+     only - on a phone there is no hover, so the only explanation of the locked
+     button could not be opened at all. A tap toggles .open (the CSS rule shows
+     the tooltip); tapping anywhere else closes it again. gateJump above already
+     ignores clicks inside .why, so the two handlers never fight. Client-only:
+     this listener is registered inside the client boot block. */
+  document.addEventListener("click", (e) => {
+    const why = e.target.closest && e.target.closest(".gate-hint .why");
+    document.querySelectorAll(".gate-hint .why.open").forEach((w) => {
+      if (w !== why) w.classList.remove("open");
+    });
+    if (!why) return;
+    e.preventDefault();
+    why.classList.toggle("open");
+  });
   const linkPop = document.getElementById("linkPopInput");
 
   if (linkPop) linkPop.placeholder = "Paste the URL, e.g. your booking link";
@@ -5567,8 +5609,11 @@ function gateLockHintHtml(rowId, hidden) {
   const lockLabel = CLIENT_MODE ? "Pick a follow-up first" : "Pick a follow-up track first";
   // G1: the owner tooltip advertises double-click-to-approve, a power-user fast
   // path that must never be taught to a client (it sends a real email).
+  // Founder panel fix 3c (2026-09-06): the client body is cut to the two facts
+  // that actually answer "why is this locked?" - what to pick, and that nothing
+  // leaves until Send reply is pressed.
   const whyBody = CLIENT_MODE
-    ? `Every reply needs a follow-up decision — even "None" — so nobody is quietly forgotten after you send.`
+    ? `Choose what happens after this reply: a follow-up sequence, or None. Nothing is sent until you press Send reply.`
     : `Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.`;
   // Phone gate (client mode): the action bar is pinned in view while the chips
   // that unlock it sit off-screen at the top of the reply, so the hint is the
@@ -5600,8 +5645,18 @@ function composerActionsHtml(row) {
         ? (sel.choice === "push" ? `Approve + ${esc(sel.name || "Follow-up")}` : "Approve — no follow-up")
         : "Approve");
 
+  // Founder panel fix 3a: in client mode the send button is wrapped with a
+  // transparent overlay that only shows while the button is :disabled (CSS), so
+  // a press on the locked button reaches the data-gate-jump handler instead of
+  // being swallowed. The button itself - class, data-id, handler - is untouched,
+  // and the owner page renders exactly the bare button it always did.
+  const sendBtn = `<button class="btn primary qc-send" data-id="${esc(row.id)}" type="button" ${disabled}>${label}</button>`;
+  const sendHtml = CLIENT_MODE
+    ? `<span class="qc-send-wrap">${sendBtn}<span class="qc-send-lock" data-gate-jump="${esc(row.id)}" role="button" tabindex="0" aria-label="Choose a follow-up first"></span></span>`
+    : sendBtn;
+
   return `<div class="qc-actions">
-    <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button" ${disabled}>${label}</button>
+    ${sendHtml}
     <span class="qc-split">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Rewrite it" : "Regenerate"}</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}" aria-label="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}">&#9662;</button>
 
