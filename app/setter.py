@@ -7475,7 +7475,6 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
     workspace labelling (the client reads this). `header` replaces the
     "New positive reply" line for re-replies, which are never new."""
     cat = row.get("category") or "positive"
-    snippet = clean_body(row.get("reply_body") or "")[:400]
     lines = [
         header or f"\U0001F3AF New positive reply \u2014 {cat}",
         "---------------------------",
@@ -7488,8 +7487,43 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
         lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
         lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
-    lines += ["", "Reply:", snippet or "(no body archived)"]
     return "\n".join(lines)
+
+
+def _ep_thread_fields(row: dict, re_reply: bool = False) -> dict:
+    """Extra payload fields that make the ever-positive alert thread like the
+    gold-standard categoriser: Make 9558449 posts a `Reply:` child from
+    `reply_text` and an original-email child from `original_email` /
+    `original_label` (each only when present). A fresh positive shows the FIRST
+    cold email ("First Email Sent"); a re-reply shows the last thing we sent
+    before it ("In reply to"). Best-effort — a Smartlead miss just drops the
+    original-email child; the reply child always posts. Never raises."""
+    out = {"reply_text": clean_body(row.get("reply_body") or "").strip()[:1500]
+           or "(no body archived)"}
+    try:
+        cid = row.get("smartlead_campaign_id")
+        email = (row.get("email") or "").strip()
+        if cid and email:
+            ok, hyd, _ = hydrate_lead(cid, email, row.get("smartlead_message_id") or "")
+            if ok and isinstance(hyd, dict):
+                label = "First Email Sent"
+                body = (hyd.get("first_outbound") or "").strip()
+                if re_reply:
+                    rt = str(row.get("replied_at") or "")
+                    for m in reversed(hyd.get("thread") or []):
+                        if str(m.get("type") or "").upper() == "SENT" and \
+                                (not rt or str(m.get("time") or "") <= rt):
+                            last = clean_body(str(m.get("body") or "")).strip()[:1500]
+                            if last:
+                                label, body = "In reply to", last
+                            break
+                if body:
+                    out["original_label"] = label
+                    out["original_email"] = body
+    except Exception as e:  # noqa: BLE001 — decoration, never load-bearing
+        print(f"[setter] ep thread-fields fetch failed: {type(e).__name__}",
+              file=sys.stderr)
+    return out
 
 
 def _ep_channel_override(workspace, campaign_id):
@@ -7592,7 +7626,6 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict) -> str:
     pcid = str(prior.get("smartlead_campaign_id") or "")
     pname = camp_names.get(pcid) or (f"campaign {pcid}" if pcid else "earlier campaign")
     cat = row.get("category") or "uncategorised"
-    snippet = clean_body(row.get("reply_body") or "")[:400]
     link = _ep_smartlead_link(row.get("smartlead_campaign_id"), row.get("email") or "")
     lines = [
         f"🔔 ONCE-POSITIVE lead replied — now: {cat}",
@@ -7610,7 +7643,6 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict) -> str:
         lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
         lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
-    lines += ["", "Reply:", snippet or "(no body archived)"]
     return "\n".join(lines)
 
 
@@ -7695,6 +7727,7 @@ def run_ever_positive_alerts() -> dict:
                             chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
                             if chan:
                                 payload["channel"] = chan
+                            payload.update(_ep_thread_fields(row, re_reply=True))
                             if _ep_post(payload, summary):
                                 _ep_stamp(rid, "re-reply-flip-alerted")
                                 summary["alerted"] += 1
@@ -7713,8 +7746,10 @@ def run_ever_positive_alerts() -> dict:
                         row, cname,
                         _ep_smartlead_link(row.get("smartlead_campaign_id"), email),
                         header=header)
-                    if _ep_post({"event_type": "EVER_POSITIVE_ALERT",
-                                 "text": text, "channel": shared}, summary):
+                    _sp = {"event_type": "EVER_POSITIVE_ALERT",
+                           "text": text, "channel": shared}
+                    _sp.update(_ep_thread_fields(row, re_reply=(cat == _RE_REPLY_LABEL)))
+                    if _ep_post(_sp, summary):
                         _ep_stamp(rid, kind)
                         summary["alerted"] += 1
                         if kind == "positive-shared-unclassified":
@@ -7744,6 +7779,7 @@ def run_ever_positive_alerts() -> dict:
                      prior.get("smartlead_campaign_id")])
             text = _ep_compose(row, prior, names)
             payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
+            payload.update(_ep_thread_fields(row, re_reply=True))
             chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
             if chan:
                 payload["channel"] = chan   # client campaign — default is #interested-replies
@@ -7827,7 +7863,6 @@ def _cp_smartlead_link(campaign_id, email: str) -> str:
 def _cp_compose(row: dict, cname: str, link: str) -> str:
     ws = row.get("workspace") or "client"
     cat = row.get("category") or "positive"
-    snippet = clean_body(row.get("reply_body") or "")[:400]
     lines = [
         f"🎯 New positive reply — {ws} · {cat}",
         "---------------------------",
@@ -7841,7 +7876,6 @@ def _cp_compose(row: dict, cname: str, link: str) -> str:
         lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
     if link:
         lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
-    lines += ["", "Reply:", snippet or "(no body archived)"]
     return "\n".join(lines)
 
 
@@ -7899,6 +7933,7 @@ def run_client_positive_alerts() -> dict:
             # -> #client-interested-replies (ruling 2026-08-18: the hook's
             # #interested-replies default is Navreo-own only).
             payload["channel"] = CLIENT_ALERT_CHANNELS.get(ws) or CLIENT_INTERNAL_CHANNEL
+            payload.update(_ep_thread_fields(row, re_reply=False))
             posted = False
             try:
                 _HTTP("POST", EVER_POSITIVE_HOOK, {}, payload)
