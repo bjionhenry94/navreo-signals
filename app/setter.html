@@ -7282,8 +7282,15 @@ async function doDismiss(btn) {
   // Dismissed and the category can still be set later.
   const _uRow = QUEUE_ROWS.find((r) => String(r.id) === String(id))
              || ALL_ROWS.find((r) => String(r.id) === String(id));
+  // Founder panel fix 4 (2026-09-06): the guard still fires for a client (an
+  // uncategorised reply is exactly the one worth pausing over), but its wording
+  // was ours - "never categorised", "hidden positive", "amber flag" name our
+  // pipeline, not anything on the client's screen. Same condition, client copy.
+  const _uncatConfirm = CLIENT_MODE
+    ? "Mark this conversation as needing no reply? It moves to Dismissed, where you can still find it."
+    : "This reply was never categorised - it could be a hidden positive.\n\nDismiss anyway? Its amber flag stays under Dismissed and you can still pick its category later.";
   if (_uRow && isUncategorised(_uRow) && _uRow.status === "needs_review"
-      && !window.confirm("This reply was never categorised - it could be a hidden positive.\n\nDismiss anyway? Its amber flag stays under Dismissed and you can still pick its category later.")) {
+      && !window.confirm(_uncatConfirm)) {
     btn.disabled = false;
     return;
   }
