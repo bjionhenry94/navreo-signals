@@ -6627,7 +6627,11 @@ def run_reply_sync() -> dict:
                      for r in to_process if isinstance(r, dict)
                      and r.get("email_lead_id") and r.get("last_reply_time")]
         _seen_set = _reply_sync_seen_batch(_all_mids)
-        _archived_set = _reply_in_archive_batch(WORKSPACE, _all_mids) if _seen_set is not None else None
+        # Archive check only for what the seen-set didn't settle (mirrors the
+        # old seen-first/archive-second order; the unconditional form was
+        # ~1.9k needless reads/day - egress check-in 2026-09-05).
+        _archived_set = (_reply_in_archive_batch(WORKSPACE, [m for m in _all_mids if m not in _seen_set])
+                         if _seen_set is not None else None)
         for r in to_process:
             if not isinstance(r, dict):
                 continue
@@ -6824,7 +6828,8 @@ def run_client_reply_sync() -> dict:
                         for r in to_process if isinstance(r, dict)
                         and r.get("email_lead_id") and r.get("last_reply_time")]
             _ws_seen = _reply_sync_seen_batch(_ws_mids)
-            _ws_arch = _reply_in_archive_batch(ws, _ws_mids) if _ws_seen is not None else None
+            _ws_arch = (_reply_in_archive_batch(ws, [m for m in _ws_mids if m not in _ws_seen])
+                        if _ws_seen is not None else None)
             for r in to_process:
                 if not isinstance(r, dict):
                     continue
