@@ -2519,10 +2519,22 @@ function trayAgeLabel(h) {
   if (h < 48) return `${Math.floor(h)}h unresolved`;
   return `${Math.floor(h / 24)}d unresolved`;
 }
+/* Founder panel fix 1 (2026-09-06): a client who explicitly chose "No
+   follow-up" was still nagged by a red tray counting that very row - the row's
+   own label read "No follow-up" while the header demanded a choice for it. In
+   CLIENT_MODE the tray feed (and therefore its count, its badge and its
+   auto-open) carries only rows still AWAITING a choice; a decided "none" row
+   simply leaves the client's tray. The owner feed is untouched: retro-deciding
+   those rows is internal housekeeping the owner still needs to see. */
+function trayFeedRows() {
+  if (!CLIENT_MODE) return unresolvedRows;
+  return (unresolvedRows || []).filter(
+    (r) => !["none", "none_at_send"].includes(r.subsequence_decision));
+}
 /* P3 ordering: >24h rows float to the top, oldest first; fresher rows
    below, newest first. */
 function sortedTrayRows() {
-  return [...unresolvedRows].sort((a, b) => {
+  return [...trayFeedRows()].sort((a, b) => {
     const ah = unresolvedAgeHours(a), bh = unresolvedAgeHours(b);
     const aOld = ah >= 24, bOld = bh >= 24;
     if (aOld !== bOld) return aOld ? -1 : 1;
@@ -2565,7 +2577,8 @@ function trayRowHtml(r) {
 function renderUnresolvedTray() {
   const tray = document.getElementById("subseqTray");
   if (!tray) return;
-  const n = unresolvedRows.length;
+  const feed = trayFeedRows();
+  const n = feed.length;
   if (!n) {
     tray.style.display = "none";
     document.getElementById("trayBody").innerHTML = "";
@@ -2580,7 +2593,7 @@ function renderUnresolvedTray() {
   // auto-open: a send whose gate choice was "None" now stays VISIBLE in the
   // tray (owner ruling 2026-07-30) but was explicitly decided, so it must not
   // pop a collapsed tray open (that pop was the 2026-07-25 complaint).
-  const nUndecided = unresolvedRows.filter(r =>
+  const nUndecided = feed.filter(r =>
     !r.subsequence_decision || r.subsequence_decision === "push_failed").length;
   if (_lastTrayCount !== null && nUndecided > _lastTrayCount) trayOpen = true;
   _lastTrayCount = nUndecided;
@@ -2588,7 +2601,7 @@ function renderUnresolvedTray() {
   tray.classList.toggle("open", trayOpen);
   // T2: "Sent without follow-up" reads to a client as a report of our own error.
   document.getElementById("trayTitle").textContent = CLIENT_MODE
-    ? `Waiting on a follow-up choice (${n})` : `Sent without follow-up (${n})`;
+    ? `Sent replies with no follow-up chosen (${n})` : `Sent without follow-up (${n})`;
 
   document.getElementById("trayBadge").textContent = n;
   const body = document.getElementById("trayBody");
