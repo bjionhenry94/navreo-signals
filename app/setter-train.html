@@ -1680,8 +1680,15 @@ function renderRoundDone() {
         + `We'll take it from here; come back any time with this same link to keep going.`;
     buttons = "";
   } else if (ready && holdComing) {
-    msg = `We're at ${disp} of the 100 goal. We're training on what you just taught us - answer these while it works, and the next round opens the moment you're done.`;
-    buttons = `<button class="btn" id="doneGenerateBtn" type="button">Skip the questions and start round ${roundNum + 1}</button>`;
+    // The question set mounts ASYNC (maybeRenderInterview below). Never
+    // promise "answer these" or offer "Skip the questions" before a set is
+    // actually on screen (owner report 2026-09-05: the skip button stood
+    // over an empty host). mountInterviewForm swaps the copy and the button
+    // label the moment the questions land; if no set arrives the round
+    // starts on its own - a founder is never left looking at a skip button
+    // for questions that do not exist.
+    msg = `We're at ${disp} of the 100 goal. We're training on what you just taught us - the next round opens the moment it's ready.`;
+    buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
   } else if (ready) {
     msg = `We're at ${disp} of the 100 goal. The next round was drafted with everything you just taught us.`;
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
@@ -1699,7 +1706,7 @@ function renderRoundDone() {
     <div class="done-banner ${trained ? "trained" : ""}">
       <div class="db-icon">${trained ? "🎉" : "✓"}</div>
       ${scoreLine}
-      <div class="db-msg">${msg}</div>
+      <div class="db-msg" id="doneMsg">${msg}</div>
     </div>
     <div id="interviewHost"></div>
     <div class="done-banner" style="margin-top:12px">${_actions}</div>
@@ -1727,7 +1734,16 @@ function renderRoundDone() {
     // round on arrival). Never startTransitionPoll here: that waited on
     // freshness and was half of the round-2 loop.
     if (!ready && !POOL_COMPLETE && !generating) generateMore();
-    maybeRenderInterview(roundNum);
+    maybeRenderInterview(roundNum).then((mounted) => {
+      // No questions to fill the hold -> straight to the scenarios (owner
+      // ruling 2026-09-05: "if there are no questions just go straight to
+      // the scenarios"). Only from THIS screen, only if it is still up.
+      if (holdComing && !mounted && view === "done" && document.getElementById("doneGenerateBtn")
+          && !document.getElementById("ivForm")) {
+        FILLER_TRIED = false; // the hold itself may still offer one filler set
+        startNextRoundOrGenerate();
+      }
+    });
   }
 }
 
@@ -2231,6 +2247,13 @@ function mountInterviewForm() {
   if (ivDismissedForRound === currentRoundNum()) return;
   if (document.getElementById("ivForm")) return;            // already mounted
   const rn = currentRoundNum();
+  if (IV_GATE_MODE) {
+    // Questions are now on screen: the copy may say so, and Start becomes a skip.
+    const dm = document.getElementById("doneMsg");
+    if (dm) dm.textContent = `We're at ${displayScore(Number(READINESS.score) || 0)} of the 100 goal. We're training on what you just taught us - answer these while it works, and the next round opens the moment you're done.`;
+    const gb = document.getElementById("doneGenerateBtn");
+    if (gb) { gb.textContent = `Skip the questions and start round ${rn + 1}`; gb.classList.remove("primary"); }
+  }
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
     title: "Before the next round - a few quick questions",
     sub: "We're training on what you just taught us. The next round opens the moment you send these.",
@@ -2289,6 +2312,7 @@ async function maybeRenderInterview(roundNum) {
     if (iv && (iv.questions || []).length) { iv.answers = iv.answers || {}; IV_CURRENT = iv; }
   }
   mountInterviewForm();
+  return !!document.getElementById("ivForm");
 }
 
 /* ── Review mode (owner request 2026-07-14) ────────────────────────────────

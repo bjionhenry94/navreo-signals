@@ -1553,7 +1553,21 @@ _LINT_TIME_RE = re.compile(
 _LINT_REASK_RE = re.compile(
     r"would you be (open|up) for? ?(to)? ?a (quick |short |brief )?(call|chat)"
     r"|would you be open to a call|open to a quick call|interested in a call", re.I)
-_LINT_PRICE_RE = re.compile(r"[£$€]\s?\d[\d,]*(?:\.\d+)?\s?[km]?\b", re.I)
+# Taught-price shapes (live 2026-09-05: the owner typed "888$K+" - currency
+# AFTER the number - so the currency-first regex saw no taught figure, the
+# TAUGHT-PRICE lint never fired, and every pricing card kept the manual's
+# "exact number on the first call" posture). Accept currency before OR after,
+# and bare k/m figures; compare on digits+unit only (see _lint_price_key).
+_LINT_PRICE_RE = re.compile(
+    r"(?:[£$€]\s?\d[\d,]*(?:\.\d+)?\s?[km]?\b"
+    r"|\b\d[\d,]*(?:\.\d+)?\s?[£$€]\s?[km]?\b"
+    r"|\b\d[\d,]*(?:\.\d+)?\s?[km]\b)", re.I)
+
+
+def _lint_price_key(v: str) -> str:
+    """'888$K+' / '$888k' / '888 k' -> '888k' - the comparable core of a price."""
+    return re.sub(r"[£$€\s,+]", "", str(v or "").lower())
+
 _LINT_BARE_VALUE_RE = re.compile(r"[£$€\d\s,.km%–—-]+", re.I)
 
 
@@ -1690,10 +1704,10 @@ def lint_draft(html: str, ctx: dict):
                                 str(ctx.get("instructions") or "") + "\n"
                                 + str(ctx.get("owner_facts") or ""))
             if re.search(r"pric|cost|fee|charge|tier", s, re.I))
-        _taught_prices = set(_LINT_PRICE_RE.findall(_price_src))
-        _plain_all_norm = re.sub(r"[\s,]", "", _TAG_RE.sub(" ", text).lower())
-        if _taught_prices and not any(
-                re.sub(r"[\s,]", "", v.lower()) in _plain_all_norm for v in _taught_prices):
+        _taught_prices = set(_lint_price_key(v) for v in _LINT_PRICE_RE.findall(_price_src))
+        _taught_prices.discard("")
+        _plain_all_norm = _lint_price_key(_TAG_RE.sub(" ", text))
+        if _taught_prices and not any(v in _plain_all_norm for v in _taught_prices):
             return False, ("The lead asked about price and the instructions state a "
                            "concrete figure (" + ", ".join(sorted(_taught_prices)[:3])
                            + ") - state it, woven naturally into the pricing answer; "
@@ -18479,9 +18493,23 @@ def route_training_interview(payload):
                 # same manual (the digest already carries each Q&A verbatim in
                 # the meantime).
                 pending = list(doc.get("pending_merges") or [])
-                pending.append({"note": "The owner answered these questions about their offer. "
-                                        "Fold every fact in:\n\n" + "\n\n".join(qa_lines),
-                                "source": "interview", "at": at})
+                # STREAMED answers land one call at a time (live 2026-09-05:
+                # ten answers became ten queued merges at ~60s each, so the
+                # price typed second-to-last reached the manual 8+ minutes
+                # later). Fold into the interview merge still WAITING in the
+                # queue instead of appending another - one merge per set.
+                _iv_head = "The owner answered these questions about their offer. Fold every fact in:\n\n"
+                _joined = None
+                for _pe in reversed(pending):
+                    if isinstance(_pe, dict) and _pe.get("source") == "interview" \
+                            and str(_pe.get("note") or "").startswith(_iv_head):
+                        _pe["note"] = str(_pe.get("note") or "") + "\n\n" + "\n\n".join(qa_lines)
+                        _pe["at"] = at
+                        _joined = _pe
+                        break
+                if _joined is None:
+                    pending.append({"note": _iv_head + "\n\n".join(qa_lines),
+                                    "source": "interview", "at": at})
                 doc["pending_merges"] = pending
                 doc["interviews"] = interviews[-12:]
                 _save_training(agent_id, doc)
