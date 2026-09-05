@@ -470,6 +470,13 @@
      (panel report 2026-08-09) — drain the colour too. */
   .inbox-shell.mobile-detail .qc-actions .qc-send:disabled { opacity: 0.6; filter: saturate(0.3); }
 
+  /* Founder panel fix 3a: on a phone the pinned bar gives .qc-send its own
+     full-width top line. In client mode the flex item is now the wrapper, so
+     the same two properties move onto it and the button fills it. */
+  body.client-mode .inbox-shell.mobile-detail .qc-actions .qc-send-wrap {
+    order: -1; flex: 1 1 100%; display: flex;
+  }
+  body.client-mode .inbox-shell.mobile-detail .qc-actions .qc-send-wrap .qc-send { flex: 1 1 auto; }
   /* Follow-up gate chips: touch-sized, sitting just above the pinned bar */
   .send-gate { margin-top: 12px; }
   .send-gate .sg-chip { min-height: 44px; }
@@ -1227,6 +1234,34 @@ body.client-mode .ii-age.overdue { background: var(--bg-sunken); color: var(--in
 }
 body.client-mode .send-gate.sg-flash { box-shadow: 0 0 0 2px var(--accent, #2F6FED); border-radius: 8px; }
 
+/* Founder panel fix 2 (2026-09-06): at 1280x720 a full draft grew the editable
+   box to ~305px and pushed the follow-up chips (y~893), Send reply (y~947) and
+   the hint clean under the fold - founders saw a reply with no way to send it
+   and scrolled only by accident. Cap the box at 38vh and let it scroll inside
+   itself: still fully editable, and draft + chooser + actions all fit at 720.
+   Client only - the owner box keeps growing as it always has. */
+body.client-mode .qc-draft { max-height: 38vh; overflow-y: auto; }
+
+/* Founder panel fix 3a (2026-09-06): a DISABLED button dispatches no click at
+   all, so pressing the locked "Send reply" did precisely nothing - five of five
+   founders pressed it, twice, before hunting for the reason. In client mode the
+   button is wrapped and a transparent overlay sits on top of it WHILE it is
+   locked (CSS-driven off :disabled, so it disappears the instant a choice
+   unlocks the button - updateApproveButton only flips the property, it never
+   re-renders). The overlay carries data-gate-jump, so the existing client-boot
+   handler scrolls the chooser into view and flashes it. Owner markup unchanged. */
+body.client-mode .qc-send-wrap { position: relative; display: inline-flex; }
+body.client-mode .qc-send-lock {
+  display: none; position: absolute; inset: 0; z-index: 2;
+  cursor: pointer; border-radius: 8px; background: transparent;
+}
+body.client-mode .qc-send:disabled + .qc-send-lock { display: block; }
+/* Founder panel fix 3b: "(why?)" opened on HOVER only, so on a phone the one
+   explanation of the lock was unreachable. A tap toggles .open (handler in the
+   client-mode boot block); the hover rule above still works with a mouse. */
+body.client-mode .gate-hint .why { cursor: pointer; }
+body.client-mode .gate-hint .why.open .tooltip { display: block; }
+
 
 /* Automated follow-up section (Bjion 2026-09-05): sits between the draft
    and Approve in client mode and carries a one-line explanation. */
@@ -1484,6 +1519,21 @@ if (CLIENT_MODE) {
   };
   document.addEventListener("click", gateJump);
   document.addEventListener("keydown", gateJump);
+  /* Founder panel fix 3b (2026-09-06): "(why?)" showed its tooltip on :hover
+     only - on a phone there is no hover, so the only explanation of the locked
+     button could not be opened at all. A tap toggles .open (the CSS rule shows
+     the tooltip); tapping anywhere else closes it again. gateJump above already
+     ignores clicks inside .why, so the two handlers never fight. Client-only:
+     this listener is registered inside the client boot block. */
+  document.addEventListener("click", (e) => {
+    const why = e.target.closest && e.target.closest(".gate-hint .why");
+    document.querySelectorAll(".gate-hint .why.open").forEach((w) => {
+      if (w !== why) w.classList.remove("open");
+    });
+    if (!why) return;
+    e.preventDefault();
+    why.classList.toggle("open");
+  });
   const linkPop = document.getElementById("linkPopInput");
 
   if (linkPop) linkPop.placeholder = "Paste the URL, e.g. your booking link";
@@ -1509,7 +1559,9 @@ if (CLIENT_MODE) {
        silently no-ops with an empty inbox (it has no row to point at), so
        say so rather than letting the click do nothing. */
     tourBtn.addEventListener("click", () => {
-      if (tutActive) endTutorial();
+      // quiet: this teardown is immediately followed by a restart, so the
+      // "Replay it any time" note would flash over the tour it just reopened.
+      if (tutActive) endTutorial(true);
       if (!document.querySelector("#inboxList .inbox-item")) {
         const note = document.createElement("div");
         note.className = "tour-wait-note";
@@ -2202,7 +2254,16 @@ function bumpCounts(row, from, to) {
   // server's counts are the token's OWN scope, whatever workspace those
   // campaigns live in, so the workspace test would freeze the badge of every
   // client whose workspace isn't navreo until the next reload landed.
-  if (!row || row.is_test) return;
+  if (!row) return;
+  // Founder panel fix 6 (2026-09-06): THIS is why the client's tab badges
+  // trailed the list by 5-15s after every approve/dismiss. The server's
+  // client-scope counts (_share_counts -> _scope_ok) apply the TOKEN's own
+  // is_test rule, so a test-flagged QA share - which is what a client demo or
+  // panel actually runs on - counts its test rows in the badge. This guard
+  // skipped exactly those rows, so no optimistic delta was ever recorded and
+  // the badge sat still until the next /queue fetch landed. The owner rule is
+  // unchanged (owner counts really are test-free, and navreo-only).
+  if (!CLIENT_MODE && row.is_test) return;
   if (!CLIENT_MODE && (row.workspace || "navreo") !== "navreo") return;
   const counts = KPIS.counts || (KPIS.counts = {});
   const step = (key, d) => {
@@ -2519,10 +2580,22 @@ function trayAgeLabel(h) {
   if (h < 48) return `${Math.floor(h)}h unresolved`;
   return `${Math.floor(h / 24)}d unresolved`;
 }
+/* Founder panel fix 1 (2026-09-06): a client who explicitly chose "No
+   follow-up" was still nagged by a red tray counting that very row - the row's
+   own label read "No follow-up" while the header demanded a choice for it. In
+   CLIENT_MODE the tray feed (and therefore its count, its badge and its
+   auto-open) carries only rows still AWAITING a choice; a decided "none" row
+   simply leaves the client's tray. The owner feed is untouched: retro-deciding
+   those rows is internal housekeeping the owner still needs to see. */
+function trayFeedRows() {
+  if (!CLIENT_MODE) return unresolvedRows;
+  return (unresolvedRows || []).filter(
+    (r) => !["none", "none_at_send"].includes(r.subsequence_decision));
+}
 /* P3 ordering: >24h rows float to the top, oldest first; fresher rows
    below, newest first. */
 function sortedTrayRows() {
-  return [...unresolvedRows].sort((a, b) => {
+  return [...trayFeedRows()].sort((a, b) => {
     const ah = unresolvedAgeHours(a), bh = unresolvedAgeHours(b);
     const aOld = ah >= 24, bOld = bh >= 24;
     if (aOld !== bOld) return aOld ? -1 : 1;
@@ -2565,7 +2638,8 @@ function trayRowHtml(r) {
 function renderUnresolvedTray() {
   const tray = document.getElementById("subseqTray");
   if (!tray) return;
-  const n = unresolvedRows.length;
+  const feed = trayFeedRows();
+  const n = feed.length;
   if (!n) {
     tray.style.display = "none";
     document.getElementById("trayBody").innerHTML = "";
@@ -2580,7 +2654,7 @@ function renderUnresolvedTray() {
   // auto-open: a send whose gate choice was "None" now stays VISIBLE in the
   // tray (owner ruling 2026-07-30) but was explicitly decided, so it must not
   // pop a collapsed tray open (that pop was the 2026-07-25 complaint).
-  const nUndecided = unresolvedRows.filter(r =>
+  const nUndecided = feed.filter(r =>
     !r.subsequence_decision || r.subsequence_decision === "push_failed").length;
   if (_lastTrayCount !== null && nUndecided > _lastTrayCount) trayOpen = true;
   _lastTrayCount = nUndecided;
@@ -2588,7 +2662,7 @@ function renderUnresolvedTray() {
   tray.classList.toggle("open", trayOpen);
   // T2: "Sent without follow-up" reads to a client as a report of our own error.
   document.getElementById("trayTitle").textContent = CLIENT_MODE
-    ? `Waiting on a follow-up choice (${n})` : `Sent without follow-up (${n})`;
+    ? `Sent replies with no follow-up chosen (${n})` : `Sent without follow-up (${n})`;
 
   document.getElementById("trayBadge").textContent = n;
   const body = document.getElementById("trayBody");
@@ -3383,10 +3457,25 @@ function unifiedConvoKey(row) {
    array. When a hit and a local row are the same conversation the LOCAL row
    wins (it carries the stable queue id + full-control open) and the hit is
    dropped — that's the merge, and it's what kills the old double-render. */
+/* Founder panel fix 7 (2026-09-06): the queue list arrives ordered by the row's
+   created_at - when the PROSPECT wrote in - which is right for Needs review and
+   wrong for Sent: a reply sent this morning sat below one sent last week purely
+   because that person had written in earlier. On the Sent pill, in client mode
+   only, order by OUR own send time (sent_at, falling back to updated_at, both
+   present on the list payload), newest first. Every other pill, and the whole
+   owner page, keeps the server's order. */
+function clientSentOrder(rows) {
+  if (!CLIENT_MODE || currentStatus !== "sent") return rows;
+  return [...rows].sort((a, b) => {
+    const ta = String((a && (a.sent_at || a.updated_at)) || "");
+    const tb = String((b && (b.sent_at || b.updated_at)) || "");
+    return ta === tb ? 0 : (ta < tb ? 1 : -1);
+  });
+}
 function unifiedInboxRows() {
   const local = visibleInboxRows();
   const q = inboxSearchQuery.trim();
-  if (!q || q.length < 3 || SL_SEARCH.q !== q || !(SL_SEARCH.results || []).length) return local;
+  if (!q || q.length < 3 || SL_SEARCH.q !== q || !(SL_SEARCH.results || []).length) return clientSentOrder(local);
   const localKeys = new Set(local.map(unifiedConvoKey).filter(Boolean));
   const extra = [];
   for (const h of SL_SEARCH.results) {
@@ -3408,7 +3497,7 @@ function unifiedInboxRows() {
     const ka = unifiedConvoKey(a) || "", kb = unifiedConvoKey(b) || "";
     return ka < kb ? 1 : (ka > kb ? -1 : 0);
   });
-  return merged;
+  return clientSentOrder(merged);
 }
 /* A one-line, unobtrusive footer under the unified list — NOT a second result
    section. It only ever says "still searching Smartlead" or surfaces an error;
@@ -4862,6 +4951,12 @@ function companySectionHtml(row) {
   const fact = (label, val) => (CLIENT_MODE && val === dash)
     ? ""
     : `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
+  // Founder panel fix 8 (2026-09-06): with every blank row folded away (R6
+  // above) an un-enriched lead left a "PROFILE" heading over a single "Name"
+  // row repeating the name already in the header - the panel read it as a
+  // half-loaded page. When nothing but the name would survive, drop the whole
+  // section. Client only; the owner keeps the dashes and the full table.
+  if (CLIENT_MODE && !role && !name && !site && !hc && !loc && !descShown) return "";
 
   return `<div class="lp-section lp-company" id="lpCompany">
     ${verdictHtml}
@@ -5546,8 +5641,11 @@ function gateLockHintHtml(rowId, hidden) {
   const lockLabel = CLIENT_MODE ? "Pick a follow-up first" : "Pick a follow-up track first";
   // G1: the owner tooltip advertises double-click-to-approve, a power-user fast
   // path that must never be taught to a client (it sends a real email).
+  // Founder panel fix 3c (2026-09-06): the client body is cut to the two facts
+  // that actually answer "why is this locked?" - what to pick, and that nothing
+  // leaves until Send reply is pressed.
   const whyBody = CLIENT_MODE
-    ? `Every reply needs a follow-up decision — even "None" — so nobody is quietly forgotten after you send.`
+    ? `Choose what happens after this reply: a follow-up sequence, or None. Nothing is sent until you press Send reply.`
     : `Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.`;
   // Phone gate (client mode): the action bar is pinned in view while the chips
   // that unlock it sit off-screen at the top of the reply, so the hint is the
@@ -5579,8 +5677,18 @@ function composerActionsHtml(row) {
         ? (sel.choice === "push" ? `Approve + ${esc(sel.name || "Follow-up")}` : "Approve — no follow-up")
         : "Approve");
 
+  // Founder panel fix 3a: in client mode the send button is wrapped with a
+  // transparent overlay that only shows while the button is :disabled (CSS), so
+  // a press on the locked button reaches the data-gate-jump handler instead of
+  // being swallowed. The button itself - class, data-id, handler - is untouched,
+  // and the owner page renders exactly the bare button it always did.
+  const sendBtn = `<button class="btn primary qc-send" data-id="${esc(row.id)}" type="button" ${disabled}>${label}</button>`;
+  const sendHtml = CLIENT_MODE
+    ? `<span class="qc-send-wrap">${sendBtn}<span class="qc-send-lock" data-gate-jump="${esc(row.id)}" role="button" tabindex="0" aria-label="Choose a follow-up first"></span></span>`
+    : sendBtn;
+
   return `<div class="qc-actions">
-    <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button" ${disabled}>${label}</button>
+    ${sendHtml}
     <span class="qc-split">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Rewrite it" : "Regenerate"}</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}" aria-label="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}">&#9662;</button>
 
@@ -7206,8 +7314,15 @@ async function doDismiss(btn) {
   // Dismissed and the category can still be set later.
   const _uRow = QUEUE_ROWS.find((r) => String(r.id) === String(id))
              || ALL_ROWS.find((r) => String(r.id) === String(id));
+  // Founder panel fix 4 (2026-09-06): the guard still fires for a client (an
+  // uncategorised reply is exactly the one worth pausing over), but its wording
+  // was ours - "never categorised", "hidden positive", "amber flag" name our
+  // pipeline, not anything on the client's screen. Same condition, client copy.
+  const _uncatConfirm = CLIENT_MODE
+    ? "Mark this conversation as needing no reply? It moves to Dismissed, where you can still find it."
+    : "This reply was never categorised - it could be a hidden positive.\n\nDismiss anyway? Its amber flag stays under Dismissed and you can still pick its category later.";
   if (_uRow && isUncategorised(_uRow) && _uRow.status === "needs_review"
-      && !window.confirm("This reply was never categorised - it could be a hidden positive.\n\nDismiss anyway? Its amber flag stays under Dismissed and you can still pick its category later.")) {
+      && !window.confirm(_uncatConfirm)) {
     btn.disabled = false;
     return;
   }
@@ -8506,7 +8621,7 @@ const TUT_STEPS = [
     body: () => "When someone replies to one of your campaigns, a reply is drafted here ready for you. You read it, change anything you like, and it only goes out when you press Send reply." },
   { title: "Everyone who replied", cta: "Next", advanceOnRowClick: true,
     target: () => document.querySelector("#inboxList .inbox-item"),
-    body: () => "Every person who has replied to you is listed here — newest first, and only your own campaigns." },
+    body: () => "Every person who has replied to you is listed here — newest first, and only your own campaigns. Type a name in the search box to jump to someone." },
   { title: "The whole conversation", cta: "Next", needsRow: true,
     target: () => document.querySelector(".convo") || document.querySelector(".msg-card"),
     body: () => "This is the whole email conversation, so you can see exactly what they said before you decide." },
@@ -8526,8 +8641,15 @@ const TUT_STEPS = [
     body: () => "Send a reply and that conversation leaves <b>Needs review</b> and moves to <b>Sent</b>. Dismiss it instead and it moves to <b>Dismissed</b>. <b>Meeting request</b> collects the people who ask for a call."   /* U4: was "gathers everyone", contradicted by a live 0 count */
       + (tutPillHasCount()
  ? " The number on each one counts only your own conversations." : "") },
-  { title: "Automated follow-up", needsRow: true, blocking: true,
-    cta: () => ((tutGateMissing() || tutGateChosen()) ? "Got it" : "Waiting for your choice…"),
+  /* Founder panel fix 5a (2026-09-06): this stop used to BLOCK - its button sat
+     disabled reading "Waiting for your choice…" until a real follow-up decision
+     was made on a real conversation. A tour must never demand a live decision:
+     founders either froze here or hit "Skip the tour" and lost the rest of it.
+     Now it is an ordinary "Got it" card, still the last stop, body unchanged.
+     armTutGateWatch below stays intact but is no longer reached (renderTutStep
+     only arms it for a blocking step). */
+  { title: "Automated follow-up", needsRow: true, blocking: false,
+    cta: "Got it",
     target: () => tutGateEl()
       || document.querySelector('.qc-send[data-id="' + (window.CSS && CSS.escape ? CSS.escape(String(tutRowId())) : tutRowId()) + '"]')
       || document.querySelector(".qc-send"),
@@ -8563,12 +8685,28 @@ function startTutorial() {
   renderTutStep();
 }
 
-function endTutorial() {
+function endTutorial(quiet) {
   tutActive = false;
   clearTutDom();
   // Written only here (and by "Skip the tour", which calls this): a
   // half-finished tour re-offers itself on the next visit.
   try { localStorage.setItem(TUT_KEY, "1"); } catch { /* ignore */ }
+  if (!quiet) tutReplayNote();
+}
+
+/* Founder panel fix 5b (2026-09-06): skipping or finishing the tour ended in
+   silence and nobody found their way back in - the panel read "Skip the tour"
+   as "lose the tour". A 3-second note in the same corner as the tour-wait note
+   (same element and class) points at the Tutorial button. Client-only: the tour
+   never runs for the owner, and the note is a no-op outside client mode. */
+function tutReplayNote() {
+  if (!CLIENT_MODE) return;
+  document.querySelectorAll(".tour-wait-note").forEach((n) => n.remove());
+  const note = document.createElement("div");
+  note.className = "tour-wait-note";
+  note.textContent = "Replay it any time with the Tutorial button.";
+  document.body.appendChild(note);
+  setTimeout(() => note.remove(), 3000);
 }
 
 function clearTutDom() {
