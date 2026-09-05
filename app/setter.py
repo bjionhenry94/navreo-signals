@@ -10392,6 +10392,115 @@ def _compute_kpis_sync() -> dict:
     return kpis
 
 
+# ── scoped pill counts for a CLIENT share (2026-09-05) ─────────────────────
+# The owner's kpis block is ACCOUNT-WIDE, so route_queue_get has always
+# withheld it from a share response - which left the client page's filter
+# chips with no badges at all. These are the same five numbers recomputed
+# INSIDE the token's scope, and nothing else: no needs_review headline, no
+# auto_sent_today / sent_today / no_action_today, no avg_response_mins_7d.
+# Those are Navreo's ops telemetry, not a client's.
+#
+# `auto_sent` is deliberately absent as a KEY: a client is never shown
+# "auto-sent" as a state of its own (_share_scrub serves such rows as plain
+# `sent`, and _reclassify_queue folds both into the client's Sent pill), so
+# its count folds into `sent` too - a badge has to match the list under it.
+#
+# Cost on the 512MB box: the collapse scan is _light_rows_all(), which this
+# same request's LIST already paid for (via _thread_rep_ids) and which is
+# cached process-wide for _REP_IDS_TTL, so the counts add exactly ONE small
+# scoped read - the needs_review direction lookup, a handful of rows inside
+# one client's campaigns. Deliberately NOT cached itself: the owner's KPI
+# cache is account-wide and a per-client cache would be one more thing
+# _bust_read_caches has to remember after every approve/dismiss.
+_SHARE_COUNT_KEYS = ("needs_review", "sent", "meeting_request", "dismissed", "all")
+
+
+def _share_count(filt: str) -> int:
+    """Header-only count of a queue filter INSIDE the current share scope.
+    _scope_sql() already carries the campaign pin AND the is_test rule (a
+    plain token excludes test rows, a TEST-flagged QA token keeps them), so
+    this must never add an is_test filter of its own."""
+    base = f"{QUEUE_TABLE}?{_list_ws_filter()}{_scope_sql()}&{filt}"
+    if _SB_COUNT:
+        n = _SB_COUNT(f"{base}&select=id")
+        if isinstance(n, int):
+            return n
+    rows = _SB("GET", f"{base}&select=id") if _SB else None
+    return len(rows) if isinstance(rows, list) else 0
+
+
+def _share_counts_flat() -> dict:
+    """Degraded fallback: header-only counts, no thread collapse and no
+    direction reclass - the same shape _compute_kpis_sync falls back to when
+    its own light scan fails. Five COUNT headers, no row bodies."""
+    return {
+        "needs_review": _share_count("status=eq.needs_review"),
+        "sent": _share_count("status=in.(sent,auto_sent)"),
+        "meeting_request": _share_count(MEETING_REQUEST_QUEUE_FILTER),
+        "dismissed": _share_count("status=eq.dismissed"),
+        "all": _share_count("id=not.is.null"),
+    }
+
+
+def _share_direction_map() -> dict:
+    """{row id: (last_msg_inbound, effective_pill)} for the share's OWN
+    needs_review rows - the scoped twin of _compute_kpis_sync's _reclass.
+    Slim select (no thread blobs): thread->-1->>type is all _queue_direction
+    needs. {} on any failure, and the fold then treats every needs_review row
+    as still awaiting us, exactly like the owner's dirs.get default."""
+    if not _SB:
+        return {}
+    rows = _SB("GET", f"{QUEUE_TABLE}?{_list_ws_filter()}&status=eq.needs_review"
+                      f"{_scope_sql()}&select=id,sent_at,decision,status,"
+                      "last_type:thread->-1->>type")
+    if not isinstance(rows, list):
+        return {}
+    return {r.get("id"): _queue_direction(r) for r in rows if isinstance(r, dict)}
+
+
+def _share_counts() -> dict:
+    """The five filter-chip counts for the CLIENT share currently in scope.
+    Same definitions as the owner's counts and in the same order - thread
+    collapse FIRST (one representative row per conversation), THEN the
+    who-spoke-last direction on each surviving needs_review row - so a badge
+    and the list beneath it can never disagree. Never raises: a broken badge
+    must not sink the list it sits over."""
+    zero = {k: 0 for k in _SHARE_COUNT_KEYS}
+    if _share_scope() is None or not _SB:
+        return zero
+    try:
+        light = _light_rows_all()
+        if not isinstance(light, list):
+            return _share_counts_flat()
+        # _scope_ok applies BOTH halves of the scope (campaign membership and
+        # the is_test rule) to the deliberately un-filtered light scan - the
+        # same Python re-assertion _fetch_queue_rows makes on the list rows.
+        reps = _collapse_threads([r for r in light
+                                  if isinstance(r, dict) and _scope_ok(r)])
+        dirs = _share_direction_map()
+        n_nr = n_sent = n_dis = n_mr = 0
+        for r in reps:
+            st = r.get("status")
+            if st == "needs_review":
+                inbound, _pill = dirs.get(r.get("id"), (True, None))
+                if inbound:
+                    n_nr += 1
+                else:                 # answered: Sent, with auto_sent folded in
+                    n_sent += 1
+            elif st in ("sent", "auto_sent"):
+                n_sent += 1
+            elif st == "dismissed":
+                n_dis += 1
+            # Meeting-request tab: thread-collapsed, cross-status, everything
+            # but dismissed - mirrors MEETING_REQUEST_QUEUE_FILTER exactly.
+            if st != "dismissed" and str(r.get("category") or "").strip() == MEETING_REQUEST_CATEGORY:
+                n_mr += 1
+        return {"needs_review": n_nr, "sent": n_sent, "meeting_request": n_mr,
+                "dismissed": n_dis, "all": len(reps)}
+    except Exception:  # noqa: BLE001 - a badge must never sink the list
+        return zero
+
+
 # ── Row-level campaign identity (identification fix 2026-08-11) ────────────
 # The list used to rely ENTIRELY on the client joining /api/setter/campaigns
 # (navreo-scoped, fetched in parallel, silently [] on a failed load) to name
@@ -11228,8 +11337,12 @@ def route_queue_get(params):
         if _share_scope() is not None:
             # _compute_kpis() is ACCOUNT-WIDE (every client's counts) and
             # _last_poll_done_at() is an internal sweep clock. Neither is a
-            # client's to see, and the client page renders neither.
-            return 200, {"rows": rows}
+            # client's to see, and the client page renders neither. The filter
+            # chips DO need badges, so a share carries its own five counts,
+            # recomputed inside the token's scope - see _share_counts. The
+            # ?before= page above deliberately carries none: the head fetch
+            # owns the counts, an older page only extends the list.
+            return 200, {"rows": rows, "kpis": {"counts": _share_counts()}}
         return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}

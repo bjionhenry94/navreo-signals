@@ -24442,6 +24442,49 @@ _TRAIN_SHARE_GET = {"/api/setter/training", "/api/setter/training/share-info"}
 _CLIENT_SHARE_GET = set(setter.CLIENT_SHARE_GET) | {"/app/setter.html"}
 
 
+def _in_client_share(path: str, share_tok: str, authed: bool, write: bool = False) -> bool:
+    """Does this request run under a CLIENT share scope? ONE definition, used
+    by do_GET and do_POST alike (fix 2026-09-05 - the two verbs each had their
+    own copy of a session test, and both got it wrong the same way).
+
+    THE TOKEN WINS OVER THE SESSION. This used to be `not authed`, so a
+    logged-in Navreo user opening a client link was answered as the OWNER:
+    GET /api/setter/queue?...&share=<touchpoint> returned 177 rows over 50
+    campaigns in two workspaces plus the account-wide kpis block, where the
+    same URL without the cookie returned 29 rows on 9 campaigns. The page
+    renders in CLIENT_MODE off the ?share= in its own URL either way, so the
+    owner was shown a client's chrome wrapped around every client's
+    conversations. A client link must resolve to the same view for everyone
+    who opens it: the token defines the view, the session is ignored.
+
+    Keyed on the ROUTE plus "a token rides it", never on the session:
+      - the training-share routes are NOT in these allowlists, so their own
+        (different) token family keeps reaching route_training_get untouched;
+      - True here only means "client_share_enter decides" - a bad, expired or
+        wrong-family token is 403'd there, with a session exactly as it always
+        was without one, instead of silently falling back to an owner-wide
+        read behind a client-mode page;
+      - no share= at all is byte-for-byte the old behaviour: an owner session
+        answers as the owner, and a logged-out caller still lands in
+        client_share_enter (which 403s the empty token).
+
+    The second clause closes the last seam: a VALID client token on a setter
+    route that is NOT allowlisted (/api/setter/agents, /search-smartlead,
+    /smartlead-thread, ...) also enters the share, so client_share_enter 403s
+    it. Without it a logged-in owner opening a client link would still get
+    OWNER-wide answers on those routes behind a CLIENT_MODE page - the client
+    page never calls them, but "a client token is riding this request" must
+    never resolve to an owner-scoped read whatever the route. Costs one HMAC,
+    and only on requests that actually carry a share=. Training tokens are a
+    different payload family (verify_client_share refuses a "train" prefix),
+    so the training-share routes are untouched.
+    """
+    routes = setter.CLIENT_SHARE_POST if write else setter.CLIENT_SHARE_GET
+    if path in routes:
+        return bool(share_tok) or not authed
+    return bool(share_tok) and bool(setter.verify_client_share(share_tok))
+
+
 def _auth_secret() -> bytes:
     import hashlib
     srk = KEYS.get("SUPABASE_SERVICE_ROLE_KEY") or ""
@@ -26462,20 +26505,15 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/setter/"):
             from urllib.parse import parse_qs, urlparse
             params = parse_qs(urlparse(self.path).query)
-            # Client share link (setter-client-view): NO owner session plus a
-            # share=<token> means this request runs, for its whole lifetime,
-            # under exactly one client's campaign scope. An owner session
-            # ignores the parameter entirely, so the owner path is untouched.
-            # The scope is always cleared in the finally - a worker thread must
-            # never inherit it into the next request it serves.
-            # Keyed on the ROUTE, not merely on "a share= is present": the
-            # training-share routes carry their own (different) token family
-            # and must keep reaching route_training_get untouched. Every path
-            # in CLIENT_SHARE_GET is otherwise unreachable without a session,
-            # so requiring a valid CLIENT token here is fail-closed - a bad or
-            # missing one can never fall through to an unscoped read.
+            # Client share link (setter-client-view): a share=<token> means
+            # this request runs, for its whole lifetime, under exactly one
+            # client's campaign scope - the token wins over any owner session
+            # (see _in_client_share). The scope is always cleared in the
+            # finally: a worker thread must never inherit it into the next
+            # request it serves.
             _share_tok = (params.get("share") or [""])[0]
-            _in_share = (not self._authed_email()) and path in setter.CLIENT_SHARE_GET
+            _in_share = _in_client_share(path, _share_tok,
+                                         bool(self._authed_email()))
             if _in_share:
                 gate = setter.client_share_enter(path, _share_tok)
                 if gate is not None:
@@ -27611,21 +27649,35 @@ class Handler(SimpleHTTPRequestHandler):
             # the body claimed before anything can read it (setter-client-view).
             if isinstance(payload, dict):
                 payload.pop("___client_id", None)
+            # Client share link: the token rides the QUERY STRING (so the body
+            # shape is unchanged), and a POST to one of the client-writable
+            # routes with NO valid token is 403'd here, before the route runs.
+            #
+            # THE TOKEN WINS OVER THE SESSION (fix 2026-09-05), the write-side
+            # half of the do_GET gate above: this whole block used to sit
+            # under `not self._authed_email()`, so a logged-in owner clicking
+            # Approve / Dismiss / Regenerate on a client link acted with OWNER
+            # scope on a page rendering in CLIENT_MODE - unscoped, unsanitised
+            # and stamped with no ___client_id. A share= token now enters the
+            # scope whatever the session says, and the logged-out branch is
+            # unchanged (no token on an allowlisted write is still 403).
+            # Lifted out of the isinstance(payload, dict) guard on purpose:
+            # the gate must not be skippable by POSTing a bare JSON list.
             _in_share = False
+            from urllib.parse import parse_qs as _pq, urlparse as _up
+            _tok = (_pq(_up(self.path).query).get("share") or [""])[0]
+            if _in_client_share(path, _tok, bool(self._authed_email()), write=True):
+                gate = setter.client_share_enter(path, _tok, write=True)
+                if gate is not None:
+                    return self._json(gate[1], gate[0])
+                _in_share = True
             if not self._authed_email() and isinstance(payload, dict):
+                # ___public is the TRAINING routes' flag (_resolve_share_scope)
+                # and stays bound to "no session", exactly as before - no route
+                # in CLIENT_SHARE_POST reads it.
                 payload["___public"] = True
-                # Client share link: the token rides the QUERY STRING (so the
-                # body shape is unchanged), and a public POST to one of the
-                # client-writable routes with NO valid token is 403'd here,
-                # before the route runs.
-                if path in setter.CLIENT_SHARE_POST:
-                    from urllib.parse import parse_qs as _pq, urlparse as _up
-                    _tok = (_pq(_up(self.path).query).get("share") or [""])[0]
-                    gate = setter.client_share_enter(path, _tok, write=True)
-                    if gate is not None:
-                        return self._json(gate[1], gate[0])
-                    _in_share = True
-                    payload["___client_id"] = setter._share_client()
+            if _in_share and isinstance(payload, dict):
+                payload["___client_id"] = setter._share_client()
             # The training share token is a bearer credential - never persist
             # it to the activity ledger, even truncated.
             log_payload = {k: v for k, v in payload.items() if k != "share"} \
