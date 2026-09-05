@@ -1996,8 +1996,7 @@ async function maybeOfferFillerQuestions() {
           title: "While that trains - a few more quick questions",
           sub: "Answer these and the next scenarios are usually ready the moment you finish. Skipping just shows the timer.",
           cta: "Send answers", skip: "Skip - just wait" })
-      + `<div class="rp-bar-track" style="overflow:hidden;margin-top:16px"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
-    startWaitBar();
+      + `</div></div>`;  // no progress bar under the questions (owner ruling 2026-09-05) - the bar returns only if they skip
     const backToBar = () => {
       shortRoundDeadline = Date.now() + 150000; // fresh window after the questions (2026-09-02)
       if (view === "shortwait") paintPlainWaitBar();
