@@ -1715,7 +1715,7 @@ function renderRoundDone() {
     ? `
     <div class="round-strip" id="roundStrip">
       <span class="rs-check">✓</span>
-      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">counts toward your 100</span>
+      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${total && right < total ? `the ${total - right} we got wrong now train${total - right === 1 ? "s" : ""} the next round` : "all three now train the next round"}</span>
       <span class="db-msg" id="doneMsg" hidden>${msg}</span>
     </div>
     <div id="interviewHost"></div>
@@ -2264,8 +2264,8 @@ function mountInterviewForm() {
   }
   const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
-    title: _nq === 1 ? "One quick question" : `${_nq} quick questions`,
-    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Round ${rn + 1} opens once retraining finishes - your answer goes with it.</span>`,
+    title: _nq === 1 ? "One optional question" : `${_nq} optional questions`,
+    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Your answer goes into round ${rn + 1}.</span>`,
     cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
@@ -2300,9 +2300,14 @@ function mountInterviewForm() {
       const lv = document.getElementById("ivLive");
       if (lv && view === "done") lv.innerHTML = `<span class="spin"></span>Still retraining - taking longer than usual. Start round ${rn + 1} whenever you like.`;
     }, 60000);
+    setTimeout(() => {
+      // Terminal state (panel round 6): stop implying eventual success.
+      const lv = document.getElementById("ivLive");
+      if (lv && view === "done") lv.textContent = `Retraining is taking too long - round ${rn + 1} will start on what we've learned so far.`;
+    }, 150000);
     const _narrow = window.matchMedia && window.matchMedia("(max-width: 520px)").matches;
     document.querySelectorAll("#ivForm .iv-q input").forEach((inp, i) => {
-      if (!inp.placeholder) inp.placeholder = "Optional - leave blank to skip";
+      if (!inp.placeholder) inp.placeholder = "Leave blank to skip";
       inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && sb) { e.preventDefault(); sb.click(); } });
       // Desktop only: focus the first field (a phone keyboard would push the
       // one button below the fold).
