@@ -16496,9 +16496,22 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         doc = _load_training(agent_id)
         try:
             if doc.get("pending_merges"):
-                _run_pending_merge_drain(agent_id)  # per-entry merge lock inside
-                agent = _load_agent(agent_id) or agent
-                doc = _load_training(agent_id)  # post-drain copy (P2: one load on the common path)
+                if not (doc.get("cases") or []):
+                    # Empty pool: nothing can be served anyway - drain first so
+                    # the very first batch is drafted from the taught brain.
+                    _run_pending_merge_drain(agent_id)  # per-entry merge lock inside
+                    agent = _load_agent(agent_id) or agent
+                    doc = _load_training(agent_id)  # post-drain copy (P2: one load on the common path)
+                else:
+                    # TOP-UP of a live pool (wait-elimination audit 2026-09-05,
+                    # live: five queued merges at ~60s each drained INLINE here
+                    # while this worker held the generation lock, so the pool
+                    # sweep behind a mid-round teaching could not run and the
+                    # portal sat on the loader for 138s). The digest already
+                    # carries every queued teaching verbatim into the drafts;
+                    # merge in the background and never block the batch.
+                    threading.Thread(target=_run_pending_merge_drain, args=(agent_id,),
+                                     daemon=True, name=f"setter-merge-{agent_id}").start()
         except Exception:  # noqa: BLE001 - a failed drain must never block generation
             pass
         existing_cases = list(doc.get("cases") or [])

@@ -1634,6 +1634,7 @@ function render() {
   }
   DISPLAYED_CASE_ID = unanswered[idx] ? String(unanswered[idx].id) : null;
   renderCase(unanswered, idx);
+  prefetchNextSet();
   if (DISPLAYED_CASE_ID && STALE_OK.has(DISPLAYED_CASE_ID)) {
     // Honest note for a card released by the 10s fallback (owner 2026-09-05).
     const host = document.querySelector("#trainApp .case-card, #trainApp .tcase, #trainApp .card") || document.getElementById("trainApp");
@@ -1948,9 +1949,20 @@ function startShortRoundPoll() {
     // 10-SECOND FALLBACK (owner 2026-09-05: no loader over 10s): nothing
     // fresh and no questions to answer -> release cards held back only by
     // style-level teachings, with an honest note on the card.
-    if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 10000
+    if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 7400
         && !currentUnanswered().some((c) => caseFresh(c))) {
-      const rel = currentUnanswered().filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
+      let rel = currentUnanswered().filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
+      if (!rel.length && Date.now() - shortRoundStartedAt > 9500) {
+        // Tier 2 (skill setter-wait-elimination, Step 3): still nothing
+        // servable at 10s - release the least-stale cards that no booking or
+        // phone teaching touches and that passed their taught-fact lint,
+        // with the honest note. Newest stamp first.
+        const wiring = TEACHINGS.some((t) => !t.d && ((t.topics || []).includes("booking") || (t.topics || []).includes("phone")));
+        rel = currentUnanswered()
+          .filter((c) => !c.taught_fact_missing && !(wiring && (cardTopics(c).includes("booking") || cardTopics(c).includes("phone"))))
+          .sort((a, b) => String(b.redrafted_at || b.generated_at || "").localeCompare(String(a.redrafted_at || a.generated_at || "")))
+          .slice(0, ROUND_SIZE);
+      }
       if (rel.length) {
         rel.forEach((c) => STALE_OK.add(String(c.id)));
         if (!ROUND_IDS || !ROUND_IDS.length) ROUND_IDS = rel.map((c) => c.id);
@@ -2035,6 +2047,20 @@ function paintPlainWaitBar() {
     + `<div class="rp-bar-track" style="overflow:hidden"><div class="rp-bar-fill" id="waitBarFill" style="width:2%"></div></div></div></div>`;
   startWaitBar();
 }
+let _prefetchAt = 0;
+function prefetchNextSet() {
+  // Keep ONE question set staged at all times (wait-elimination 2026-09-05:
+  // a mid-round teaching with no staged set showed a bare 12s bar while the
+  // generator minted one). Fire-and-forget; the server dedupes (exists/busy).
+  if (!SHARE_MODE || Date.now() - _prefetchAt < 20000) return;
+  const local = INTERVIEWS.some((iv) => iv && (iv.questions || []).length && !Object.keys(iv.answers || {}).length);
+  if (local) return;
+  _prefetchAt = Date.now();
+  const pb = { agent_id: selectedAgentId, action: "prefetch_next", share: SHARE_TOKEN };
+  fetchJson("/api/setter/training/interview", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(pb),
+  }).catch(() => {});
+}
 function fillerFormActive() {
   return view === "shortwait" && !!document.querySelector("#shortRoundWaitMsg #ivForm");
 }
@@ -2092,6 +2118,7 @@ async function maybeOfferFillerQuestions() {
       + `</div></div>`;  // no progress bar under the questions (owner ruling 2026-09-05) - the bar returns only if they skip
     const backToBar = () => {
       shortRoundDeadline = Date.now() + 150000; // fresh window after the questions (2026-09-02)
+      _prefetchAt = 0; prefetchNextSet();       // this set is spent - stage the next one now
       if (view === "shortwait") paintPlainWaitBar();
     };
     const sb = document.getElementById("ivSubmitBtn");
