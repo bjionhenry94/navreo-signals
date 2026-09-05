@@ -155,6 +155,17 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
 .grade-q-label { font-size: 14px; font-weight: 600; margin-bottom: 8px; }
 .sr-hidden-label { display: none; }
 .grade-btns { display: flex; gap: 10px; }
+.interview .iv-sub-2 { display: block; color: var(--ink-3); margin-top: 2px; }
+.interview .iv-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 10px; }
+.interview .iv-live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
+.interview .iv-live .spin { width: 11px; height: 11px; border: 2px solid var(--line-2); border-top-color: var(--orange-500, #D97A2B); border-radius: 50%; animation: fastloop-spin .8s linear infinite; flex: none; }
+.round-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 20px 4px; font-size: 14px; color: var(--ink-1); }
+.round-strip .rs-sub { font-size: 12.5px; color: var(--ink-3); }
+.round-strip .rs-check { color: var(--orange-500, #D97A2B); font-weight: 600; }
+.round-strip .rs-text { font-weight: 600; }
+.round-strip .db-review { margin: 0 0 0 auto; color: var(--orange-600, #C4641F); font-size: 13px; }
+.done-banner .db-review { display: inline-block; margin-top: 10px; font-size: 12.5px; color: var(--ink-3); text-decoration: underline; text-underline-offset: 3px; cursor: pointer; }
+@media (max-width: 520px) { .interview .iv-row { flex-direction: column; align-items: stretch; } .interview .iv-row .btn { width: 100%; justify-content: center; } }
 .grade-btns .btn { flex: 1; justify-content: center; padding: 12px 14px; font-size: 13.5px; }
 .grade-btns .btn.sel.big-yes { background: var(--green-bg); border-color: var(--green-line); color: #195C3F; }
 /* Owner refinement 2026-08-17: the client portal's Correct button is solid
@@ -388,6 +399,7 @@ let generating = false; // guards the POST /training/generate and /training/rech
    2026-08-16, revision 2), so the client page is rating rounds only - no
    chat pane, no uploads. */
 let ROUND_IDS = null;
+let ROUND_START_DISP = null;   // displayed score when the current round opened (drives the "+N toward 100" delta)
 const ROUND_SIZE = 3;   // owner ruling 2026-08-20: rounds of 3, was 5
 const ROUND_CAP = 17;           // ~TRAINING_BANK_MAX(50) / ROUND_SIZE(3): consume the
                                 // whole pre-built pool, then end (owner ruling 2026-08-22)
@@ -1042,6 +1054,7 @@ function beginRoundIfNeeded() {
   }
   FILLER_TRIED = false; // each hold gets at most ONE filler set (max two question rounds per transition)
   ROUND_IDS = currentUnanswered().filter((c) => caseFresh(c)).slice(0, ROUND_SIZE).map((c) => c.id);
+  ROUND_START_DISP = displayScore(Number(READINESS.score) || 0);
   let n = 0, sitting = 0;
   try {
     n = Number(SS.get("trainRoundNum") || "0");
@@ -1411,7 +1424,7 @@ function renderReadinessPanel(animate) {
             <div class="rp-label">${ready ? "Ready" : "Getting to 100"}</div>
             <div class="rp-explain">${ready
               ? "We've got your voice down and we're ready to reply for you. Keep going to sharpen it further."
-              : "This score is how often we get the reply right first time: Correct nudges it up, Needs work holds it back. At 100 we've got your voice down and can reply for you."}</div>
+              : "Replies we got right first time. At 100 we can send replies without you."}</div>
           </div>
         </div>
         <div class="rp-bar-wrap">
@@ -1637,8 +1650,7 @@ function renderRoundDone() {
   const capped = roundsThisSitting() >= ROUND_CAP;
   const answeredCount = CASES.filter((c) => isAnswered(c.id)).length;
   const scoreLine = total
-    ? `<div class="round-score">${right} of ${total} right</div>
-       <div class="db-msg">Round ${roundNum} done - we got ${right} of ${total} right this round.</div>`
+    ? `<div class="round-score">Round ${roundNum}: ${right} of ${total} right</div>`
     : "";
 
   // Round-open gate (owner ruling 2026-08-25, bug #2 "Start round 2 goes in
@@ -1687,7 +1699,7 @@ function renderRoundDone() {
     // label the moment the questions land; if no set arrives the round
     // starts on its own - a founder is never left looking at a skip button
     // for questions that do not exist.
-    msg = `We're at ${disp} of the 100 goal. We're training on what you just taught us - the next round opens the moment it's ready.`;
+    msg = ``;  // the score panel above owns the number (UI/UX panel 2026-09-05)
     buttons = `<button class="btn primary" id="doneGenerateBtn" type="button">Start round ${roundNum + 1}</button>`;
   } else if (ready) {
     msg = `We're at ${disp} of the 100 goal. The next round was drafted with everything you just taught us.`;
@@ -1703,10 +1715,10 @@ function renderRoundDone() {
   const _actions = `${updating}${buttons}${answeredCount ? `<button class="btn" id="doneReviewBtn" type="button" style="margin-left:8px">See what we've learned</button>` : ""}`;
   el.innerHTML = holdComing
     ? `
-    <div class="done-banner ${trained ? "trained" : ""}">
-      <div class="db-icon">${trained ? "🎉" : "✓"}</div>
-      ${scoreLine}
-      <div class="db-msg" id="doneMsg">${msg}</div>
+    <div class="round-strip" id="roundStrip">
+      <span class="rs-check">✓</span>
+      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${(ROUND_START_DISP != null && ROUND_START_DISP > 0 && disp > ROUND_START_DISP) ? `+${disp - ROUND_START_DISP} toward your 100 · ` : ""}${total && right < total ? `the ${total - right} you corrected ${total - right === 1 ? "is" : "are"} in this retrain` : `all ${total || "three"} are in this retrain`}</span>
+      <span class="db-msg" id="doneMsg" hidden>${msg}</span>
     </div>
     <div id="interviewHost"></div>
     <div class="done-banner" style="margin-top:12px">${_actions}</div>
@@ -2247,36 +2259,90 @@ function mountInterviewForm() {
   if (document.getElementById("ivForm")) return;            // already mounted
   const rn = currentRoundNum();
   if (IV_GATE_MODE) {
-    // Questions are now on screen: the copy may say so, and Start becomes a skip.
-    const dm = document.getElementById("doneMsg");
-    if (dm) dm.textContent = `We're at ${displayScore(Number(READINESS.score) || 0)} of the 100 goal. We're training on what you just taught us - answer these while it works, and the next round opens the moment you're done.`;
-    // The form's own skip starts the round, so the banner's Start would be
-    // a second button for the same action (owner: "buttons duplicated",
-    // 2026-09-05) - hide it while the questions are up.
+    // Remove, don't hide: the .btn display rule beats the [hidden] attribute
+    // (live 2026-09-05: the banner Start stayed visible under the form).
     const gb = document.getElementById("doneGenerateBtn");
-    if (gb) gb.hidden = true;
+    if (gb) gb.remove();
   }
+  const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
-    title: "Before the next round - a few quick questions",
-    sub: "We're training on what you just taught us. The next round opens the moment you send these.",
-    cta: `Send answers and start round ${rn + 1}`, skip: `Skip the questions and start round ${rn + 1}`,
+    title: _nq === 1 ? "One optional question" : `${_nq} optional questions`,
+    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Start round ${rn + 1} whenever you like; your answer goes with it.</span>`,
+    cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
     sub: "Your answers go straight into the next replies. One line each, skip any.",
   });
+  if (IV_GATE_MODE) {
+    // ONE decision (UI/UX panel 2026-09-05, three reviewers): a single
+    // state-aware primary. Nothing typed -> "Start round N" (the skip path:
+    // timer only). Something typed -> "Send and start round N". No separate
+    // skip link, no second banner. The review link is navigation, not part
+    // of this decision - it moves into the result card as a quiet text link.
+    const rb = document.getElementById("doneReviewBtn");
+    if (rb) {
+      const banner = rb.closest(".done-banner");
+      const strip = document.getElementById("roundStrip");
+      const link = document.createElement("a");
+      link.className = "db-review"; link.id = "doneReviewLink"; link.setAttribute("role", "button");
+      const { right: _r, total: _t } = roundScore();
+      link.textContent = _t && _r < _t ? "Show what we got wrong" : "Review rated replies";
+      link.addEventListener("click", () => startReview());
+      if (strip) strip.appendChild(link);
+      rb.remove();
+      if (banner && !banner.querySelector("button, a")) banner.remove();
+    }
+    const sk = document.getElementById("ivSkipBtn");
+    if (sk) sk.remove();
+    const sb = document.getElementById("ivSubmitBtn");
+    // Fixed label (panel round 2: a caption that mutates under the cursor is
+    // a moving target). The rule is stated once, in words, under the input.
+    // Honest overrun (panel round 5): after 60s the promise of "about 30
+    // seconds" must change its words, not just keep spinning.
+    setTimeout(() => {
+      const lv = document.getElementById("ivLive");
+      if (lv && view === "done") lv.innerHTML = `<span class="spin"></span>Still retraining - taking longer than usual. Start round ${rn + 1} whenever you like.`;
+    }, 60000);
+    setTimeout(() => {
+      // Terminal state (panel round 6): stop implying eventual success.
+      const lv = document.getElementById("ivLive");
+      if (lv && view === "done") lv.textContent = `Still retraining. Round ${rn + 1} will use everything we have so far.`;  // spinner stops; the button keeps its identity
+    }, 150000);
+    const _narrow = window.matchMedia && window.matchMedia("(max-width: 520px)").matches;
+    document.querySelectorAll("#ivForm .iv-q input").forEach((inp, i) => {
+      if (!inp.placeholder) inp.placeholder = "Leave blank to skip";
+      inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && sb) { e.preventDefault(); sb.click(); } });
+      // Desktop only: focus the first field (a phone keyboard would push the
+      // one button below the fold).
+      if (i === 0 && !_narrow) setTimeout(() => { inp.focus({ preventScroll: true }); host.scrollIntoView({ block: "nearest" }); }, 0);
+    });
+  }
   document.querySelectorAll("#ivForm .iv-q input").forEach((inp) => {
     const qid = inp.getAttribute("data-qid");
     if (IV_TYPED[qid]) inp.value = IV_TYPED[qid];
     inp.addEventListener("input", () => { IV_TYPED[qid] = inp.value; });
   });
   const submitBtn = document.getElementById("ivSubmitBtn");
-  if (submitBtn) submitBtn.addEventListener("click", () => submitInterviewAnswers(IV_CURRENT, () => {
+  if (submitBtn) submitBtn.addEventListener("click", () => {
+    if (IV_GATE_MODE) {
+      // Acknowledge the press at once (panel: one button, no pending state
+      // invited double submits); the round opener takes over from here.
+      submitBtn.disabled = true;
+      submitBtn.textContent = `Starting round ${currentRoundNum() + 1}…`;
+    }
+    if (IV_GATE_MODE && ![...document.querySelectorAll("#ivForm .iv-q input")].some((i) => i.value.trim())) {
+      // Nothing typed: the single button IS the skip (timer only, never these questions again).
+      ivDismissedForRound = currentRoundNum(); IV_TYPED = {}; host.innerHTML = "";
+      FILLER_TRIED = true; startNextRoundOrGenerate(); return;
+    }
+    submitInterviewAnswers(IV_CURRENT, () => {
     IV_TYPED = {};
     const h = document.getElementById("interviewHost");
     if (h) h.innerHTML = "";
     if (IV_GATE_MODE) { FILLER_TRIED = true; startNextRoundOrGenerate(); return; } // questions done -> the round (2026-09-02)
     if (view === "done") render();
-  }));
+    });
+  });
   const skipBtn = document.getElementById("ivSkipBtn");
   if (skipBtn) skipBtn.addEventListener("click", () => {
     ivDismissedForRound = currentRoundNum();
