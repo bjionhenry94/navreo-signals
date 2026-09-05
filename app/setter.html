@@ -1215,6 +1215,23 @@ body.client-mode .ii-line3 .ii-age { margin-left: auto; }
    and Approve in client mode and carries a one-line explanation. */
 body.client-mode .send-gate { margin-top: 12px; }
 body.client-mode .send-gate .sg-intro { font-size: 12.5px; color: var(--ink-2); line-height: 1.5; margin: -2px 0 10px; }
+/* The Tutorial button is the client's only way back into the tour, so it
+   outranks the phone rule that hides the owner's admin cluster (line ~415).
+   On phones the header row goes away entirely in .mobile-detail, so pin it
+   to the corner instead - under the tour dim (z-index 500) so the tour it
+   starts still covers it. */
+body.client-mode #clientTourBtn { display: inline-flex !important; }
+@media (max-width: 640px) {
+  body.client-mode #clientTourBtn { position: fixed; top: 10px; right: 10px; z-index: 450; }
+}
+/* Shown for 3s when the tour is asked for before any reply exists. */
+.tour-wait-note {
+  position: fixed; top: 56px; right: 12px; z-index: 460;
+  max-width: min(260px, calc(100vw - 24px));
+  background: var(--cream, #fff); border: 1px solid var(--line); border-radius: 10px;
+  padding: 8px 11px; font-size: 12.5px; color: var(--ink-2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.14);
+}
 
 /* ── First-visit tutorial overlay (copied verbatim from setter-train.html:
    256-271) ────────────────────────────────────────────────────────────────
@@ -1431,19 +1448,35 @@ if (CLIENT_MODE) {
     if (e) e.remove();
   });
   /* The tour replay control takes the slot the settings gear just vacated -
-     same flex slot, same .btn.icon-btn box, so the header geometry is
-     unchanged. Built here rather than in the markup so the owner page never
-     carries a hidden node. */
+     a labelled .btn ("Tutorial") rather than a bare icon, because a client
+     who wants the tour back has to be able to SEE that it is there. Built
+     here rather than in the markup so the owner page never carries a hidden
+     node. */
   const headRow = document.querySelector(".setter-head-row");
   if (headRow) {
     const tourBtn = document.createElement("button");
-    tourBtn.className = "btn icon-btn";
+    tourBtn.className = "btn";
     tourBtn.id = "clientTourBtn";
     tourBtn.type = "button";
-    tourBtn.title = "Show me around";
-    tourBtn.setAttribute("aria-label", "Show me around");
-    tourBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.4-2.6 4"/><path d="M12 17.4h.01"/></svg>`;
-    tourBtn.addEventListener("click", () => startTutorial());
+    tourBtn.title = "Replay the tour";
+    tourBtn.setAttribute("aria-label", "Tutorial");
+    tourBtn.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.7 2.7 0 0 1 5.2.9c0 1.8-2.6 2.4-2.6 4"/><path d="M12 17.4h.01"/></svg><span>Tutorial</span>`;
+    /* Always a RESTART, never a resume: a half-finished tour is torn down
+       first so the click lands on step 1 of 6 every time. startTutorial()
+       silently no-ops with an empty inbox (it has no row to point at), so
+       say so rather than letting the click do nothing. */
+    tourBtn.addEventListener("click", () => {
+      if (tutActive) endTutorial();
+      if (!document.querySelector("#inboxList .inbox-item")) {
+        const note = document.createElement("div");
+        note.className = "tour-wait-note";
+        note.textContent = "The tour starts once your first reply arrives.";
+        document.body.appendChild(note);
+        setTimeout(() => note.remove(), 3000);
+        return;
+      }
+      startTutorial();
+    });
     headRow.appendChild(tourBtn);
   }
 }
