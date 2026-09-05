@@ -1539,11 +1539,21 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // Confidence grades (A healthiest … E least healthy) — the same grade the cap
   // engine acts on, one map keyed by domain. Loads after paint and re-renders
   // the manager so the badges fill in; the tables never block on it.
+  var gradesTries = 0;
   function loadGrades() {
     return fetch("/api/deliverability/grades", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
-      .then(function (j) { if (j && j.ok && j.grades) { S.grades = j; renderMgrTabs(); } })
-      .catch(function () { });
+      .then(function (j) {
+        var have = !!(j && j.ok && j.grades && Object.keys(j.grades).length);
+        if (have) { S.grades = j; renderMgrTabs(); }
+        // Cold cache after a deploy (the server answers instantly with
+        // computing:true and recomputes in the background) or a failed fetch:
+        // poll until the map lands. The old code gave up on the first miss and
+        // the page stayed grade-less until a manual reload.
+        if ((!have || (j && j.computing)) && gradesTries < 20) { gradesTries++; setTimeout(loadGrades, 4000); }
+        else if (have) gradesTries = 0;
+      })
+      .catch(function () { if (gradesTries < 20) { gradesTries++; setTimeout(loadGrades, 4000); } });
   }
 
   // paint immediately with placeholders/representative, then fill as data lands
