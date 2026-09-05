@@ -1227,6 +1227,14 @@ body.client-mode .ii-age.overdue { background: var(--bg-sunken); color: var(--in
 }
 body.client-mode .send-gate.sg-flash { box-shadow: 0 0 0 2px var(--accent, #2F6FED); border-radius: 8px; }
 
+/* Founder panel fix 2 (2026-09-06): at 1280x720 a full draft grew the editable
+   box to ~305px and pushed the follow-up chips (y~893), Send reply (y~947) and
+   the hint clean under the fold - founders saw a reply with no way to send it
+   and scrolled only by accident. Cap the box at 38vh and let it scroll inside
+   itself: still fully editable, and draft + chooser + actions all fit at 720.
+   Client only - the owner box keeps growing as it always has. */
+body.client-mode .qc-draft { max-height: 38vh; overflow-y: auto; }
+
 
 /* Automated follow-up section (Bjion 2026-09-05): sits between the draft
    and Approve in client mode and carries a one-line explanation. */
