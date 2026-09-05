@@ -4013,14 +4013,14 @@ function renderDetail(row) {
         </div>
       </div>
       <div class="dh-band">
-        ${CLIENT_MODE
-          // The NAME goes (§2 row 21: campaign names carry our internal
-          // "Client / Mechanism / v3" convention). The .dh-campaign box itself
-          // stays, empty: it is `flex: 1 1 auto` and the only thing holding the
-          // quick links at the right of the band, and §9 forbids moving a kept
-          // element. Same box, same geometry, no name.
-          ? `<div class="dh-campaign"></div>`
-          : `<div class="dh-campaign" title="${esc(campaignNameFor(row))}"><span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>`}
+        ${/* Campaign name shows in BOTH modes (Bjion 2026-09-05: "Add the
+           campaign name back here"). Client mode used to blank it (spec §2
+           row 21 - the internal "Client / Mechanism / v3" naming); the owner
+           wants clients to see which campaign the reply came from. Same box,
+           same geometry. campaignNameFor falls back to the row's own
+           server-stamped campaign_name, so a client whose scoped
+           /api/setter/campaigns list is empty still gets the real name. */
+        `<div class="dh-campaign" title="${esc(campaignNameFor(row))}"><span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>`}
         <div class="dh-actions">
           <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
           <button type="button" class="lp-panel-toggle" id="panelToggleBtn" aria-pressed="true" title="Hide lead details">${ICON_PANEL}</button>
