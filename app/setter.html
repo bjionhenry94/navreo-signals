@@ -1211,6 +1211,11 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
    client pill. Hand the job to the age badge here rather than touching 364,
    so the row keeps its right edge and the owner rule stays untouched. */
 body.client-mode .ii-line3 .ii-age { margin-left: auto; }
+/* L4: the amber "overdue" state fires at 15 minutes - Navreo's internal
+   response SLA, not a commitment to the client. Neutralise the colour only;
+   the badge itself stays because the elapsed time is genuinely useful. */
+body.client-mode .ii-age.overdue { background: var(--bg-sunken); color: var(--ink-2); }
+
 /* Automated follow-up section (Bjion 2026-09-05): sits between the draft
    and Approve in client mode and carries a one-line explanation. */
 body.client-mode .send-gate { margin-top: 12px; }
@@ -1447,6 +1452,14 @@ if (CLIENT_MODE) {
     const e = document.getElementById(id);
     if (e) e.remove();
   });
+  /* G9 + L3: two static placeholders baked into the markup. G9 uses Navreo's
+     OWN booking URL as the worked example inside a client's tool; L3's
+     "campaign" pairs with the internal campaign slug. Attribute swaps only. */
+  const linkPop = document.getElementById("linkPopInput");
+  if (linkPop) linkPop.placeholder = "Paste the URL, e.g. your booking link";
+  const searchBox = document.getElementById("inboxSearch");
+  if (searchBox) searchBox.placeholder = "Search by name, email or what they wrote…";
+
   /* The tour replay control takes the slot the settings gear just vacated -
      a labelled .btn ("Tutorial") rather than a bare icon, because a client
      who wants the tour back has to be able to SEE that it is there. Built
@@ -3050,9 +3063,14 @@ function renderCategoryFilter() {
   const names = Array.from(new Set([...Object.keys(counts), ...selectedCategories]))
     .sort((a, b) => (a === "Uncategorised") - (b === "Uncategorised") || a.localeCompare(b));
   const n = selectedCategories.size;
+  // L10: "Uncategorised" and "lead category" are the last triage words a client
+  // sees. Display-name only - data-cat / selectedCategories keep the real key.
+  const catDisp = (c) => (CLIENT_MODE && c === "Uncategorised") ? "Still reading it" : c;
   const label = !n ? "All categories"
-    : (n === 1 ? Array.from(selectedCategories)[0] : `${n} categories`);
+    : (n === 1 ? catDisp(Array.from(selectedCategories)[0]) : `${n} categories`);
   btn.innerHTML = `<span class="cf-label">${esc(label)}</span><span class="cf-caret">&#9662;</span>`;
+  if (CLIENT_MODE) btn.title = "Filter by what they're asking for";
+
   btn.classList.toggle("active", n > 0);
   btn.setAttribute("aria-expanded", _catMenuOpen ? "true" : "false");
   btn.onclick = () => { _catMenuOpen = !_catMenuOpen; renderCategoryFilter(); };
@@ -3060,8 +3078,9 @@ function renderCategoryFilter() {
     ? `<div class="cf-clear-row"><span class="small muted">${n} selected</span>` +
       `<button type="button" class="cf-clear" id="cfClearBtn">Clear</button></div>` : "";
   menu.innerHTML = header + (names.length
-    ? names.map((c) => `<label class="cf-opt"><input type="checkbox" data-cat="${esc(c)}"${selectedCategories.has(c) ? " checked" : ""}><span class="cf-name">${esc(c)}</span><span class="cf-n">${counts[c] || 0}</span></label>`).join("")
-    : `<div class="cf-empty small muted">No categories in this view yet</div>`);
+    ? names.map((c) => `<label class="cf-opt"><input type="checkbox" data-cat="${esc(c)}"${selectedCategories.has(c) ? " checked" : ""}><span class="cf-name">${esc(catDisp(c))}</span><span class="cf-n">${counts[c] || 0}</span></label>`).join("")
+    : `<div class="cf-empty small muted">${CLIENT_MODE ? "Nothing to filter here yet" : "No categories in this view yet"}</div>`);
+
   menu.style.display = _catMenuOpen ? "block" : "none";
   menu.querySelectorAll("input[type=checkbox]").forEach((cb) => cb.addEventListener("change", () => {
     const c = cb.getAttribute("data-cat");
@@ -3443,19 +3462,23 @@ function clientEmptyStateText() {
   return "No replies yet. New replies to your campaigns land here automatically, usually within a few minutes of arriving - nothing for you to do until one appears.";
 }
 function renderInboxList() {
-
   const el = document.getElementById("inboxList");
   const paged = pagedInboxRows();
+
   const testNoteEl = document.getElementById("testOnlyNote");
   if (testNoteEl) {
     const onlyTest = paged.rows.length > 0 && paged.rows.every((r) => r.is_test);
     testNoteEl.style.display = onlyTest ? "block" : "none";
     testNoteEl.textContent = onlyTest ? "These are simulated test replies. Real replies will appear here." : "";
   }
+  // L9: clicking an empty tab used to leave the previously-selected
+  // conversation open on the right - a live Send reply button for someone who
+  // isn't in the list, sitting beside "No replies yet". Show/hide only.
+  if (CLIENT_MODE && !paged.rows.length && !_queueLoading && selectedRowId) renderDetail(null);
   const slFoot = smartleadStatusFootHtml();
   const html = (!paged.rows.length
-
     // While a fetch is in flight an empty list means "still loading", not
+
     // "nothing here" - never show the misleading empty state during a load
     // (loader ruling 2026-07-16). A Smartlead search still in flight is the
     // same case: don't claim "nothing here" while more results may land.
@@ -3466,9 +3489,16 @@ function renderInboxList() {
             : `<div class="empty">${CLIENT_MODE
                 ? clientEmptyStateText()
                 : "No replies here. New ones will show up after the next check."}</div>`))
+    // L7 (copy-only mitigation): positive-sounding replies do end up filed here
 
-    : paged.rows.map(inboxItemHtml).join(""))
+    // when the categoriser gets one wrong. Say what this tab is and that the
+    // client can still answer, instead of leaving it unexplained.
+    : (CLIENT_MODE && currentStatus === "dismissed"
+        ? `<div class="small muted" style="padding:10px 12px;border-bottom:1px solid var(--line)">Filed away automatically — auto-replies, out-of-office and no-thank-yous. Open one and reply if we got it wrong.</div>`
+        : "")
+      + paged.rows.map(inboxItemHtml).join(""))
     + slFoot;
+
   // Identical-HTML skip (perf pass R2): only touch the DOM when the markup
   // actually differs. An identical string rebuilds a byte-for-byte identical
   // list, so skipping the innerHTML assignment is invisible but saves the parse/
@@ -3576,7 +3606,12 @@ function ageBadgeHtml(row) {
   else text = `${Math.floor(mins / (60 * 24))}d`;
   const full = then.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   const overdue = mins > 15;
-  return `<span class="ii-age ${overdue ? "overdue" : ""}" title="${esc(full)} (your local time)">${esc(text)}</span>`;
+  // L4: the amber at 15 minutes is Navreo's own internal response SLA, not a
+  // promise made to the client. Keep the badge, drop the alarm (the colour
+  // itself is neutralised by the body.client-mode rule in the stylesheet).
+  const title = CLIENT_MODE ? `They replied ${full}` : `${full} (your local time)`;
+  return `<span class="ii-age ${overdue ? "overdue" : ""}" title="${esc(title)}">${esc(text)}</span>`;
+
 }
 
 /* Minimal 3-line row: bold name + TEST chip / one-line snippet / hold label
@@ -4103,8 +4138,9 @@ function renderDetail(row) {
     ${convoHtml(row)}
     <div class="msg-card">
       <div class="composer-head">
-        <div class="msg-card-lab">Your reply</div>
+        ${CLIENT_MODE && !needsComposerActions(row) ? "" : `<div class="msg-card-lab">Your reply</div>`}
         ${linkButtonHtml(row)}
+
         ${teachToggleHtml(row)}
         <div class="ch-spacer"></div>
         ${retroFollowupHtml(row)}
@@ -4529,8 +4565,11 @@ function categoryTone(name) {
 function categoryControlInner(row, compact) {
   const curCat = String(row.category || "").trim();
   const catUncat = !curCat || curCat === "Uncategorizable by Ai";
+  // R4: "Uncategorised" is triage vocabulary - a founder reads it as "the tool
+  // failed" on a reply that plainly asks for a case study. Tone class kept.
   const catPill = catUncat
-    ? `<span class="pill a">Uncategorised</span>`
+    ? `<span class="pill a">${CLIENT_MODE ? "Still reading it" : "Uncategorised"}</span>`
+
     : `<span class="pill ${categoryTone(curCat)}">${esc(curCat)}</span>`;
   // A SENT row keeps the control (owner ask 2026-08-15) - the server's
   // recategorise route already relabels sent threads in place
@@ -4544,7 +4583,8 @@ function categoryControlInner(row, compact) {
   const hint = "";
   return `
       <div class="lp-cat-head">
-        <div class="lp-label">Lead category</div>
+        <div class="lp-label">${CLIENT_MODE ? "What they're asking for" : "Lead category"}</div>
+
         <div class="lp-cat-now">${catPill}</div>
       </div>
       ${CLIENT_MODE ? "" : (() => {
@@ -4772,15 +4812,23 @@ function companySectionHtml(row) {
   const verdictHtml = (chipLabel && !CLIENT_MODE)
     ? `<div class="lp-verdict-row"><span class="lp-qual lp-qual-${esc(q.verdict || "unknown")}">${chipLabel}</span>${q.reason ? `<span class="lp-qual-reason-inline">${esc(q.reason)}</span>` : ""}</div>`
     : "";
-  const fact = (label, val) => `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
+  // R6: in client mode a row whose value is just the dash carries nothing - a
+  // six-row table of em-dashes reads as a broken page on the first reply opened.
+  const fact = (label, val) => (CLIENT_MODE && val === dash)
+    ? ""
+    : `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
+
   return `<div class="lp-section lp-company" id="lpCompany">
     ${verdictHtml}
     <div class="lp-label">Profile</div>
     <dl class="lp-facts">
       ${fullName ? fact("Name", esc(fullName)) : ""}
       ${fact("Role", role ? esc(role) : dash)}
-      ${fact("Personal Location", personalLoc)}
-      ${fact("Local time", localTime)}
+      ${/* R5: call-timing aids for an SDR, and the tz-derived "Personal
+            Location" openly contradicts "Company HQ" on the same card. */ ""}
+      ${CLIENT_MODE ? "" : fact("Personal Location", personalLoc)}
+      ${CLIENT_MODE ? "" : fact("Local time", localTime)}
+
       ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a></span>` : ""}` : (site ? `<a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a>` : dash))}
       ${fact("Size", hc ? esc(hc) : dash)}
       ${fact("Company HQ", loc ? esc(loc) : dash)}
@@ -5841,8 +5889,13 @@ function composerHtml(row) {
       </div>`;
   }
   if (row.status === "no_action" || row.status === "dismissed") {
-    const label = row.status === "dismissed" ? "Dismissed." : "No action needed.";
-    const cat = row.category ? ` Category: ${esc(row.category)}.` : "";
+    // G10: raw Smartlead category text with its odd casing, under a heading
+    // promising a reply that isn't there. Client mode says what happened.
+    const label = CLIENT_MODE
+      ? (row.status === "dismissed" ? "Filed away — no reply was sent." : "No reply needed for this one.")
+      : (row.status === "dismissed" ? "Dismissed." : "No action needed.");
+    const cat = (!CLIENT_MODE && row.category) ? ` Category: ${esc(row.category)}.` : "";
+
     const anywayBtn = (!CLIENT_MODE && row.status === "no_action")
       ? `<button class="btn qc-draft-anyway" data-id="${esc(row.id)}" type="button" style="margin-top:10px">Draft a reply anyway</button>` : "";
     return `<div class="small muted">${label}${cat}</div>${anywayBtn}`;
@@ -6312,7 +6365,10 @@ function applyLinkPopover() {
   const raw = linkPopInput.value.trim();
   if (!raw) { shakeLinkInput("Enter a URL first."); return; }
   const url = normaliseUrl(raw);
-  if (!url) { shakeLinkInput("That doesn't look like a web address. Try https://calendly.com/navreo/30min"); return; }
+  if (!url) { shakeLinkInput(CLIENT_MODE   /* G9 */
+    ? "That doesn't look like a web address. It should start with https://"
+    : "That doesn't look like a web address. Try https://calendly.com/navreo/30min"); return; }
+
   if (!PENDING_LINK) { hideLinkPopover(false); return; }
 
   let flashRect = null;
@@ -8336,6 +8392,17 @@ function tutFirstRowId() {
   return el ? el.getAttribute("data-id") : null;
 }
 function tutRowId() { return selectedRowId || tutFirstRowId(); }
+/* U2/U3: replay the tour from the Sent tab and stops 4 and 6 narrate a draft
+   and an Approve button that aren't on the screen. This says which case we're
+   in so those two stops can tell the truth. */
+function tutRowSent() {
+  const id = tutRowId();
+  if (!id) return false;
+  const r = QUEUE_ROWS.find((x) => String(x.id) === String(id))
+         || ALL_ROWS.find((x) => String(x.id) === String(id));
+  return !!r && (r.status === "sent" || r.status === "auto_sent");
+}
+
 function tutGateEl() {
   const id = tutRowId();
   return id ? document.getElementById("gate-" + id) : null;
@@ -8383,7 +8450,7 @@ function tutPillHasCount() {
 
 const TUT_STEPS = [
   { title: "Welcome", cta: "Show me around", target: () => null,
-    body: () => "When someone replies to one of your campaigns, a reply is drafted here ready for you. You read it, change anything you like, and it only goes out when you press Approve." },
+    body: () => "When someone replies to one of your campaigns, a reply is drafted here ready for you. You read it, change anything you like, and it only goes out when you press Send reply." },
   { title: "Everyone who replied", cta: "Next", advanceOnRowClick: true,
     target: () => document.querySelector("#inboxList .inbox-item"),
     body: () => "Every person who has replied to you is listed here — newest first, and only your own campaigns." },
@@ -8392,7 +8459,10 @@ const TUT_STEPS = [
     body: () => "This is the whole email conversation, so you can see exactly what they said before you decide." },
   { title: "The draft reply", cta: "Next", needsRow: true,
     target: () => document.querySelector(".qc-draft"),
-    body: () => "This is the draft reply, written in your voice — click straight into it and change any word you like before it goes." },
+    body: () => tutRowSent()   /* U3 */
+      ? "This is where you type, if you want to send another message."
+      : "This is the draft reply, written in your voice — click straight into it and change any word you like before it goes." },
+
   /* Stop 5 (owner ask 2026-09-05): where a conversation GOES once a decision is
      made. The pills are the only place that movement is visible, so the stop
      anchors on them and names each destination. The "Meeting request" sentence
@@ -8400,18 +8470,24 @@ const TUT_STEPS = [
      status except dismissed - see FILTER_PILLS and the server filter). */
   { title: "Where replies go next", cta: "Next",
     target: () => tutPillEl(),
-    body: () => "Approve a reply and that conversation leaves <b>Needs review</b> and moves to <b>Sent</b>. Dismiss it instead and it moves to <b>Dismissed</b>. <b>Meeting request</b> gathers everyone who asked for a call, and keeps them there until you dismiss them."
-      + (tutPillHasCount() ? " The number on each one counts only your own conversations." : "") },
+    body: () => "Send a reply and that conversation leaves <b>Needs review</b> and moves to <b>Sent</b>. Dismiss it instead and it moves to <b>Dismissed</b>. <b>Meeting request</b> collects the people who ask for a call."   /* U4: was "gathers everyone", contradicted by a live 0 count */
+      + (tutPillHasCount()
+ ? " The number on each one counts only your own conversations." : "") },
   { title: "Automated follow-up", needsRow: true, blocking: true,
     cta: () => ((tutGateMissing() || tutGateChosen()) ? "Got it" : "Waiting for your choice…"),
     target: () => tutGateEl()
       || document.querySelector('.qc-send[data-id="' + (window.CSS && CSS.escape ? CSS.escape(String(tutRowId())) : tutRowId()) + '"]')
       || document.querySelector(".qc-send"),
-    body: () => (tutGateMissing()
-      ? "Nothing has gone to this person yet. Press <b>Approve</b> and the reply goes out — you'll see it in the conversation straight away."
+    body: () => (tutRowSent()
+      /* U2: on a sent row this stop used to promise an Approve button that is
+         not on the screen, about a reply that went out days ago. */
+      ? "This one has already been answered. You can send another message in the same thread whenever you like."
+      : tutGateMissing()
+      ? "Nothing has gone to this person yet. Press <b>Send reply</b> and the reply goes out — you'll see it in the conversation straight away."
+
       : tutGateNoneOnly()
-        ? "If they don't reply, follow-ups can go out automatically later. This campaign has none set up yet, so choose <b>None</b> — one reply, no chasing. Choosing it sends nothing by itself: nothing reaches this person until you press <b>Approve</b>."
-        : "Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Approve</b>, and any follow-ups only go out later if they don't reply.") },
+        ? "If they don't reply, follow-ups can go out automatically later. This campaign has none set up yet, so choose <b>None</b> — one reply, no chasing. Choosing it sends nothing by itself: nothing reaches this person until you press <b>Send reply</b>."
+        : "Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Send reply</b>, and any follow-ups only go out later if they don't reply.") },
 ];
 
 /* Auto-run guard, mirroring train's maybeStartTutorial: called from the RENDER
