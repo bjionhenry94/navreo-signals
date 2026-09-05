@@ -1211,6 +1211,23 @@ html.headless a.lp-qbtn::after { content: "⧉"; font-size: 10px; opacity: 0.55;
    client pill. Hand the job to the age badge here rather than touching 364,
    so the row keeps its right edge and the owner rule stays untouched. */
 body.client-mode .ii-line3 .ii-age { margin-left: auto; }
+/* L4: the amber "overdue" state fires at 15 minutes - Navreo's internal
+   response SLA, not a commitment to the client. Neutralise the colour only;
+   the badge itself stays because the elapsed time is genuinely useful. */
+body.client-mode .ii-age.overdue { background: var(--bg-sunken); color: var(--ink-2); }
+/* Phone gate: on a phone the pinned action bar shows a locked Send reply and
+   the instruction that unlocks it, while the chooser itself is off-screen.
+   The hint becomes a tappable jump to the chooser (handler in the client-mode
+   boot block); this gives it a control's affordance and target size. */
+@media (max-width: 640px) {
+  body.client-mode .gate-hint[data-gate-jump] {
+    cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+    padding: 6px 2px; min-height: 32px; display: inline-flex; align-items: center; gap: 4px;
+  }
+}
+body.client-mode .send-gate.sg-flash { box-shadow: 0 0 0 2px var(--accent, #2F6FED); border-radius: 8px; }
+
+
 /* Automated follow-up section (Bjion 2026-09-05): sits between the draft
    and Approve in client mode and carries a one-line explanation. */
 body.client-mode .send-gate { margin-top: 12px; }
@@ -1447,6 +1464,32 @@ if (CLIENT_MODE) {
     const e = document.getElementById(id);
     if (e) e.remove();
   });
+  /* G9 + L3: two static placeholders baked into the markup. G9 uses Navreo's
+     OWN booking URL as the worked example inside a client's tool; L3's
+     "campaign" pairs with the internal campaign slug. Attribute swaps only. */
+  /* Phone gate: "Pick a follow-up first" names a target the founder cannot
+     see - the chooser is above the fold of the reply while the action bar is
+     pinned at the bottom. Tapping the hint scrolls the chooser into view.
+     Delegated so it survives every re-render of the composer. */
+  const gateJump = (e) => {
+    const hint = e.target.closest && e.target.closest("[data-gate-jump]");
+    if (!hint || (e.target.closest && e.target.closest(".why"))) return;
+    if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
+    const gate = document.getElementById("gate-" + hint.getAttribute("data-gate-jump"));
+    if (!gate) return;
+    e.preventDefault();
+    gate.scrollIntoView({ behavior: "smooth", block: "center" });
+    gate.classList.add("sg-flash");
+    setTimeout(() => gate.classList.remove("sg-flash"), 1200);
+  };
+  document.addEventListener("click", gateJump);
+  document.addEventListener("keydown", gateJump);
+  const linkPop = document.getElementById("linkPopInput");
+
+  if (linkPop) linkPop.placeholder = "Paste the URL, e.g. your booking link";
+  const searchBox = document.getElementById("inboxSearch");
+  if (searchBox) searchBox.placeholder = "Search by name, email or what they wrote…";
+
   /* The tour replay control takes the slot the settings gear just vacated -
      a labelled .btn ("Tutorial") rather than a bare icon, because a client
      who wants the tour back has to be able to SEE that it is there. Built
@@ -2264,8 +2307,12 @@ async function _loadQueueInner(prefetch) {
     if (!QUEUE_ROWS.length && _allRowsLoaded && ALL_ROWS.length) {
       QUEUE_ROWS = clientPillRows(ALL_ROWS, currentStatus);
     }
-    showError("Couldn't refresh the queue: " + res.error +
-      (QUEUE_ROWS.length ? " - showing the last loaded conversations." : ""));
+    // U5: "queue" is banned client vocabulary and the raw HTTP status helps nobody.
+    showError(CLIENT_MODE
+      ? "Couldn't refresh just now — showing the conversations we already loaded. Trying again shortly."
+      : "Couldn't refresh the queue: " + res.error +
+        (QUEUE_ROWS.length ? " - showing the last loaded conversations." : ""));
+
     // Self-heal (502 fix 2026-08-09): don't leave the banner sitting for the
     // full 60s poll gap — one gentle re-try in ~20s clears it as soon as the
     // restarting instance is back. Single-flight: never stacks timers.
@@ -2469,8 +2516,10 @@ function sortedTrayRows() {
 }
 function trayRowHtml(r) {
   const h = unresolvedAgeHours(r);
+  // T3: "push" is our API verb and means nothing to a client.
   const failTag = r.subsequence_decision === "push_failed"
-    ? `<span class="pill r">push failed — retry</span>` : "";
+    ? `<span class="pill r">${CLIENT_MODE ? "Follow-up didn't save — try again" : "push failed — retry"}</span>` : "";
+
   const company = r.company_domain ? `<span class="muted small">${esc(r.company_domain)}</span>` : "";
   return `<div class="tray-row ${h >= 24 ? "old" : ""}" data-id="${esc(r.id)}">
     <div class="tray-row-main" role="button" tabindex="0" data-id="${esc(r.id)}" title="Open the full conversation">
@@ -2485,7 +2534,8 @@ function trayRowHtml(r) {
     <div class="tray-row-actions">
       ${failTag}
       ${["none", "none_at_send"].includes(r.subsequence_decision) ? `<span class="pill n tray-none-tag">No follow-up</span>` : ""}
-      <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">Add to subsequence &#9662;</button>
+      <button class="tray-add-btn sg-add" type="button" data-id="${esc(r.id)}">${CLIENT_MODE ? "Add a follow-up" : "Add to subsequence"} &#9662;</button>
+
       ${["none", "none_at_send"].includes(r.subsequence_decision) ? "" : `<button class="tray-none-btn sg-none" type="button" data-id="${esc(r.id)}">No follow-up needed</button>`}
       ${CLIENT_MODE ? ""
         // The tray itself STAYS in client mode (its endpoint is scoped to the
@@ -2521,7 +2571,10 @@ function renderUnresolvedTray() {
   _lastTrayCount = nUndecided;
   tray.style.display = "";
   tray.classList.toggle("open", trayOpen);
-  document.getElementById("trayTitle").textContent = `Sent without follow-up (${n})`;
+  // T2: "Sent without follow-up" reads to a client as a report of our own error.
+  document.getElementById("trayTitle").textContent = CLIENT_MODE
+    ? `Waiting on a follow-up choice (${n})` : `Sent without follow-up (${n})`;
+
   document.getElementById("trayBadge").textContent = n;
   const body = document.getElementById("trayBody");
   // Keep the reviewer's place (bounce fix 2026-08-01): the wholesale
@@ -2616,8 +2669,11 @@ async function openUnresolvedRow(id) {
   const res = await fetchJson(`/api/setter/queue/row?id=${encodeURIComponent(id)}`);
   const row = res.ok && res.data && res.data.row;
   if (!row) {
-    if (t) showDetailError("Couldn't load the full conversation: " + (res.error || "row not found"));
-    else showError("Couldn't open that conversation: " + (res.error || "row not found"));
+    // U6: "row not found" is a database phrase.
+    const notFound = "Couldn't open that conversation — refresh the page and try again.";
+    if (t) showDetailError(CLIENT_MODE ? notFound : "Couldn't load the full conversation: " + (res.error || "row not found"));
+    else showError(CLIENT_MODE ? notFound : "Couldn't open that conversation: " + (res.error || "row not found"));
+
     return;
   }
   const idx = ALL_ROWS.findIndex((r) => String(r.id) === String(id));
@@ -2692,12 +2748,16 @@ async function retroFollowupAdd(id, subSequenceId, btn, showPicker) {
       || "Smartlead didn't respond just now — please try again in a moment.";
     const retryable = res.status === 503 || res.status === 502
       || (res.data && res.data.retryable);
-    showError("Couldn't add to subsequence: " + msg
-      + (retryable ? " You can try again." : ""));
+    // T7: the raw tail names Smartlead. Client mode gets one friendly line.
+    showError(CLIENT_MODE
+      ? "Couldn't add the follow-up — try again in a moment."
+      : "Couldn't add to subsequence: " + msg + (retryable ? " You can try again." : ""));
+
     return;
   }
   clearError();
-  protoNote("Pushed to Smartlead subsequence");
+  protoNote(CLIENT_MODE ? "Follow-up added" : "Pushed to Smartlead subsequence");   // T6
+
   // Progress-to-next (owner ask 2026-08-01): resolve the next person BEFORE
   // this row leaves, update the tray optimistically (no awaited round trip —
   // that network wait + full rebuild was the bounce), open the next
@@ -2786,7 +2846,7 @@ function renderTrayPicker(id, subs) {
   const picker = document.getElementById(`sgPicker-${id}`);
   if (!picker) return;
   picker.style.display = "block";
-  picker.innerHTML = `<div class="small muted" style="margin:4px 0">This campaign has more than one subsequence — pick one:</div>
+  picker.innerHTML = `<div class="small muted" style="margin:4px 0">${CLIENT_MODE ? "This campaign has more than one follow-up — pick one:" : "This campaign has more than one subsequence — pick one:"}</div>
     <div class="sg-chips">${(subs || []).map((s) =>
       `<button type="button" class="chip sg-picker-chip" data-id="${esc(id)}" data-sub-id="${esc(s.id)}">${esc(s.name || "Follow-up")}</button>`
     ).join("")}</div>`;
@@ -3033,9 +3093,14 @@ function renderCategoryFilter() {
   const names = Array.from(new Set([...Object.keys(counts), ...selectedCategories]))
     .sort((a, b) => (a === "Uncategorised") - (b === "Uncategorised") || a.localeCompare(b));
   const n = selectedCategories.size;
+  // L10: "Uncategorised" and "lead category" are the last triage words a client
+  // sees. Display-name only - data-cat / selectedCategories keep the real key.
+  const catDisp = (c) => (CLIENT_MODE && c === "Uncategorised") ? "Still reading it" : c;
   const label = !n ? "All categories"
-    : (n === 1 ? Array.from(selectedCategories)[0] : `${n} categories`);
+    : (n === 1 ? catDisp(Array.from(selectedCategories)[0]) : `${n} categories`);
   btn.innerHTML = `<span class="cf-label">${esc(label)}</span><span class="cf-caret">&#9662;</span>`;
+  if (CLIENT_MODE) btn.title = "Filter by what they're asking for";
+
   btn.classList.toggle("active", n > 0);
   btn.setAttribute("aria-expanded", _catMenuOpen ? "true" : "false");
   btn.onclick = () => { _catMenuOpen = !_catMenuOpen; renderCategoryFilter(); };
@@ -3043,8 +3108,9 @@ function renderCategoryFilter() {
     ? `<div class="cf-clear-row"><span class="small muted">${n} selected</span>` +
       `<button type="button" class="cf-clear" id="cfClearBtn">Clear</button></div>` : "";
   menu.innerHTML = header + (names.length
-    ? names.map((c) => `<label class="cf-opt"><input type="checkbox" data-cat="${esc(c)}"${selectedCategories.has(c) ? " checked" : ""}><span class="cf-name">${esc(c)}</span><span class="cf-n">${counts[c] || 0}</span></label>`).join("")
-    : `<div class="cf-empty small muted">No categories in this view yet</div>`);
+    ? names.map((c) => `<label class="cf-opt"><input type="checkbox" data-cat="${esc(c)}"${selectedCategories.has(c) ? " checked" : ""}><span class="cf-name">${esc(catDisp(c))}</span><span class="cf-n">${counts[c] || 0}</span></label>`).join("")
+    : `<div class="cf-empty small muted">${CLIENT_MODE ? "Nothing to filter here yet" : "No categories in this view yet"}</div>`);
+
   menu.style.display = _catMenuOpen ? "block" : "none";
   menu.querySelectorAll("input[type=checkbox]").forEach((cb) => cb.addEventListener("change", () => {
     const c = cb.getAttribute("data-cat");
@@ -3413,18 +3479,36 @@ function renderSmartleadDetail(h, thread) {
   if (back) back.addEventListener("click", (e) => { e.preventDefault(); backToInbox(); });
 }
 
+/* L1: one empty-state sentence used to serve every tab AND every fruitless
+   search, so the Sent tab said "No replies yet" while 35 replies existed, and
+   a search for someone on another tab read as if they had vanished. Client
+   mode only - the owner keeps its single line. */
+function clientEmptyStateText() {
+  const q = (typeof inboxSearchQuery === "string" ? inboxSearchQuery : "").trim();
+  if (q) return `No conversations here match "${q}". Try another tab.`;
+  if (currentStatus === "sent") return "Nothing sent yet. Replies you approve will show up here.";
+  if (currentStatus === "meeting_request") return "Nobody has asked for a call yet.";
+  if (currentStatus === "dismissed") return "Nothing filed away yet.";
+  return "No replies yet. New replies to your campaigns land here automatically, usually within a few minutes of arriving - nothing for you to do until one appears.";
+}
 function renderInboxList() {
   const el = document.getElementById("inboxList");
   const paged = pagedInboxRows();
+
   const testNoteEl = document.getElementById("testOnlyNote");
   if (testNoteEl) {
     const onlyTest = paged.rows.length > 0 && paged.rows.every((r) => r.is_test);
     testNoteEl.style.display = onlyTest ? "block" : "none";
     testNoteEl.textContent = onlyTest ? "These are simulated test replies. Real replies will appear here." : "";
   }
+  // L9: clicking an empty tab used to leave the previously-selected
+  // conversation open on the right - a live Send reply button for someone who
+  // isn't in the list, sitting beside "No replies yet". Show/hide only.
+  if (CLIENT_MODE && !paged.rows.length && !_queueLoading && selectedRowId) renderDetail(null);
   const slFoot = smartleadStatusFootHtml();
   const html = (!paged.rows.length
     // While a fetch is in flight an empty list means "still loading", not
+
     // "nothing here" - never show the misleading empty state during a load
     // (loader ruling 2026-07-16). A Smartlead search still in flight is the
     // same case: don't claim "nothing here" while more results may land.
@@ -3433,10 +3517,18 @@ function renderInboxList() {
         : (slFoot
             ? ""   // the footer's "Searching all of Smartlead…" carries the state
             : `<div class="empty">${CLIENT_MODE
-                ? "No replies yet. New replies to your campaigns land here automatically, usually within a few minutes of arriving - nothing for you to do until one appears."
+                ? clientEmptyStateText()
                 : "No replies here. New ones will show up after the next check."}</div>`))
-    : paged.rows.map(inboxItemHtml).join(""))
+    // L7 (copy-only mitigation): positive-sounding replies do end up filed here
+
+    // when the categoriser gets one wrong. Say what this tab is and that the
+    // client can still answer, instead of leaving it unexplained.
+    : (CLIENT_MODE && currentStatus === "dismissed"
+        ? `<div class="small muted" style="padding:10px 12px;border-bottom:1px solid var(--line)">Filed away automatically — auto-replies, out-of-office and no-thank-yous. Open one and reply if we got it wrong.</div>`
+        : "")
+      + paged.rows.map(inboxItemHtml).join(""))
     + slFoot;
+
   // Identical-HTML skip (perf pass R2): only touch the DOM when the markup
   // actually differs. An identical string rebuilds a byte-for-byte identical
   // list, so skipping the innerHTML assignment is invisible but saves the parse/
@@ -3544,7 +3636,12 @@ function ageBadgeHtml(row) {
   else text = `${Math.floor(mins / (60 * 24))}d`;
   const full = then.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
   const overdue = mins > 15;
-  return `<span class="ii-age ${overdue ? "overdue" : ""}" title="${esc(full)} (your local time)">${esc(text)}</span>`;
+  // L4: the amber at 15 minutes is Navreo's own internal response SLA, not a
+  // promise made to the client. Keep the badge, drop the alarm (the colour
+  // itself is neutralised by the body.client-mode rule in the stylesheet).
+  const title = CLIENT_MODE ? `They replied ${full}` : `${full} (your local time)`;
+  return `<span class="ii-age ${overdue ? "overdue" : ""}" title="${esc(title)}">${esc(text)}</span>`;
+
 }
 
 /* Minimal 3-line row: bold name + TEST chip / one-line snippet / hold label
@@ -4021,7 +4118,10 @@ function renderDetail(row) {
     // its own queue item. The "No reply from them since this was sent" line was
     // noise the owner asked to drop (2026-08-10).
     repliedBackHtml = later
-      ? `<div class="sent-line auto_sent">They replied ${pulledAgo(later.replied_at)} - it's in this queue as its own item.</div>`
+      ? `<div class="sent-line auto_sent">${CLIENT_MODE                                 /* G12 */
+          ? `They replied ${pulledAgo(later.replied_at)} — it's in your inbox as its own conversation.`
+          : `They replied ${pulledAgo(later.replied_at)} - it's in this queue as its own item.`}</div>`
+
       : "";
   }
 
@@ -4068,8 +4168,9 @@ function renderDetail(row) {
     ${convoHtml(row)}
     <div class="msg-card">
       <div class="composer-head">
-        <div class="msg-card-lab">Your reply</div>
+        ${CLIENT_MODE && !needsComposerActions(row) ? "" : `<div class="msg-card-lab">Your reply</div>`}
         ${linkButtonHtml(row)}
+
         ${teachToggleHtml(row)}
         <div class="ch-spacer"></div>
         ${retroFollowupHtml(row)}
@@ -4494,8 +4595,11 @@ function categoryTone(name) {
 function categoryControlInner(row, compact) {
   const curCat = String(row.category || "").trim();
   const catUncat = !curCat || curCat === "Uncategorizable by Ai";
+  // R4: "Uncategorised" is triage vocabulary - a founder reads it as "the tool
+  // failed" on a reply that plainly asks for a case study. Tone class kept.
   const catPill = catUncat
-    ? `<span class="pill a">Uncategorised</span>`
+    ? `<span class="pill a">${CLIENT_MODE ? "Still reading it" : "Uncategorised"}</span>`
+
     : `<span class="pill ${categoryTone(curCat)}">${esc(curCat)}</span>`;
   // A SENT row keeps the control (owner ask 2026-08-15) - the server's
   // recategorise route already relabels sent threads in place
@@ -4509,7 +4613,8 @@ function categoryControlInner(row, compact) {
   const hint = "";
   return `
       <div class="lp-cat-head">
-        <div class="lp-label">Lead category</div>
+        <div class="lp-label">${CLIENT_MODE ? "What they're asking for" : "Lead category"}</div>
+
         <div class="lp-cat-now">${catPill}</div>
       </div>
       ${CLIENT_MODE ? "" : (() => {
@@ -4594,9 +4699,10 @@ function leadPanelHtml(row) {
     ${noAgentHtml}
     ${companySectionHtml(row)}
     ${clientSectionHtml(row)}
-    <div class="lp-section">
+    ${CLIENT_MODE && !leadDecisionHtml(row) ? "" : `<div class="lp-section">
       ${leadDecisionHtml(row)}
-    </div>
+    </div>`}
+
   `;
 }
 /* Notes: a SHARED, team-visible free-text scratchpad on this lead (owner ask
@@ -4736,15 +4842,23 @@ function companySectionHtml(row) {
   const verdictHtml = (chipLabel && !CLIENT_MODE)
     ? `<div class="lp-verdict-row"><span class="lp-qual lp-qual-${esc(q.verdict || "unknown")}">${chipLabel}</span>${q.reason ? `<span class="lp-qual-reason-inline">${esc(q.reason)}</span>` : ""}</div>`
     : "";
-  const fact = (label, val) => `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
+  // R6: in client mode a row whose value is just the dash carries nothing - a
+  // six-row table of em-dashes reads as a broken page on the first reply opened.
+  const fact = (label, val) => (CLIENT_MODE && val === dash)
+    ? ""
+    : `<div class="lp-fact"><dt>${label}</dt><dd>${val}</dd></div>`;
+
   return `<div class="lp-section lp-company" id="lpCompany">
     ${verdictHtml}
     <div class="lp-label">Profile</div>
     <dl class="lp-facts">
       ${fullName ? fact("Name", esc(fullName)) : ""}
       ${fact("Role", role ? esc(role) : dash)}
-      ${fact("Personal Location", personalLoc)}
-      ${fact("Local time", localTime)}
+      ${/* R5: call-timing aids for an SDR, and the tz-derived "Personal
+            Location" openly contradicts "Company HQ" on the same card. */ ""}
+      ${CLIENT_MODE ? "" : fact("Personal Location", personalLoc)}
+      ${CLIENT_MODE ? "" : fact("Local time", localTime)}
+
       ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a></span>` : ""}` : (site ? `<a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a>` : dash))}
       ${fact("Size", hc ? esc(hc) : dash)}
       ${fact("Company HQ", loc ? esc(loc) : dash)}
@@ -4789,7 +4903,12 @@ function wireClientToggle(scope) {
    howDecidedContentHtml, laid out as a clean two-column list with the "none"
    guardrail rows hidden, so the panel scans fast. */
 function leadDecisionHtml(row) {
+  // R1/R2/R3: in client mode every fact row here is already filtered out, so all
+  // that remains is our own Calendly plumbing note ("this agent") and the
+  // "No decision details." fallback. Render nothing at all instead.
+  if (CLIENT_MODE) return "";
   const parts = [];
+
   // The "Held for review" head + reason and the Intent row were dropped from
   // the sidebar (owner ask 2026-08-11); the Try-it drawer keeps the full set.
   const verdict = autoSendVerdictHtml(row, true);
@@ -5267,7 +5386,8 @@ function convoMsgHtml(who, when, body, emphasize, inbound) {
 function subseqNoteHtml(when) {
   return `<div class="thread-note" style="text-align:center;margin:10px 0;">
     <span class="small" style="display:inline-block;padding:4px 12px;border-radius:999px;background:var(--bg-sunken);border:1px solid var(--line);color:var(--ink-3);">
-      &#10227; Added to a follow-up subsequence${when ? ` &middot; ${pulledAgo(when)}` : ""}</span>
+      &#10227; ${CLIENT_MODE ? "Added to an automatic follow-up" : "Added to a follow-up subsequence"}${when ? ` &middot; ${pulledAgo(when)}` : ""}</span>
+
   </div>`;
 }
 function convoHtml(row) {
@@ -5396,15 +5516,35 @@ function needsComposerActions(row) {
 /* Dismiss STAYS in client mode (ruling 4.i) - a client saying "no reply
    needed" is a real decision. Only the tooltip goes: it names our internal
    queue process and our sending platform (spec §2 row 23). */
-const DISMISS_TITLE_ATTR = CLIENT_MODE ? ""
+/* G8: stripping the owner tooltip left a bare "Dismiss" with no way to tell
+   whether it deletes the reply, unsubscribes the person or just files it.
+   Client mode gets its own party-neutral label + title. */
+const DISMISS_TITLE_ATTR = CLIENT_MODE
+  ? ` title="Files this conversation away. Nothing is sent, and you can still find it under Dismissed."`
   : ` title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead."`;
+const DISMISS_LABEL = CLIENT_MODE ? "No reply needed" : "Dismiss";
+
 function gateLockHintHtml(rowId, hidden) {
   // The single wording change permitted anywhere in client mode (ruling 4.ii):
   // "track" is our word for a subsequence. Everything else - chip labels,
   // button labels, the gate label, the "(why?)" body - is verbatim.
   const lockLabel = CLIENT_MODE ? "Pick a follow-up first" : "Pick a follow-up track first";
-  return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}" ${hidden ? 'style="display:none"' : ""}>${lockLabel}
-    <span class="why">(why?<span class="tooltip">Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.</span>)</span>
+  // G1: the owner tooltip advertises double-click-to-approve, a power-user fast
+  // path that must never be taught to a client (it sends a real email).
+  const whyBody = CLIENT_MODE
+    ? `Every reply needs a follow-up decision — even "None" — so nobody is quietly forgotten after you send.`
+    : `Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.`;
+  // Phone gate (client mode): the action bar is pinned in view while the chips
+  // that unlock it sit off-screen at the top of the reply, so the hint is the
+  // only thing on screen pointing at them. Make it the control that gets you
+  // there. Owner keeps a plain, inert hint (the attributes are client-only).
+  const jump = CLIENT_MODE
+    ? ` data-gate-jump="${esc(rowId)}" role="button" tabindex="0"`
+    : "";
+  return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}"${jump} ${hidden ? 'style="display:none"' : ""}>${lockLabel}
+
+    <span class="why">(why?<span class="tooltip">${whyBody}</span>)</span>
+
   </span>`;
 }
 function composerActionsHtml(row) {
@@ -5416,15 +5556,21 @@ function composerActionsHtml(row) {
   const sel = GATE_SELECTION[row.id];
   const gateApplies = !!row.smartlead_campaign_id;
   const disabled = (gateApplies && !sel) ? "disabled" : "";
-  const label = sel
-    ? (sel.choice === "push" ? `Approve + ${esc(sel.name || "Follow-up")}` : "Approve — no follow-up")
-    : "Approve";
+  // G5: "Approve + Meeting Request" reads as "approve the meeting request",
+  // the opposite of what it does. Client mode names the action, not the track.
+  const label = CLIENT_MODE
+    ? (sel ? (sel.choice === "push" ? "Send reply + follow-up" : "Send reply, no follow-up") : "Send reply")
+    : (sel
+        ? (sel.choice === "push" ? `Approve + ${esc(sel.name || "Follow-up")}` : "Approve — no follow-up")
+        : "Approve");
+
   return `<div class="qc-actions">
     <button class="btn primary qc-send" data-id="${esc(row.id)}" type="button" ${disabled}>${label}</button>
     <span class="qc-split">
-      <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Regenerate</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="Regenerate with feedback" aria-label="Regenerate with feedback">&#9662;</button>
+      <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Rewrite it" : "Regenerate"}</button><button class="btn qc-regen-arrow" data-id="${esc(row.id)}" type="button" title="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}" aria-label="${CLIENT_MODE ? "Rewrite it with a note" : "Regenerate with feedback"}">&#9662;</button>
+
     </span>
-    <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>Dismiss</button>
+    <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>${DISMISS_LABEL}</button>
     ${gateApplies ? gateLockHintHtml(row.id, !!sel) : ""}
   </div>`;
 }
@@ -5446,15 +5592,16 @@ function needsRetroFollowup(row) {
 function retroFollowupHtml(row) {
   if (!needsRetroFollowup(row)) return "";
   const isNone = ["none", "none_at_send"].includes(row.subsequence_decision);
-  const failTag = row.subsequence_decision === "push_failed"
-    ? `<span class="pill r">push failed — retry</span>` : "";
+  const failTag = row.subsequence_decision === "push_failed"   // T3
+    ? `<span class="pill r">${CLIENT_MODE ? "Follow-up didn't save — try again" : "push failed — retry"}</span>` : "";
   const noneTag = isNone ? `<span class="pill n">No follow-up</span>` : "";
   return `<div class="qc-actions">
     ${failTag}${noneTag}
-    <button class="btn primary qc-retro-add" data-id="${esc(row.id)}" type="button">Add to subsequence</button>
+    <button class="btn primary qc-retro-add" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Add a follow-up" : "Add to subsequence"}</button>
     ${isNone ? "" : `<button class="btn qc-retro-none" data-id="${esc(row.id)}" type="button">No follow-up needed</button>`}
     <button class="btn qc-retro-dismiss" data-id="${esc(row.id)}" type="button"${CLIENT_MODE ? ""
-      : ` title="Remove from the follow-up reminder list"`}>Dismiss</button>
+      : ` title="Remove from the follow-up reminder list"`}>${CLIENT_MODE ? "Skip the follow-up" : "Dismiss"}</button>
+
   </div>`;
 }
 function retroFollowupPickerHtml(row) {
@@ -5465,7 +5612,7 @@ function renderDetailRetroPicker(id, subs) {
   const picker = document.getElementById(`sgDetailPicker-${id}`);
   if (!picker) return;
   picker.style.display = "block";
-  picker.innerHTML = `<div class="small muted" style="margin:4px 0">This campaign has more than one subsequence — pick one:</div>
+  picker.innerHTML = `<div class="small muted" style="margin:4px 0">${CLIENT_MODE ? "This campaign has more than one follow-up — pick one:" : "This campaign has more than one subsequence — pick one:"}</div>
     <div class="sg-chips">${(subs || []).map((s) =>
       `<button type="button" class="chip sg-detail-picker-chip" data-id="${esc(id)}" data-sub-id="${esc(s.id)}">${esc(s.name || "Follow-up")}</button>`
     ).join("")}</div>`;
@@ -5484,21 +5631,27 @@ function renderDetailRetroPicker(id, subs) {
    a send on a Smartlead lookup outage. */
 function gateHintSeen() { return localStorage.getItem("setterGateHintSeen") === "1"; }
 function gateHintHtml() {
+  if (CLIENT_MODE) return ""; // G2: never advertise double-click-to-send to a client
   if (gateHintSeen()) return "";
-  return `<div class="small muted sg-hint">Double-click a chip to pick it and send in one step - or press 1-5, then Enter.</div>`;
+  return
+ `<div class="small muted sg-hint">Double-click a chip to pick it and send in one step - or press 1-5, then Enter.</div>`;
 }
 function sendGateChipsHtml(row, subs) {
   const sel = GATE_SELECTION[row.id];
   const chips = (subs || []).map((s, i) => {
     const on = !!(sel && sel.choice === "push" && String(sel.subSequenceId) === String(s.id));
     return `<button type="button" class="chip sg-chip${on ? " on" : ""}" data-id="${esc(row.id)}"
-      data-choice="push" data-sub-id="${esc(s.id)}" data-name="${esc(s.name || "Follow-up")}" data-idx="${i}">${esc(s.name || "Follow-up")}</button>`;
+      data-choice="push" data-sub-id="${esc(s.id)}" data-name="${esc(s.name || "Follow-up")}" data-idx="${i}">${CLIENT_MODE ? "Follow-up: " : ""}${esc(s.name || "Follow-up")}</button>`;
+
   });
   const noneOn = !!(sel && sel.choice === "none");
   chips.push(`<button type="button" class="chip sg-chip sg-none${noneOn ? " on" : ""}" data-id="${esc(row.id)}"
     data-choice="none" data-idx="${(subs || []).length}">None</button>`);
   const note = (subs || []).length === 0
-    ? `<div class="small muted" style="margin-bottom:6px">This campaign has no follow-up sequences set up — choose None to unlock Approve.</div>` : "";
+    ? `<div class="small muted" style="margin-bottom:6px">${CLIENT_MODE
+        ? "No automatic follow-ups are set up for this campaign yet — choose None to send just this one reply."
+        : "This campaign has no follow-up sequences set up — choose None to unlock Approve."}</div>` : "";
+
   return `<div class="send-gate" id="gate-${esc(row.id)}">
     ${CLIENT_MODE
       // Client language (Bjion 2026-09-05): a titled section that says what
@@ -5507,7 +5660,8 @@ function sendGateChipsHtml(row, subs) {
       // only control on this page that sends anything. Party-neutral: the
       // reader may be the person doing the replying. Owner label unchanged.
       ? `<div class="sg-label">Automated follow-up</div>
-    <div class="sg-intro">Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Approve</b>, which unlocks once you've chosen.</div>`
+    <div class="sg-intro">Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Send reply</b>, which unlocks once you've chosen.</div>`
+
       : `<div class="sg-label">Choose the automated follow-up sequence — pick one to unlock Approve</div>`}
     ${note}
     <div class="sg-chips">${chips.join("")}</div>
@@ -5541,12 +5695,16 @@ function updateApproveButton(rowId) {
   }
   const sel = GATE_SELECTION[rowId];
   if (!sel) {
-    btn.disabled = true; btn.textContent = "Approve";
+    btn.disabled = true; btn.textContent = CLIENT_MODE ? "Send reply" : "Approve";   // G5
+
     if (hint) hint.style.display = "";
     return;
   }
   btn.disabled = false;
-  btn.textContent = sel.choice === "push" ? `Approve + ${sel.name || "Follow-up"}` : "Approve — no follow-up";
+  btn.textContent = CLIENT_MODE                                                       // G5
+    ? (sel.choice === "push" ? "Send reply + follow-up" : "Send reply, no follow-up")
+    : (sel.choice === "push" ? `Approve + ${sel.name || "Follow-up"}` : "Approve — no follow-up");
+
   if (hint) hint.style.display = "none";
 }
 function selectGateChip(rowId, chip) {
@@ -5697,7 +5855,10 @@ function learnIntroHtml() {
   </div>`;
 }
 function feedbackPlaceholder() {
-  if (CLIENT_MODE) return "";
+  // G7: dropping the owner's training wording left a client with a blank box
+  // and no idea what to type. Give guidance without promising it "learns".
+  if (CLIENT_MODE) return "What should be different? e.g. shorter, mention pricing";
+
   return trainingModeOn()
     ? "Tell it what to change - it'll remember going forward"
     : "Tell it what to change - applies to this reply only";
@@ -5725,7 +5886,8 @@ function composerFeedbackHtml(row) {
   const noteHtml = note ? `<div class="qc-note" id="note-${esc(row.id)}">${esc(note)}</div>` : "";
   return `${noteHtml}<div class="qc-feedback" id="fb-${esc(row.id)}" style="display:none">
     <input type="text" class="qc-feedback-input" data-id="${esc(row.id)}" placeholder="${feedbackPlaceholder()}">
-    <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">Regenerate with feedback</button>
+    <button class="btn qc-regen-fb" data-id="${esc(row.id)}" type="button">${CLIENT_MODE ? "Rewrite it" : "Regenerate with feedback"}</button>
+
   </div>`;
 }
 /* Manual link (owner ask 2026-07-17). The button sits with the "Your reply"
@@ -5765,8 +5927,13 @@ function composerHtml(row) {
       </div>`;
   }
   if (row.status === "no_action" || row.status === "dismissed") {
-    const label = row.status === "dismissed" ? "Dismissed." : "No action needed.";
-    const cat = row.category ? ` Category: ${esc(row.category)}.` : "";
+    // G10: raw Smartlead category text with its odd casing, under a heading
+    // promising a reply that isn't there. Client mode says what happened.
+    const label = CLIENT_MODE
+      ? (row.status === "dismissed" ? "Filed away — no reply was sent." : "No reply needed for this one.")
+      : (row.status === "dismissed" ? "Dismissed." : "No action needed.");
+    const cat = (!CLIENT_MODE && row.category) ? ` Category: ${esc(row.category)}.` : "";
+
     const anywayBtn = (!CLIENT_MODE && row.status === "no_action")
       ? `<button class="btn qc-draft-anyway" data-id="${esc(row.id)}" type="button" style="margin-top:10px">Draft a reply anyway</button>` : "";
     return `<div class="small muted">${label}${cat}</div>${anywayBtn}`;
@@ -5774,7 +5941,7 @@ function composerHtml(row) {
   if (row.status === "error") {
     return `<div class="qc-actions">
       <button class="btn qc-regen" data-id="${esc(row.id)}" type="button">Try again</button>
-      <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>Dismiss</button>
+      <button class="btn qc-dismiss" data-id="${esc(row.id)}" type="button"${DISMISS_TITLE_ATTR}>${DISMISS_LABEL}</button>
     </div>`;
   }
   return "";
@@ -6236,7 +6403,10 @@ function applyLinkPopover() {
   const raw = linkPopInput.value.trim();
   if (!raw) { shakeLinkInput("Enter a URL first."); return; }
   const url = normaliseUrl(raw);
-  if (!url) { shakeLinkInput("That doesn't look like a web address. Try https://calendly.com/navreo/30min"); return; }
+  if (!url) { shakeLinkInput(CLIENT_MODE   /* G9 */
+    ? "That doesn't look like a web address. It should start with https://"
+    : "That doesn't look like a web address. Try https://calendly.com/navreo/30min"); return; }
+
   if (!PENDING_LINK) { hideLinkPopover(false); return; }
 
   let flashRect = null;
@@ -6474,8 +6644,13 @@ async function doSend(btn) {
       if (String(selectedRowId) === String(id)) renderDetail(row);
     }
     const msg = (res.data && (res.data.error || (res.data.row && res.data.row.error))) || res.error || "the send did not go through";
-    showError("Couldn't send the reply: " + msg);
-    showDetailError("Couldn't send the reply: " + msg);
+    // U7: the tail is whatever the server or Smartlead returned - drop it for clients.
+    const sendErr = CLIENT_MODE
+      ? "Couldn't send the reply just now — nothing went out. Try again in a moment."
+      : "Couldn't send the reply: " + msg;
+    showError(sendErr);
+    showDetailError(sendErr);
+
     return;
   }
   clearError();
@@ -6926,7 +7101,10 @@ function applyRedraftedRow(id, fresh) {
   // painted nothing and said nothing — the second click then "worked" only
   // because the cache TTL had passed. Every path now paints or explains.
   if (!fresh) {
-    showDetailError("The regeneration finished but returned nothing usable - click Regenerate once more.");
+    showDetailError(CLIENT_MODE                                                        // U9
+      ? "That didn't produce anything — press Rewrite it once more."
+      : "The regeneration finished but returned nothing usable - click Regenerate once more.");
+
     return;
   }
   let merged = null;
@@ -6951,8 +7129,12 @@ function applyRedraftedRow(id, fresh) {
   if (String(selectedRowId) === String(id)) {
     renderDetail(merged);
     if (merged.status === "needs_review" && !merged.draft_body) {
-      showDetailError("No draft came back: " +
-        (merged.decision_reason || "the drafter returned an empty reply - regenerate with feedback to steer it."));
+      // U8: decision_reason is our internal hold vocabulary.
+      showDetailError(CLIENT_MODE
+        ? "Nothing came back this time — press Rewrite it once more."
+        : "No draft came back: " +
+          (merged.decision_reason || "the drafter returned an empty reply - regenerate with feedback to steer it."));
+
     }
   }
 }
@@ -7103,7 +7285,8 @@ async function doSubsequence(chk) {
   // lead was added, so the action is visible on the conversation. Only when
   // the push actually took — mirror the checkbox's server-confirmed state.
   if (chk.checked) graftSubseqNote(row, id);
-  protoNote(checked ? "Pushed to Smartlead subsequence" : "Saved");
+  protoNote(checked ? (CLIENT_MODE ? "Follow-up added" : "Pushed to Smartlead subsequence") : "Saved");   // T6
+
 }
 
 /* Graft the "added to subsequence" note onto the local thread and repaint the
@@ -7211,8 +7394,11 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   // never runs, and it names our sending platform to a client (spec §2 row
   // 12/13). Search-scope audit 2026-09-05: a client's search only ever filters
   // the rows the scoped queue already handed this page.
+  // L2: a client's search only ever filters the rows of the CURRENT pill, so
+  // "your conversations" over-promises the scope. Say what it actually does.
   if (note && searching) note.textContent = CLIENT_MODE
-    ? "searching your conversations" : "+ searching all of Smartlead";
+    ? "searching this tab only" : "+ searching all of Smartlead";
+
   scheduleSmartleadSearch();
   if (_localSearchTimer) clearTimeout(_localSearchTimer);
   _localSearchTimer = setTimeout(() => {
@@ -8194,7 +8380,10 @@ async function openPermalink() {
     }
   }
   if (!row) {
-    showError("Couldn't find that conversation — the link may be old, or the reply hasn't been pulled into the Setter yet.");
+    showError(CLIENT_MODE                                                              // U10
+      ? "Couldn't find that conversation — the link may be out of date."
+      : "Couldn't find that conversation — the link may be old, or the reply hasn't been pulled into the Setter yet.");
+
     return true;
   }
   clearError();   // a resolved link must not sit under a stale not-found banner
@@ -8241,6 +8430,17 @@ function tutFirstRowId() {
   return el ? el.getAttribute("data-id") : null;
 }
 function tutRowId() { return selectedRowId || tutFirstRowId(); }
+/* U2/U3: replay the tour from the Sent tab and stops 4 and 6 narrate a draft
+   and an Approve button that aren't on the screen. This says which case we're
+   in so those two stops can tell the truth. */
+function tutRowSent() {
+  const id = tutRowId();
+  if (!id) return false;
+  const r = QUEUE_ROWS.find((x) => String(x.id) === String(id))
+         || ALL_ROWS.find((x) => String(x.id) === String(id));
+  return !!r && (r.status === "sent" || r.status === "auto_sent");
+}
+
 function tutGateEl() {
   const id = tutRowId();
   return id ? document.getElementById("gate-" + id) : null;
@@ -8288,7 +8488,7 @@ function tutPillHasCount() {
 
 const TUT_STEPS = [
   { title: "Welcome", cta: "Show me around", target: () => null,
-    body: () => "When someone replies to one of your campaigns, a reply is drafted here ready for you. You read it, change anything you like, and it only goes out when you press Approve." },
+    body: () => "When someone replies to one of your campaigns, a reply is drafted here ready for you. You read it, change anything you like, and it only goes out when you press Send reply." },
   { title: "Everyone who replied", cta: "Next", advanceOnRowClick: true,
     target: () => document.querySelector("#inboxList .inbox-item"),
     body: () => "Every person who has replied to you is listed here — newest first, and only your own campaigns." },
@@ -8297,7 +8497,10 @@ const TUT_STEPS = [
     body: () => "This is the whole email conversation, so you can see exactly what they said before you decide." },
   { title: "The draft reply", cta: "Next", needsRow: true,
     target: () => document.querySelector(".qc-draft"),
-    body: () => "This is the draft reply, written in your voice — click straight into it and change any word you like before it goes." },
+    body: () => tutRowSent()   /* U3 */
+      ? "This is where you type, if you want to send another message."
+      : "This is the draft reply, written in your voice — click straight into it and change any word you like before it goes." },
+
   /* Stop 5 (owner ask 2026-09-05): where a conversation GOES once a decision is
      made. The pills are the only place that movement is visible, so the stop
      anchors on them and names each destination. The "Meeting request" sentence
@@ -8305,18 +8508,24 @@ const TUT_STEPS = [
      status except dismissed - see FILTER_PILLS and the server filter). */
   { title: "Where replies go next", cta: "Next",
     target: () => tutPillEl(),
-    body: () => "Approve a reply and that conversation leaves <b>Needs review</b> and moves to <b>Sent</b>. Dismiss it instead and it moves to <b>Dismissed</b>. <b>Meeting request</b> gathers everyone who asked for a call, and keeps them there until you dismiss them."
-      + (tutPillHasCount() ? " The number on each one counts only your own conversations." : "") },
+    body: () => "Send a reply and that conversation leaves <b>Needs review</b> and moves to <b>Sent</b>. Dismiss it instead and it moves to <b>Dismissed</b>. <b>Meeting request</b> collects the people who ask for a call."   /* U4: was "gathers everyone", contradicted by a live 0 count */
+      + (tutPillHasCount()
+ ? " The number on each one counts only your own conversations." : "") },
   { title: "Automated follow-up", needsRow: true, blocking: true,
     cta: () => ((tutGateMissing() || tutGateChosen()) ? "Got it" : "Waiting for your choice…"),
     target: () => tutGateEl()
       || document.querySelector('.qc-send[data-id="' + (window.CSS && CSS.escape ? CSS.escape(String(tutRowId())) : tutRowId()) + '"]')
       || document.querySelector(".qc-send"),
-    body: () => (tutGateMissing()
-      ? "Nothing has gone to this person yet. Press <b>Approve</b> and the reply goes out — you'll see it in the conversation straight away."
+    body: () => (tutRowSent()
+      /* U2: on a sent row this stop used to promise an Approve button that is
+         not on the screen, about a reply that went out days ago. */
+      ? "This one has already been answered. You can send another message in the same thread whenever you like."
+      : tutGateMissing()
+      ? "Nothing has gone to this person yet. Press <b>Send reply</b> and the reply goes out — you'll see it in the conversation straight away."
+
       : tutGateNoneOnly()
-        ? "If they don't reply, follow-ups can go out automatically later. This campaign has none set up yet, so choose <b>None</b> — one reply, no chasing. Choosing it sends nothing by itself: nothing reaches this person until you press <b>Approve</b>."
-        : "Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Approve</b>, and any follow-ups only go out later if they don't reply.") },
+        ? "If they don't reply, follow-ups can go out automatically later. This campaign has none set up yet, so choose <b>None</b> — one reply, no chasing. Choosing it sends nothing by itself: nothing reaches this person until you press <b>Send reply</b>."
+        : "Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Send reply</b>, and any follow-ups only go out later if they don't reply.") },
 ];
 
 /* Auto-run guard, mirroring train's maybeStartTutorial: called from the RENDER
