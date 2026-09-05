@@ -1215,6 +1215,18 @@ body.client-mode .ii-line3 .ii-age { margin-left: auto; }
    response SLA, not a commitment to the client. Neutralise the colour only;
    the badge itself stays because the elapsed time is genuinely useful. */
 body.client-mode .ii-age.overdue { background: var(--bg-sunken); color: var(--ink-2); }
+/* Phone gate: on a phone the pinned action bar shows a locked Send reply and
+   the instruction that unlocks it, while the chooser itself is off-screen.
+   The hint becomes a tappable jump to the chooser (handler in the client-mode
+   boot block); this gives it a control's affordance and target size. */
+@media (max-width: 640px) {
+  body.client-mode .gate-hint[data-gate-jump] {
+    cursor: pointer; text-decoration: underline; text-underline-offset: 3px;
+    padding: 6px 2px; min-height: 32px; display: inline-flex; align-items: center; gap: 4px;
+  }
+}
+body.client-mode .send-gate.sg-flash { box-shadow: 0 0 0 2px var(--accent, #2F6FED); border-radius: 8px; }
+
 
 /* Automated follow-up section (Bjion 2026-09-05): sits between the draft
    and Approve in client mode and carries a one-line explanation. */
@@ -1455,7 +1467,25 @@ if (CLIENT_MODE) {
   /* G9 + L3: two static placeholders baked into the markup. G9 uses Navreo's
      OWN booking URL as the worked example inside a client's tool; L3's
      "campaign" pairs with the internal campaign slug. Attribute swaps only. */
+  /* Phone gate: "Pick a follow-up first" names a target the founder cannot
+     see - the chooser is above the fold of the reply while the action bar is
+     pinned at the bottom. Tapping the hint scrolls the chooser into view.
+     Delegated so it survives every re-render of the composer. */
+  const gateJump = (e) => {
+    const hint = e.target.closest && e.target.closest("[data-gate-jump]");
+    if (!hint || (e.target.closest && e.target.closest(".why"))) return;
+    if (e.type === "keydown" && e.key !== "Enter" && e.key !== " ") return;
+    const gate = document.getElementById("gate-" + hint.getAttribute("data-gate-jump"));
+    if (!gate) return;
+    e.preventDefault();
+    gate.scrollIntoView({ behavior: "smooth", block: "center" });
+    gate.classList.add("sg-flash");
+    setTimeout(() => gate.classList.remove("sg-flash"), 1200);
+  };
+  document.addEventListener("click", gateJump);
+  document.addEventListener("keydown", gateJump);
   const linkPop = document.getElementById("linkPopInput");
+
   if (linkPop) linkPop.placeholder = "Paste the URL, e.g. your booking link";
   const searchBox = document.getElementById("inboxSearch");
   if (searchBox) searchBox.placeholder = "Search by name, email or what they wrote…";
@@ -5504,7 +5534,15 @@ function gateLockHintHtml(rowId, hidden) {
   const whyBody = CLIENT_MODE
     ? `Every reply needs a follow-up decision — even "None" — so nobody is quietly forgotten after you send.`
     : `Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.`;
-  return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}" ${hidden ? 'style="display:none"' : ""}>${lockLabel}
+  // Phone gate (client mode): the action bar is pinned in view while the chips
+  // that unlock it sit off-screen at the top of the reply, so the hint is the
+  // only thing on screen pointing at them. Make it the control that gets you
+  // there. Owner keeps a plain, inert hint (the attributes are client-only).
+  const jump = CLIENT_MODE
+    ? ` data-gate-jump="${esc(rowId)}" role="button" tabindex="0"`
+    : "";
+  return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}"${jump} ${hidden ? 'style="display:none"' : ""}>${lockLabel}
+
     <span class="why">(why?<span class="tooltip">${whyBody}</span>)</span>
 
   </span>`;
