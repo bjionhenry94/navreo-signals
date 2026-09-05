@@ -2107,8 +2107,12 @@ const COUNT_DELTAS = {};       // counts key -> {d, base}
 let COUNT_DELTAS_AT = 0;
 function bumpCounts(row, from, to) {
   // Server counts are navreo-only and exclude test rows — mirror that, or a
-  // client/test row's action double-moves the folded badge.
-  if (!row || row.is_test || (row.workspace || "navreo") !== "navreo") return;
+  // client/test row's action double-moves the folded badge. In CLIENT_MODE the
+  // server's counts are the token's OWN scope, whatever workspace those
+  // campaigns live in, so the workspace test would freeze the badge of every
+  // client whose workspace isn't navreo until the next reload landed.
+  if (!row || row.is_test) return;
+  if (!CLIENT_MODE && (row.workspace || "navreo") !== "navreo") return;
   const counts = KPIS.counts || (KPIS.counts = {});
   const step = (key, d) => {
     if (typeof counts[key] === "number") counts[key] += d;
@@ -2857,7 +2861,13 @@ function renderQueueFilters() {
   // ask 2026-07-25), so it inherits the fold the strip used to do: visible
   // TEST needs-review rows are added in, so the badge always matches what the
   // eye sees in the list below it.
-  const testNeeds = visibleInboxRows().filter((r) => r.is_test && r.status === "needs_review").length;
+  // Both folds are OWNER-only (client counts, 2026-09-05): a share response's
+  // counts are computed inside the token's own campaign scope, on exactly the
+  // rows that token can see - test rows included when it's a TEST-flagged QA
+  // token, and its workspace whatever that workspace is. Folding either in
+  // again would double-count the client's badge.
+  const testNeeds = CLIENT_MODE ? 0
+    : visibleInboxRows().filter((r) => r.is_test && r.status === "needs_review").length;
   // Monitor-workspace rows render in the list but the server's counts are
   // deliberately navreo-only — fold the visible client rows into the badge
   // the same way test rows are, so the number matches the eye again
@@ -2865,15 +2875,20 @@ function renderQueueFilters() {
   // to the SAME basis as testNeeds (the visible list, needs_review pill
   // only): on other pills _reclassify keeps answered rows at stored
   // status needs_review, which over-counted the badge from the Sent pill.
-  const clientNeeds = (currentStatus === "needs_review" ? visibleInboxRows() : [])
-    .filter((r) => !r.is_test && r.status === "needs_review"
-      && (r.workspace || "navreo") !== "navreo").length;
+  const clientNeeds = CLIENT_MODE ? 0
+    : (currentStatus === "needs_review" ? visibleInboxRows() : [])
+      .filter((r) => !r.is_test && r.status === "needs_review"
+        && (r.workspace || "navreo") !== "navreo").length;
   wrap.innerHTML = FILTER_PILLS.map((p) => {
-    // A share response deliberately carries no kpis block: _compute_kpis() is
-    // account-wide (every client's counts) and re-deriving it per client would
-    // be ~10 extra reads a request. counts is {} in client mode, so the badge
-    // simply doesn't render - exactly what the owner page does whenever the
-    // KPI block is missing. The pill markup, labels and order are untouched.
+    // A share response now carries its OWN kpis.counts (owner ask 2026-09-05:
+    // "the numbers should be specific to that client"): the same count keys the
+    // owner pills read, re-computed inside the token's campaign scope, and
+    // nothing else in the kpis block - every other KPI surface stays removed
+    // (#statsInline, renderKpis' early return). So the badge renders in client
+    // mode exactly as it does for the owner. If counts are absent (an older
+    // backend, or a failed compute) n is undefined and no badge renders at all
+    // - what the owner page already does whenever the KPI block is missing.
+    // The pill markup, labels and order are untouched in both modes.
     let n = counts[p.count];
     if (typeof n === "number" && p.key === "needs_review") n += testNeeds + clientNeeds;
     const badge = (typeof n === "number") ? ` <b class="n">${fmt(n)}</b>` : "";
@@ -5454,9 +5469,12 @@ function sendGateChipsHtml(row, subs) {
   return `<div class="send-gate" id="gate-${esc(row.id)}">
     ${CLIENT_MODE
       // Client language (Bjion 2026-09-05): a titled section that says what
-      // the follow-ups ARE before asking for the choice. Owner label unchanged.
+      // the follow-ups ARE before asking for the choice - and states outright
+      // that PICKING one sends nothing. The choice is a setting; Approve is the
+      // only control on this page that sends anything. Party-neutral: the
+      // reader may be the person doing the replying. Owner label unchanged.
       ? `<div class="sg-label">Automated follow-up</div>
-    <div class="sg-intro">After your reply goes out, we keep following up for you automatically. Pick the follow-up sequence this person should get — or <b>None</b> for just this one reply. Approve unlocks once you've chosen.</div>`
+    <div class="sg-intro">Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Approve</b>, which unlocks once you've chosen.</div>`
       : `<div class="sg-label">Choose the automated follow-up sequence — pick one to unlock Approve</div>`}
     ${note}
     <div class="sg-chips">${chips.join("")}</div>
@@ -7154,7 +7172,14 @@ document.getElementById("inboxSearch").addEventListener("input", (e) => {
   // answer instantly and Smartlead itself is asked after a typing pause, so
   // the note now promises exactly what happens ("searching this filter only"
   // predates the Smartlead escalation and taught the opposite).
-  if (note && searching) note.textContent = "+ searching all of Smartlead";
+  // CLIENT_MODE never escalates (scheduleSmartleadSearch returns immediately,
+  // and /api/setter/search-smartlead isn't even in CLIENT_SHARE_GET), so the
+  // owner's note would be false there twice over - it promises a search that
+  // never runs, and it names our sending platform to a client (spec §2 row
+  // 12/13). Search-scope audit 2026-09-05: a client's search only ever filters
+  // the rows the scoped queue already handed this page.
+  if (note && searching) note.textContent = CLIENT_MODE
+    ? "searching your conversations" : "+ searching all of Smartlead";
   scheduleSmartleadSearch();
   if (_localSearchTimer) clearTimeout(_localSearchTimer);
   _localSearchTimer = setTimeout(() => {
@@ -8151,11 +8176,20 @@ async function openPermalink() {
    same .tut-dim / .tut-spot / .tut-card / .tc-* classes (copied into the
    stylesheet above). One tour style in the product, not two.
 
-   Five stops walk a client from "a reply came in" to the one decision the
-   page actually needs from them. Stop 5, "Automated follow-up", is BLOCKING
+   Six stops walk a client from "a reply came in" to the one decision the
+   page actually needs from them. Stop 6, "Automated follow-up", is BLOCKING
    (Bjion 2026-09-05: the section itself is the stop): the follow-up choice
    is the only thing standing between a draft and a sent email, so the tour
    waits there until a chip is really chosen rather than narrating past it.
+   The blocking stop MUST stay LAST - armTutGateWatch identifies it by
+   TUT_STEPS[TUT_STEPS.length - 1], so a stop appended after it would silently
+   un-arm the watch. Stop 5 (the filter pills) was therefore inserted BEFORE
+   it, and "Step N of 6" needs no edit: the card reads TUT_STEPS.length.
+
+   Party-neutral copy law (Bjion 2026-09-05): a client link is sometimes
+   opened by the person who does the replying themselves, so no stop may say
+   "we write" / "we send" / "we keep following up". The reply is DRAFTED here;
+   the reader edits it, approves it, and it goes out.
 
    Copy law: client language throughout - never "queue", "subsequence",
    "gate" or "agent". */
@@ -8204,29 +8238,52 @@ function tutGateMissing() {
   // themselves a mutation the observer below sees. Only an absent node is.
   return false;
 }
+/* Stop 5's anchor: the "Needs review" pill, falling back to the pill row.
+   Returns null when the row isn't laid out - the phone rules hide
+   .setter-head-row while a conversation is open, and renderTutStep centres the
+   card on a null target rather than pointing it at nothing. */
+function tutPillEl() {
+  const el = document.querySelector('#queueFilters .chip[data-status="needs_review"]')
+          || document.getElementById("queueFilters");
+  return (el && el.offsetParent !== null) ? el : null;
+}
+/* The pill badges only exist when the share response carried scoped counts, so
+   the sentence that points at them is only spoken when they are really there. */
+function tutPillHasCount() {
+  return !!document.querySelector("#queueFilters .chip .n");
+}
 
 const TUT_STEPS = [
   { title: "Welcome", cta: "Show me around", target: () => null,
-    body: () => "When someone replies to one of your campaigns, we write the reply for you — you read it, approve it, and we send it." },
+    body: () => "When someone replies to one of your campaigns, a reply is drafted here ready for you. You read it, change anything you like, and it only goes out when you press Approve." },
   { title: "Everyone who replied", cta: "Next", advanceOnRowClick: true,
     target: () => document.querySelector("#inboxList .inbox-item"),
     body: () => "Every person who has replied to you is listed here — newest first, and only your own campaigns." },
   { title: "The whole conversation", cta: "Next", needsRow: true,
     target: () => document.querySelector(".convo") || document.querySelector(".msg-card"),
     body: () => "This is the whole email conversation, so you can see exactly what they said before you decide." },
-  { title: "The reply we wrote", cta: "Next", needsRow: true,
+  { title: "The draft reply", cta: "Next", needsRow: true,
     target: () => document.querySelector(".qc-draft"),
-    body: () => "This is the reply we've written in your voice — click straight into it and change any word you like before it goes." },
+    body: () => "This is the draft reply, written in your voice — click straight into it and change any word you like before it goes." },
+  /* Stop 5 (owner ask 2026-09-05): where a conversation GOES once a decision is
+     made. The pills are the only place that movement is visible, so the stop
+     anchors on them and names each destination. The "Meeting request" sentence
+     matches what that pill really filters (category "Meeting Request", every
+     status except dismissed - see FILTER_PILLS and the server filter). */
+  { title: "Where replies go next", cta: "Next",
+    target: () => tutPillEl(),
+    body: () => "Approve a reply and that conversation leaves <b>Needs review</b> and moves to <b>Sent</b>. Dismiss it instead and it moves to <b>Dismissed</b>. <b>Meeting request</b> gathers everyone who asked for a call, and keeps them there until you dismiss them."
+      + (tutPillHasCount() ? " The number on each one counts only your own conversations." : "") },
   { title: "Automated follow-up", needsRow: true, blocking: true,
     cta: () => ((tutGateMissing() || tutGateChosen()) ? "Got it" : "Waiting for your choice…"),
     target: () => tutGateEl()
       || document.querySelector('.qc-send[data-id="' + (window.CSS && CSS.escape ? CSS.escape(String(tutRowId())) : tutRowId()) + '"]')
       || document.querySelector(".qc-send"),
     body: () => (tutGateMissing()
-      ? "Approve sends the reply — you'll see it in the conversation straight away."
+      ? "Nothing has gone to this person yet. Press <b>Approve</b> and the reply goes out — you'll see it in the conversation straight away."
       : tutGateNoneOnly()
-        ? "After your reply goes out we can keep following up automatically — but this campaign has no follow-up sequences yet, so choose <b>None</b> (one reply, no chasing) and Approve unlocks."
-        : "After your reply goes out, we keep following up for you automatically. Pick the follow-up sequence this person should get, or <b>None</b> if they should get just this one reply — then Approve unlocks.") },
+        ? "If they don't reply, follow-ups can go out automatically later. This campaign has none set up yet, so choose <b>None</b> — one reply, no chasing. Choosing it sends nothing by itself: nothing reaches this person until you press <b>Approve</b>."
+        : "Pick the follow-up this person gets if they don't reply — or <b>None</b> for just this one reply. Choosing one sends nothing by itself: nothing reaches this person until you press <b>Approve</b>, and any follow-ups only go out later if they don't reply.") },
 ];
 
 /* Auto-run guard, mirroring train's maybeStartTutorial: called from the RENDER
