@@ -1935,6 +1935,23 @@ function startShortRoundPoll() {
     // still pre-teaching (instant-open 2026-08-28: swaps land behind the
     // reading); stop once the round is full AND every unreached card is
     // fresh (or the deadline bounds it).
+    // SWAP, DON'T WAIT (wait-elimination 2026-09-05): a stale unanswered
+    // round card is replaced by any fresh spare outside the round, so a hold
+    // only ever lasts while NO fresh card exists anywhere in the pool.
+    if (ROUND_IDS && ROUND_IDS.length) {
+      const inRound = new Set(ROUND_IDS.map(String));
+      const spares = CASES.filter((c) => !isAnswered(c.id) && !inRound.has(String(c.id)) && caseFresh(c));
+      if (spares.length) {
+        let changed = false;
+        ROUND_IDS = ROUND_IDS.map((id) => {
+          if (isAnswered(id) || String(id) === DISPLAYED_CASE_ID) return id;
+          const c = CASES.find((x) => String(x.id) === String(id));
+          if (c && !caseFresh(c) && spares.length) { changed = true; return spares.shift().id; }
+          return id;
+        });
+        if (changed) { try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ } }
+      }
+    }
     const roundStale = (ROUND_IDS || []).some((id) => {
       if (isAnswered(id)) return false;
       const c = CASES.find((x) => String(x.id) === String(id));
@@ -1949,23 +1966,29 @@ function startShortRoundPoll() {
     // 10-SECOND FALLBACK (owner 2026-09-05: no loader over 10s): nothing
     // fresh and no questions to answer -> release cards held back only by
     // style-level teachings, with an honest note on the card.
-    if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 7400
+    if (view === "shortwait" && !fillerFormActive() && Date.now() - shortRoundStartedAt > 6000
         && !currentUnanswered().some((c) => caseFresh(c))) {
-      let rel = currentUnanswered().filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
-      if (!rel.length && Date.now() - shortRoundStartedAt > 9500) {
+      // Candidates: the round while it still has unanswered cards, else the
+      // whole pool (live 2026-09-05: an exhausted round left both tiers with
+      // nothing to release and the hold ran 78s).
+      const cand = currentUnanswered().length ? currentUnanswered() : CASES.filter((c) => !isAnswered(c.id));
+      let rel = cand.filter(staleOnlyByStyle).slice(0, ROUND_SIZE);
+      if (!rel.length && Date.now() - shortRoundStartedAt > 8000) {
         // Tier 2 (skill setter-wait-elimination, Step 3): still nothing
         // servable at 10s - release the least-stale cards that no booking or
         // phone teaching touches and that passed their taught-fact lint,
         // with the honest note. Newest stamp first.
         const wiring = TEACHINGS.some((t) => !t.d && ((t.topics || []).includes("booking") || (t.topics || []).includes("phone")));
-        rel = currentUnanswered()
+        rel = cand
           .filter((c) => !c.taught_fact_missing && !(wiring && (cardTopics(c).includes("booking") || cardTopics(c).includes("phone"))))
           .sort((a, b) => String(b.redrafted_at || b.generated_at || "").localeCompare(String(a.redrafted_at || a.generated_at || "")))
           .slice(0, ROUND_SIZE);
       }
       if (rel.length) {
         rel.forEach((c) => STALE_OK.add(String(c.id)));
-        if (!ROUND_IDS || !ROUND_IDS.length) ROUND_IDS = rel.map((c) => c.id);
+        const keep = (ROUND_IDS || []).filter((id) => isAnswered(id) || String(id) === DISPLAYED_CASE_ID);
+        ROUND_IDS = keep.concat(rel.map((c) => c.id).filter((id) => !keep.includes(id))).slice(0, Math.max(ROUND_SIZE, keep.length));
+        try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
         stopShortRoundPoll();
         DISPLAYED_CASE_ID = null; idx = 0; view = "stream"; render();
         return;
@@ -2021,7 +2044,7 @@ function startShortRoundPoll() {
       idx = 0;
       render();
     }
-  }, 2500);
+  }, 1500);
 }
 function shortRoundHolding() {
   return SHARE_MODE && !!shortRoundPollHandle && !!ROUND_IDS && ROUND_IDS.length < ROUND_SIZE;
