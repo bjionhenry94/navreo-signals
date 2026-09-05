@@ -1714,8 +1714,15 @@ def lint_draft(html: str, ctx: dict):
         # old never-quote posture and no figure at all). When the manual's
         # own pricing sentences state a concrete figure, a pricing reply
         # must contain it.
+        # LINE-based, not sentence-based (live 2026-09-05, the reason a typed
+        # price NEVER reached a draft across every sitting): a taught price
+        # arrives as "Q: ...any price indication...? A: $666K+" - splitting at
+        # the "?" put "A: $666K+" in its own segment with no pricing word, so
+        # it was dropped before the figure was ever looked for. A line (or
+        # bullet) is the unit an owner teaches in; keep whole lines that talk
+        # about price.
         _price_src = " ".join(
-            s for s in re.split(r"(?<=[.!?\n])",
+            s for s in re.split(r"\n+",
                                 str(ctx.get("instructions") or "") + "\n"
                                 + str(ctx.get("owner_facts") or ""))
             if re.search(r"pric|cost|fee|charge|tier", s, re.I))
@@ -18523,7 +18530,17 @@ def route_training_interview(payload):
                 for _pe in reversed(pending):
                     if isinstance(_pe, dict) and _pe.get("source") == "interview" \
                             and str(_pe.get("note") or "").startswith(_iv_head):
-                        _pe["note"] = str(_pe.get("note") or "") + "\n\n" + "\n\n".join(qa_lines)
+                        # Same question re-answered (streamed answers land on
+                        # every blur: "No" then "$666K+", "www.calendly.com/"
+                        # then the full URL) REPLACES its earlier line - a
+                        # note carrying both makes the merge model keep the
+                        # stale one or fail the value/URL guarantee and fall
+                        # back to a raw append (live 2026-09-05, both merges
+                        # "appended").
+                        _blocks = [b for b in str(_pe.get("note") or "")[len(_iv_head):].split("\n\n") if b.strip()]
+                        _new_qs = {ln.split("\n", 1)[0] for ln in qa_lines}
+                        _blocks = [b for b in _blocks if b.split("\n", 1)[0] not in _new_qs]
+                        _pe["note"] = _iv_head + "\n\n".join(_blocks + qa_lines)
                         _pe["at"] = at
                         _joined = _pe
                         break
