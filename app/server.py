@@ -835,7 +835,14 @@ def ws_for_campaign(campaign_id) -> str:
     if not cid or not cid.isdigit():
         return "navreo"
     hit = _ws_campaign_cache.get(cid)
-    if hit:
+    if isinstance(hit, tuple):
+        # Negative entry ("navreo", expires_at): an id neither table knows yet
+        # used to re-query BOTH tables on every call - 12.5k requests/day of
+        # identical misses (egress check-in 2026-09-05). A 10-min negative
+        # cache keeps the "resolves correctly once stamped" property.
+        if time.time() < hit[1]:
+            return hit[0]
+    elif hit:
         return hit
     try:
         rows = sb("GET", f"campaign_scorecard?select=workspace&smartlead_campaign_id=eq.{cid}&limit=1") \
@@ -845,6 +852,7 @@ def ws_for_campaign(campaign_id) -> str:
     if rows and rows[0].get("workspace"):
         _ws_campaign_cache[cid] = rows[0]["workspace"]
         return rows[0]["workspace"]
+    _ws_campaign_cache[cid] = ("navreo", time.time() + 600)
     return "navreo"
 
 
