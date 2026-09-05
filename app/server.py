@@ -22938,8 +22938,9 @@ def outlook_reply_caps(mode: str = "preview") -> dict:
     return provider_reply_caps("OUTLOOK", mode)
 
 
-_GRADES_CACHE = {"data": None, "ts": 0.0}
+_GRADES_CACHE = {"data": None, "ts": 0.0, "computing": False}
 _GRADES_TTL_S = 600
+_GRADES_LOCK = threading.Lock()
 
 
 def _health_letter(p_healthy: float) -> str:
@@ -22950,18 +22951,12 @@ def _health_letter(p_healthy: float) -> str:
             else "C" if p_healthy >= 0.30 else "D" if p_healthy >= 0.10 else "E")
 
 
-def grades_get(force: bool = False) -> tuple[dict, int]:
-    """An A-E health grade for every sending domain, for the Inbox & Domain
-    Manager. A = clearly healthy, E = confidently below its reply floor. Built
-    from the SAME posterior + per-provider/workspace prior the cap engine grades
-    on, so the letter agrees with the park/cap-down/hold action the engine takes
-    (A/B/C keep sending, D caps down, E parks). Runs the three providers' preview
-    (nothing is written), keyed by domain. Cached 10 min — the preview reads the
-    whole mirror per provider, so it is not recomputed on every hub paint."""
+def _grades_compute() -> dict:
+    """The (slow) grade computation: three provider previews over the mirror,
+    then a posterior per domain. Runs in a BACKGROUND thread — never on a
+    request — because on a cold Supabase it can outlast the proxy timeout and
+    502 the very page that asked for it."""
     from datetime import datetime, timezone
-    ent = _GRADES_CACHE
-    if not force and ent["data"] and (time.time() - ent["ts"]) < _GRADES_TTL_S:
-        return ent["data"], 200
     grades: dict = {}
     errs: dict = {}
     for prov in ("OUTLOOK", "GOOGLE", "MAILDOSO"):
@@ -23001,11 +22996,54 @@ def grades_get(force: bool = False) -> tuple[dict, int]:
                 "action": "park" if g == "E" else "cap_down" if g == "D" else "keep",
                 "reply_rate": row.get("reply_rate"), "sent_30d": s,
                 "workspace": row.get("workspace"), "provider": prov}
-    out = {"ok": True, "gradeOn": bool(os.environ.get("CAP_GRADE_V1")),
-           "grades": grades, "errors": errs, "count": len(grades),
-           "generated_at": datetime.now(timezone.utc).isoformat()}
-    _GRADES_CACHE.update(data=out, ts=time.time())
-    return out, 200
+    return {"ok": True, "gradeOn": bool(os.environ.get("CAP_GRADE_V1")),
+            "grades": grades, "errors": errs, "count": len(grades),
+            "generated_at": datetime.now(timezone.utc).isoformat()}
+
+
+def _grades_refresh_bg() -> bool:
+    """Kick a background recompute of the grade map unless one is already
+    running. Returns True if a refresh was started. A failed refresh keeps the
+    last good map in place."""
+    with _GRADES_LOCK:
+        if _GRADES_CACHE["computing"]:
+            return False
+        _GRADES_CACHE["computing"] = True
+
+    def _run():
+        try:
+            out = _grades_compute()
+            _GRADES_CACHE.update(data=out, ts=time.time())
+        except Exception as e:  # noqa: BLE001 — keep the last good map
+            print(f"[grades] background refresh failed: {str(e)[:160]}", flush=True)
+        finally:
+            _GRADES_CACHE["computing"] = False
+    threading.Thread(target=_run, name="grades-refresh", daemon=True).start()
+    return True
+
+
+def grades_get(force: bool = False) -> tuple[dict, int]:
+    """An A-E health grade for every sending domain, for the Inbox & Domain
+    Manager. A = clearly healthy, E = confidently below its reply floor. Built
+    from the SAME posterior + per-provider/workspace prior the cap engine grades
+    on, so the letter agrees with the park/cap-down/hold action the engine takes
+    (A/B/C keep sending, D caps down, E parks). Keyed by domain, cached 10 min.
+
+    NON-BLOCKING (2026-09-05): a fresh cache is served as-is. A cold or stale
+    one kicks a background refresh and this returns IMMEDIATELY — stale data if
+    we have any, else an empty map flagged `computing` so the page polls until
+    it lands. Before this, the first hub load after a deploy (the restart wipes
+    the cache) blocked on the 3-provider recompute, 502'd at the proxy, and the
+    page — which never retried — stayed grade-less until a manual reload."""
+    ent = _GRADES_CACHE
+    fresh = bool(ent["data"]) and (time.time() - ent["ts"]) < _GRADES_TTL_S
+    if fresh and not force:
+        return ent["data"], 200
+    _grades_refresh_bg()
+    if ent["data"]:
+        return {**ent["data"], "stale": True, "computing": bool(ent["computing"])}, 200
+    return {"ok": True, "computing": True, "grades": {}, "count": 0,
+            "gradeOn": bool(os.environ.get("CAP_GRADE_V1"))}, 200
 
 
 def maildoso_reply_caps(mode: str = "preview") -> dict:
@@ -27935,6 +27973,14 @@ class _NavreoServer(ThreadingHTTPServer):
     request_queue_size = 128
     daemon_threads = True
 
+
+# Warm the confidence-grade map shortly after boot. A Render restart wipes the
+# in-memory cache, and the first hub visitor after every deploy was paying the
+# 3-provider recompute (or eating a 502) before a single badge could show.
+if os.environ.get("RENDER"):
+    _grades_warm_timer = threading.Timer(25.0, _grades_refresh_bg)
+    _grades_warm_timer.daemon = True
+    _grades_warm_timer.start()
 
 if __name__ == "__main__":
     # Render injects $PORT and needs 0.0.0.0; locally, argv[1] or 7901 on 127.0.0.1.
