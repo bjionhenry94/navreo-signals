@@ -3413,7 +3413,20 @@ function renderSmartleadDetail(h, thread) {
   if (back) back.addEventListener("click", (e) => { e.preventDefault(); backToInbox(); });
 }
 
+/* L1: one empty-state sentence used to serve every tab AND every fruitless
+   search, so the Sent tab said "No replies yet" while 35 replies existed, and
+   a search for someone on another tab read as if they had vanished. Client
+   mode only - the owner keeps its single line. */
+function clientEmptyStateText() {
+  const q = (typeof inboxSearchQuery === "string" ? inboxSearchQuery : "").trim();
+  if (q) return `No conversations here match "${q}". Try another tab.`;
+  if (currentStatus === "sent") return "Nothing sent yet. Replies you approve will show up here.";
+  if (currentStatus === "meeting_request") return "Nobody has asked for a call yet.";
+  if (currentStatus === "dismissed") return "Nothing filed away yet.";
+  return "No replies yet. New replies to your campaigns land here automatically, usually within a few minutes of arriving - nothing for you to do until one appears.";
+}
 function renderInboxList() {
+
   const el = document.getElementById("inboxList");
   const paged = pagedInboxRows();
   const testNoteEl = document.getElementById("testOnlyNote");
@@ -3424,6 +3437,7 @@ function renderInboxList() {
   }
   const slFoot = smartleadStatusFootHtml();
   const html = (!paged.rows.length
+
     // While a fetch is in flight an empty list means "still loading", not
     // "nothing here" - never show the misleading empty state during a load
     // (loader ruling 2026-07-16). A Smartlead search still in flight is the
@@ -3433,8 +3447,9 @@ function renderInboxList() {
         : (slFoot
             ? ""   // the footer's "Searching all of Smartlead…" carries the state
             : `<div class="empty">${CLIENT_MODE
-                ? "No replies yet. New replies to your campaigns land here automatically, usually within a few minutes of arriving - nothing for you to do until one appears."
+                ? clientEmptyStateText()
                 : "No replies here. New ones will show up after the next check."}</div>`))
+
     : paged.rows.map(inboxItemHtml).join(""))
     + slFoot;
   // Identical-HTML skip (perf pass R2): only touch the DOM when the markup
@@ -4594,9 +4609,10 @@ function leadPanelHtml(row) {
     ${noAgentHtml}
     ${companySectionHtml(row)}
     ${clientSectionHtml(row)}
-    <div class="lp-section">
+    ${CLIENT_MODE && !leadDecisionHtml(row) ? "" : `<div class="lp-section">
       ${leadDecisionHtml(row)}
-    </div>
+    </div>`}
+
   `;
 }
 /* Notes: a SHARED, team-visible free-text scratchpad on this lead (owner ask
@@ -4789,7 +4805,12 @@ function wireClientToggle(scope) {
    howDecidedContentHtml, laid out as a clean two-column list with the "none"
    guardrail rows hidden, so the panel scans fast. */
 function leadDecisionHtml(row) {
+  // R1/R2/R3: in client mode every fact row here is already filtered out, so all
+  // that remains is our own Calendly plumbing note ("this agent") and the
+  // "No decision details." fallback. Render nothing at all instead.
+  if (CLIENT_MODE) return "";
   const parts = [];
+
   // The "Held for review" head + reason and the Intent row were dropped from
   // the sidebar (owner ask 2026-08-11); the Try-it drawer keeps the full set.
   const verdict = autoSendVerdictHtml(row, true);
@@ -5403,8 +5424,14 @@ function gateLockHintHtml(rowId, hidden) {
   // "track" is our word for a subsequence. Everything else - chip labels,
   // button labels, the gate label, the "(why?)" body - is verbatim.
   const lockLabel = CLIENT_MODE ? "Pick a follow-up first" : "Pick a follow-up track first";
+  // G1: the owner tooltip advertises double-click-to-approve, a power-user fast
+  // path that must never be taught to a client (it sends a real email).
+  const whyBody = CLIENT_MODE
+    ? `Every reply needs a follow-up decision — even "None" — so nobody is quietly forgotten after you send.`
+    : `Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.`;
   return `<span class="gate-hint" id="gateLockHint-${esc(rowId)}" ${hidden ? 'style="display:none"' : ""}>${lockLabel}
-    <span class="why">(why?<span class="tooltip">Every approved reply needs an explicit follow-up decision - even "None" - so leads can't quietly fall through the cracks after a send. Fast paths: double-click any chip to approve instantly, or use keys 1-5 then Enter.</span>)</span>
+    <span class="why">(why?<span class="tooltip">${whyBody}</span>)</span>
+
   </span>`;
 }
 function composerActionsHtml(row) {
@@ -5484,7 +5511,9 @@ function renderDetailRetroPicker(id, subs) {
    a send on a Smartlead lookup outage. */
 function gateHintSeen() { return localStorage.getItem("setterGateHintSeen") === "1"; }
 function gateHintHtml() {
+  if (CLIENT_MODE) return ""; // G2: never advertise double-click-to-send to a client
   if (gateHintSeen()) return "";
+
   return `<div class="small muted sg-hint">Double-click a chip to pick it and send in one step - or press 1-5, then Enter.</div>`;
 }
 function sendGateChipsHtml(row, subs) {
