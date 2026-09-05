@@ -159,7 +159,8 @@ body.share-mode .qc-draft.edited { border-color: var(--orange-500, #D97A2B); bac
 .interview .iv-hint { font-size: 12.5px; color: var(--ink-3); margin: -2px 0 10px; }
 .interview .iv-live { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-2); }
 .interview .iv-live .spin { width: 11px; height: 11px; border: 2px solid var(--line-2); border-top-color: var(--orange-500, #D97A2B); border-radius: 50%; animation: fastloop-spin .8s linear infinite; flex: none; }
-.round-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 4px 14px; font-size: 14px; color: var(--ink-1); }
+.round-strip { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 20px 4px; font-size: 14px; color: var(--ink-1); }
+.round-strip .rs-sub { font-size: 12.5px; color: var(--ink-3); }
 .round-strip .rs-check { color: var(--orange-500, #D97A2B); font-weight: 600; }
 .round-strip .rs-text { font-weight: 600; }
 .round-strip .db-review { margin: 0 0 0 auto; color: var(--orange-600, #C4641F); }
@@ -1421,7 +1422,7 @@ function renderReadinessPanel(animate) {
             <div class="rp-label">${ready ? "Ready" : "Getting to 100"}</div>
             <div class="rp-explain">${ready
               ? "We've got your voice down and we're ready to reply for you. Keep going to sharpen it further."
-              : "How often we get the reply right first time. At 100 we can reply for you."}</div>
+              : "Replies we got right first time. At 100 we can send replies without you."}</div>
           </div>
         </div>
         <div class="rp-bar-wrap">
@@ -1714,7 +1715,7 @@ function renderRoundDone() {
     ? `
     <div class="round-strip" id="roundStrip">
       <span class="rs-check">✓</span>
-      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span>
+      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">counts toward your 100</span>
       <span class="db-msg" id="doneMsg" hidden>${msg}</span>
     </div>
     <div id="interviewHost"></div>
@@ -2263,8 +2264,8 @@ function mountInterviewForm() {
   }
   const _nq = (IV_CURRENT.questions || []).length;
   host.innerHTML = interviewFormHtml(IV_CURRENT, IV_GATE_MODE ? {
-    title: _nq === 1 ? "One quick question - optional" : `${_nq} quick questions - optional`,
-    sub: `<span class="iv-live"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Your answer is sent with the round - round ${rn + 1} opens when both are done.</span>`,
+    title: _nq === 1 ? "One quick question" : `${_nq} quick questions`,
+    sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Round ${rn + 1} opens once retraining finishes - your answer goes with it.</span>`,
     cta: `Start round ${rn + 1}`, skip: "",
   } : {
     title: "While that builds - a few quick questions",
@@ -2282,7 +2283,7 @@ function mountInterviewForm() {
       const strip = document.getElementById("roundStrip");
       const link = document.createElement("a");
       link.className = "db-review"; link.id = "doneReviewLink"; link.setAttribute("role", "button");
-      link.textContent = "Compare your rated replies: then vs now";
+      link.textContent = "Review rated replies";
       link.addEventListener("click", () => startReview());
       if (strip) strip.appendChild(link);
       rb.remove();
@@ -2293,9 +2294,15 @@ function mountInterviewForm() {
     const sb = document.getElementById("ivSubmitBtn");
     // Fixed label (panel round 2: a caption that mutates under the cursor is
     // a moving target). The rule is stated once, in words, under the input.
+    // Honest overrun (panel round 5): after 60s the promise of "about 30
+    // seconds" must change its words, not just keep spinning.
+    setTimeout(() => {
+      const lv = document.getElementById("ivLive");
+      if (lv && view === "done") lv.innerHTML = `<span class="spin"></span>Still retraining - taking longer than usual. Start round ${rn + 1} whenever you like.`;
+    }, 60000);
     const _narrow = window.matchMedia && window.matchMedia("(max-width: 520px)").matches;
     document.querySelectorAll("#ivForm .iv-q input").forEach((inp, i) => {
-      if (!inp.placeholder) inp.placeholder = "Leave blank to skip";
+      if (!inp.placeholder) inp.placeholder = "Optional - leave blank to skip";
       inp.addEventListener("keydown", (e) => { if (e.key === "Enter" && sb) { e.preventDefault(); sb.click(); } });
       // Desktop only: focus the first field (a phone keyboard would push the
       // one button below the fold).
