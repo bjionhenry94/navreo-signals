@@ -1512,7 +1512,15 @@ _WIRING_ADMIT_RES = [
 
 _INTERNAL_VOICE_RE = re.compile(
     r"\b(?:the\s+)?inbox\s+manager\b|\bthe\s+manual\b|\b(?:our|the|my)\s+instructions\s+(?:say|state|allow)"
-    r"|\bthe\s+(?:ai\s+)?assistant\b", re.IGNORECASE)
+    r"|\bthe\s+(?:ai\s+)?assistant\b"
+    # Live 2026-09-06 (owner: "fatal"): "as the owner confirmed, a public
+    # starting point is £500k+" and "the lead keeps whatever it finds" - the
+    # manual's third person (the owner / the client / the lead) read back to
+    # the prospect. The reply speaks as "we" to "you".
+    r"|\b(?:as|per)\s+the\s+(?:owner|client|founder|trainer)\s+(?:confirmed|said|told|instructed|stated|noted|mentioned)"
+    r"|\bthe\s+(?:owner|founder|trainer)\s+(?:confirmed|said|told|has|wants|allows|permits|instructed|stated)\b"
+    r"|\bthe\s+lead\s+(?:keeps|will|can|has|is|asks|wants|gets|receives|should)\b"
+    r"|\bthe\s+(?:lead|prospect)'s\s+own\b", re.IGNORECASE)
 
 
 def _text_admits_missing_wiring(text: str) -> bool:
@@ -1690,9 +1698,9 @@ def lint_draft(html: str, ctx: dict):
     # reply is written in first person, as the sender.
     if _INTERNAL_VOICE_RE.search(_low_plain):
         return False, ("Never refer to 'the inbox manager', 'the manual', 'the instructions' "
-                       "or 'the assistant' in a reply - the lead must never see our internal "
-                       "rules quoted back. Say the same fact in first person as the sender "
-                       "('I can share a starter range of ...').")
+                       "'the owner', 'the client' or 'the lead' in a reply - the lead must never "
+                       "see our internal rules quoted back. Say the same fact in first person "
+                       "plural, as us to you ('Our pricing starts at ...', 'you keep whatever it finds').")
     # ANSWER-PRICING-FIRST (owner report 2026-08-27: a bare "What's your
     # price?" got an assessment preamble as paragraph one - "tone deaf, that
     # first paragraph is irrelevant". The answer-first prompt rule keeps
@@ -1706,6 +1714,22 @@ def lint_draft(html: str, ctx: dict):
     # emails talk about "cloud cost" on every line.
     _lead_words = _strip_quoted(str(ctx.get("thread_text") or ""))[:600]
     _lead_asks_price = bool(_LINT_PRICE_ASK_RE.search(_lead_words))
+    # ANSWER-THE-QUESTION (live 2026-09-06: "who should I loop in on our
+    # side? what's the usual next step?" got two times and nothing else).
+    # When the lead's own words carry a real question (not just "worth a
+    # chat?"), the first paragraph after the greeting may not be the call
+    # ask - it has to answer them.
+    _lead_qs = [q.strip() for q in re.findall(r"([^.!?\n]{12,}\?)", _lead_words)
+                if not re.search(r"\b(?:worth a|quick|up for a|open to a|fancy a|free for a)\b[^?]{0,20}(?:chat|call)\?", q, re.I)]
+    if _lead_qs:
+        _aq_paras = [_TAG_RE.sub(" ", p).strip() for p in re.split(r"<br\s*/?>|</div>|</p>", text)]
+        _aq_paras = [p for p in _aq_paras if p]
+        if _aq_paras and len(_aq_paras[0]) < 40 and re.match(r"(hi|hello|hey)\b", _aq_paras[0], re.I):
+            _aq_paras = _aq_paras[1:]
+        if _aq_paras and re.match(r"(?:would you be open to a call|would (?:[a-z]+day)|are you (?:free|available)|how about)", _aq_paras[0], re.I):
+            return False, ("The lead asked a direct question ('" + _lead_qs[0][:80] + "') - answer it in "
+                           "the first paragraph after the greeting, in plain first person plural, "
+                           "then propose the two times.")
     if str(ctx.get("primary_intent") or "") == "pricing" or _lead_asks_price:
         _pf_paras = [
             _TAG_RE.sub(" ", p).strip()
@@ -16140,7 +16164,7 @@ def route_training_get(params):
             _stale_n = sum(
                 1 for c in cases
                 if not _is_case_answered(c.get("id"), answers)
-                and str((c.get("redrafted_at") or c.get("generated_at") or "")) < _cov) if _cov else 0
+                and str((c.get("redrafted_at") or c.get("generated_at") or "")) <= _cov) if _cov else 0
             _gen_raw = dict(doc.get("generating") or {})
             _recent = str(_gen_raw.get("finished_at") or _gen_raw.get("started_at") or "")
             _cutoff = (_dt.datetime.now(_dt.timezone.utc)
@@ -17239,7 +17263,10 @@ def _redraft_training_pool(agent_id: str) -> int:
         def _is_stale_card(c):
             if not _cov_sw:
                 return True
-            return str((c or {}).get("redrafted_at") or (c or {}).get("generated_at") or "") < _cov_sw
+            # <= not <: a redraft that started in the SAME second as a
+            # streamed answer landed used the earlier value (live 2026-09-06:
+            # the booking link "test2" was drafted at :33, "test2255" saved at :34).
+            return str((c or {}).get("redrafted_at") or (c or {}).get("generated_at") or "") <= _cov_sw
         in_round_raw = doc.get("client_round_ids")
         if in_round_raw is None:
             # No round ids on record: redraft the unanswered head in position

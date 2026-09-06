@@ -563,7 +563,7 @@ function caseFresh(c, opts) {
   if (id && STALE_OK.has(id)) return true; // served under the 10s fallback with an honest note
   const ct = cardTopics(c);
   const ctext = cardText(c);
-  return !ledger.some((t) => t.at > stamp
+  return !ledger.some((t) => t.at >= stamp   // same-second = drafted before the answer landed (2026-09-06)
     && (t.global || (t.topics || []).some((k) => ct.includes(k))
         || (t.kw || []).some((w) => ctext.includes(w))));
 }
@@ -2287,7 +2287,13 @@ document.addEventListener("input", (e) => {
   if (!inp || !inp.matches || !inp.matches("#ivForm .iv-q input[data-qid]")) return;
   const qid = inp.getAttribute("data-qid");
   clearTimeout(ivStreamTimers[qid]);
-  ivStreamTimers[qid] = setTimeout(() => streamOneInterviewAnswer(inp), 1200);
+  // A LINK/URL answer streams only when the field is left (live 2026-09-06:
+  // a 1.2s pause mid-URL sent "calendly.com/test2", the field was wired to
+  // it and a card was drafted with it before "test2255" arrived). Other
+  // answers keep streaming on a longer idle.
+  const _lab = inp.closest(".iv-q") ? (inp.closest(".iv-q").querySelector("label") || {}).textContent || "" : "";
+  if (/\b(link|url)\b/i.test(_lab) || /^(https?:\/\/|www\.)/i.test((inp.value || "").trim())) return;
+  ivStreamTimers[qid] = setTimeout(() => streamOneInterviewAnswer(inp), 2000);
 });
 document.addEventListener("focusout", (e) => {
   const inp = e.target;
