@@ -416,6 +416,37 @@ def capture_booking_link_from_feedback(agent_id: str, *texts) -> str:
         return ""
 
 
+_TAUGHT_PHONE_RE = re.compile(r"(\+?\d[\d\s().\-]{2,}\d)")
+_PHONE_CONTEXT_RE = re.compile(r"\b(?:phone|number|call me|call us|ring|mobile|cell|direct line)\b", re.IGNORECASE)
+
+
+def capture_phone_from_feedback(agent_id: str, inbound_text: str, *texts) -> str:
+    """Durable phone-number capture (owner report 2026-09-06: the number
+    taught by rewriting a phone-ask reply to '9911' was ignored by the next
+    phone card). Mirrors capture_booking_link_from_feedback: when the lead
+    asked for our number, or the teaching itself talks about a phone/number,
+    the digit run in the rewrite/note/answer is stored on agent.phone_number
+    - the drafts, the lint and the placeholder fill all read that field.
+    Overwrites (the owner is correcting it on purpose). Returns the number or
+    "". Never raises."""
+    try:
+        asked = bool(_ASK_OUR_BOOKING_OR_PHONE_RE.search(str(inbound_text or ""))
+                     and re.search(r"number|phone|call", str(inbound_text or ""), re.I))
+        for t in texts:
+            plain = _TAG_RE.sub(" ", str(t or ""))
+            if not (asked or _PHONE_CONTEXT_RE.search(plain)):
+                continue
+            for m in _TAUGHT_PHONE_RE.findall(plain):
+                digits = re.sub(r"\D", "", m)
+                if 4 <= len(digits) <= 15 and not re.match(r"20\d\d", digits):  # not a year/date
+                    num = re.sub(r"\s+", " ", m.strip())
+                    _save_agent({"id": agent_id, "phone_number": num})
+                    return num
+        return ""
+    except Exception:  # noqa: BLE001 - capture is best-effort, never blocks the answer save
+        return ""
+
+
 def _norm_url(url: str) -> str:
     """Lowercase, trailing-slash/punctuation-stripped form of a URL, so the
     same link written with or without a trailing slash, or with trailing
@@ -1512,7 +1543,15 @@ _WIRING_ADMIT_RES = [
 
 _INTERNAL_VOICE_RE = re.compile(
     r"\b(?:the\s+)?inbox\s+manager\b|\bthe\s+manual\b|\b(?:our|the|my)\s+instructions\s+(?:say|state|allow)"
-    r"|\bthe\s+(?:ai\s+)?assistant\b", re.IGNORECASE)
+    r"|\bthe\s+(?:ai\s+)?assistant\b"
+    # Live 2026-09-06 (owner: "fatal"): "as the owner confirmed, a public
+    # starting point is £500k+" and "the lead keeps whatever it finds" - the
+    # manual's third person (the owner / the client / the lead) read back to
+    # the prospect. The reply speaks as "we" to "you".
+    r"|\b(?:as|per)\s+the\s+(?:owner|client|founder|trainer)\s+(?:confirmed|said|told|instructed|stated|noted|mentioned)"
+    r"|\bthe\s+(?:owner|founder|trainer)\s+(?:confirmed|said|told|has|wants|allows|permits|instructed|stated)\b"
+    r"|\bthe\s+lead\s+(?:keeps|will|can|has|is|asks|wants|gets|receives|should)\b"
+    r"|\bthe\s+(?:lead|prospect)'s\s+own\b", re.IGNORECASE)
 
 
 def _text_admits_missing_wiring(text: str) -> bool:
@@ -1690,9 +1729,9 @@ def lint_draft(html: str, ctx: dict):
     # reply is written in first person, as the sender.
     if _INTERNAL_VOICE_RE.search(_low_plain):
         return False, ("Never refer to 'the inbox manager', 'the manual', 'the instructions' "
-                       "or 'the assistant' in a reply - the lead must never see our internal "
-                       "rules quoted back. Say the same fact in first person as the sender "
-                       "('I can share a starter range of ...').")
+                       "'the owner', 'the client' or 'the lead' in a reply - the lead must never "
+                       "see our internal rules quoted back. Say the same fact in first person "
+                       "plural, as us to you ('Our pricing starts at ...', 'you keep whatever it finds').")
     # ANSWER-PRICING-FIRST (owner report 2026-08-27: a bare "What's your
     # price?" got an assessment preamble as paragraph one - "tone deaf, that
     # first paragraph is irrelevant". The answer-first prompt rule keeps
@@ -1706,6 +1745,28 @@ def lint_draft(html: str, ctx: dict):
     # emails talk about "cloud cost" on every line.
     _lead_words = _strip_quoted(str(ctx.get("thread_text") or ""))[:600]
     _lead_asks_price = bool(_LINT_PRICE_ASK_RE.search(_lead_words))
+    # ANSWER-THE-QUESTION (live 2026-09-06: "who should I loop in on our
+    # side? what's the usual next step?" got two times and nothing else).
+    # When the lead's own words carry a real question (not just "worth a
+    # chat?"), the first paragraph after the greeting may not be the call
+    # ask - it has to answer them.
+    _lead_qs = [q.strip() for q in re.findall(r"([^.!?\n]{12,}\?)", _lead_words)
+                if not re.search(r"\b(?:worth a|quick|up for a|open to a|fancy a|free for a)\b[^?]{0,20}(?:chat|call)\?", q, re.I)]
+    _ph_m = re.search(r"Our phone number is ([+\d][\d\s().\-]{2,}\d)", str(ctx.get("owner_facts") or "") + " " + str(ctx.get("instructions") or ""))
+    if _ph_m and re.search(r"\byour\s+(?:phone\s+)?number\b|\byour\s+phone\b|\bgive\s+you\s+a\s+call\b|\bi'?ll\s+call\s+you\b", _lead_words, re.I):
+        _ph_digits = re.sub(r"\D", "", _ph_m.group(1))
+        if _ph_digits not in re.sub(r"\D", "", _TAG_RE.sub(" ", text)):
+            return False, ("The lead asked for our phone number and we have one (" + _ph_m.group(1).strip()
+                           + ") - give exactly that number in the first sentence, in first person, then stop.")
+    if _lead_qs:
+        _aq_paras = [_TAG_RE.sub(" ", p).strip() for p in re.split(r"<br\s*/?>|</div>|</p>", text)]
+        _aq_paras = [p for p in _aq_paras if p]
+        if _aq_paras and len(_aq_paras[0]) < 40 and re.match(r"(hi|hello|hey)\b", _aq_paras[0], re.I):
+            _aq_paras = _aq_paras[1:]
+        if _aq_paras and re.match(r"(?:would you be open to a call|would (?:[a-z]+day)|are you (?:free|available)|how about)", _aq_paras[0], re.I):
+            return False, ("The lead asked a direct question ('" + _lead_qs[0][:80] + "') - answer it in "
+                           "the first paragraph after the greeting, in plain first person plural, "
+                           "then propose the two times.")
     if str(ctx.get("primary_intent") or "") == "pricing" or _lead_asks_price:
         _pf_paras = [
             _TAG_RE.sub(" ", p).strip()
@@ -2616,8 +2677,11 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         # then erased exactly that number back to [PHONE NUMBER] because it
         # only trusted digits already in the instructions. Digits from the
         # digest count as taught too.
+        _phone_field = str((agent or {}).get("phone_number") or "").strip()
         _instr_digits = re.sub(r"\D", "", (_agent_instructions(agent) or "")
-                               + (regen_feedback or ""))
+                               + (regen_feedback or "") + _phone_field)
+        if _phone_field and "[PHONE NUMBER]" in html_body:
+            html_body = html_body.replace("[PHONE NUMBER]", _phone_field)
         def _fix_num(m):
             num = m.group(1)
             digs = re.sub(r"\D", "", num)
@@ -4586,6 +4650,11 @@ def _latest_owner_rules(agent: dict, doc: dict = None, max_rules: int = 8, limit
     to before this feature - see _prefix_latest_rules."""
     agent = agent or {}
     items = []  # (at, note) - not yet ordered
+    _ph = str(agent.get("phone_number") or "").strip()
+    if _ph:
+        # Newest possible: the durable taught number outranks everything.
+        items.append(("9999-12-31T23:59:59+00:00",
+                      f"Our phone number is {_ph}. When a lead asks for our number or says they will call, give exactly this number, in first person."))
     for entry in (agent.get("instruction_edits") or []):
         entry = entry or {}
         note = str(entry.get("rule") or entry.get("note") or "").strip()
@@ -16140,7 +16209,7 @@ def route_training_get(params):
             _stale_n = sum(
                 1 for c in cases
                 if not _is_case_answered(c.get("id"), answers)
-                and str((c.get("redrafted_at") or c.get("generated_at") or "")) < _cov) if _cov else 0
+                and str((c.get("redrafted_at") or c.get("generated_at") or "")) <= _cov) if _cov else 0
             _gen_raw = dict(doc.get("generating") or {})
             _recent = str(_gen_raw.get("finished_at") or _gen_raw.get("started_at") or "")
             _cutoff = (_dt.datetime.now(_dt.timezone.utc)
@@ -17239,7 +17308,10 @@ def _redraft_training_pool(agent_id: str) -> int:
         def _is_stale_card(c):
             if not _cov_sw:
                 return True
-            return str((c or {}).get("redrafted_at") or (c or {}).get("generated_at") or "") < _cov_sw
+            # <= not <: a redraft that started in the SAME second as a
+            # streamed answer landed used the earlier value (live 2026-09-06:
+            # the booking link "test2" was drafted at :33, "test2255" saved at :34).
+            return str((c or {}).get("redrafted_at") or (c or {}).get("generated_at") or "") <= _cov_sw
         in_round_raw = doc.get("client_round_ids")
         if in_round_raw is None:
             # No round ids on record: redraft the unanswered head in position
@@ -18410,6 +18482,8 @@ def route_training_answer(payload):
             # set - deterministic, so it works even though lesson_from_edit
             # rightly refuses to learn a pasted link as a writing lesson.
             captured_booking = capture_booking_link_from_feedback(agent_id, edited_body, note)
+            capture_phone_from_feedback(agent_id, str(((case_for_edit or {}).get("inbound") or {}).get("body") or ""),
+                                        edited_body, note)
 
             readiness = compute_readiness(doc)
             history = list(doc.get("readiness_history") or [])
@@ -18818,6 +18892,10 @@ def route_training_interview(payload):
             # so the redraft's agent snapshot (and every future draft) fills the
             # [BOOKING LINK] placeholder from the field. Partial save merges onto
             # the stored doc, so nothing else on the agent is touched.
+            for _qid, _ans in raw.items():
+                _qt = by_id.get(str(_qid), "")
+                if re.search(r"phone|\bnumber\b", _qt, re.I) and str(_ans or "").strip():
+                    capture_phone_from_feedback(agent_id, "what's your phone number", "phone: " + str(_ans))
             if booking_url_ans and booking_url_ans != str(agent.get("booking_link") or "").strip():
                 try:
                     _save_agent({"id": agent_id, "booking_link": booking_url_ans})
@@ -19061,7 +19139,11 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
         #   (b) never run more than 3 interview ROUNDS total (the initial set
         #       + 2 follow-ups); past that the interview is done for good.
         covered_topics = {t for q in answered_qs if (t := _iv_topic(q))}
-        if len(covered_topics) >= 7 or answered_rounds >= 3:
+        # Ceilings relaxed (owner 2026-09-06: "it says a few questions but
+        # there is only 1 - add more in these moments"): the paraphrase
+        # dedupe below is what stops repeats; the interview may keep going
+        # with genuinely new angles for as long as a sitting has holds.
+        if len(covered_topics) >= 11 or answered_rounds >= 6:
             return []
         _manual = _agent_instructions(agent)  # once (H5)
         r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
@@ -19082,6 +19164,41 @@ def _generate_interview_questions(agent: dict, doc: dict) -> list:
             # anti-repeat leaks, live-confirmed 2026-08-22). Fewer/empty is fine.
             out = _dedupe_interview_questions(out, [p["q"] for p in prior])
             out = _drop_banned_interview_questions(out)
+            # REFILL TO A REAL SET (owner 2026-09-06): when topic-dedupe leaves
+            # one or two questions, ask once more for follow-ups on NEW angles
+            # (objections, edge cases, process, deliverables, timelines) -
+            # deduped by paraphrase only, so a deeper question on a covered
+            # topic is allowed while a reworded repeat is not.
+            if 0 < len(out) < 3:
+                try:
+                    r2 = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                              {"Authorization": f"Bearer {key}"},
+                              {"model": OPENAI_MODEL,
+                               "messages": [{"role": "system", "content": TRAINING_INTERVIEW_SYSTEM
+                                             + "\n\nREFILL MODE: the owner has already covered the basic topics. Ask "
+                                             + str(5 - len(out)) + " FOLLOW-UP questions that go one level deeper on "
+                                             "specifics a prospect could ask (edge cases, objections, exact steps, "
+                                             "what happens after, exceptions). Never re-ask anything in already_asked "
+                                             "in other words."},
+                                            {"role": "user", "content": json.dumps({
+                                                "instruction_manual": _manual[:8000],
+                                                "already_asked": (prior[-40:] + [{"q": q, "a": ""} for q in out]),
+                                                "recent_feedback": _training_session_feedback_digest(doc, 1200)})}],
+                               "response_format": {"type": "json_schema", "json_schema": {
+                                   "name": "setter_interview_questions", "strict": True,
+                                   "schema": TRAINING_INTERVIEW_SCHEMA}}})
+                    if isinstance(r2, dict) and not r2.get("error"):
+                        more = [str(q).strip() for q in (json.loads(r2["choices"][0]["message"]["content"]).get("questions") or []) if str(q).strip()]
+                        _known = [_iv_question_tokens(x) for x in ([p["q"] for p in prior] + out)]
+                        for q in _drop_banned_interview_questions(more):
+                            toks = _iv_question_tokens(q)
+                            if toks and any(len(toks & pt) / max(1, len(toks | pt)) >= 0.6 for pt in _known):
+                                continue
+                            out.append(q); _known.append(toks)
+                            if len(out) >= 5:
+                                break
+                except Exception:  # noqa: BLE001 - refill is best-effort
+                    pass
             # A call that returns nothing NEW means the offer is already covered:
             # END the interview (empty), never pad with the static set.
             out = out[:5]
