@@ -3615,14 +3615,15 @@ function clientEmptyStateText() {
 function caughtUpHtml() {
   const c = (KPIS && KPIS.counts) || {};
   const n = (v) => (typeof v === "number" ? v : 0);
+  const pl = (v, one, many) => (n(v) === 1 ? one : many);
   const seal = `<div class="cu-seal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>`;
   if (CLIENT_MODE) {
     return `<div class="empty caught-up">${seal}
       <p class="cu-t">You're all caught up.</p>
       <p class="cu-s">Nothing waiting on you. Here's what your replies have done so far.</p>
       <div class="cu-tiles">
-        <div class="cu-tile"><b>${n(c.sent)}</b><span>replies sent</span></div>
-        <div class="cu-tile hi"><b>${n(c.meeting_request)}</b><span>calls requested</span></div>
+        <div class="cu-tile"><b>${n(c.sent)}</b><span>${pl(c.sent, "reply", "replies")} sent</span></div>
+        <div class="cu-tile hi"><b>${n(c.meeting_request)}</b><span>${pl(c.meeting_request, "call", "calls")} requested</span></div>
         <div class="cu-tile"><b>${n(c.dismissed)}</b><span>filed as no reply needed</span></div>
       </div>
       <div class="cu-meta">Only your campaigns · new replies appear here on their own</div>
@@ -3635,8 +3636,8 @@ function caughtUpHtml() {
     <p class="cu-t">Inbox clear.</p>
     <p class="cu-s">Nothing waiting on the team. Here's the day so far.</p>
     <div class="cu-tiles">
-      <div class="cu-tile"><b>${n(KPIS.sent_today)}</b><span>replies handled today</span></div>
-      <div class="cu-tile hi"><b>${n(c.meeting_request)}</b><span>calls requested</span></div>
+      <div class="cu-tile"><b>${n(KPIS.sent_today)}</b><span>${pl(KPIS.sent_today, "reply", "replies")} handled today</span></div>
+      <div class="cu-tile hi"><b>${n(c.meeting_request)}</b><span>${pl(c.meeting_request, "call", "calls")} requested</span></div>
       <div class="cu-tile"><b>${avg}</b><span>avg time to reply, 7d</span></div>
     </div>
     <div class="cu-meta">${auto ? `${auto} auto-sent today · ` : ""}${LAST_CHECKED ? `last checked ${pulledAgo(LAST_CHECKED)}` : "next check runs on its own"}</div>
