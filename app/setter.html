@@ -147,6 +147,20 @@
 .il-list { flex: 1; overflow-y: auto; }
 .il-test-note { padding: 8px 14px; border-bottom: 1px solid var(--line); }
 .il-list .empty { padding: 40px 16px; }
+/* "All caught up" scoreboard (Bjion 2026-09-06, prototype 02): an empty Needs
+   review reads as a result, not an absence. Same markup in both modes; the
+   numbers differ (owner: today's telemetry, client: their own counts). */
+.il-list .empty.caught-up { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 34px 16px 30px; text-align: center; }
+.caught-up .cu-seal { width: 40px; height: 40px; border-radius: 50%; background: var(--green-bg); border: 1px solid var(--green-line); color: var(--green); display: grid; place-items: center; margin-bottom: 2px; }
+.caught-up .cu-seal svg { width: 20px; height: 20px; }
+.caught-up .cu-t { font-family: var(--font-sans); font-weight: 600; font-size: 17px; letter-spacing: -0.02em; color: var(--ink); margin: 0; }
+.caught-up .cu-s { color: var(--ink-3); font-size: 12.5px; margin: 0; max-width: 32ch; }
+.caught-up .cu-tiles { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; width: 100%; max-width: 320px; margin-top: 6px; }
+.caught-up .cu-tile { background: var(--cream-50, #fff); border: 1px solid var(--line); border-radius: 10px; padding: 9px 6px 8px; }
+.caught-up .cu-tile b { display: block; font-size: 21px; font-weight: 600; letter-spacing: -0.03em; line-height: 1; font-variant-numeric: tabular-nums; color: var(--ink); }
+.caught-up .cu-tile.hi b { color: var(--orange); }
+.caught-up .cu-tile span { display: block; font-size: 10.5px; color: var(--ink-3); margin-top: 5px; line-height: 1.25; }
+.caught-up .cu-meta { color: var(--ink-3); font-size: 11.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
 .il-pager { flex-shrink: 0; border-top: 1px solid var(--line); padding: 7px 10px; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 12px; color: var(--ink-3); }
 .il-pager button { padding: 4px 9px; font-size: 12px; }
 .inbox-right { flex: 1; min-width: 0; overflow-y: auto; padding: 0 26px 40px; }
@@ -3595,6 +3609,44 @@ function clientEmptyStateText() {
   if (currentStatus === "dismissed") return "Nothing filed away yet.";
   return "No replies yet. New replies to your campaigns land here automatically, usually within a few minutes of arriving - nothing for you to do until one appears.";
 }
+/* Scoreboard empty state for Needs review (Bjion 2026-09-06: "I like the
+   scoreboard"). Only when the tab is genuinely clear - never over a search,
+   a load, or another tab, which keep their own sentences. */
+function caughtUpHtml() {
+  const c = (KPIS && KPIS.counts) || {};
+  const n = (v) => (typeof v === "number" ? v : 0);
+  const seal = `<div class="cu-seal"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>`;
+  if (CLIENT_MODE) {
+    return `<div class="empty caught-up">${seal}
+      <p class="cu-t">You're all caught up.</p>
+      <p class="cu-s">Nothing waiting on you. Here's what your replies have done so far.</p>
+      <div class="cu-tiles">
+        <div class="cu-tile"><b>${n(c.sent)}</b><span>replies sent</span></div>
+        <div class="cu-tile hi"><b>${n(c.meeting_request)}</b><span>calls requested</span></div>
+        <div class="cu-tile"><b>${n(c.dismissed)}</b><span>filed as no reply needed</span></div>
+      </div>
+      <div class="cu-meta">Only your campaigns · new replies appear here on their own</div>
+    </div>`;
+  }
+  const mins = typeof KPIS.avg_response_mins_7d === "number" ? Math.round(KPIS.avg_response_mins_7d) : null;
+  const avg = mins == null ? "–" : (mins >= 60 ? `${(mins / 60).toFixed(1)}h` : `${mins}m`);
+  const auto = n(KPIS.auto_sent_today);
+  return `<div class="empty caught-up">${seal}
+    <p class="cu-t">Inbox clear.</p>
+    <p class="cu-s">Nothing waiting on the team. Here's the day so far.</p>
+    <div class="cu-tiles">
+      <div class="cu-tile"><b>${n(KPIS.sent_today)}</b><span>replies handled today</span></div>
+      <div class="cu-tile hi"><b>${n(c.meeting_request)}</b><span>calls requested</span></div>
+      <div class="cu-tile"><b>${avg}</b><span>avg time to reply, 7d</span></div>
+    </div>
+    <div class="cu-meta">${auto ? `${auto} auto-sent today · ` : ""}${LAST_CHECKED ? `last checked ${pulledAgo(LAST_CHECKED)}` : "next check runs on its own"}</div>
+  </div>`;
+}
+function caughtUpApplies() {
+  const q = (typeof inboxSearchQuery === "string" ? inboxSearchQuery : "").trim();
+  return !q && currentStatus === "needs_review" && !UNCAT_ONLY_SAFE();
+}
+function UNCAT_ONLY_SAFE() { return (typeof UNCAT_ONLY !== "undefined") && !!UNCAT_ONLY; }
 function renderInboxList() {
   const el = document.getElementById("inboxList");
   const paged = pagedInboxRows();
@@ -3620,9 +3672,11 @@ function renderInboxList() {
         ? `<div class="empty"><span class="btnspin"></span> Loading replies…</div>`
         : (slFoot
             ? ""   // the footer's "Searching all of Smartlead…" carries the state
-            : `<div class="empty">${CLIENT_MODE
-                ? clientEmptyStateText()
-                : "No replies here. New ones will show up after the next check."}</div>`))
+            : (caughtUpApplies()
+                ? caughtUpHtml()
+                : `<div class="empty">${CLIENT_MODE
+                    ? clientEmptyStateText()
+                    : "No replies here. New ones will show up after the next check."}</div>`)))
     // L7 (copy-only mitigation): positive-sounding replies do end up filed here
 
     // when the categoriser gets one wrong. Say what this tab is and that the
