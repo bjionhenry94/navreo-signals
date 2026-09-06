@@ -2135,7 +2135,7 @@ async function maybeOfferFillerQuestions() {
     if (!el) return;
     el.innerHTML = `<div class="empty-flow"><div id="shortRoundWaitMsg" style="max-width:560px;margin:0 auto">`
       + interviewFormHtml({ questions: qs }, {
-          title: "While that trains - a few more quick questions",
+          title: qs.length === 1 ? "While that trains - one more quick question" : `While that trains - ${qs.length} more quick questions`,
           sub: "Answer these and the next scenarios are usually ready the moment you finish. Skipping just shows the timer.",
           cta: "Send answers", skip: "Skip - just wait" })
       + `</div></div>`;  // no progress bar under the questions (owner ruling 2026-09-05) - the bar returns only if they skip
@@ -2407,7 +2407,7 @@ function mountInterviewForm() {
     sub: `<span class="iv-live" id="ivLive"><span class="spin"></span>Retraining on your ratings - about 30 seconds.</span><span class="iv-sub-2">Start round ${rn + 1} whenever you like; your answer goes with it.</span>`,
     cta: `Start round ${rn + 1}`, skip: "",
   } : {
-    title: "While that builds - a few quick questions",
+    title: _nq === 1 ? "While that builds - one quick question" : `While that builds - ${_nq} quick questions`,
     sub: "Your answers go straight into the next replies. One line each, skip any.",
   });
   if (IV_GATE_MODE) {
