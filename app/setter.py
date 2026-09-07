@@ -18264,16 +18264,64 @@ def _pop_one_pending_merge(agent_id: str):
     (client-readiness audit 2026-09-01): a worker killed mid-drain used to
     lose EVERY popped-but-unapplied teaching; now at most the in-flight one
     is at risk, and concurrent drains interleave instead of one holding the
-    whole queue."""
+    whole queue.
+    CLAIM, DON'T POP (reader audit 2026-09-07): a deploy landed while a
+    founder's five-answer intake merge was in flight - the entry had already
+    been popped, the process died, and every taught fact vanished with no
+    trace (manual unchanged, no "Training note", pending_merges 0). The entry
+    now STAYS in the list stamped claimed_at until _release_pending_merge
+    removes it after the merge has SAVED; a claim older than
+    _MERGE_CLAIM_STALE_S is retried by the next drain, and a claim that
+    failed _MERGE_MAX_ATTEMPTS times is dropped rather than retried forever."""
+    now = _dt.datetime.now(_dt.timezone.utc)
     with _get_training_doc_lock(agent_id):
         doc = _load_training(agent_id, strict=True)
         pending = list(doc.get("pending_merges") or [])
         if not pending:
             return None
-        entry = pending.pop(0)
-        doc["pending_merges"] = pending
+        keep, entry = [], None
+        for e in pending:
+            if entry is None and isinstance(e, dict):
+                ca = str(e.get("claimed_at") or "")
+                stale = True
+                if ca:
+                    try:
+                        stale = (now - _parse_iso(ca)).total_seconds() >= _MERGE_CLAIM_STALE_S
+                    except Exception:  # noqa: BLE001
+                        stale = True
+                if stale:
+                    attempts = int(e.get("attempts") or 0) + 1
+                    if attempts > _MERGE_MAX_ATTEMPTS:
+                        continue  # dropped: three failed claims already
+                    e["claimed_at"] = now.isoformat(timespec="seconds")
+                    e["attempts"] = attempts
+                    e.setdefault("claim_id", uuid.uuid4().hex[:8])
+                    entry = e
+            keep.append(e)
+        doc["pending_merges"] = keep
         _save_training(agent_id, doc)
     return entry
+
+
+_MERGE_CLAIM_STALE_S = 600
+_MERGE_MAX_ATTEMPTS = 3
+
+
+def _release_pending_merge(agent_id: str, entry) -> None:
+    """Remove a claimed pending_merge once its merge has been saved (see
+    _pop_one_pending_merge). Never raises."""
+    try:
+        cid = (entry or {}).get("claim_id") if isinstance(entry, dict) else None
+        if not cid:
+            return
+        with _get_training_doc_lock(agent_id):
+            doc = _load_training(agent_id, strict=True)
+            pending = [e for e in (doc.get("pending_merges") or [])
+                       if not (isinstance(e, dict) and e.get("claim_id") == cid)]
+            doc["pending_merges"] = pending
+            _save_training(agent_id, doc)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _run_pending_merge_drain(agent_id: str):
@@ -18307,6 +18355,8 @@ def _run_pending_merge_drain(agent_id: str):
                 if note:
                     merge_correction_into_instructions(
                         merge_agent, note, source=(entry or {}).get("source") or "training")
+            # Saved (or nothing to do): only now does the entry leave the queue.
+            _release_pending_merge(agent_id, entry)
         except Exception as e:  # noqa: BLE001 - one bad merge must never stall the queue
             if _LOG:  # a dropped teaching leaves a trace (stability review R1)
                 try:
@@ -19074,6 +19124,7 @@ def route_training_interview(payload):
                 _joined = None
                 for _pe in reversed(pending):
                     if isinstance(_pe, dict) and _pe.get("source") == "interview" \
+                            and not _pe.get("claimed_at") \
                             and str(_pe.get("note") or "").startswith(_iv_head):
                         # Same question re-answered (streamed answers land on
                         # every blur: "No" then "$666K+", "www.calendly.com/"
