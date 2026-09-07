@@ -23046,6 +23046,33 @@ def grades_get(force: bool = False) -> tuple[dict, int]:
             "gradeOn": bool(os.environ.get("CAP_GRADE_V1"))}, 200
 
 
+# ── Early release on grade (owner ruling 2026-09-07) ─────────────────────────
+# The grade only ever stopped NEW parks. A healthy domain parked before the
+# grade existed just sat out its 7-day timer: on 2026-09-07, 56 of 74 resting
+# domains (5,518 of 7,562 sends/day) graded A/B. The restore sweep now treats a
+# resting entry as due the moment its domains grade in GRADE_EARLY_RELEASE, on
+# enough real sends that the grade rests on evidence rather than the prior.
+# Bjion chose A+B ("if the engine won't park a B it shouldn't keep one parked");
+# drop "B" from the tuple to go A-only.
+GRADE_EARLY_RELEASE = ("A", "B")
+GRADE_EARLY_MIN_SENDS = 300
+
+
+def _grades_map_for_sweep() -> dict:
+    """Grade map for the restore sweep: the cached map if fresh, else a fresh
+    compute (the sweep already runs in its own thread, so blocking is fine).
+    Never raises — an empty map just means no early release this pass."""
+    try:
+        ent = _GRADES_CACHE
+        if ent["data"] and (time.time() - ent["ts"]) < _GRADES_TTL_S:
+            return ent["data"].get("grades") or {}
+        out = _grades_compute()
+        _GRADES_CACHE.update(data=out, ts=time.time())
+        return out.get("grades") or {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def maildoso_reply_caps(mode: str = "preview") -> dict:
     """Maildoso SMTP boxes: flat 15/day down to 0.4%, park below 0.4% (owner
     ruling 2026-08-30, supersedes the 20/15/park-below-0.5% tiering of
@@ -24246,12 +24273,59 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                 time.sleep(10)
             entries, _src, _mbx, _bl = _restore_entries()
             due = [e for e in entries if e.get("overdue")]
-            r = out["restore"] = {"due": [e["id"] for e in due], "restored": [],
-                                  "skipped": []}
+            # Early release on grade (owner ruling 2026-09-07): a resting entry
+            # whose every domain grades in GRADE_EARLY_RELEASE on >= 300 real
+            # 30d sends, and is neither bounce-paused (durable cap stash) nor
+            # blacklisted, is due NOW — it goes through the same restore path,
+            # which retires the ledger row so rest_enforce can't re-zero it.
+            early = []
+            try:
+                gmap = _grades_map_for_sweep()
+                bounce_held = {str(d).lower() for d in (_cap_stash_read() or {}).keys()}
+                due_ids = {e["id"] for e in due}
+                for e in entries:
+                    if e["id"] in due_ids:
+                        continue
+                    doms = [str(d).lower() for d in (e.get("domains") or [])]
+                    if not doms or any(d in bounce_held or d in (_bl or set()) for d in doms):
+                        continue
+                    gs = [gmap.get(d) for d in doms]
+                    if not all(g and g.get("grade") in GRADE_EARLY_RELEASE
+                               and (g.get("sent_30d") or 0) >= GRADE_EARLY_MIN_SENDS
+                               for g in gs):
+                        continue
+                    e = dict(e)
+                    e["early_release"] = True
+                    e["grade"] = ",".join(sorted({g["grade"] for g in gs}))
+                    early.append(e)
+            except Exception as ex:  # noqa: BLE001 — additive; never break the timer path
+                out["restore_early_error"] = str(ex)[:200]
+            due = due + early
+            r = out["restore"] = {"due": [e["id"] for e in due],
+                                  "early": [{"id": e["id"], "domains": e.get("domains"),
+                                             "grade": e.get("grade")} for e in early],
+                                  "restored": [], "skipped": []}
             for e in due:
                 dry, _st = api_restore_live({"id": e["id"], "dry_run": True})
                 sugg = (dry or {}).get("suggestions") or []
                 if not sugg:
+                    if e.get("early_release"):
+                        # A healthy domain with no campaign to attach to still
+                        # gets its caps back (exactly what the Step 1 restore
+                        # did): un-park + retire the ledger row, not attached.
+                        try:
+                            jb, _s3 = api_warmup_job({"op": "resume",
+                                                      "domains": e.get("domains") or []})
+                            r["restored"].append({"id": e["id"], "domains": e.get("domains"),
+                                                  "early_release": True, "grade": e.get("grade"),
+                                                  "attached": False, "ok": True,
+                                                  "true_up_job": (jb or {}).get("job_id"),
+                                                  "reason": "no campaign suggestion — caps resumed, not attached"})
+                        except Exception as ex:  # noqa: BLE001
+                            r["skipped"].append({"id": e["id"], "domains": e.get("domains"),
+                                                 "early_release": True,
+                                                 "reason": "resume failed: " + str(ex)[:120]})
+                        continue
                     r["skipped"].append({"id": e["id"], "domains": e.get("domains"),
                                          "reason": "no campaign suggestion — left for manual restore"})
                     continue
@@ -24260,6 +24334,8 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                 rec = {"id": e["id"], "domains": e.get("domains"),
                        "campaign": {"id": sugg[0]["id"], "name": sugg[0].get("name")},
                        "ok": bool((res or {}).get("ok")), "status": st}
+                if e.get("early_release"):
+                    rec["early_release"], rec["grade"] = True, e.get("grade")
                 if (res or {}).get("blacklist_warning"):
                     rec["blacklist_warning"] = res["blacklist_warning"]
                 if rec["ok"]:
