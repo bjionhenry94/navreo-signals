@@ -3597,7 +3597,12 @@ def _scrub_control_chars(html: str) -> str:
     broken glyph on a served card). Common apostrophe/quote forms map to
     their intended character; everything else below 0x20 except newline,
     tab and carriage return is dropped."""
-    return (html or "").translate(_CTRL_TABLE)  # identical mapping, C-speed (P4)
+    s = (html or "")
+    # reader audit 2026-09-07 loop 4: a DEL (0x7f) with a stray space stood in
+    # for an apostrophe ("Here\x7f s"); restore the contraction, drop the rest
+    s = re.sub(r"([A-Za-z])[\x7f\x80-\x9f]\s?(s|t|ll|ve|re|d|m)\b", r"\1'\2", s)
+    s = re.sub(r"[\x7f\x80-\x90\x95-\x9f]", "", s)
+    return s.translate(_CTRL_TABLE)  # identical mapping, C-speed (P4)
 
 
 def proofread_draft(html: str, sender_first: str = "", booking_link: str = "", *, timeout: float = None):
@@ -9827,11 +9832,19 @@ def route_agents_correction(payload):
         source = payload.get("source") or "manual"
         if not text:
             return 400, {"error": "text is required"}
+        _mlock = _get_training_merge_lock(agent_id)  # reader audit 2026-09-07 loop 4: never race the drain's merges
+        _mlock.acquire(timeout=180)
         agent = _load_agent(agent_id)
         if not agent:
             return 404, {"error": "Agent not found."}
         if scope == "remember":
-            _ok, _new_instructions, how = merge_correction_into_instructions(agent, text, source)
+            try:
+                _ok, _new_instructions, how = merge_correction_into_instructions(agent, text, source)
+            finally:
+                try:
+                    _mlock.release()
+                except RuntimeError:
+                    pass
             saved = _load_agent(agent_id) or agent
             resp = {
                 "ok": True, "agent_id": agent_id, "scope": scope, "how": how,
@@ -9894,6 +9907,10 @@ def route_agents_memory_delete(payload):
         return 200, {"ok": True, "agent_id": agent_id, "memory_count": len(saved.get("memory") or []),
                      "memory": saved.get("memory") or []}
     except Exception as e:  # noqa: BLE001
+        try:
+            _get_training_merge_lock((payload or {}).get("agent_id") or "").release()
+        except Exception:  # noqa: BLE001 - not held, or no agent id
+            pass
         return 500, {"error": str(e)[:300]}
 
 
