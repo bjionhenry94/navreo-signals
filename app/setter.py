@@ -15952,8 +15952,8 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
             # "Tuesday 10:00 / 12:00" pair (earliest-slot rule on a synthetic
             # calendar). Vary the window per scenario, deterministically.
             import zlib as _zlib
-            _seed = _zlib.crc32(str(reply_row.get("id") or reply_row.get("reply_subject")
-                                    or reply_row.get("reply_body") or "").encode("utf-8", "ignore"))
+            _seed = _zlib.crc32(("|".join(str(x or "") for x in (reply_id, email_domain, subject, body)))
+                                .encode("utf-8", "ignore"))
             _off_days, _off_hours = _seed % 4, (_seed >> 3) % 6
             _now_dt = now if isinstance(now, _dt.datetime) else _parse_iso(now)
             if _now_dt.tzinfo is None:
