@@ -18384,6 +18384,20 @@ def warmup_capacity_get() -> tuple[dict, int]:
     resting = [r for r in resting
                if not ((mirror_box.get(str(r.get("email") or "").lower()) or {})
                        .get("message_per_day") or 0)]
+    # Completeness (owner ruling 2026-09-07: resting = cap 0, the mirror's
+    # cap-0 census IS the definition): the audit views can omit held boxes —
+    # after a fresh refresh the client-ws inwarmup view listed 451 of KRG's 520
+    # cap-0 mailboxes (69 missing across four domains), so the tile under-read
+    # KRG by 178/day. Add every mirror mailbox at cap 0 the views did not list;
+    # the cohort is then exactly the census and the views only enrich it.
+    _have = {str(r.get("email") or "").lower() for r in resting}
+    for _m in mrows:
+        _em = str(_m.get("email") or "").lower()
+        if _em and _em not in _have and not (_m.get("message_per_day") or 0):
+            _have.add(_em)
+            resting.append({"email": _em, "domain": str(_m.get("domain") or "").lower(),
+                            "workspace": _m.get("workspace") or "navreo",
+                            "tags": _m.get("tags") or [], "provider": ""})
 
     def _clientws_resting(email):
         r = mirror_box.get(email)
