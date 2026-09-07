@@ -7627,10 +7627,11 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
     chat = _alert_chat_link(row, channel)
+    # One link only (Bjion 2026-09-07): "Open conversation" -> the setter (a
+    # client share link on a client-facing channel, the owner permalink
+    # internally). The Smartlead master-inbox link is gone from every alert.
     if chat:
-        lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
-    if link:
-        lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
+        lines.append(f":dart: <{chat}|Open conversation>")
     return "\n".join(lines)
 
 
@@ -7770,7 +7771,7 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -
     pcid = str(prior.get("smartlead_campaign_id") or "")
     pname = camp_names.get(pcid) or (f"campaign {pcid}" if pcid else "earlier campaign")
     cat = row.get("category") or "uncategorised"
-    link = _ep_smartlead_link(row.get("smartlead_campaign_id"), row.get("email") or "")
+    link = ""   # Smartlead link dropped from alerts (Bjion 2026-09-07)
     lines = [
         f"🔔 ONCE-POSITIVE lead replied — now: {cat}",
         "---------------------------",
@@ -7783,10 +7784,11 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
     chat = _alert_chat_link(row, channel)
+    # One link only (Bjion 2026-09-07): "Open conversation" -> the setter (a
+    # client share link on a client-facing channel, the owner permalink
+    # internally). The Smartlead master-inbox link is gone from every alert.
     if chat:
-        lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
-    if link:
-        lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
+        lines.append(f":dart: <{chat}|Open conversation>")
     return "\n".join(lines)
 
 
@@ -7888,7 +7890,7 @@ def run_ever_positive_alerts() -> dict:
                         or f"campaign {row.get('smartlead_campaign_id')}"
                     text = _ep_positive_shared_text(
                         row, cname,
-                        _ep_smartlead_link(row.get("smartlead_campaign_id"), email),
+                        "",   # Smartlead link dropped from alerts (Bjion 2026-09-07)
                         header=header, channel=shared)
                     _sp = {"event_type": "EVER_POSITIVE_ALERT",
                            "text": text, "channel": shared}
@@ -8049,10 +8051,11 @@ def _cp_compose(row: dict, cname: str, link: str, channel: str = None) -> str:
         f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
     ]
     chat = _alert_chat_link(row, channel)
+    # One link only (Bjion 2026-09-07): "Open conversation" -> the setter (a
+    # client share link on a client-facing channel, the owner permalink
+    # internally). The Smartlead master-inbox link is gone from every alert.
     if chat:
-        lines.append(f":dart: <{chat}|Open this chat in the Appointment Setter>")
-    if link:
-        lines.append(f":speech_balloon: <{link}|Open conversation in Smartlead>")
+        lines.append(f":dart: <{chat}|Open conversation>")
     return "\n".join(lines)
 
 
@@ -8103,7 +8106,7 @@ def run_client_positive_alerts() -> dict:
             cid = row.get("smartlead_campaign_id")
             names = _ep_campaign_names(ws, [cid])
             cname = names.get(str(cid or "")) or (f"campaign {cid}" if cid else "unknown campaign")
-            link = _cp_smartlead_link(cid, email)
+            link = ""   # Smartlead link dropped from alerts (Bjion 2026-09-07)
             # Mapped workspace -> its own channel; every other client workspace
             # -> #client-interested-replies (ruling 2026-08-18: the hook's
             # #interested-replies default is Navreo-own only).
