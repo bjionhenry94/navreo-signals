@@ -438,12 +438,142 @@ def capture_phone_from_feedback(agent_id: str, inbound_text: str, *texts) -> str
                 continue
             for m in _TAUGHT_PHONE_RE.findall(plain):
                 digits = re.sub(r"\D", "", m)
-                if 4 <= len(digits) <= 15 and not re.match(r"20\d\d", digits):  # not a year/date
+                # Reader audit 2026-09-07: a 4-digit "9911" typed in a side note
+                # was stored and emailed as our number. Fewer than 7 digits is
+                # not a phone number - see short_phone_run_in_feedback.
+                if 7 <= len(digits) <= 15 and not re.match(r"20\d\d", digits):  # not a year/date
                     num = re.sub(r"\s+", " ", m.strip())
                     _save_agent({"id": agent_id, "phone_number": num})
                     return num
         return ""
     except Exception:  # noqa: BLE001 - capture is best-effort, never blocks the answer save
+        return ""
+
+
+def short_phone_run_in_feedback(inbound_text: str, *texts) -> str:
+    """Reader audit 2026-09-07: "our number is 9911" was stored and emailed
+    verbatim. capture_phone_from_feedback now needs 7+ digits; this returns
+    the too-short digit run (4-6 digits) the teaching offered as a phone so
+    the wizard can say so to the trainer, or "". Never raises."""
+    try:
+        asked = bool(_ASK_OUR_BOOKING_OR_PHONE_RE.search(str(inbound_text or ""))
+                     and re.search(r"number|phone|call", str(inbound_text or ""), re.I))
+        for t in texts:
+            plain = _TAG_RE.sub(" ", str(t or ""))
+            if not (asked or _PHONE_CONTEXT_RE.search(plain)):
+                continue
+            for m in _TAUGHT_PHONE_RE.findall(plain):
+                digits = re.sub(r"\D", "", m)
+                if 3 <= len(digits) <= 6 and not re.match(r"20\d\d", digits):
+                    return re.sub(r"\s+", " ", m.strip())
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+_VAGUE_NOTE_RE = re.compile(
+    r"\b(not sure|hmm+|meh|feels? (?:a bit |a little |kind of |kinda )?(?:off|wrong|odd|weird)"
+    r"|doesn'?t feel|not quite|dunno|not really|so-so|kind of|kinda|not (?:great|good|right)"
+    r"|could be better|a bit off|bit weird|not us|not like us)\b", re.IGNORECASE)
+_DIRECTIVE_NOTE_RE = re.compile(
+    r"\b(use|say|don'?t|do not|never|always|add|remove|mention|include|offer|ask|call|write|keep|drop"
+    r"|sign|start|end|avoid|put|send|quote|give|reply|answer|shorter|longer|less|more|instead|replace"
+    r"|change|too (?:blunt|long|short|formal|casual|salesy|pushy|wordy)|our (?:number|link|price))\b",
+    re.IGNORECASE)
+
+
+def _note_is_actionable(note: str) -> bool:
+    """Reader audit 2026-09-07: "hmm not sure, doesn't feel quite like us"
+    became a standing manual rule ("Training note (...)") and was echoed back
+    as "Got it - hmm not sure...". A note carries an instruction when it has a
+    number or link, is long enough to say something, or names a change; a
+    bare shrug is feedback for the redraft digest, never a rule."""
+    s = str(note or "").strip()
+    if not s:
+        return False
+    if re.search(r"\d", s) or re.search(r"https?://|www\.", s, re.I):
+        return True
+    if len(re.findall(r"[A-Za-z']+", s)) > 14:
+        return True
+    if _VAGUE_NOTE_RE.search(s) and not _DIRECTIVE_NOTE_RE.search(s):
+        return False
+    return True
+
+
+_PRICE_SHAPE_RE = re.compile(r"(?<![\w$€£])(\d[\d,]*(?:\.\d+)?)\s*([$€£])(?:\s*([kKmM])(?![a-zA-Z]))?(\+?)")
+
+
+def _fix_price_shapes(text: str) -> str:
+    """"888$K+" -> "$888K+" (reader audit 2026-09-07: the price exactly as
+    typed reached four prospect drafts). A currency sign typed after the
+    digits moves in front and k/m is upper-cased; nothing else is touched."""
+    def _r(m):
+        return f"{m.group(2)}{m.group(1)}{(m.group(3) or '').upper()}{m.group(4)}"
+    return _PRICE_SHAPE_RE.sub(_r, str(text or ""))
+
+
+_LINK_QUESTION_RE = re.compile(r"\b(link|url|page|pdf|video|repo|documentation|website)\b", re.IGNORECASE)
+_BARE_LINK_RE = re.compile(
+    r"(?<![\w/@.])(?:www\.[^\s\"'<>]+|[a-z0-9][a-z0-9.-]*\.(?:com|io|ai|app|co|us|uk|eu|de|nl|net|org)(?:/[^\s\"'<>]*)?)",
+    re.IGNORECASE)
+
+
+def _normalise_taught_answer(question: str, answer: str) -> str:
+    """Interview answers land in the manual verbatim, so shape them once at
+    capture (reader audit 2026-09-07): price signs in front of the digits, and
+    a link answer typed without its scheme ("www.calendly.com/x") becomes a
+    real https URL so it is clickable in every draft."""
+    a = _fix_price_shapes(answer)
+    if _LINK_QUESTION_RE.search(str(question or "")):
+        a = _BARE_LINK_RE.sub(lambda m: m.group(0) if m.group(0).lower().startswith(("http://", "https://"))
+                              else "https://" + m.group(0), a)
+    return a
+
+
+_HOME_TZ_TABLE = [
+    (r"\b(amsterdam|rotterdam|utrecht|eindhoven|netherlands|dutch)\b", "Europe/Amsterdam"),
+    (r"\b(london|manchester|edinburgh|united kingdom|\buk\b|england|scotland)\b", "Europe/London"),
+    (r"\b(berlin|munich|hamburg|frankfurt|cologne|germany|german)\b", "Europe/Berlin"),
+    (r"\b(paris|lyon|france|french)\b", "Europe/Paris"),
+    (r"\b(dublin|ireland|irish)\b", "Europe/Dublin"),
+    (r"\b(stockholm|gothenburg|sweden|swedish)\b", "Europe/Stockholm"),
+    (r"\b(copenhagen|denmark|danish)\b", "Europe/Copenhagen"),
+    (r"\b(oslo|norway|norwegian)\b", "Europe/Oslo"),
+    (r"\b(helsinki|finland|finnish)\b", "Europe/Helsinki"),
+    (r"\b(madrid|barcelona|spain|spanish)\b", "Europe/Madrid"),
+    (r"\b(lisbon|porto|portugal)\b", "Europe/Lisbon"),
+    (r"\b(zurich|geneva|switzerland|swiss)\b", "Europe/Zurich"),
+    (r"\b(vienna|austria)\b", "Europe/Vienna"),
+    (r"\b(brussels|antwerp|belgium)\b", "Europe/Brussels"),
+    (r"\b(milan|rome|italy|italian)\b", "Europe/Rome"),
+    (r"\b(warsaw|krakow|poland)\b", "Europe/Warsaw"),
+    (r"\b(prague|czech)\b", "Europe/Prague"),
+    (r"\b(dubai|abu dhabi|uae)\b", "Asia/Dubai"),
+    (r"\b(singapore)\b", "Asia/Singapore"),
+    (r"\b(sydney|melbourne|australia)\b", "Australia/Sydney"),
+    (r"\b(toronto|ontario|canada)\b", "America/Toronto"),
+    (r"\b(new york|nyc|boston|miami|atlanta|philadelphia)\b", "America/New_York"),
+    (r"\b(san francisco|los angeles|california|seattle|bay area)\b", "America/Los_Angeles"),
+    (r"\b(austin|dallas|houston|chicago|texas)\b", "America/Chicago"),
+]
+
+
+def _agent_home_timezone(agent: dict) -> str:
+    """Where the SENDER is, read from the agent's own instructions (the
+    earliest city/country mention wins - "built in Amsterdam" beats a partner
+    hub "in Dubai" further down). Reader audit 2026-09-07: practice leads with
+    zero timezone signal were all defaulted to US Eastern, so a European
+    company's wizard proposed 10:00 AM EDT to Nordic prospects. Returns an
+    IANA name or ""."""
+    try:
+        text = str(_agent_instructions(agent) or "")[:8000].lower()
+        best = None
+        for pat, tz in _HOME_TZ_TABLE:
+            m = re.search(pat, text)
+            if m and (best is None or m.start() < best[0]):
+                best = (m.start(), tz)
+        return best[1] if best else ""
+    except Exception:  # noqa: BLE001
         return ""
 
 
@@ -2252,10 +2382,10 @@ Rules:
 - LEAD-PROPOSED TIME (owner rule 2026-08-21, every SDR, OVERRIDES the two-fresh-times default even when live slots exist). When the lead puts forward their OWN time, day, or window - specific ("are you free Thursday at 3?", "the 24th at 2pm works") OR vague ("mornings are best", "a 30 min call later this week? Morning PST would work", "early next week", "after 2pm") - you must answer THAT proposal, not open with the generic "Would you be open to a call on {t1} or {t2}" shape, which reads as not having read their email. Your first job is to say plainly whether you can make what they asked for. Exactly two shapes: when the slots you were given fall inside what they asked for, ACCEPT plainly - "Yes, I'm free on {matching slot} or {second matching slot}, I'll share an invite now." (keep each time's own slot link when links exist; one matching slot means offer that one). When none of the given slots fit their window, COUNTER honestly and OPEN by naming their proposed time as the thing you cannot make: "Unfortunately I can't make {their proposed time, in their words}, but I can do {slot 1} or {slot 2} - would either of those work?". The counter MUST start by acknowledging their time does not work; you must NEVER open a counter with the generic "Would you be open to a call on ..." shape, which reads as ignoring that they already named a time. Never pretend to a fit that isn't there, never ignore their stated window, and never invent a time outside the slots you were given. A lead who proposes a time (or directly asks to set up a call) is ALREADY SOLD ON THE CALL: the ENTIRE reply is the scheduling answer - greeting, the accept-or-counter line, at most one short closing line, sign-off. Do NOT add product explanation, assessment detail, setup or access requirements, resource pitches, or any paragraph they did not ask for - all of that belongs in the call itself, and padding the reply with it reads as not listening (owner rule, repeated many times: "when someone directly asks for a call, you just tell them a time - you don't give them additional information").
 - CALL-ALREADY-REQUESTED (owner HARD RULE 2026-08-28, every SDR). When lead_requested_call is true - the lead asked for the call, asked you to propose times, asked for a setup call, or said yes to one - the call is AGREED. NEVER write "Would you be open to a call...", "would you be up for a quick chat", or any phrasing that re-asks whether they want the call they just asked for: that reads as not listening. Propose the two times DIRECTLY as the scheduling sentence ("Does Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST work for you?" - with the same per-slot links/plain-text rules as the two-times default), keep any answer to their other questions first per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, and confirm who should join when they named attendees (their CFO, their security team). Everything else about the two-times machinery (slots verbatim, fallback ladder, constraints, LEAD-PROPOSED TIME) applies unchanged - only the openness re-ask is banned.
 - NO-CALL-SELLING (owner HARD RULE 2026-08-28, every SDR). Once scheduling is agreed - the lead proposed their own time OR asked for the call - the scheduling sentence contains the times and NOTHING else: no purpose clause, no value pitch, no "where I can run through the discovery call and show what the assessment will surface for you". They already want the call; selling it again reads as scripted. Accept or counter plainly ("Unfortunately I can't make Tue morning, but I can do Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST - does either work?") and stop. Describing what the call covers is allowed ONLY when the lead themselves asked what the call is for, and then it belongs in its own answer sentence per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, never bolted onto the time proposal.
-- ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST (owner rule 2026-08-27, every SDR). The FIRST paragraph after the greeting answers the specific thing the lead's latest message asked - their access question, their timeline question, their security question, their pricing question, their "do you apply fixes or just recommend" question - in their terms. NEVER open with a stock offer, product, or process preamble ("[the deliverable] comes from our [offer/assessment/audit], which we set up on a call") before the answer: opening with anything but the answer reads as dodging the question, and repeating the same explanation sentence across replies reads as a bot. Where the reply genuinely needs to explain how the offer works, weave it in as ONE short clause AFTER the answer, never as its own opening paragraph. When the lead asked several questions, answer each briefly in the order they asked. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
+- ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST (owner rule 2026-08-27, every SDR). The FIRST paragraph after the greeting answers the specific thing the lead's latest message asked - their access question, their timeline question, their security question, their pricing question, their "do you apply fixes or just recommend" question - in their terms. NEVER open with a stock offer, product, or process preamble ("[the deliverable] comes from our [offer/assessment/audit], which we set up on a call") before the answer: opening with anything but the answer reads as dodging the question, and repeating the same explanation sentence across replies reads as a bot. Where the reply genuinely needs to explain how the offer works, weave it in as ONE short clause AFTER the answer, never as its own opening paragraph. When the lead asked several questions, answer EVERY ONE of them - each in its own sentence, in the order asked - before any call ask or next step; answering only the first and pivoting to a call is wrong (reader audit 2026-09-07: "send the breakdown" + "do you offer a follow-up session?" got neither). If one genuinely cannot be answered from what you know, say so in a clause ("on the follow-up session I'd want to check with the team and come back to you") rather than skipping it. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
 - NEVER-ADMIT-MISSING-WIRING (owner HARD RULE 2026-08-31, every SDR). Never tell the lead that a phone number, booking link, calendar, price, or any other detail is missing, not set up, not wired up, not provided, or unavailable - and never narrate that it will exist later ("once it's set up", "isn't set up yet"). The lead must never sense unfinished wiring. When you lack a booking link, follow the [BOOKING LINK] placeholder rule silently; when you lack a phone number, warmly steer to a scheduled call or keep it on email without one word about phone availability; when you lack a price, follow the instructions' pricing posture without saying a price is unavailable. State what IS true and offer what you DO have - zero meta-commentary about gaps. This rule outranks any instruction-manual line that tells you to announce a missing detail.
 - WEAVE-TAUGHT-FACTS-IN (owner HARD RULE 2026-08-31, every SDR). When the instructions or reviewer feedback supply a concrete fact the reply needs - a price range, a phone number, a link, a timeframe - it must be woven into a natural sentence that answers the lead ("Our pricing is tiered, with engagements typically in the £50K-£150K range depending on your estate."), NEVER parked on its own line or bolted on as a bare value. A paragraph that is nothing but a figure reads as pasted, not written.
-- SELF-SERVE ASSET REQUEST (owner rule 2026-08-22, every SDR, live-confirmed, OVERRIDES the two-fresh-times default). When the lead asks for your BOOKING LINK or your PHONE NUMBER - especially when they say they will book or call themselves ("what's your booking link? I'll book direct", "what's your number? I'll give you a call") - ANSWER WITH JUST THAT ASSET and STOP. For a booking-link ask, give the booking_link value and nothing else about scheduling; do NOT also propose two call times. For a phone-number ask, give the phone number EXACTLY as it appears in the instructions OR in reviewer_feedback/owner_corrections - a number the owner taught during training arrives there first, before it is folded into the instructions, so USE IT; only when NEITHER source contains a phone number do you write the literal placeholder [PHONE NUMBER] ("My number is [PHONE NUMBER]."). Never invent one - a fabricated number (for example "+44 7700 900123") is a serious error, so manufacture no digits: use the taught number if you were given one anywhere, otherwise the placeholder. Either way do NOT append the two-times "Would you be open to a call on ..." paragraph: the lead has chosen to self-serve, so a fresh call pitch talks straight past them.
+- SELF-SERVE ASSET REQUEST (owner rule 2026-08-22, every SDR, live-confirmed, OVERRIDES the two-fresh-times default). When the lead asks for your BOOKING LINK or your PHONE NUMBER - especially when they say they will book or call themselves ("what's your booking link? I'll book direct", "what's your number? I'll give you a call") - ANSWER WITH THAT ASSET and nothing else about scheduling - but still write a complete, human email (reader audit 2026-09-07: "Hi Chris, Our number is 9911. Marton" and "My booking link is www..." went out as the WHOLE message): the greeting, ONE natural sentence that hands the asset over ("Here's my booking link: <a href="...">...</a> - pick whichever slot suits you." / "Of course - you can reach me on +31 ... whenever suits."), one short friendly closing line ("Speak soon." / "Looking forward to it."), and the sign-off. Never send the asset as a bare one-line email. For a booking-link ask, give the booking_link value and nothing else about scheduling; do NOT also propose two call times. For a phone-number ask, give the phone number EXACTLY as it appears in the instructions OR in reviewer_feedback/owner_corrections - a number the owner taught during training arrives there first, before it is folded into the instructions, so USE IT; only when NEITHER source contains a phone number do you write the literal placeholder [PHONE NUMBER] ("My number is [PHONE NUMBER]."). Never invent one - a fabricated number (for example "+44 7700 900123") is a serious error, so manufacture no digits: use the taught number if you were given one anywhere, otherwise the placeholder. Either way do NOT append the two-times "Would you be open to a call on ..." paragraph: the lead has chosen to self-serve, so a fresh call pitch talks straight past them.
 - ANSWER THE LEAD'S ACTUAL QUESTION FIRST (owner rule 2026-08-22, every SDR, live-confirmed). Before anything else, the draft must make a genuine ATTEMPT at the specific thing the lead asked. If they asked for case studies, ENGAGE the case studies - say plainly they are early-stage and give the actual anonymised outcomes or proof the instructions hold - never reply with a generic website overview and a call pitch as if they had asked "what do you do". The recipient must FEEL their question was heard and attempted, even when part of it must be deferred to a call. A reply that skips the actual question and jumps to "here is an overview, would you be open to a call" is wrong even when it is polite. Only after you have truly engaged their question may a call be offered, and only when call_ask allows it.
 - EVERY DISTINCT QUESTION GETS A VERDICT (owner rule 2026-08-30, every SDR). When the lead asks more than one thing, dispose of each one visibly, in the order they asked: the instructed answer, an honest no ("no, we do not offer that"), or the specific gap flagged with [NEED YOUR INPUT]. Never silently drop a question because the reply is getting long, meet the 150-word cap by shortening each answer, never by omitting one. A yes/no question opens with the verdict word ("Yes," / "Not quite," / "No,"), never a preamble.
 - ONE ASK, EVER (owner rule 2026-08-17: "You're asking for a call twice, don't do that"). A draft asks for the call at most once. The two-times call ask, a general-window proposal, and the "When would be a good time for us to talk?" availability ask are three ALTERNATIVES: exactly one may appear in a draft, never two. Each fallback-ladder step REPLACES the call ask, it never adds a second ask on top. A draft containing both "Would you be open to a call" and "When would be a good time" is invalid. Never write the call-ask sentence at all when you have no times to put in it. And never write the same sentence or phrase twice anywhere in one draft. A lead who has already said yes to a call, booked one, or shared THEIR OWN booking/scheduling link has chosen the path: confirm it (for their link: say you'll grab a time on it) and make ZERO fresh asks.
@@ -2694,6 +2824,22 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
             r"|you can (?:reach|call|contact) (?:me|us) (?:on|at))\s*([+()\d][()\d\s\-]{6,}\d)",
             _fix_num, html_body)
     except Exception:  # noqa: BLE001 - a repair helper must never break drafting
+        pass
+    # Reader audit 2026-09-07 repairs - deterministic, never raise:
+    try:
+        # (a) an anchor with an empty href ("10:00 AM EDT [link: ]") is plain text
+        html_body = re.sub(r'<a\s+href=""[^>]*>(.*?)</a>', r"\1", html_body, flags=re.S | re.I)
+        # (b) "888$K+" -> "$888K+": a price typed with the sign after the digits
+        html_body = _fix_price_shapes(html_body)
+        # (c) every proposed slot reads exactly as its label ("Tuesday, 8th
+        # September at 10:00 AM CEST"), never a "Sep 8" / "8 September" rewrite
+        for _s in (slots or []):
+            _lk = str((_s or {}).get("link") or "")
+            _lb = str((_s or {}).get("label") or "")
+            if _lk and _lb:
+                html_body = re.sub(r'(<a\s+href="' + re.escape(_lk) + r'"[^>]*>)(.*?)(</a>)',
+                                   lambda m, _lb=_lb: m.group(1) + _lb + m.group(3), html_body, flags=re.S)
+    except Exception:  # noqa: BLE001
         pass
     html_body = enforce_signoff(html_body, sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
@@ -15146,7 +15292,7 @@ def _synthetic_training_avail(now_utc) -> list:
     out = []
     for d in range(8):  # tomorrow through a week out - pick_slots drops weekends itself
         day = start + _dt.timedelta(days=d)
-        for h in range(0, 24, 2):  # every 2h UTC so >=2 land in any lead's 9-17 local
+        for h in range(0, 24):  # hourly UTC (reader audit 2026-09-07: per-scenario hour offsets need it)
             out.append(day.replace(hour=h).isoformat(timespec="seconds"))
     return out
 
@@ -15768,6 +15914,14 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                     "last_outbound": "", "email_domain": email_domain}, agent, owner_hints=mem_digest)
 
     tz, tz_confident = resolve_timezone(hints, cls)
+    if not tz_confident:
+        # Reader audit 2026-09-07: 42 of 60 practice drafts proposed US
+        # Eastern times to made-up European leads, because a zero-signal lead
+        # defaults to America/New_York. A practice lead with no signal is
+        # assumed to be where the sender is.
+        _home_tz = _agent_home_timezone(agent)
+        if _home_tz:
+            tz = _home_tz
 
     primary = cls.get("primary_intent")
     try:
@@ -15794,7 +15948,21 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
         if slot_status == "ok":
             eff_lead = dict(eff_settings)
             eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
-            slots = pick_slots(avail, tz, eff_lead, now)
+            # Reader audit 2026-09-07: every practice draft offered the same
+            # "Tuesday 10:00 / 12:00" pair (earliest-slot rule on a synthetic
+            # calendar). Vary the window per scenario, deterministically.
+            import zlib as _zlib
+            _seed = _zlib.crc32(str(reply_row.get("id") or reply_row.get("reply_subject")
+                                    or reply_row.get("reply_body") or "").encode("utf-8", "ignore"))
+            _off_days, _off_hours = _seed % 4, (_seed >> 3) % 6
+            _now_dt = now if isinstance(now, _dt.datetime) else _parse_iso(now)
+            if _now_dt.tzinfo is None:
+                _now_dt = _now_dt.replace(tzinfo=_dt.timezone.utc)
+            _nb = _now_dt + _dt.timedelta(hours=20 + 24 * _off_days + _off_hours)
+            slots = pick_slots(avail, tz, eff_lead, now, not_before_utc=_nb,
+                               horizon_days_override=HORIZON_WORKING_DAYS + _off_days + 1)
+            if not slots:
+                slots = pick_slots(avail, tz, eff_lead, now)
             if not slots:
                 slot_status = "none_available"
 
@@ -18403,7 +18571,7 @@ def route_training_answer(payload):
             skipped = bool(payload.get("skipped"))
             decision_ok = None if skipped else payload.get("decision_ok")
             reply_ok = None if skipped else payload.get("reply_ok")
-            note = "" if skipped else str(payload.get("note") or "").strip()
+            note = "" if skipped else _fix_price_shapes(str(payload.get("note") or "").strip())
             scope = payload.get("scope") or "one_off"
             at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
@@ -18464,7 +18632,12 @@ def route_training_answer(payload):
             # trip); the background retrain worker kicked off further down
             # drains and merges it. scope="one_off" (or an empty note) is
             # audit-only and changes nothing but feedback_log, exactly as before.
-            if note and scope == "remember":
+            # Reader audit 2026-09-07: "hmm not sure, doesn't feel quite like
+            # us" became a standing manual rule and was echoed back as "Got it
+            # - hmm not sure". A note with no instruction in it is feedback -
+            # it still steers the redraft digest, but never the manual.
+            note_vague = bool(note) and not _note_is_actionable(note)
+            if note and scope == "remember" and not note_vague:
                 pending_merges = list(doc.get("pending_merges") or [])
                 pending_merges.append({"note": note, "source": f"training:{case_id}", "at": at})
                 doc["pending_merges"] = pending_merges
@@ -18485,8 +18658,9 @@ def route_training_answer(payload):
             # set - deterministic, so it works even though lesson_from_edit
             # rightly refuses to learn a pasted link as a writing lesson.
             captured_booking = capture_booking_link_from_feedback(agent_id, edited_body, note)
-            capture_phone_from_feedback(agent_id, str(((case_for_edit or {}).get("inbound") or {}).get("body") or ""),
-                                        edited_body, note)
+            _inb_for_phone = str(((case_for_edit or {}).get("inbound") or {}).get("body") or "")
+            captured_phone = capture_phone_from_feedback(agent_id, _inb_for_phone, edited_body, note)
+            short_phone = "" if captured_phone else short_phone_run_in_feedback(_inb_for_phone, edited_body, note)
 
             readiness = compute_readiness(doc)
             history = list(doc.get("readiness_history") or [])
@@ -18526,9 +18700,19 @@ def route_training_answer(payload):
         if captured_booking:
             learned = {"kind": "note", "pending": False,
                        "text": f"Booking link saved: {captured_booking} - every draft can now link it."}
+        elif captured_phone:
+            learned = {"kind": "note", "pending": False,
+                       "text": f"Phone number saved: {captured_phone} - every phone reply will carry it."}
+        elif short_phone:
+            learned = {"kind": "note", "pending": False,
+                       "text": (f"'{short_phone}' doesn't look like a full phone number, so we haven't used it - "
+                                "paste it with the country code and every phone reply will carry it.")}
         elif edit_is_real:
             learned = {"kind": "edit", "text": "", "pending": True,
                        "source": f"training-edit:{case_id}"}
+        elif note_vague:
+            learned = {"kind": "note", "pending": False,
+                       "text": "we'll take another pass at that one. Tell us what to change and it becomes a rule."}
         elif note and scope == "remember":
             learned = {"kind": "note", "text": note, "pending": False}
 
@@ -18673,7 +18857,7 @@ def route_training_interview(payload):
             doc = _load_training(agent_id)
             interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
             latest = interviews[-1] if interviews else None
-            if latest and _iv_unanswered(latest):
+            if latest and _iv_unanswered(latest) and not latest.get("skipped_at"):
                 # Idempotent AND partial-answer safe: an unanswered set is
                 # re-served, never re-generated (a refresh mid-questionnaire
                 # must not burn tokens or shuffle the questions under the
@@ -18735,7 +18919,7 @@ def route_training_interview(payload):
                 doc = _load_training(agent_id)
                 interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
                 latest = interviews[-1] if interviews else None
-                if latest and _iv_unanswered(latest):
+                if latest and _iv_unanswered(latest) and not latest.get("skipped_at"):
                     served = _drop_banned_interview_questions(_iv_unanswered(latest))
                     if served:
                         return 200, {"questions": served, "ready": True,
@@ -18746,6 +18930,24 @@ def route_training_interview(payload):
                 served = _drop_banned_interview_questions(questions)
                 return 200, {"questions": served, "ready": True, "asked_at": at2}
             return 200, {"questions": questions, "asked_at": at2}
+
+        if action == "skip":
+            # Reader audit 2026-09-07: a set left blank came back word-for-word
+            # on the next screen. A skipped set is consumed - the next hold
+            # gets a new one (the prefetched set, or a fresh generation).
+            with _get_training_doc_lock(agent_id):
+                doc = _load_training(agent_id, strict=True)
+                interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
+                asked = str(payload.get("asked_at") or "")
+                for iv in reversed(interviews):
+                    if asked and str(iv.get("asked_at") or "") != asked:
+                        continue
+                    if _iv_unanswered(iv):
+                        iv["skipped_at"] = at
+                    break
+                doc["interviews"] = interviews[-12:]
+                _save_training(agent_id, doc)
+            return 200, {"ok": True}
 
         if action == "prefetch_next":
             # Generate the NEXT question set now, in the background of the
@@ -18819,6 +19021,7 @@ def route_training_interview(payload):
                 for qid, ans in raw.items():
                     ans = str(ans or "").strip()[:500]
                     if ans and str(qid) in by_id:
+                        ans = _normalise_taught_answer(by_id[str(qid)], ans)
                         stored[str(qid)] = ans
                         qa_lines.append(f"Q: {by_id[str(qid)]}\nA: {ans}")
                 if not qa_lines:
@@ -19027,7 +19230,7 @@ def _append_interview_set(agent_id: str, questions_text):
         # Reuse only when the unanswered tail is still SERVABLE - the same
         # banned-shape filter the route applies at serve time (panel round 2,
         # C3b): an all-banned tail must be displaced, never returned forever.
-        served = _drop_banned_interview_questions(_iv_unanswered(latest)) if latest else []
+        served = _drop_banned_interview_questions(_iv_unanswered(latest)) if (latest and not latest.get("skipped_at")) else []
         if served:
             return served, str(latest.get("asked_at") or ""), True
         if not questions:
