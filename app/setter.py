@@ -500,6 +500,61 @@ def _note_is_actionable(note: str) -> bool:
     return True
 
 
+def _mask_short_phone_runs(note: str) -> str:
+    """Reader audit 2026-09-07: "our number is 9911" merged into the manual
+    as a standing rule ("provide our number 9911"). A 4-6 digit run offered
+    as a phone is not a number the drafter may quote - it becomes the
+    [PHONE NUMBER] placeholder in the merged note, so the manual says what
+    the drafts say until a full number is taught. Never raises."""
+    try:
+        s = str(note or "")
+        if not _PHONE_CONTEXT_RE.search(s):
+            return s
+        def _r(m):
+            digits = re.sub(r"\D", "", m.group(1))
+            return "[PHONE NUMBER]" if 3 <= len(digits) <= 6 and not re.match(r"20\d\d", digits) else m.group(0)
+        return _TAUGHT_PHONE_RE.sub(_r, s)
+    except Exception:  # noqa: BLE001
+        return str(note or "")
+
+
+_IV_FACT_LABELS = [
+    (r"\bbook", "Booking link"),
+    (r"\b(price|pricing|cost)", "Starting price we may share before a call"),
+    (r"\b(case stud|results|customer results|one.?pager)", "Results / case-study link"),
+    (r"\b(minutes|how long|length)", "Discovery call length"),
+    (r"\b(deliverable|receive|finishes)", "What the lead receives after the assessment"),
+    (r"\b(security|residency|sovereignty|compliance)", "Security / compliance page"),
+    (r"\b(phone|number)", "Phone number"),
+    (r"\b(obligation|purchase)", "Obligation after the free assessment"),
+    (r"\b(subset|part of their estate|one cloud provider)", "Running on part of the estate"),
+    (r"\b(currency|euros|usd)", "Currency shown"),
+]
+
+
+def _interview_note_to_facts(note: str) -> str:
+    """Turn the interview merge note ("Q: ... the inbox manager may send ...
+    A: ...") into first-person fact lines a draft can quote safely."""
+    out = []
+    for block in str(note or "").split("\n\n"):
+        block = block.strip()
+        if not block.startswith("Q:") or "\nA:" not in block:
+            continue
+        q, a = block.split("\nA:", 1)
+        q = q[2:].strip(); a = a.strip()
+        if not a:
+            continue
+        label = None
+        for pat, lab in _IV_FACT_LABELS:
+            if re.search(pat, q, re.I):
+                label = lab
+                break
+        if not label:
+            label = re.sub(r"\b(the inbox manager|the owner)\b", "we", q, flags=re.I).rstrip("?.:").strip()[:90]
+        out.append(f"- {label}: {a}")
+    return "\n".join(out) if out else str(note or "")
+
+
 _PRICE_SHAPE_RE = re.compile(r"(?<![\w$€£])(\d[\d,]*(?:\.\d+)?)\s*([$€£])(?:\s*([kKmM])(?![a-zA-Z]))?(\+?)")
 
 
@@ -5007,7 +5062,7 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
     save against; detail is "merged" or "appended"."""
     agent = agent or {}
     agent_id = agent.get("id")
-    note = str(note or "").strip()
+    note = _mask_short_phone_runs(str(note or "").strip())
     old = _agent_instructions(agent)
     if not agent_id:
         return False, old, "agent has no id"
@@ -5017,7 +5072,14 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
     at = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
 
     def _append_fallback():
-        line = f"Training note ({at[:10]}): {note}"
+        # Reader audit 2026-09-07: an interview set that fell back to append
+        # put the raw "Q: ... the inbox manager may send ... A: ..." block
+        # into the quotable manual (third-person text a draft can lift).
+        # Interview notes append as first-person fact lines instead.
+        if source == "interview" and note.startswith("The owner answered"):
+            line = f"Taught facts ({at[:10]}):\n" + _interview_note_to_facts(note)
+        else:
+            line = f"Training note ({at[:10]}): {note}"
         return (old + "\n\n" + line).strip() if old else line
 
     _CASE_SPECIFIC_TOKENS = ("this reply", "this lead", "this case")
@@ -5029,14 +5091,21 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
         key = _KEYS.get("OPENAI_API_KEY")
         if key:
             payload = {"current_instructions": old, "correction": note}
-            r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
-                     {"Authorization": f"Bearer {key}"},
-                     {"model": OPENAI_MODEL,
-                      "messages": [{"role": "system", "content": MERGE_INSTRUCTIONS_SYSTEM},
-                                  {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
-                      "response_format": {"type": "json_schema", "json_schema": {
-                          "name": "setter_instructions_merge", "strict": True,
-                          "schema": MERGE_INSTRUCTIONS_SCHEMA}}})
+            r = None
+            for _attempt in range(2):  # reader audit 2026-09-07: one retry before the append fallback (a 17k-char rewrite times out now and then)
+                try:
+                    r = _HTTP("POST", "https://api.openai.com/v1/chat/completions",
+                             {"Authorization": f"Bearer {key}"},
+                             {"model": OPENAI_MODEL,
+                              "messages": [{"role": "system", "content": MERGE_INSTRUCTIONS_SYSTEM},
+                                          {"role": "user", "content": json.dumps(payload, ensure_ascii=False)}],
+                              "response_format": {"type": "json_schema", "json_schema": {
+                                  "name": "setter_instructions_merge", "strict": True,
+                                  "schema": MERGE_INSTRUCTIONS_SCHEMA}}})
+                except Exception:  # noqa: BLE001
+                    r = None
+                if isinstance(r, dict) and not r.get("error"):
+                    break
             if isinstance(r, dict) and not r.get("error"):
                 data = json.loads(r["choices"][0]["message"]["content"])
                 candidate = str(data.get("instructions") or "").strip()
