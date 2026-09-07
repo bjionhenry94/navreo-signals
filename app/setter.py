@@ -2177,8 +2177,28 @@ def lint_draft(html: str, ctx: dict):
     _asset_yes = (instruction_urls or ctx.get("booking_link")) \
         and re.search(r"\b(yes please|please send|send it( over)?|go ahead|happy to (?:see|receive|take a look)|sure,? send|send (?:me )?(?:some )?(?:more )?(?:information|info|details))\b", _lead_words, re.I) \
         and re.search(r"\b(send|share)\b", str(ctx.get("thread_text") or ""), re.I)
+    # CC REQUEST (reader audit 2026-09-07 loop 5): "send it over and cc our ops
+    # lead" was silently dropped in one of two cases.
+    if re.search(r"\b(?:cc|copy in|copy|loop in|include)\s+(?:our|my|the)\s+\w+", _lead_words, re.I) \
+            and not re.search(r"\b(?:cc|copy|include|loop in|add)\b", _TAG_RE.sub(" ", text), re.I):
+        return False, ("The lead asked you to cc or include a colleague - say you will (and ask for their address "
+                       "if it was not given); never drop a cc request.")
+    # BOUNCED QUESTION (loop 5): "should I include our cloud lead?" answered with
+    # "would you like me to include our cloud lead?" - the same question, rephrased.
+    _stop2 = {"should", "would", "could", "about", "there", "which", "where", "their", "these", "those", "other",
+              "with", "from", "that", "this", "have", "need", "what", "when", "does", "will", "also", "your",
+              "like", "include", "want", "please", "call", "join", "think"}
+    for _q in _lead_qs:
+        _kw = {w for w in re.findall(r"[a-z][a-z\-]{3,}", _q.lower()) if w not in _stop2}
+        for _p in re.split(r"<br\s*/?>|</div>|</p>", text):
+            _pt = _TAG_RE.sub(" ", _p).strip()
+            if _pt.endswith("?") and len(_kw) >= 2 and len(_kw & set(re.findall(r"[a-z][a-z\-]{3,}", _pt.lower()))) >= 2 \
+                    and not re.search(r"\b(?:would you be open|would .* work|work for you|suit you)\b", _pt, re.I):
+                return False, ("The draft hands the lead's own question back to them ('" + _pt[:70] + "') - answer it "
+                               "with a recommendation instead of asking it.")
     if _asset_yes:
         _hrefs = [h for h in re.findall(r'href="([^"]+)"', text) if "calendly" not in h.lower()]
+        _hrefs += [u for u in re.findall(r"(?<![\"'=>])https?://[^\s<\"']+", _TAG_RE.sub(" ", text)) if "calendly" not in u.lower()]
         if _hrefs and all(re.match(r"^https?://[^/]+/?$", h) for h in _hrefs):
             return False, ("The lead said yes to what we offered to send and the only link is the bare homepage - send the "
                            "real page (results / overview) under its real name, or say plainly we do not have that document.")
@@ -3160,6 +3180,7 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         pass
     html_body = _scrub_control_chars(html_body)  # last word on control bytes, whatever path produced them
     html_body = enforce_signoff(html_body, sender_first)
+    html_body = enforce_taught_signoff(html_body, _taught_signoff(agent), sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
 
 
@@ -3243,6 +3264,50 @@ def enforce_signoff(html: str, sender_first: str) -> str:
             return html
         return html[:m.start(1)] + sender_first + html[m.end(1):]
     except Exception:  # noqa: BLE001 - a sign-off guard must never sink a draft
+        return html
+
+
+_TAUGHT_SIGNOFF_RE = re.compile(
+    r"(?:always\s+)?(?:end|close|sign(?:\s+off)?)\s+(?:every\s+(?:reply|email|message)\s+)?with\s+['\"\u2018\u201c]([^'\"\u2019\u201d\n]{3,40})['\"\u2019\u201d]",
+    re.IGNORECASE)
+
+
+def _taught_signoff(agent: dict) -> str:
+    """Reader audit 2026-09-07 loop 5: the founder taught "Always end with
+    'Speak soon, Marton'" and 28 of 60 drafts still closed with a bare
+    "Marton" - the rule lived only as prose. Read the taught closing line from
+    the manual and the standing rules; "" when none is taught."""
+    try:
+        texts = [str(_agent_instructions(agent) or "")]
+        for e in (agent or {}).get("instruction_edits") or []:
+            texts.append(str((e or {}).get("rule") or (e or {}).get("text") or ""))
+        for t in texts:
+            m = _TAUGHT_SIGNOFF_RE.search(t)
+            if m:
+                return m.group(1).strip()
+        return ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def enforce_taught_signoff(html: str, taught: str, sender_first: str) -> str:
+    """When a closing line was taught, a draft that ends on the bare sender
+    name (the shape enforce_signoff guarantees) ends on the taught line
+    instead. A draft that already carries it is left alone. Never raises."""
+    try:
+        taught = str(taught or "").strip()
+        if not taught or not html or taught.lower() in html.lower():
+            return html
+        m = _SIGNOFF_TAIL_RE.search(html)
+        if not m:
+            return html
+        tail = m.group(1).strip()
+        if not tail or not _NAME_LIKE_RE.match(tail) or tail.lower() in _CLOSING_WORDS:
+            return html
+        if sender_first and tail.lower() != str(sender_first).strip().lower():
+            return html
+        return html[:m.start(1)] + taught + html[m.end(1):]
+    except Exception:  # noqa: BLE001
         return html
 
 
