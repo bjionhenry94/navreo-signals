@@ -936,7 +936,7 @@ function markFirstIvDone() {
 function firstInterviewBuildingHtml() {
   return `
     <div class="empty-flow">
-      <p>Before we write anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
+      <p>Before we write anything: a few quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
       <div class="build-notice" style="margin-top:14px;padding:14px 16px;border:1px solid var(--line,#e5e2dc);border-radius:10px;background:var(--card,#faf9f7);color:var(--ink-soft,#6b6b6b);font-weight:500">
         Training is still being built. Come back later.
       </div>
@@ -993,13 +993,15 @@ function mountFirstInterviewForm(iv) {
   const el = document.getElementById("trainApp");
   el.innerHTML = `
     <div class="empty-flow">
-      <p>Before you rate anything: five quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
+      <p>Before you rate anything: a few quick questions about your offer. Your answers shape every reply we draft - then we'll show you conversations and you tell us if we got them right. Nothing here ever emails anyone.</p>
       <div id="ivFirstHost"></div>
     </div>`;
   const host = document.getElementById("ivFirstHost");
   if (!host) return;
+  const _ivN = ((iv && iv.questions) || []).length;
   host.innerHTML = interviewFormHtml(iv, {
-    title: "Five quick questions",
+    // Reader audit 2026-09-07: the heading said "Five" over three boxes.
+    title: `${countWord(_ivN)} quick question${_ivN === 1 ? "" : "s"}`,
     sub: "One line each - we use these in every reply we draft for you.",
     cta: "Save answers & start rating",
     skip: "Skip - take me to the scenarios",
@@ -1039,7 +1041,7 @@ function mountFirstInterviewForm(iv) {
     }
   });
   const skipBtn = document.getElementById("ivSkipBtn");
-  if (skipBtn) skipBtn.addEventListener("click", () => { if (!firstIvBusy) proceed(); });
+  if (skipBtn) skipBtn.addEventListener("click", () => { if (!firstIvBusy) { skipInterviewSet(iv); proceed(); } });
 }
 
 /* A round begins whenever the stream starts with no round in progress: at
@@ -1345,6 +1347,10 @@ async function startReview() {
   showError((res.data && res.data.message) || "Couldn't start the review.");
 }
 
+function isRated(caseId) {
+  const a = ANSWERS[caseId];
+  return !!a && a.skipped !== true && a.decision_ok !== undefined && a.decision_ok !== null;
+}
 function isAnswered(caseId) {
   const a = ANSWERS[caseId];
   // A skip counts as handled: it leaves the stream (never re-shown) but the
@@ -2147,7 +2153,7 @@ async function maybeOfferFillerQuestions() {
     const sb = document.getElementById("ivSubmitBtn");
     const sk = document.getElementById("ivSkipBtn");
     if (sb) sb.addEventListener("click", () => submitInterviewAnswers({ questions: qs }, backToBar));
-    if (sk) sk.addEventListener("click", backToBar);
+    if (sk) sk.addEventListener("click", () => { skipInterviewSet({ questions: qs }); backToBar(); });
   } catch { /* filler is best-effort - the timer stands */ }
 }
 function renderShortRoundWait() {
@@ -2186,6 +2192,7 @@ function growRoundIfShort() {
    round builds, so the wait does double duty. Always skippable; answers
    merge into the agent's brain through the same correction door as
    everything else and ride the digest into the very next drafts. */
+function countWord(n) { return ["No", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight"][n] || String(n); }
 function interviewFormHtml(iv, opts) {
   opts = opts || {};
   const qs = (iv && iv.questions) || [];
@@ -2205,6 +2212,15 @@ function interviewFormHtml(iv, opts) {
     </div>`;
 }
 
+function skipInterviewSet(iv) {
+  // Reader audit 2026-09-07: a set left blank was re-asked word for word on
+  // the next screen. Tell the server the set was skipped (fire-and-forget).
+  try {
+    const body = { agent_id: selectedAgentId, action: "skip", asked_at: (iv && iv.asked_at) || "" };
+    if (SHARE_MODE) body.share = SHARE_TOKEN;
+    fetch("/api/setter/training/interview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), keepalive: true }).catch(() => {});
+  } catch { /* best effort */ }
+}
 async function fetchInterviewQuestions(opts) {
   opts = opts || {};
   const body = { agent_id: selectedAgentId, action: "questions" };
@@ -2423,7 +2439,7 @@ function mountInterviewForm() {
       const link = document.createElement("a");
       link.className = "db-review"; link.id = "doneReviewLink"; link.setAttribute("role", "button");
       const { right: _r, total: _t } = roundScore();
-      link.textContent = _t && _r < _t ? "Show what we got wrong" : "Review rated replies";
+      link.textContent = "See what we've learned"; // reader audit 2026-09-07: "Show what we got wrong" opened a then-vs-now review that included the ones marked right
       link.addEventListener("click", () => startReview());
       if (strip) strip.appendChild(link);
       rb.remove();
@@ -2469,6 +2485,7 @@ function mountInterviewForm() {
     }
     if (IV_GATE_MODE && ![...document.querySelectorAll("#ivForm .iv-q input")].some((i) => i.value.trim())) {
       // Nothing typed: the single button IS the skip (timer only, never these questions again).
+      skipInterviewSet(IV_CURRENT);
       ivDismissedForRound = currentRoundNum(); IV_TYPED = {}; host.innerHTML = "";
       FILLER_TRIED = true; startNextRoundOrGenerate(); return;
     }
@@ -2482,6 +2499,7 @@ function mountInterviewForm() {
   });
   const skipBtn = document.getElementById("ivSkipBtn");
   if (skipBtn) skipBtn.addEventListener("click", () => {
+    skipInterviewSet(IV_CURRENT);
     ivDismissedForRound = currentRoundNum();
     IV_TYPED = {};
     host.innerHTML = "";
@@ -2566,7 +2584,7 @@ function renderReview() {
 }
 
 function renderReviewCard(c) {
-  const campaignName = campaignMap[c.campaign_id] || (c.campaign_id ? `Campaign ${c.campaign_id}` : "Unknown campaign");
+  const campaignName = campaignMap[c.campaign_id] || (c.campaign_id ? `Campaign ${c.campaign_id}` : "Practice scenario");
   const category = c.category || "Uncategorised";
   const inbound = c.inbound || {};
   const inboundBody = msgText(inbound.body) || "<i>No message text.</i>";
@@ -2601,12 +2619,12 @@ function renderReviewCard(c) {
       <div class="review-compare">
         <div class="review-pane">
           <div class="review-pane-head"><span class="review-pane-lab">Back then</span></div>
-          <div class="tr-call ${back.cls}">${esc(back.text)}</div>
+          ${SHARE_MODE ? "" : `<div class="tr-call ${back.cls}">${esc(back.text)}</div>`}
           ${c.draft_html ? `<div class="qc-draft">${c.draft_html}</div>` : `<div class="small">No draft was produced.</div>`}
         </div>
         <div class="review-pane">
           <div class="review-pane-head"><span class="review-pane-lab">With today's brain</span></div>
-          <div class="tr-call ${now_.cls}">${esc(now_.text)}</div>
+          ${SHARE_MODE ? "" : `<div class="tr-call ${now_.cls}">${esc(now_.text)}</div>`}
           ${recheck.draft_html ? `<div class="qc-draft">${recheck.draft_html}</div>` : `<div class="small">No draft was produced.</div>`}
         </div>
       </div>
@@ -2949,7 +2967,7 @@ function renderCase(unanswered, i) {
   const total = unanswered.length;
   const answeredCount = CASES.filter((x) => isAnswered(x.id)).length;
 
-  const campaignName = campaignMap[c.campaign_id] || (c.campaign_id ? `Campaign ${c.campaign_id}` : "Unknown campaign");
+  const campaignName = campaignMap[c.campaign_id] || (c.campaign_id ? `Campaign ${c.campaign_id}` : "Practice scenario");
   const category = c.category || "Uncategorised";
 
   const outreach = c.original_outreach || {};
@@ -2973,8 +2991,13 @@ function renderCase(unanswered, i) {
   const progressLine = SHARE_MODE
     ? (() => {
         const ids = ROUND_IDS || [];
-        const ratedInRound = ids.filter((id) => isAnswered(id)).length;
-        return `Round ${currentRoundNum()} &middot; rated ${ratedInRound} of ${ids.length || total}`;
+        // Reader audit 2026-09-07: "rated 0 of 1" then "rated 1 of 3", and a
+        // skip counted as a rating. Count real ratings only, and say "of 3"
+        // whenever the round can still fill to ROUND_SIZE from the pool.
+        const ratedInRound = ids.filter((id) => isRated(id)).length;
+        const spare = currentUnanswered().filter((c) => !ids.includes(c.id)).length;
+        const roundTotal = Math.max(ids.length, Math.min(ROUND_SIZE, ids.length + spare));
+        return `Round ${currentRoundNum()} &middot; rated ${ratedInRound} of ${roundTotal || total}`;
       })()
     : `Rated ${answeredCount} of ${CASES.length} in this batch`;
   // Portal thread view (owner founding case 2026-08-17): when the case
@@ -3301,6 +3324,7 @@ const IN_FLIGHT_ANSWERS = new Set();
        same "find this case id in the fresh unanswered list" logic the
        retrain poll already relies on). */
 function submitAndAdvance(c) {
+  LEARNED_CHIP = null; // reader audit 2026-09-07: a "Got it" chip stayed pinned for six cards; each teach shows on the next card only
   const p = pendingFor(c.id);
   if (SHARE_MODE) {
     if (!p.verdict) { showNudge("Pick Correct or Needs work first."); return; }
@@ -3521,6 +3545,7 @@ function stopChipPoll() {
    score; it only takes the card out of the queue. Mirrors submitAndAdvance's
    optimistic advance + background POST, with an undo on failure. */
 function skipAndAdvance(c) {
+  LEARNED_CHIP = null;
   if (IN_FLIGHT_ANSWERS.has(c.id)) return;
   clearError();
   hideNudge();
