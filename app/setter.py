@@ -1986,6 +1986,7 @@ _LINT_PRICE_RE = re.compile(
 _LINT_PRICE_ASK_RE = re.compile(
     r"how much|what(?:'s| is| are| does| would)?[^.?!\n]{0,40}\b(?:price|pricing|cost|fee|fees|charge)s?\b"
     r"|\b(?:your|the) (?:price|pricing|fees?|rates?)\b|price (?:range|indication|point)|\bpricing\b|\bcost\?", re.I)
+_LINT_NOT_PRICE_RE = re.compile(r"\bhow much (?:time|effort|work|of (?:our|your|their) time|access|involvement|bandwidth)\b", re.IGNORECASE)
 
 
 def _lint_price_key(v: str) -> str:
@@ -2119,7 +2120,8 @@ def lint_draft(html: str, ctx: dict):
     # carried no price at all). Quoted outreach is stripped first: our own
     # emails talk about "cloud cost" on every line.
     _lead_words = _strip_quoted(str(ctx.get("thread_text") or ""))[:600]
-    _lead_asks_price = bool(_LINT_PRICE_ASK_RE.search(_lead_words))
+    _lead_asks_price = bool(_LINT_PRICE_ASK_RE.search(_lead_words)) and not (
+        _LINT_NOT_PRICE_RE.search(_lead_words) and not re.search(r"\b(price|pricing|cost|\$|€|£|fee|budget)\b", _lead_words, re.I))  # "how much time" is not a price ask (reader audit loop 5)
     # ANSWER-THE-QUESTION (live 2026-09-06: "who should I loop in on our
     # side? what's the usual next step?" got two times and nothing else).
     # When the lead's own words carry a real question (not just "worth a
@@ -2196,7 +2198,7 @@ def lint_draft(html: str, ctx: dict):
                     and not re.search(r"\b(?:would you be open|would .* work|work for you|suit you)\b", _pt, re.I):
                 return False, ("The draft hands the lead's own question back to them ('" + _pt[:70] + "') - answer it "
                                "with a recommendation instead of asking it.")
-    if _asset_yes:
+    if _asset_yes and re.search(r"\b(breakdown|case stud|results|write-?up|one-?pager|checklist|summary|pdf|deck|report)\b", _lead_words, re.I):
         _hrefs = [h for h in re.findall(r'href="([^"]+)"', text) if "calendly" not in h.lower()]
         _hrefs += [u for u in re.findall(r"(?<![\"'=>])https?://[^\s<\"']+", _TAG_RE.sub(" ", text)) if "calendly" not in u.lower()]
         if _hrefs and all(re.match(r"^https?://[^/]+/?$", h) for h in _hrefs):
@@ -2284,9 +2286,12 @@ def lint_draft(html: str, ctx: dict):
                            ") - acknowledge it: accept it, or open by naming it as the "
                            "time you can't make.")
     if ctx.get("slot_status") == "ok" and not (
-            ctx.get("call_ask") == "avoid" and ctx.get("lead_proposed_time")):
+            ctx.get("call_ask") == "avoid" and ctx.get("lead_proposed_time")) \
+            and not _ASK_OUR_BOOKING_OR_PHONE_RE.search(_lead_words):
         # (skipped for a lead-proposed time: an ACCEPT reply legitimately
-        # names only the slot(s) that match the lead's own window)
+        # names only the slot(s) that match the lead's own window; and for a
+        # self-serve phone/booking ask, where the rule forbids the two times -
+        # reader audit 2026-09-07 loop 5: that contradiction failed every phone card)
         for link in (ctx.get("slot_links") or []):
             if link and link not in text:
                 return False, "The draft is missing one of the suggested call times."
@@ -3191,6 +3196,22 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
                 and not re.search(r"\+?\d[\d\s().\-]{6,}\d", _plain2):
             _sig = _SIGNOFF_TAIL_RE.search(html_body)
             _line = ('<div>If it is easier, grab a slot that suits you here: <a href="' + _bl2 + '">see my availability</a>.</div><br>')
+            html_body = (html_body[:_sig.start()] + _line + html_body[_sig.start():]) if _sig else (html_body + "<br>" + _line)
+        # Reader audit loop 5: sentences the model keeps producing after three lint
+        # retries - a bracket placeholder it invented, "You will be speaking with",
+        # a country code glued to the phone placeholder, an em dash.
+        html_body = re.sub(r"<div>[^<]*\[(?:day and time|day|time|name|date)\][^<]*</div>(?:<br>)?", "", html_body, flags=re.I)
+        html_body = re.sub(r"[^.<>]*\[(?:day and time|day|time|name|date)\][^.<>]*\.\s*", "", html_body, flags=re.I)
+        html_body = re.sub(r"\s*You(?:'|\u2019)?ll be speaking with [^.<]*\.|\s*You will be speaking with [^.<]*\.", "", html_body, flags=re.I)
+        html_body = re.sub(r"\+\d{1,3}\s*\[PHONE NUMBER\]", "[PHONE NUMBER]", html_body)
+        html_body = html_body.replace(" \u2014 ", ", ").replace("\u2014", ", ")
+        _plain2 = _TAG_RE.sub(" ", html_body)
+        _fit = [s_ for s_ in (slots or []) if (s_ or {}).get("lead_fit") and (s_ or {}).get("label")]
+        if _fit and not any(str(s_["label"]) in _plain2 for s_ in _fit):
+            _sig = _SIGNOFF_TAIL_RE.search(html_body)
+            _line = "<div>I have pencilled in " + " or ".join(
+                ('<a href="' + s_["link"] + '">' + s_["label"] + "</a>") if s_.get("link") else s_["label"] for s_ in _fit[:2]
+            ) + " - just confirm and it is in the diary.</div><br>"
             html_body = (html_body[:_sig.start()] + _line + html_body[_sig.start():]) if _sig else (html_body + "<br>" + _line)
         # "I'll send a calendar invite" is a promise nobody keeps - the link is the invite.
         if _bl2 and re.search(r"\bI(?:'|\u2019)?ll send (?:you )?(?:a |the )?(?:calendar )?invite\b", _plain2, re.I):
