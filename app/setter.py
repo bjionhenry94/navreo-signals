@@ -577,6 +577,38 @@ def _agent_home_timezone(agent: dict) -> str:
         return ""
 
 
+def _training_lead_timezone(hints: dict, cls: dict, agent: dict):
+    """Training-only timezone: the live rule (zero signal -> US Eastern)
+    stands for real leads, but a made-up practice lead with no signal is
+    assumed to be where the SENDER is (reader audit 2026-09-07: the redraft
+    path kept proposing 9:00 AM EDT to a Dutch company's practice prospects
+    after the case-build path had been fixed). Returns (tz, confident)."""
+    tz, confident = resolve_timezone(hints, cls)
+    if not confident:
+        home = _agent_home_timezone(agent)
+        if home:
+            tz = home
+    return tz, confident
+
+
+def _training_pick_varied_slots(avail: list, tz: str, eff_lead: dict, now, seed_text: str) -> list:
+    """Training-only slot pick: the earliest-slot rule on a synthetic
+    calendar gave every practice draft the identical pair (50 of 60 drafts
+    said "Tuesday 10:00 / 12:00"). Shift the window per scenario,
+    deterministically from the scenario's own text; fall back to the plain
+    pick when the shifted window is empty. Never invents a time."""
+    import zlib as _zlib
+    seed = _zlib.crc32(str(seed_text or "").encode("utf-8", "ignore"))
+    off_days, off_hours = seed % 4, (seed >> 3) % 6
+    now_dt = now if isinstance(now, _dt.datetime) else _parse_iso(now)
+    if now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=_dt.timezone.utc)
+    nb = now_dt + _dt.timedelta(hours=20 + 24 * off_days + off_hours)
+    slots = pick_slots(avail, tz, eff_lead, now, not_before_utc=nb,
+                       horizon_days_override=HORIZON_WORKING_DAYS + off_days + 1)
+    return slots or pick_slots(avail, tz, eff_lead, now)
+
+
 def _norm_url(url: str) -> str:
     """Lowercase, trailing-slash/punctuation-stripped form of a URL, so the
     same link written with or without a trailing slash, or with trailing
@@ -17735,7 +17767,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                         "last_outbound": "", "email_domain": ""}, agent_snapshot, owner_hints=digest)
 
         hints = {"phone": _extract_phone(body), "body": body}
-        tz, tz_confident = resolve_timezone(hints, cls)
+        tz, tz_confident = _training_lead_timezone(hints, cls, agent_snapshot)
 
         primary = cls.get("primary_intent")
         try:
@@ -17757,7 +17789,8 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
             if slot_status == "ok":
                 eff_lead = dict(eff_settings)
                 eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
-                slots = pick_slots(avail, tz, eff_lead, now)
+                slots = _training_pick_varied_slots(avail, tz, eff_lead, now,
+                                                    "|".join(str(x or "") for x in (case.get("id"), subject, body)))
                 if not slots:
                     slot_status = "none_available"
 
@@ -17887,7 +17920,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                         "last_outbound": "", "email_domain": ""}, agent_snapshot, owner_hints=digest)
 
         hints = {"phone": _extract_phone(body), "body": body}
-        tz, tz_confident = resolve_timezone(hints, cls)
+        tz, tz_confident = _training_lead_timezone(hints, cls, agent_snapshot)
 
         primary = cls.get("primary_intent")
         try:
@@ -17909,7 +17942,8 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
             if slot_status == "ok":
                 eff_lead = dict(eff_settings)
                 eff_lead["_lead"] = {"first_name": "", "last_name": "", "email": ""}
-                slots = pick_slots(avail, tz, eff_lead, now)
+                slots = _training_pick_varied_slots(avail, tz, eff_lead, now,
+                                                    "|".join(str(x or "") for x in (case.get("id"), subject, body)))
                 if not slots:
                     slot_status = "none_available"
 
