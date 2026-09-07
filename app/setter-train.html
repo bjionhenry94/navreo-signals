@@ -1792,7 +1792,7 @@ function renderRoundDone() {
     ? `
     <div class="round-strip" id="roundStrip">
       <span class="rs-check">✓</span>
-      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${(ROUND_START_DISP != null && ROUND_START_DISP > 0 && disp > ROUND_START_DISP) ? `+${disp - ROUND_START_DISP} toward your 100 · ` : ""}${total && right < total ? `the ${total - right} you corrected ${total - right === 1 ? "is" : "are"} in this retrain` : `all ${total || "three"} are in this retrain`}</span>
+      <span class="rs-text">${total ? `Round ${roundNum}: ${right} of ${total} right` : `Round ${roundNum} done`}</span><span class="rs-sub">${(ROUND_START_DISP != null && ROUND_START_DISP > 0 && disp > ROUND_START_DISP) ? `+${disp - ROUND_START_DISP} toward your 100 · ` : ""}${(() => { const _ids = ROUND_IDS || []; const _corr = _ids.filter((id) => ANSWERS[id] && ANSWERS[id].reply_ok === false).length; const _sk = _ids.filter((id) => ANSWERS[id] && ANSWERS[id].skipped === true).length; return _corr ? `the ${_corr} you corrected ${_corr === 1 ? "is" : "are"} in this retrain` : (_sk ? `${_sk} skipped - nothing new to learn from ${_sk === 1 ? "it" : "them"}` : `all ${total || "three"} are in this retrain`); })()}</span>
       <span class="db-msg" id="doneMsg" hidden>${msg}</span>
     </div>
     <div id="interviewHost"></div>
@@ -2651,7 +2651,7 @@ function renderReviewCard(c) {
         <div class="review-pane">
           <div class="review-pane-head"><span class="review-pane-lab">Back then</span></div>
           ${SHARE_MODE ? "" : `<div class="tr-call ${back.cls}">${esc(back.text)}</div>`}
-          ${c.draft_html ? `<div class="qc-draft">${c.draft_html}</div>` : `<div class="small">No draft was produced.</div>`}
+          ${(ans.rated_draft_html || c.draft_html) ? `<div class="qc-draft">${ans.rated_draft_html || c.draft_html}</div>` : `<div class="small">No draft was produced.</div>`}
         </div>
         <div class="review-pane">
           <div class="review-pane-head"><span class="review-pane-lab">With today's brain</span></div>
