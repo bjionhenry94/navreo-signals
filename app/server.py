@@ -22971,7 +22971,12 @@ def outlook_reply_caps(mode: str = "preview") -> dict:
 
 
 _GRADES_CACHE = {"data": None, "ts": 0.0, "computing": False}
-_GRADES_TTL_S = 600
+_GRADES_TTL_S = 3 * 3600   # was 600. Inputs are DAILY mailbox_stats_daily snapshots,
+# so the map cannot change between runs - yet a 10-min TTL recomputed all three
+# provider previews (~230 chunk reads, ~23 MB) every expiry for as long as the
+# Mailboxes hub was open: 06:10-08:50 UTC on 2026-09-07 = ~18 identical
+# recomputes, ~400 MB (egress check-in). 3 h keeps grades <=3 h behind the
+# 04:30 stats sync; the restore sweep still recomputes on its own when stale.
 _GRADES_LOCK = threading.Lock()
 
 
