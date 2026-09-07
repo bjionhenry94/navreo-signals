@@ -519,17 +519,19 @@ def _mask_short_phone_runs(note: str) -> str:
 
 
 _IV_FACT_LABELS = [
-    (r"\bphone\b", "Phone number"),  # first: "instead of booking a call, which phone number" is a phone question
-    (r"\bbook", "Booking link"),
-    (r"\b(price|pricing|cost)", "Starting price we may share before a call"),
-    (r"\b(case stud|results|customer results|one.?pager)", "Results / case-study link"),
-    (r"\b(minutes|how long|length)", "Discovery call length"),
-    (r"\b(deliverable|receive|finishes)", "What the lead receives after the assessment"),
-    (r"\b(security|residency|sovereignty|compliance)", "Security / compliance page"),
-    (r"\b(url|link|pdf|video|one.?pager|asset|breakdown|sample|example)", "Link we may send"),
-    (r"\b(obligation|purchase)", "Obligation after the free assessment"),
-    (r"\b(subset|part of their estate|one cloud provider)", "Running on part of the estate"),
-    (r"\b(currency|euros|usd)", "Currency shown"),
+    # order matters: specific facts first, the generic "book"/"link" catch-alls last
+    # (reader audit 2026-09-07 loop 4: "Booking link: 20 mins" came from "when booking" in a call-length question)
+    (r"\bphone\b", "Phone number"),
+    (r"\b(minutes|how long|length|duration)\b", "Discovery call length"),
+    (r"\b(price|pricing|cost)\b", "Starting price we may share before a call"),
+    (r"\b(deliverable|receive|finishes|hand over|handed over)\b", "What the lead receives after the assessment"),
+    (r"\b(obligation|purchase|commit)\b", "Obligation after the free assessment"),
+    (r"\b(subset|part of their estate|one cloud provider|one provider)\b", "Running on part of the estate"),
+    (r"\b(currency|euros|usd)\b", "Currency shown"),
+    (r"\b(security|residency|sovereignty|compliance)\b", "Security / compliance page"),
+    (r"\b(case stud|results|customer results|one.?pager|breakdown|sample|example)", "Results / case-study link"),
+    (r"\b(booking link|book a call|schedul|calendly)", "Booking link"),
+    (r"\b(url|link|pdf|video|asset)\b", "Link we may send"),
 ]
 
 
@@ -5361,6 +5363,13 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
     # caller can now say so instead of reporting it complete.
     conflicts = _find_instruction_conflicts(new_text, note)
     remaining = list(conflicts or [])
+    # Reader audit 2026-09-07 (loop 4): the model cleanup after an interview
+    # APPEND rewrote a founder sentence into "...'we already do this' or : a
+    # PDF report plus a link...". Appended fact lines do not conflict with
+    # anything; skip the cleanup pass for them (the deterministic excision
+    # below still runs).
+    if source == "interview" and how.startswith("appended"):
+        remaining = []
     if remaining:
         cleaned = None
         try:
