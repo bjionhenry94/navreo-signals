@@ -1337,7 +1337,24 @@ async function startReview() {
   }
   clearError();
   const genStatus = res.data && res.data.status;
-  if (genStatus === "started" || genStatus === "already_running" || genStatus === "queued") {
+  if (genStatus === "already_running") {
+    // Reader audit 2026-09-07 (loop 3): a retrain still held the lock, the
+    // recheck never started, and "Re-running your rated scenarios…" spun
+    // for minutes. Say what is happening and retry until the lock frees.
+    reviewInFlight = false;
+    restores.forEach((r) => r());
+    startReview._retries = (startReview._retries || 0) + 1;
+    if (startReview._retries <= 36) {
+      const r2 = markReviewButtonsBusy("Still retraining on what you just taught - the review opens right after (about a minute)…");
+      setTimeout(() => { r2.forEach((f) => f()); startReview(); }, 5000);
+    } else {
+      startReview._retries = 0;
+      showError("Still retraining - try the review again in a minute.");
+    }
+    return;
+  }
+  startReview._retries = 0;
+  if (genStatus === "started" || genStatus === "queued") {
     reviewPollRestores = restores;
     startReviewPoll(); // reviewInFlight stays true until endReviewPoll() (success, failure, or timeout)
     return;
@@ -1389,7 +1406,7 @@ function applyReadiness(r, opts) {
 
 function animateNumber(el, from, to, duration) {
   from = Number(from) || 0; to = Number(to) || 0;
-  if (from === to) { el.textContent = String(to); return; }
+  if (from === to || document.hidden) { el.textContent = String(to); return; } // a hidden tab never runs the count-up - show the number
   const start = performance.now();
   function step(now) {
     const t = Math.min(1, (now - start) / duration);
