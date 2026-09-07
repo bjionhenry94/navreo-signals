@@ -1087,6 +1087,18 @@ function beginRoundIfNeeded() {
         view = "done";
         return;
       }
+      // Reader audit 2026-09-07 (loop 4): a reload right after "Start round
+      // N" abandoned that round when a retrain had just made its cards
+      // non-fresh - the restore fell through to a NEW round. Keep the saved
+      // round and hold until its cards are redrafted (swap-in / fallback
+      // tiers apply as on any hold).
+      if (restored.some((id) => !isAnswered(id))) {
+        ROUND_IDS = restored;
+        try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
+        startShortRoundPoll();
+        view = "shortwait";
+        return;
+      }
     }
   }
   // Cap the round at ROUND_SIZE (owner ruling 2026-08-20): a backlog of
@@ -3492,7 +3504,7 @@ function submitAndAdvance(c) {
       const learned = res.data.learned;
       let taught = false;
       if (learned) {
-        LEARNED_CHIP = { ...learned };
+        LEARNED_CHIP = { ...learned, since: Date.now() };
         bumpLastFeedbackAt(res.data.at || "");
         taught = true;
         renderLearnedChip();
@@ -3548,7 +3560,8 @@ function renderLearnedChipHtml() {
   if (!SHARE_MODE || !LEARNED_CHIP) return "";
   const chip = LEARNED_CHIP;
   if (chip.pending) {
-    return `<div class="learned-chip pending"><span class="lc-ico">✍️</span><span>Learning from your version…</span></div>`;
+    const _slow = chip.since && (Date.now() - chip.since) > 20000; // reader audit 2026-09-07 loop 4: the chip sat 30s+ with no sign of life
+    return `<div class="learned-chip pending"><span class="lc-ico">✍️</span><span>${_slow ? "Still learning from your version - it lands within a minute; the next replies already follow it." : "Learning from your version…"}</span></div>`;
   }
   const text = String(chip.text || "").trim();
   if (!text) return "";
