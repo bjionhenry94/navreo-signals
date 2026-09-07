@@ -682,6 +682,13 @@ _PROPOSED_TIME_RE = re.compile(
     r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
 
 
+_MONTHS = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9, "sept": 9,
+           "oct": 10, "nov": 11, "dec": 12}
+_PROPOSED_DATE_RE = re.compile(
+    r"\b(\d{1,2})(?:st|nd|rd|th)?\s+(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\.?"
+    r"(?:\s+\d{4})?[^.\n?]{0,25}?\b(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
+
+
 def _lead_proposed_slot_isos(text: str, tz: str, now_dt) -> list:
     """"Tuesday at 09:30 CET" / "Thu 3pm" -> the next such moment (lead-local,
     at least tomorrow) as ISO strings a training slot pick can offer, plus
@@ -692,6 +699,22 @@ def _lead_proposed_slot_isos(text: str, tz: str, now_dt) -> list:
         zi = ZoneInfo(tz or "Europe/London")
         base = now_dt.astimezone(zi)
         out = []
+        # "14 Sept at 09:30 CET or 15 Sept at 11:00" (reader audit 2026-09-07
+        # loop 4: date-based proposals were refused and countered)
+        for m in _PROPOSED_DATE_RE.finditer(s):
+            try:
+                dnum, mon = int(m.group(1)), _MONTHS.get(m.group(2).lower()[:4] if m.group(2).lower().startswith("sept") else m.group(2).lower()[:3])
+                hour = int(m.group(3)); minute = int(m.group(4) or 0); ap = (m.group(5) or "").lower()
+                if ap == "pm" and hour < 12:
+                    hour += 12
+                if mon and 1 <= dnum <= 31 and 6 <= hour <= 20 and minute in (0, 15, 30, 45):
+                    year = base.year + (1 if mon < base.month else 0)
+                    loc0 = _dt.datetime(year, mon, dnum, hour, minute, tzinfo=zi)
+                    if loc0.date() > base.date():
+                        for extra in (0, 2, 4):
+                            out.append((loc0 + _dt.timedelta(hours=extra)).astimezone(_dt.timezone.utc).isoformat(timespec="seconds"))
+            except Exception:  # noqa: BLE001
+                continue
         for m in _PROPOSED_TIME_RE.finditer(s):
             day = _PREF_DAYS.get(m.group(1).lower())
             hour = int(m.group(2)); minute = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
