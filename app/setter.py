@@ -5313,6 +5313,17 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                 _script_re = re.compile(r"(use|open with|start with|begin with)[^.\n]{0,80}\b(exactly|verbatim|word for word)\b|\bexactly in the first paragraph\b|\b(?:this |the )(?:opening )?sentence exactly\b", re.I)
                 if candidate and len(_script_re.findall(candidate)) > len(_script_re.findall(old)):
                     candidate = ""
+                # Reader audit 2026-09-07: "Always end with 'Speak soon, Marton'" was
+                # appended to six unrelated rule lines ("Omar ... is the sender for the
+                # Middle East, and always end with 'Speak soon, Marton'"). A note phrase
+                # stamped onto many lines is a paste, not a merge.
+                if candidate:
+                    _phr = [p for p in re.findall(r"'([^']{12,80})'|\"([^\"]{12,80})\"", note) for p in p if p]
+                    _phr = _phr or [note.strip()[:60]]
+                    for _p in _phr:
+                        if len(_p) >= 12 and candidate.lower().count(_p.lower()) - old.lower().count(_p.lower()) > 2:
+                            candidate = ""
+                            break
                 if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len and _vals_ok:
                     new_text = candidate
                     how = "merged"
@@ -5392,6 +5403,10 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                     _cut.append(_p)
             if _cut:
                 new_text = re.sub(r"[ \t]{2,}", " ", new_text)
+                # reader audit 2026-09-07: a cut clause left ", ," and " , " in
+                # the founder's own sentences ("the numbers, or the assessment, , assessment")
+                new_text = re.sub(r"\s*,\s*,+", ",", new_text)
+                new_text = re.sub(r" ,", ",", new_text)
                 new_text = re.sub(r"\n{3,}", "\n\n", new_text).strip()
                 remaining = [x for x in remaining if x not in _cut]
                 how += "+excised"
