@@ -15992,6 +15992,16 @@ REALISM (how a real lead writes, learned from real replies): short sentences, so
 Output STRICT JSON: {"scenarios": [{"lead_first_name": "...", "lead_company": "...", "subject": "...", "body": "...", "prior_lead_reply": "...", "outreach_subject": "...", "outreach_body": "..."}, ...]}, one object per scenario_plan position, in the same order. subject and body should read like a short, real inbound email reply - plain text, a couple of sentences, the way a busy person actually replies, never polished marketing copy."""
 
 
+_MSG_LABEL_RE = re.compile(r"^\s*(?:follow[\s\-\u2011]?up|prior|reply|second message|first message)\s*:\s*", re.IGNORECASE)
+
+
+def _strip_message_label(text: str) -> str:
+    """Reader audit 2026-09-07 (loop 4): the invention model labelled a lead's
+    second message "Follow-up: who on our side..." and the label reached the
+    card as if the lead had typed it. Labels are never part of a message."""
+    return _MSG_LABEL_RE.sub("", str(text or ""), count=1)
+
+
 def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campaign_ids: list | None = None,
                                reference_sample: list | None = None,
                                avoid_gists: list | None = None, outreach_offset: int = 0) -> list:
@@ -16165,8 +16175,8 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
             "lead_first_name": first,
             "lead_company": company,
             "subject": str(item.get("subject") or "").strip(),
-            "body": body,
-            "prior_lead_reply": str(item.get("prior_lead_reply") or "").strip(),
+            "body": _strip_message_label(body),
+            "prior_lead_reply": _strip_message_label(str(item.get("prior_lead_reply") or "").strip()),
             "outreach_subject": o_subject,
             "outreach_body": o_body,
         })
@@ -16311,7 +16321,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
             # trainee anyway - the wizard showed exactly the shape every rule
             # forbids. Now the lint reason goes back through the drafter once,
             # as reviewer feedback, before the case is stored.
-            for _attempt in range(2):
+            for _attempt in range(3):  # reader audit 2026-09-07 loop 4: two lint-feedback redrafts
                 _fb = mem_digest if _attempt == 0 else (
                     (mem_digest + "\n\n" if mem_digest else "")
                     + "REVIEWER FEEDBACK (fix exactly this): " + lint_reason)
@@ -18094,7 +18104,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 # trainer as "the reply we'd send", and their edit then
                 # taught it back into the brain as fact. One retry with the
                 # lint reason fed back, mirroring _build_training_case.
-                for _attempt in range(2):
+                for _attempt in range(3):  # reader audit 2026-09-07 loop 4: two lint-feedback redrafts
                     _fb = digest if _attempt == 0 else (
                         (digest + "\n\n" if digest else "") +
                         "PREVIOUS DRAFT REJECTED: " + str(lint_reason or "") +
@@ -18250,7 +18260,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 # trainer as "the reply we'd send", and their edit then
                 # taught it back into the brain as fact. One retry with the
                 # lint reason fed back, mirroring _build_training_case.
-                for _attempt in range(2):
+                for _attempt in range(3):  # reader audit 2026-09-07 loop 4: two lint-feedback redrafts
                     _fb = digest if _attempt == 0 else (
                         (digest + "\n\n" if digest else "") +
                         "PREVIOUS DRAFT REJECTED: " + str(lint_reason or "") +
