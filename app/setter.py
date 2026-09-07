@@ -715,6 +715,8 @@ def _lead_proposed_slot_isos(text: str, tz: str, now_dt) -> list:
                             out.append((loc0 + _dt.timedelta(hours=extra)).astimezone(_dt.timezone.utc).isoformat(timespec="seconds"))
             except Exception:  # noqa: BLE001
                 continue
+        if out:
+            return out  # a dated proposal is exact; the weekday parser would misread "Thursday 10 September" as ten o'clock
         for m in _PROPOSED_TIME_RE.finditer(s):
             day = _PREF_DAYS.get(m.group(1).lower())
             hour = int(m.group(2)); minute = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
