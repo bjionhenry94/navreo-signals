@@ -2409,6 +2409,7 @@ async function submitInterviewAnswers(iv, onDone) {
         if (unsent[sq.id] !== undefined) recordTeaching((res.data && res.data.at) || "", sq.q + " " + unsent[sq.id], null, _defer, "interview");
       });
       if (LEARNED_CHIP && LEARNED_CHIP.kind === "interview") LEARNED_CHIP.pending = false;
+      if (res.data && res.data.learned && res.data.learned.text) { LEARNED_CHIP = { ...res.data.learned }; renderLearnedChip(); } // e.g. a price in the wrong currency
     } else {
       showError("Couldn't save those answers - " + ((res && res.error) || "please retry") + " (your scenarios are unaffected).");
     }
