@@ -711,8 +711,7 @@ def _lead_proposed_slot_isos(text: str, tz: str, now_dt) -> list:
                     year = base.year + (1 if mon < base.month else 0)
                     loc0 = _dt.datetime(year, mon, dnum, hour, minute, tzinfo=zi)
                     if loc0.date() > base.date():
-                        for extra in (0, 2, 4):
-                            out.append((loc0 + _dt.timedelta(hours=extra)).astimezone(_dt.timezone.utc).isoformat(timespec="seconds"))
+                        out.append(loc0.astimezone(_dt.timezone.utc).isoformat(timespec="seconds"))
             except Exception:  # noqa: BLE001
                 continue
         if out:
@@ -729,11 +728,11 @@ def _lead_proposed_slot_isos(text: str, tz: str, now_dt) -> list:
             d = base.date() + _dt.timedelta(days=1)
             while d.weekday() != day:
                 d += _dt.timedelta(days=1)
-            if re.search(r"\bnext\s*$", s[max(0, m.start() - 8):m.start()].lower()) and (d - base.date()).days < 7:
-                d += _dt.timedelta(days=7)  # "next Wednesday" is the one after this week's
-            for extra in (0, 2, 4):
-                loc = _dt.datetime(d.year, d.month, d.day, hour, minute, tzinfo=zi) + _dt.timedelta(hours=extra)
-                out.append(loc.astimezone(_dt.timezone.utc).isoformat(timespec="seconds"))
+            if (re.search(r"\bnext\s*$", s[max(0, m.start() - 8):m.start()].lower()) or re.search(r"\bnext week\b", s.lower())) \
+                    and d.isocalendar()[:2] <= base.date().isocalendar()[:2]:
+                d += _dt.timedelta(days=7)  # "next Wednesday" / "next week ... Tue 14:00" is the one after this week's
+            loc = _dt.datetime(d.year, d.month, d.day, hour, minute, tzinfo=zi)
+            out.append(loc.astimezone(_dt.timezone.utc).isoformat(timespec="seconds"))
         return out
     except Exception:  # noqa: BLE001
         return []
@@ -756,11 +755,14 @@ def _training_pick_varied_slots(avail: list, tz: str, eff_lead: dict, now, seed_
     proposed = _lead_proposed_slot_isos(lead_text, tz, now_dt) if lead_text else []
     if proposed:
         try:
-            exact = pick_slots(proposed, tz, eff_lead, now)
+            exact = []
+            for _iso in proposed[:2]:
+                _one = pick_slots([_iso], tz, eff_lead, now)
+                if _one:
+                    _one[0]["lead_fit"] = True  # the lead named this time - accept it, never refuse it
+                    exact.append(_one[0])
             if exact:
-                for _s in exact:
-                    _s["lead_fit"] = True  # the lead named this time - accept it, never refuse it
-                return exact
+                return exact  # only the time(s) the lead named - never a filler slot they never offered
         except Exception:  # noqa: BLE001
             pass
     if pref:
@@ -796,6 +798,22 @@ def _training_pick_varied_slots(avail: list, tz: str, eff_lead: dict, now, seed_
     seed = _zlib.crc32(str(seed_text or "").encode("utf-8", "ignore"))
     off_days, off_hours = seed % 4, (seed >> 3) % 6
     nb = now_dt + _dt.timedelta(hours=20 + 24 * off_days + off_hours)
+    _picked = pick_slots(avail, tz, eff_lead, now, not_before_utc=nb,
+                         horizon_days_override=HORIZON_WORKING_DAYS + off_days + 1)
+    if len(_picked) == 2 and (seed >> 9) & 1:
+        # reader audit 2026-09-07 loop 4: 48 of 60 drafts offered two slots on the
+        # same day exactly two hours apart - half the picks now put the second
+        # slot on another day.
+        try:
+            _nb2 = _parse_iso(_picked[0]["iso"]) + _dt.timedelta(hours=22)
+            _alt = pick_slots(avail, tz, eff_lead, now, not_before_utc=_nb2,
+                              horizon_days_override=HORIZON_WORKING_DAYS + off_days + 3)
+            if _alt and _alt[0].get("iso") != _picked[0].get("iso"):
+                _picked = [_picked[0], _alt[0]]
+        except Exception:  # noqa: BLE001
+            pass
+    if _picked:
+        return _picked
     slots = pick_slots(avail, tz, eff_lead, now, not_before_utc=nb,
                        horizon_days_override=HORIZON_WORKING_DAYS + off_days + 1)
     return slots or pick_slots(avail, tz, eff_lead, now)
@@ -2121,6 +2139,16 @@ def lint_draft(html: str, ctx: dict):
     if ctx.get("lead_time_fit") and re.search(r"\b(?:unfortunately|can'?t make|cannot make|not able to make|doesn'?t work for me|won'?t work)\b", _TAG_RE.sub(" ", text), re.I):
         return False, ("The lead's own time fits the slots you were given - accept it plainly ('Tuesday at 14:00 works, "
                        "here is the link') and never say you cannot make their time.")
+    if ctx.get("lead_time_fit") and ctx.get("slot_labels") and not any(str(l) in _TAG_RE.sub(" ", text) for l in (ctx.get("slot_labels") or []) if l):
+        return False, ("The lead's own time fits - accept it by naming the slot exactly as given ('"
+                       + str((ctx.get("slot_labels") or [""])[0]) + "') with its link, so it is actually booked.")
+    # PHONE ASK WITHOUT A NUMBER (reader audit 2026-09-07 loop 4): "Happy to take
+    # your call, but first a short discovery call..." with no number, no
+    # placeholder and no link left the keenest lead with nowhere to go.
+    if re.search(r"\byour\s+(?:phone\s+)?number\b|\bgive\s+you\s+a\s+call\b|\bi'?ll\s+call\s+you\b", _lead_words, re.I) \
+            and "[PHONE NUMBER]" not in text and not re.search(r"href=|https?://", text):
+        return False, ("The lead asked for a number to call. Give the taught number, or the literal [PHONE NUMBER] "
+                       "placeholder, or at least the booking link with two times - never a deflection with nothing to click.")
     # ECHOED QUESTION (reader audit 2026-09-07): "Any blackout windows we
     # should consider?" came back to the lead verbatim, as a question.
     _plain_draft_l = re.sub(r"\s+", " ", _TAG_RE.sub(" ", text)).lower()
@@ -2147,7 +2175,7 @@ def lint_draft(html: str, ctx: dict):
     # ACCEPTED ASSET (reader audit 2026-09-07): "yes please, send the
     # breakdown" answered with "Happy to send the breakdown" and no link.
     _asset_yes = (instruction_urls or ctx.get("booking_link")) \
-        and re.search(r"\b(yes please|please send|send it( over)?|go ahead|happy to (?:see|receive|take a look)|sure,? send)\b", _lead_words, re.I) \
+        and re.search(r"\b(yes please|please send|send it( over)?|go ahead|happy to (?:see|receive|take a look)|sure,? send|send (?:me )?(?:some )?(?:more )?(?:information|info|details))\b", _lead_words, re.I) \
         and re.search(r"\b(send|share)\b", str(ctx.get("thread_text") or ""), re.I)
     if _asset_yes:
         _hrefs = [h for h in re.findall(r'href="([^"]+)"', text) if "calendly" not in h.lower()]
@@ -2655,7 +2683,7 @@ Rules:
 - ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST (owner rule 2026-08-27, every SDR). The FIRST paragraph after the greeting answers the specific thing the lead's latest message asked - their access question, their timeline question, their security question, their pricing question, their "do you apply fixes or just recommend" question - in their terms. NEVER open with a stock offer, product, or process preamble ("[the deliverable] comes from our [offer/assessment/audit], which we set up on a call") before the answer: opening with anything but the answer reads as dodging the question, and repeating the same explanation sentence across replies reads as a bot. Where the reply genuinely needs to explain how the offer works, weave it in as ONE short clause AFTER the answer, never as its own opening paragraph. When the lead asked several questions, answer EVERY ONE of them - each in its own sentence, in the order asked - before any call ask or next step; answering only the first and pivoting to a call is wrong (reader audit 2026-09-07: "send the breakdown" + "do you offer a follow-up session?" got neither). If one genuinely cannot be answered from what you know, say so in a clause ("on the follow-up session I'd want to check with the team and come back to you") rather than skipping it.
 - ACCEPTED ASSET (reader audit 2026-09-07). When the lead says yes to something we offered to send ("yes please", "send it over", "go ahead", "happy to take a look"), the reply hands it over in the first paragraph: a real link from the instructions named for what it is - for a breakdown, write-up, case study or examples the RESULTS page (never the bare homepage described as "the breakdown"), for "how it works" the overview page - never "Happy to send it" with nothing attached. Only call a link what it is: if the lead asked for something specific we do not hold (a security checklist, a one-page summary, a PDF), say plainly that we do not have that as a document, give the closest real page under its real name, and offer to cover the rest on the call. Never send the bare homepage as if it were the asset. If the instructions hold no such link, say plainly what you will send and when, then the next step.
 - ANSWER IN YOUR OWN SENTENCES: never splice the lead's phrasing into yours ("how retention and where results live would be handled" is their question fragment, not a clause a person writes) and never answer with a form label ("Who from our side joins:"). When the lead asks who joins from OUR side, name our people (the sender, and who else from the company); "your side" in their email means us.
-- NEVER paste the lead's own question back to them as a question. NEVER promise to send a calendar invite (the booking link or the proposed times are the invite). NEVER write "You will be speaking with me" or "You'll be speaking with me" - the sign-off already says who is writing. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
+- NEVER paste the lead's own question back to them as a question, and never answer it with the same question rephrased ("should I include our cloud lead?" is answered "yes, please do", not "would you like your cloud lead to join?"). When the lead asks you to cc or include a colleague, say you will and ask for their address if it was not given - never ignore a cc request. NEVER promise to send a calendar invite (the booking link or the proposed times are the invite). NEVER write "You will be speaking with me" or "You'll be speaking with me" - the sign-off already says who is writing. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
 - NEVER-ADMIT-MISSING-WIRING (owner HARD RULE 2026-08-31, every SDR). Never tell the lead that a phone number, booking link, calendar, price, or any other detail is missing, not set up, not wired up, not provided, or unavailable - and never narrate that it will exist later ("once it's set up", "isn't set up yet"). The lead must never sense unfinished wiring. When you lack a booking link, follow the [BOOKING LINK] placeholder rule silently; when you lack a phone number, warmly steer to a scheduled call or keep it on email without one word about phone availability; when you lack a price, follow the instructions' pricing posture without saying a price is unavailable. State what IS true and offer what you DO have - zero meta-commentary about gaps. This rule outranks any instruction-manual line that tells you to announce a missing detail.
 - WEAVE-TAUGHT-FACTS-IN (owner HARD RULE 2026-08-31, every SDR). When the instructions or reviewer feedback supply a concrete fact the reply needs - a price range, a phone number, a link, a timeframe - it must be woven into a natural sentence that answers the lead ("Our pricing is tiered, with engagements typically in the £50K-£150K range depending on your estate."), NEVER parked on its own line or bolted on as a bare value. A paragraph that is nothing but a figure reads as pasted, not written.
 - SELF-SERVE ASSET REQUEST (owner rule 2026-08-22, every SDR, live-confirmed, OVERRIDES the two-fresh-times default). When the lead asks for your BOOKING LINK or your PHONE NUMBER - especially when they say they will book or call themselves ("what's your booking link? I'll book direct", "what's your number? I'll give you a call") - ANSWER WITH THAT ASSET and nothing else about scheduling - but still write a complete, human email (reader audit 2026-09-07: "Hi Chris, Our number is 9911. Marton" and "My booking link is www..." went out as the WHOLE message): the greeting, ONE natural sentence that hands the asset over ("Here's my booking link: <a href="...">...</a> - pick whichever slot suits you." / "Of course - you can reach me on +31 ... whenever suits."), one short friendly closing line ("Speak soon." / "Looking forward to it."), and the sign-off. Never send the asset as a bare one-line email. For a booking-link ask, give the booking_link value and nothing else about scheduling; do NOT also propose two call times. For a phone-number ask, give the phone number EXACTLY as it appears in the instructions OR in reviewer_feedback/owner_corrections - a number the owner taught during training arrives there first, before it is folded into the instructions, so USE IT; only when NEITHER source contains a phone number do you write the literal placeholder [PHONE NUMBER] ("My number is [PHONE NUMBER]."). Never invent one - a fabricated number (for example "+44 7700 900123") is a serious error, so manufacture no digits: use the taught number if you were given one anywhere, otherwise the placeholder. Either way do NOT append the two-times "Would you be open to a call on ..." paragraph: the lead has chosen to self-serve, so a fresh call pitch talks straight past them.
@@ -3661,7 +3689,8 @@ def _scrub_control_chars(html: str) -> str:
     s = re.sub(r"\b(aren|don|isn|won|can|doesn|didn|wouldn|couldn|shouldn|haven|hasn|wasn|weren)t\b", r"\1't", s, flags=re.I)
     s = re.sub(r"\bwont\b", "won't", s, flags=re.I)
     s = re.sub(r"\b(I)(ve|ll|d|m)\b", r"\1'\2", s)
-    s = re.sub(r"\b(you|they|we)(re|ve|ll|d)\b", r"\1'\2", s, flags=re.I)
+    s = re.sub(r"\b(you|they)(re|ve|ll|d)\b", r"\1'\2", s, flags=re.I)  # never "we": well / were / wed are words (reader audit loop 4: "works we'll")
+    s = re.sub(r"\bweve\b", "we've", s, flags=re.I)
     s = re.sub(r"\b(that|what|here|there|let|it)s\b(?= (?:a|an|the|our|your|my|how|what|why|no|not|one|two|worth|fine|great|good|see)\b)", r"\1's", s, flags=re.I)
     return s
 
