@@ -24329,8 +24329,15 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                     r["skipped"].append({"id": e["id"], "domains": e.get("domains"),
                                          "reason": "no campaign suggestion — left for manual restore"})
                     continue
-                res, st = api_restore_live({"id": e["id"],
-                                            "campaign_ids": [sugg[0]["id"]]})
+                # Early release is by definition BEFORE the timer, and restore-live
+                # has its own due-date guard (409 "not due yet — re-send with
+                # force_early"). The grade is the authority here, so pass it.
+                # The first live run (2026-09-07) selected 21 early domains and
+                # released 1 because this flag was missing.
+                req = {"id": e["id"], "campaign_ids": [sugg[0]["id"]]}
+                if e.get("early_release"):
+                    req["force_early"] = True
+                res, st = api_restore_live(req)
                 rec = {"id": e["id"], "domains": e.get("domains"),
                        "campaign": {"id": sugg[0]["id"], "name": sugg[0].get("name")},
                        "ok": bool((res or {}).get("ok")), "status": st}
