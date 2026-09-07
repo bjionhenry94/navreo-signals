@@ -3079,6 +3079,7 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
                 html_body = html_body.replace(_lb, '<a href="' + _lk + '">' + _lb + "</a>", 1)
     except Exception:  # noqa: BLE001
         pass
+    html_body = _scrub_control_chars(html_body)  # last word on control bytes, whatever path produced them
     html_body = enforce_signoff(html_body, sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
 
@@ -3581,7 +3582,9 @@ def _visible_digit_runs(html: str) -> set:
     return set(re.findall(r"\d+", plain))
 
 
-_CTRL_MAP = {"\u0018": "'", "\u0019": "'", "\u001c": '"', "\u001d": '"'}
+_CTRL_MAP = {"\u0018": "'", "\u0019": "'", "\u001c": '"', "\u001d": '"',
+             # C1 controls a model emits for cp1252 smart quotes (reader audit 2026-09-07: dropped apostrophes in the review column)
+             "\u0091": "'", "\u0092": "'", "\u0093": '"', "\u0094": '"'}
 
 
 _CTRL_TABLE = {i: None for i in range(32) if chr(i) not in "\n\t\r"}
@@ -3657,6 +3660,10 @@ def proofread_draft(html: str, sender_first: str = "", booking_link: str = "", *
         # that touches the html on every call site.
         result = demarkdown_links(result)
         result = enforce_signoff(result, sender_first)
+        # Reader audit 2026-09-07: the proofread MODEL's own output carried
+        # U+0019 again (three served cards had it inside "Here's" / "I've");
+        # the scrub ran on the input only. Scrub what we return, too.
+        result = _scrub_control_chars(result)
         return result, result != original
     except Exception:  # noqa: BLE001 - a proofread outage must degrade to the original draft, never crash
         return original, False
