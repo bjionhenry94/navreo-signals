@@ -17950,8 +17950,14 @@ def _training_session_feedback_digest(doc: dict, limit_chars: int = 6000) -> str
         if edited:
             case = cases_by_id.get(str(case_id)) or {}
             inbound_snip = str((case.get("inbound") or {}).get("body") or "")[:80]
-            soft_lines.append(f"- For a reply like '{inbound_snip}', the owner rewrote our draft. "
-                              f"Write similar replies the way they did: '{edited[:220]}'")
+            # Reader audit 2026-09-07 (loop 3): quoting the rewrite verbatim made
+            # every redraft open with the owner's one-off sentence. Describe the
+            # shape; quote only sentences that carry a concrete fact.
+            _facts = " / ".join(x for x in re.split(r"(?<=[.!?])\s+", edited) if re.search(r"\d|https?://|www\.|[$€£]", x))[:220]
+            soft_lines.append(f"- For a reply like '{inbound_snip}', the owner rewrote our draft into a warm one-line "
+                              f"acknowledgement, then the lead's actual question answered, then the next step. Write "
+                              f"similar replies in that SHAPE - never reuse their sentences, a line written for one lead "
+                              f"is wrong for the next." + (f" Facts they stated: '{_facts}'" if _facts else ""))
         if note or edited:
             continue
         if ans.get("decision_ok") is False or ans.get("reply_ok") is False:
