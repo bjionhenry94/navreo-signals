@@ -18372,6 +18372,18 @@ def warmup_capacity_get() -> tuple[dict, int]:
     # send (message_per_day > 0) is NEVER resting; client-ws resting = warm-up
     # ON and cap 0. (Navreo-ws rows come from the real rest ledger — trusted.)
     mirror_box = {str(r.get("email") or "").lower(): r for r in mrows if r.get("email")}
+    # Cap truth for EVERY workspace (owner, 2026-09-07: "force the accurate
+    # verdict"): a mailbox the mirror shows with a sending cap (> 0) is
+    # SENDING, never resting, whichever audit view lists it. The audit's
+    # rested/inwarmup views keep a box after it is restored — 835 of 862
+    # navreo-ws "rested" rows carried live caps after the early-release pass —
+    # so this tile never registered a release and overstated Navreo's resting
+    # by ~4.5k/day. The client-ws guard below already applied the rule; the
+    # navreo workspace was trusted on the view alone. Unknown-to-mirror rows
+    # are kept (the mirror is a full census, so those are rare).
+    resting = [r for r in resting
+               if not ((mirror_box.get(str(r.get("email") or "").lower()) or {})
+                       .get("message_per_day") or 0)]
 
     def _clientws_resting(email):
         r = mirror_box.get(email)
