@@ -23574,7 +23574,12 @@ def _restore_entries():
     bl_doms = {(b.get("domain") or "").lower()
                for b in (blob.get("blacklist") or []) if isinstance(b, dict)}
     pending = [r for r in rems if not r.get("done")]
-    covered = {d.lower() for r in rems for d in (r.get("domains") or [])}
+    # Only a PENDING reminder covers a domain. A done reminder used to count
+    # too, so a domain re-parked after its reminder completed got no reminder
+    # entry (done) AND no ledger auto entry (covered) — invisible to the timer
+    # and to early release alike (arnicbiz.biz, 2026-09-07: healthy, parked
+    # since 09-04, never once entered the queue).
+    covered = {d.lower() for r in pending for d in (r.get("domains") or [])}
 
     def iso(ms):
         return datetime.fromtimestamp(ms / 1000, tz=timezone.utc).date().isoformat()
@@ -24377,6 +24382,16 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                                              or (res or {}).get("error"))[:160]])
                     r["skipped"].append(rec)
                     out["ok"] = False
+            if r["restored"]:
+                # The manager's Resting tab reads the cached deliverability
+                # bundle (audit views ∪ ledger), which otherwise shows released
+                # domains as resting for up to an hour. Kick a refresh so the
+                # UI reflects a release within a minute or so (2026-09-07: the
+                # tab read 165 on stale views until a manual refresh).
+                try:
+                    _deliv_bundle_start(force=True)
+                except Exception as ex:  # noqa: BLE001 — cosmetic; never fail the sweep
+                    out["bundle_refresh_error"] = str(ex)[:120]
         except Exception as e:  # noqa: BLE001
             out["restore"] = {"error": str(e)[:200]}
             out["ok"] = False
