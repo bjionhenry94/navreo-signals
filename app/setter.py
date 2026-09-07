@@ -2815,13 +2815,15 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         def _fix_num(m):
             num = m.group(1)
             digs = re.sub(r"\D", "", num)
-            if len(digs) >= 7 and digs not in _instr_digits:
+            # Reader audit 2026-09-07: "My number is 9911." - a 4-6 digit run
+            # lifted from a training note is not a phone number either.
+            if len(digs) < 7 or digs not in _instr_digits:
                 return m.group(0).replace(num, "[PHONE NUMBER]")
             return m.group(0)
         html_body = re.sub(
             r"(?i)\b(?:(?:my|our|the) (?:phone |direct |mobile |cell )?(?:number|line|mobile|cell) is"
             r"|(?:reach|call|ring|contact) (?:me|us) (?:on|at)"
-            r"|you can (?:reach|call|contact) (?:me|us) (?:on|at))\s*([+()\d][()\d\s\-]{6,}\d)",
+            r"|you can (?:reach|call|contact) (?:me|us) (?:on|at))\s*([+()\d][()\d\s\-]{2,}\d)",
             _fix_num, html_body)
     except Exception:  # noqa: BLE001 - a repair helper must never break drafting
         pass
@@ -18939,12 +18941,11 @@ def route_training_interview(payload):
                 doc = _load_training(agent_id, strict=True)
                 interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
                 asked = str(payload.get("asked_at") or "")
-                for iv in reversed(interviews):
-                    if asked and str(iv.get("asked_at") or "") != asked:
-                        continue
-                    if _iv_unanswered(iv):
-                        iv["skipped_at"] = at
-                    break
+                _hit = next((iv for iv in reversed(interviews) if asked and str(iv.get("asked_at") or "") == asked), None)
+                if _hit is None:
+                    _hit = next((iv for iv in reversed(interviews) if _iv_unanswered(iv)), None)
+                if _hit is not None and _iv_unanswered(_hit):
+                    _hit["skipped_at"] = at
                 doc["interviews"] = interviews[-12:]
                 _save_training(agent_id, doc)
             return 200, {"ok": True}

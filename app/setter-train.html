@@ -1604,8 +1604,26 @@ function render() {
   // prefetched next batch is already sitting unanswered in the pool - the
   // round-done screen must show between rounds.
   if (SHARE_MODE && ROUND_IDS && ROUND_IDS.length && ROUND_IDS.every((id) => isAnswered(id))) {
-    if (shortRoundHolding()) { renderShortRoundWait(); return; }
-    view = "done"; renderDone(); return;
+    // Reader audit 2026-09-07: a round that opened with one fresh card closed
+    // as "Round 1: 0 of 1 right". Fill a short round from the pool first -
+    // fresh spares at once, otherwise hold (the short-round poll swaps
+    // spares in and its fallback tiers release within seconds).
+    if (ROUND_IDS.length < ROUND_SIZE) {
+      const outside = CASES.filter((c) => !isAnswered(c.id) && !ROUND_IDS.includes(c.id));
+      const freshSpares = outside.filter((c) => caseFresh(c)).slice(0, ROUND_SIZE - ROUND_IDS.length);
+      if (freshSpares.length) {
+        ROUND_IDS = ROUND_IDS.concat(freshSpares.map((c) => c.id));
+        try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
+        DISPLAYED_CASE_ID = null; idx = 0;
+      } else if (outside.length) {
+        if (!shortRoundHolding()) startShortRoundPoll();
+        view = "shortwait"; renderShortRoundWait(); return;
+      }
+    }
+    if (ROUND_IDS.every((id) => isAnswered(id))) {
+      if (shortRoundHolding()) { renderShortRoundWait(); return; }
+      view = "done"; renderDone(); return;
+    }
   }
   const unanswered = currentUnanswered();
   if (!unanswered.length) {
@@ -2214,7 +2232,15 @@ function interviewFormHtml(iv, opts) {
 
 function skipInterviewSet(iv) {
   // Reader audit 2026-09-07: a set left blank was re-asked word for word on
-  // the next screen. Tell the server the set was skipped (fire-and-forget).
+  // the next screen. Consume it locally (the filler form reads INTERVIEWS
+  // through ANSWERED_IV_LOCAL) and tell the server (fire-and-forget).
+  try {
+    const qs = (iv && iv.questions) || [];
+    if (!qs.length) {
+      document.querySelectorAll("#ivForm .iv-q input[data-qid]").forEach((inp) => ANSWERED_IV_LOCAL.ids.add(String(inp.getAttribute("data-qid"))));
+    }
+    qs.forEach((q) => { if (q && q.id) ANSWERED_IV_LOCAL.ids.add(String(q.id)); });
+  } catch { /* best effort */ }
   try {
     const body = { agent_id: selectedAgentId, action: "skip", asked_at: (iv && iv.asked_at) || "" };
     if (SHARE_MODE) body.share = SHARE_TOKEN;
@@ -2337,7 +2363,12 @@ async function submitInterviewAnswers(iv, onDone) {
     if (qid) sentQuestions.push({ id: qid, q: lab ? (lab.textContent || "").trim() : "" });
     if (qid && val) { answers[qid] = val; n++; }
   });
-  if (!n) { showError("Answer at least one question - or hit skip."); return; }
+  if (!n) {
+    // Nothing typed on a "Start round" button (reader audit 2026-09-07): that
+    // is a skip, never an error - the set is consumed and the round opens.
+    if (SHARE_MODE) { skipInterviewSet({ questions: sentQuestions }); if (typeof onDone === "function") onDone(); return; }
+    showError("Answer at least one question - or hit skip."); return;
+  }
   sentQuestions.forEach((q) => {
     if (answers[q.id]) {
       ANSWERED_IV_LOCAL.ids.add(String(q.id));
@@ -2995,7 +3026,7 @@ function renderCase(unanswered, i) {
         // skip counted as a rating. Count real ratings only, and say "of 3"
         // whenever the round can still fill to ROUND_SIZE from the pool.
         const ratedInRound = ids.filter((id) => isRated(id)).length;
-        const spare = currentUnanswered().filter((c) => !ids.includes(c.id)).length;
+        const spare = CASES.filter((c) => !isAnswered(c.id) && !ids.includes(c.id)).length;
         const roundTotal = Math.max(ids.length, Math.min(ROUND_SIZE, ids.length + spare));
         return `Round ${currentRoundNum()} &middot; rated ${ratedInRound} of ${roundTotal || total}`;
       })()
