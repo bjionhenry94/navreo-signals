@@ -1076,6 +1076,17 @@ function beginRoundIfNeeded() {
         try { SS.set("trainRoundIds", JSON.stringify(ROUND_IDS)); } catch { /* ignore */ }
         return;
       }
+      // Reader audit 2026-09-07 (loop 3): a reload (or "Back") on the
+      // round-done screen used to start and count the NEXT round and bin
+      // the optional questions. A finished round whose done screen was not
+      // dismissed comes back as the done screen.
+      let donePending = "";
+      try { donePending = SS.get("trainDonePending") || ""; } catch { /* ignore */ }
+      if (restored.length && restored.every((id) => isAnswered(id)) && donePending === "1") {
+        ROUND_IDS = restored;
+        view = "done";
+        return;
+      }
     }
   }
   // Cap the round at ROUND_SIZE (owner ruling 2026-08-20): a backlog of
@@ -1734,6 +1745,7 @@ function renderDone() {
    action. At ROUND_CAP rounds in one sitting, no more rounds are offered at
    all - "we'll take it from here". */
 function renderRoundDone() {
+  try { SS.set("trainDonePending", "1"); } catch { /* ignore */ } // cleared when the next round starts
   const el = document.getElementById("trainApp");
   const { right, total } = roundScore();
   const roundNum = currentRoundNum();
@@ -2816,6 +2828,7 @@ function startPrefetchPoll() {
    its busy label and poll) when the pool is dry. */
 let roundOpening = false; // repeated clicks while opening are no-ops
 async function startNextRoundOrGenerate() {
+  try { SS.set("trainDonePending", "0"); } catch { /* ignore */ }
   // Guard only against re-entering THIS opener (audit #9): the old
   // `|| generating` swallowed the click whenever a BACKGROUND prefetch was
   // in flight - even though the local pool already had a full round ready to

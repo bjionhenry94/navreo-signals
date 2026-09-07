@@ -519,13 +519,14 @@ def _mask_short_phone_runs(note: str) -> str:
 
 
 _IV_FACT_LABELS = [
+    (r"\bphone\b", "Phone number"),  # first: "instead of booking a call, which phone number" is a phone question
     (r"\bbook", "Booking link"),
     (r"\b(price|pricing|cost)", "Starting price we may share before a call"),
     (r"\b(case stud|results|customer results|one.?pager)", "Results / case-study link"),
     (r"\b(minutes|how long|length)", "Discovery call length"),
     (r"\b(deliverable|receive|finishes)", "What the lead receives after the assessment"),
     (r"\b(security|residency|sovereignty|compliance)", "Security / compliance page"),
-    (r"\b(phone|number)", "Phone number"),
+    (r"\b(url|link|pdf|video|one.?pager|asset|breakdown|sample|example)", "Link we may send"),
     (r"\b(obligation|purchase)", "Obligation after the free assessment"),
     (r"\b(subset|part of their estate|one cloud provider)", "Running on part of the estate"),
     (r"\b(currency|euros|usd)", "Currency shown"),
@@ -5118,6 +5119,7 @@ Rules:
 - Never invent a new link, price, or rule that the correction did not state.
 - META-FEEDBACK IS NEVER REPLY COPY (live incident 2026-08-21): when the correction is the owner's complaint about a draft's BEHAVIOUR ("You didn't answer the question.", "too vague", "this ignored what they said") rather than a fact or a rule, integrate the behavioural rule it implies (answer the lead's question directly and specifically) - NEVER store the complaint's words as something to say to leads. A manual that tells the setter to literally reply "You didn't answer the question" to a lead is always wrong.
 - A terse correction is the owner's shorthand, not finished copy: "Yes" to a question about guarantees, or "Ours is better." about competitors, records the STANCE (we say yes to NDAs; we position ourselves as stronger than watch-only tools) - integrate the stance in the manual's own plain voice, never enshrine the shorthand as a canned sentence the setter must send verbatim. Only wording the owner explicitly marks as what to say ("reply with:", a quoted model answer, a rewritten draft) is kept verbatim.
+- A REVIEWER'S REWRITE IS AN EXAMPLE, NEVER A SCRIPT (reader audit 2026-09-07): when the correction shows sentences the reviewer typed into one reply, distil the principle (warm one-line acknowledgement, then the answer, then the next step) and never instruct the setter to use that sentence "exactly", "verbatim" or "in every reply" - a sentence written for one lead ("glad it's useful") is wrong for the next lead who never said it was useful.
 - If the manual already contains this exact rule (same meaning, any wording), return the manual UNCHANGED rather than appending a duplicate - repeated identical corrections must never pile up copies of the same line.
 - Write in plain text, short paragraphs. No em dashes anywhere, ever, use a comma or period instead.
 - Return the FULL updated manual, not just the changed part and not a summary of the change.
@@ -5297,6 +5299,13 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                         if _probe and _probe not in _cand_l:
                             _vals_ok = False
                             break
+                # Reader audit 2026-09-07: a merge turned one reviewer rewrite into
+                # "use this opening sentence exactly in the first paragraph" and
+                # every draft that followed opened with it. Such a candidate is
+                # rejected; the lesson lands as a rule line instead.
+                if candidate and re.search(r"(use|open with|start with|begin with)[^.\n]{0,60}\b(exactly|verbatim|word for word)\b|\bexactly in the first paragraph\b|\bthis (?:opening )?sentence exactly\b", candidate, re.I) \
+                        and not re.search(r"\b(exactly|verbatim|word for word)\b", old, re.I):
+                    candidate = ""
                 if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len and _vals_ok:
                     new_text = candidate
                     how = "merged"
