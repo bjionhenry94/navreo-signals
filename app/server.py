@@ -24287,7 +24287,14 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                     if e["id"] in due_ids:
                         continue
                     doms = [str(d).lower() for d in (e.get("domains") or [])]
-                    if not doms or any(d in bounce_held or d in (_bl or set()) for d in doms):
+                    # Bounce-paused domains are a hard stop. Blacklist is NOT:
+                    # every flagged domain fleet-wide (284 on 2026-09-07) is on
+                    # SURBL alone — a URI list that covers ~half the fleet
+                    # including domains at 1.4% reply on 3,500 sends — and the
+                    # timer path already restores through it with a
+                    # blacklist_warning. Early release does the same; the
+                    # warning is recorded on the entry so it stays visible.
+                    if not doms or any(d in bounce_held for d in doms):
                         continue
                     gs = [gmap.get(d) for d in doms]
                     if not all(g and g.get("grade") in GRADE_EARLY_RELEASE
@@ -24297,6 +24304,8 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                     e = dict(e)
                     e["early_release"] = True
                     e["grade"] = ",".join(sorted({g["grade"] for g in gs}))
+                    if any(d in (_bl or set()) for d in doms):
+                        e["blacklist_warning"] = "listed (SURBL) — released on grade, same as the timer path"
                     early.append(e)
             except Exception as ex:  # noqa: BLE001 — additive; never break the timer path
                 out["restore_early_error"] = str(ex)[:200]
@@ -24318,6 +24327,7 @@ def _auto_domain_check(trigger: str = "scheduled") -> dict:
                                                       "domains": e.get("domains") or []})
                             r["restored"].append({"id": e["id"], "domains": e.get("domains"),
                                                   "early_release": True, "grade": e.get("grade"),
+                                                  "blacklist_warning": e.get("blacklist_warning"),
                                                   "attached": False, "ok": True,
                                                   "true_up_job": (jb or {}).get("job_id"),
                                                   "reason": "no campaign suggestion — caps resumed, not attached"})
