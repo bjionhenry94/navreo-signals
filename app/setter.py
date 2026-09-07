@@ -3179,6 +3179,25 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     except Exception:  # noqa: BLE001
         pass
     html_body = _scrub_control_chars(html_body)  # last word on control bytes, whatever path produced them
+    try:
+        _bl2 = _booking_link(agent)
+        _lead_txt = _strip_quoted(str((reply or {}).get("body") or ""))
+        _plain2 = _TAG_RE.sub(" ", html_body)
+        # Reader audit 2026-09-07 loop 5: "Of course, I can do this by phone, but
+        # usually it's easiest to set a short discovery call." - no number, no
+        # placeholder, no link, after three lint retries. Give them the link.
+        if _bl2 and re.search(r"\byour\s+(?:phone\s+)?number\b|\bgive\s+you\s+a\s+call\b|\bi'?ll\s+call\s+you\b", _lead_txt, re.I) \
+                and "[PHONE NUMBER]" not in html_body and "href=" not in html_body \
+                and not re.search(r"\+?\d[\d\s().\-]{6,}\d", _plain2):
+            _sig = _SIGNOFF_TAIL_RE.search(html_body)
+            _line = ('<div>If it is easier, grab a slot that suits you here: <a href="' + _bl2 + '">see my availability</a>.</div><br>')
+            html_body = (html_body[:_sig.start()] + _line + html_body[_sig.start():]) if _sig else (html_body + "<br>" + _line)
+        # "I'll send a calendar invite" is a promise nobody keeps - the link is the invite.
+        if _bl2 and re.search(r"\bI(?:'|\u2019)?ll send (?:you )?(?:a |the )?(?:calendar )?invite\b", _plain2, re.I):
+            html_body = re.sub(r"\bI(?:'|\u2019)?ll send (?:you )?(?:a |the )?(?:calendar )?invite[^.<]*\.?",
+                               'You can lock it in here: <a href="' + _bl2 + '">see my availability</a>.', html_body, count=1, flags=re.I)
+    except Exception:  # noqa: BLE001
+        pass
     html_body = enforce_signoff(html_body, sender_first)
     html_body = enforce_taught_signoff(html_body, _taught_signoff(agent), sender_first)
     return {"subject": subject, "html": html_body, "feedback_note": feedback_note}
@@ -14689,7 +14708,6 @@ def _redraft_sync(payload):
                 "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                 "slot_labels": [s.get("label") for s in slots],
                 "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
-            "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
                 "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
                 "thread_text": f"{redraft_body_text} {thread_text}",
                 "slots_fallback": slot_status != "ok",
@@ -14760,7 +14778,6 @@ def _redraft_sync(payload):
                 "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                 "slot_labels": [s.get("label") for s in slots],
                 "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
-            "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
                 "instructions": _agent_instructions(agent), "booking_link": _booking_link(agent),
                 "thread_text": f"{body_text} {thread_text}",
                 "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
@@ -16489,7 +16506,6 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                 "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                 "slot_labels": [s.get("label") for s in slots],
                 "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
-            "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
                 "instructions": _agent_instructions(agent),
                 "booking_link": _booking_link(agent), "thread_text": body,
                 "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
@@ -18309,7 +18325,6 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                         "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                         "slot_labels": [s.get("label") for s in slots],
                 "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
-            "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
                         "instructions": _agent_instructions(agent_snapshot),
                         "booking_link": _booking_link(agent_snapshot), "thread_text": body,
                         "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
@@ -18338,6 +18353,8 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
         case["decision"] = decision
         case["decision_reason"] = reason
         case["draft_html"] = draft_html
+        case["lint_ok"] = lint_ok            # reader audit 2026-09-07 loop 5: redrafts stored no lint outcome, so a
+        case["lint_reason"] = lint_reason    # draft that failed three times shipped invisibly
         case["updated_by_feedback"] = True
         # TAUGHT-FACT FRESHNESS (live-verify 2026-09-03): a redraft that
         # still fails a taught-fact lint (the taught price missing, a wiring
@@ -18467,7 +18484,6 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                         "slot_status": slot_status, "slot_links": [s.get("link") for s in slots],
                         "slot_labels": [s.get("label") for s in slots],
                 "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
-            "lead_time_fit": any(bool((s or {}).get("lead_fit")) for s in slots),
                         "instructions": _agent_instructions(agent_snapshot),
                         "booking_link": _booking_link(agent_snapshot), "thread_text": body,
                         "slots_fallback": slots_fallback, "needs_availability_ask": needs_availability_ask,
