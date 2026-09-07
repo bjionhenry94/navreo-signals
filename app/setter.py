@@ -5303,8 +5303,8 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                 # "use this opening sentence exactly in the first paragraph" and
                 # every draft that followed opened with it. Such a candidate is
                 # rejected; the lesson lands as a rule line instead.
-                if candidate and re.search(r"(use|open with|start with|begin with)[^.\n]{0,60}\b(exactly|verbatim|word for word)\b|\bexactly in the first paragraph\b|\bthis (?:opening )?sentence exactly\b", candidate, re.I) \
-                        and not re.search(r"\b(exactly|verbatim|word for word)\b", old, re.I):
+                _script_re = re.compile(r"(use|open with|start with|begin with)[^.\n]{0,80}\b(exactly|verbatim|word for word)\b|\bexactly in the first paragraph\b|\b(?:this |the )(?:opening )?sentence exactly\b", re.I)
+                if candidate and len(_script_re.findall(candidate)) > len(_script_re.findall(old)):
                     candidate = ""
                 if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len and _vals_ok:
                     new_text = candidate
@@ -5443,7 +5443,7 @@ LESSON_FROM_EDIT_SCHEMA = {
     },
 }
 
-LESSON_FROM_EDIT_SYSTEM = """An AI appointment setter drafted a reply. A human reviewer edited it before approving. You are given both versions. Decide whether the edit teaches a rule worth applying to EVERY future reply, and if so, state that rule.
+LESSON_FROM_EDIT_SYSTEM = """An AI appointment setter drafted a reply. A human reviewer edited it before approving. You are given both versions. Decide whether the edit teaches a rule worth applying to EVERY future reply, and if so, state that rule. The rule must be a principle (what to do, in what order, in what tone), never the reviewer's sentence itself: never tell the setter to use, open with or copy any sentence from the edit exactly or verbatim - a line written for one lead ("glad it's useful") is wrong for the next lead.
 
 Almost all edits are NOT lessons. Default to is_lesson=false. A missed lesson costs nothing - the reviewer can always say it in words. A wrong rule silently corrupts every future draft, which is far worse. When in any doubt at all, answer false.
 
@@ -17690,18 +17690,22 @@ def _merge_training_edit_entry(agent: dict, entry: dict):
                         for x in _re.split(r"(?<=[.!?])\s+|\n+", txt) if x.strip()]
             _orig_sents = set(_sents(_draft_text(original)))
             _added = [x for x in _sents(edited_text) if x not in _orig_sents]
-            _added_block = " / ".join(_added)[:800]
-            rule = (f"For a reply like '{gist}', the owner rewrote our draft. Learn the tone and "
-                    f"content of their version and write replies to similar messages the same "
-                    f"way.")
+            # Reader audit 2026-09-07 (loop 3): quoting every added sentence
+            # seeded "Thanks, glad it's useful - here is the short version"
+            # into the manual as a standing opener for every lead. Only
+            # sentences that carry a concrete fact are quoted; the rest is
+            # tone, described, never copied.
+            _facty = [x for x in _added if re.search(r"\d|https?://|www\.|[$€£]", x)]
+            _added_block = " / ".join(_facty)[:800]
+            rule = (f"For a reply like '{gist}', the owner rewrote our draft. Learn the SHAPE of their "
+                    f"version (a warm one-line acknowledgement, then the lead's actual question answered, "
+                    f"then the next step) and write replies to similar messages the same way. Never copy "
+                    f"their sentences into other replies and never make any of them a standing opener - "
+                    f"a line written for one lead is wrong for the next.")
             if _added_block:
-                rule += (f" These are the exact sentences the owner ADDED or CHANGED - treat "
-                         f"every concrete fact in them (a price, timeframe, certification, name, "
-                         f"link, or role) as the owner's newest stated truth and update the "
-                         f"manual's matching section: '{_added_block}'")
-            rule += (f" Their full version, for TONE AND STRUCTURE ONLY - facts appearing only "
-                     f"here and not in the added sentences above are the draft's own words, NOT "
-                     f"owner statements, never store them as facts: '{edited_text[:600]}'")
+                rule += (f" These added sentences carry concrete facts (a price, timeframe, certification, "
+                         f"name, link, or role) - treat those facts as the owner's newest stated truth and "
+                         f"update the manual's matching section: '{_added_block}'")
         merge_correction_into_instructions(agent, rule, source=entry.get("source") or "training-edit")
     except Exception:  # noqa: BLE001 - one bad edit must never sink the drain
         pass
