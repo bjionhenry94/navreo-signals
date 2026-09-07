@@ -669,6 +669,43 @@ def _lead_time_preference(text: str):
     return {"days": days, "half": half, "next_week": next_week}
 
 
+_PROPOSED_TIME_RE = re.compile(
+    r"\b(mon|monday|tue|tues|tuesday|wed|wednesday|thu|thur|thurs|thursday|fri|friday)\b[^.\n?]{0,30}?"
+    r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
+
+
+def _lead_proposed_slot_isos(text: str, tz: str, now_dt) -> list:
+    """"Tuesday at 09:30 CET" / "Thu 3pm" -> the next such moment (lead-local,
+    at least tomorrow) as ISO strings a training slot pick can offer, plus
+    the same day 2h and 4h later so a second slot exists. [] when the lead
+    named no exact time. Never raises."""
+    try:
+        s = str(text or "")
+        zi = ZoneInfo(tz or "Europe/London")
+        base = now_dt.astimezone(zi)
+        out = []
+        for m in _PROPOSED_TIME_RE.finditer(s):
+            day = _PREF_DAYS.get(m.group(1).lower())
+            hour = int(m.group(2)); minute = int(m.group(3) or 0); ap = (m.group(4) or "").lower()
+            if ap == "pm" and hour < 12:
+                hour += 12
+            if ap == "am" and hour == 12:
+                hour = 0
+            if day is None or not (6 <= hour <= 20) or minute not in (0, 15, 30, 45):
+                continue
+            d = base.date() + _dt.timedelta(days=1)
+            while d.weekday() != day:
+                d += _dt.timedelta(days=1)
+            if re.search(r"\bnext\s*$", s[max(0, m.start() - 8):m.start()].lower()) and (d - base.date()).days < 7:
+                d += _dt.timedelta(days=7)  # "next Wednesday" is the one after this week's
+            for extra in (0, 2, 4):
+                loc = _dt.datetime(d.year, d.month, d.day, hour, minute, tzinfo=zi) + _dt.timedelta(hours=extra)
+                out.append(loc.astimezone(_dt.timezone.utc).isoformat(timespec="seconds"))
+        return out
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _training_pick_varied_slots(avail: list, tz: str, eff_lead: dict, now, seed_text: str, lead_text: str = None) -> list:
     """Training-only slot pick: the earliest-slot rule on a synthetic
     calendar gave every practice draft the identical pair (50 of 60 drafts
@@ -680,6 +717,17 @@ def _training_pick_varied_slots(avail: list, tz: str, eff_lead: dict, now, seed_
     if now_dt.tzinfo is None:
         now_dt = now_dt.replace(tzinfo=_dt.timezone.utc)
     pref = _lead_time_preference(lead_text) if lead_text else None
+    # A lead who names an exact time ("Tuesday at 09:30 CET works for me")
+    # must be able to get exactly that time back (reader audit 2026-09-07:
+    # the draft accepted 09:30 and then offered 09:00 and 11:00).
+    proposed = _lead_proposed_slot_isos(lead_text, tz, now_dt) if lead_text else []
+    if proposed:
+        try:
+            exact = pick_slots(proposed, tz, eff_lead, now)
+            if exact:
+                return exact
+        except Exception:  # noqa: BLE001
+            pass
     if pref:
         try:
             zi = ZoneInfo(tz or "Europe/London")
@@ -694,7 +742,7 @@ def _training_pick_varied_slots(avail: list, tz: str, eff_lead: dict, now, seed_
                     continue
                 if pref["half"] == "am" and not (8 <= loc.hour < 12):
                     continue
-                if pref["half"] == "pm" and not (12 <= loc.hour < 18):
+                if pref["half"] == "pm" and not (13 <= loc.hour < 18):  # noon is not "afternoon" (reader audit 2026-09-07)
                     continue
                 if pref["next_week"] and loc.isocalendar()[:2] <= ln.isocalendar()[:2]:
                     continue
@@ -1313,7 +1361,10 @@ def _slot_link(agent: dict, lead: dict, iso_with_offset: str) -> str:
     last = (lead or {}).get("last_name") or ""
     email = (lead or {}).get("email") or ""
     name = f"{first} {last}".strip()
-    return f"{base}/{iso_with_offset}?name={quote(name)}&email={quote(email)}"
+    # Reader audit 2026-09-07: "?name=&email=" hung off every practice slot
+    # link - only prefill what we actually know.
+    _q = "&".join(p for p in (f"name={quote(name)}" if name else "", f"email={quote(email)}" if email else "") if p)
+    return f"{base}/{iso_with_offset}" + (f"?{_q}" if _q else "")
 
 
 def _parse_iso(s):
@@ -2032,6 +2083,21 @@ def lint_draft(html: str, ctx: dict):
         if len(_qn.split()) >= 5 and _qn.lower() in _plain_draft_l:
             return False, ("The draft repeats the lead's own question back to them ('" + _qn[:60]
                            + "') - answer it instead of asking it.")
+    # EVERY QUESTION ANSWERED (reader audit 2026-09-07, loop 3): six of
+    # thirty-three drafts answered one of two or three questions. Each
+    # question's own content words must show up somewhere in the draft.
+    if len(_lead_qs) >= 2:
+        _stop = {"about","would","could","should","there","which","where","their","these","those","other","your",
+                 "with","from","that","this","have","need","what","when","does","will","also","into","after",
+                 "before","them","they","been","were","being","more","some","just","like","than","then","only",
+                 "please","quick","question","questions","thanks","sounds","interesting","really","actually"}
+        for _q in _lead_qs:
+            _kw = [w for w in re.findall(r"[a-z][a-z\-]{4,}", _q.lower()) if w not in _stop]
+            if not _kw:
+                continue
+            if not any(w in _plain_draft_l for w in _kw[:6]):
+                return False, ("The lead asked '" + _q.strip()[:70] + "' and the draft never addresses it - answer "
+                               "every question they asked, each in its own sentence, before anything else.")
     # ACCEPTED ASSET (reader audit 2026-09-07): "yes please, send the
     # breakdown" answered with "Happy to send the breakdown" and no link.
     if (instruction_urls or ctx.get("booking_link")) \
@@ -2535,7 +2601,8 @@ Rules:
 - CALL-ALREADY-REQUESTED (owner HARD RULE 2026-08-28, every SDR). When lead_requested_call is true - the lead asked for the call, asked you to propose times, asked for a setup call, or said yes to one - the call is AGREED. NEVER write "Would you be open to a call...", "would you be up for a quick chat", or any phrasing that re-asks whether they want the call they just asked for: that reads as not listening. Propose the two times DIRECTLY as the scheduling sentence ("Does Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST work for you?" - with the same per-slot links/plain-text rules as the two-times default), keep any answer to their other questions first per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, and confirm who should join when they named attendees (their CFO, their security team). Everything else about the two-times machinery (slots verbatim, fallback ladder, constraints, LEAD-PROPOSED TIME) applies unchanged - only the openness re-ask is banned.
 - NO-CALL-SELLING (owner HARD RULE 2026-08-28, every SDR). Once scheduling is agreed - the lead proposed their own time OR asked for the call - the scheduling sentence contains the times and NOTHING else: no purpose clause, no value pitch, no "where I can run through the discovery call and show what the assessment will surface for you". They already want the call; selling it again reads as scripted. Accept or counter plainly ("Unfortunately I can't make Tue morning, but I can do Monday, 31st August at 10:00 AM CEST or Monday, 31st August at 12:00 PM CEST - does either work?") and stop. Describing what the call covers is allowed ONLY when the lead themselves asked what the call is for, and then it belongs in its own answer sentence per ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST, never bolted onto the time proposal.
 - ANSWER-THE-LEAD'S-ACTUAL-QUESTION-FIRST (owner rule 2026-08-27, every SDR). The FIRST paragraph after the greeting answers the specific thing the lead's latest message asked - their access question, their timeline question, their security question, their pricing question, their "do you apply fixes or just recommend" question - in their terms. NEVER open with a stock offer, product, or process preamble ("[the deliverable] comes from our [offer/assessment/audit], which we set up on a call") before the answer: opening with anything but the answer reads as dodging the question, and repeating the same explanation sentence across replies reads as a bot. Where the reply genuinely needs to explain how the offer works, weave it in as ONE short clause AFTER the answer, never as its own opening paragraph. When the lead asked several questions, answer EVERY ONE of them - each in its own sentence, in the order asked - before any call ask or next step; answering only the first and pivoting to a call is wrong (reader audit 2026-09-07: "send the breakdown" + "do you offer a follow-up session?" got neither). If one genuinely cannot be answered from what you know, say so in a clause ("on the follow-up session I'd want to check with the team and come back to you") rather than skipping it.
-- ACCEPTED ASSET (reader audit 2026-09-07). When the lead says yes to something we offered to send ("yes please", "send it over", "go ahead", "happy to take a look"), the reply hands it over in the first paragraph: a real link from the instructions (the results page, the overview page) named for what it is - never "Happy to send it" with nothing attached, and never the bare homepage described as "the breakdown". If the instructions hold no such link, say plainly what you will send and when, then the next step.
+- ACCEPTED ASSET (reader audit 2026-09-07). When the lead says yes to something we offered to send ("yes please", "send it over", "go ahead", "happy to take a look"), the reply hands it over in the first paragraph: a real link from the instructions named for what it is - for a breakdown, write-up, case study or examples the RESULTS page (never the bare homepage described as "the breakdown"), for "how it works" the overview page - never "Happy to send it" with nothing attached. If the instructions hold no such link, say plainly what you will send and when, then the next step.
+- ANSWER IN YOUR OWN SENTENCES: never splice the lead's phrasing into yours ("how retention and where results live would be handled" is their question fragment, not a clause a person writes) and never answer with a form label ("Who from our side joins:"). When the lead asks who joins from OUR side, name our people (the sender, and who else from the company); "your side" in their email means us.
 - NEVER paste the lead's own question back to them as a question. NEVER promise to send a calendar invite (the booking link or the proposed times are the invite). NEVER write "You will be speaking with me" or "You'll be speaking with me" - the sign-off already says who is writing. When the lead asked nothing and simply agreed, acknowledge in one line and move straight to the next step - no recap of the offer they already said yes to.
 - NEVER-ADMIT-MISSING-WIRING (owner HARD RULE 2026-08-31, every SDR). Never tell the lead that a phone number, booking link, calendar, price, or any other detail is missing, not set up, not wired up, not provided, or unavailable - and never narrate that it will exist later ("once it's set up", "isn't set up yet"). The lead must never sense unfinished wiring. When you lack a booking link, follow the [BOOKING LINK] placeholder rule silently; when you lack a phone number, warmly steer to a scheduled call or keep it on email without one word about phone availability; when you lack a price, follow the instructions' pricing posture without saying a price is unavailable. State what IS true and offer what you DO have - zero meta-commentary about gaps. This rule outranks any instruction-manual line that tells you to announce a missing detail.
 - WEAVE-TAUGHT-FACTS-IN (owner HARD RULE 2026-08-31, every SDR). When the instructions or reviewer feedback supply a concrete fact the reply needs - a price range, a phone number, a link, a timeframe - it must be woven into a natural sentence that answers the lead ("Our pricing is tiered, with engagements typically in the £50K-£150K range depending on your estate."), NEVER parked on its own line or bolted on as a bare value. A paragraph that is nothing but a figure reads as pasted, not written.
@@ -19035,7 +19102,7 @@ Your questions gather the FACTS the manual still lacks so the inbox manager can 
 - Timeline: how long it takes, or how soon a prospect sees results.
 
 Rules:
-- ASK FOR REAL LINKS (owner rule 2026-08-21): each round, one or two questions should ask the owner to PASTE AN ACTUAL LINK the inbox manager may send, always tied to the lead situation that triggers it - "When a lead asks what expertise you have in their sector, which case study or page would you send? Paste the link." Good link asks: sector/industry case studies, results write-ups, product one-pagers, explainer videos (a security/compliance page only when the offer is clearly for regulated or enterprise buyers). Only ask for a link the manual doesn't already hold for that situation, and make the SITUATION half explicit - the answer becomes a resource the inbox manager is allowed to send, so it must be clear when.
+- ASK FOR REAL LINKS (owner rule 2026-08-21): each round, one or two questions should ask the owner to PASTE AN ACTUAL LINK the inbox manager may send, always tied to the lead situation that triggers it. FIRST OF ALL (reader audit 2026-09-07): when the outreach copy offers to SEND something specific - "a short breakdown", "a write-up", "a one-pager", "a video" - the very first link question asks for THAT asset's link, because every "yes please, send it" reply depends on it - "When a lead asks what expertise you have in their sector, which case study or page would you send? Paste the link." Good link asks: sector/industry case studies, results write-ups, product one-pagers, explainer videos (a security/compliance page only when the offer is clearly for regulated or enterprise buyers). Only ask for a link the manual doesn't already hold for that situation, and make the SITUATION half explicit - the answer becomes a resource the inbox manager is allowed to send, so it must be clear when.
 - NEVER ask about the sign-off, the sender's first name, the sender's role or title in the signature, or any part of the sending identity (owner rule 2026-08-21). Who signs each email is decided by the sending mailboxes, which change per campaign - it is never the client's question to answer. "Should the inbox manager include a short sign-off? What first name and role should it use?" is exactly the banned shape.
 - STAY INSIDE THE REPLY (owner rule 2026-08-21): every question must be about a fact, number, policy, stance, link or resource the inbox manager needs in order to REPLY to a lead. Ask for the KNOWLEDGE that determines the reply, never the reply itself. NEVER ask how it operates OUTSIDE writing the reply: who to CC or include on a calendar invite, who to hand the thread to (it never hands off), internal routing, CRM steps, or any back-office process. "Who should the inbox manager include on discovery-call invites by default?" is exactly the banned shape.
 - ASK FOR THE FACT, NEVER THE WORDING (owner rule 2026-08-21, live-confirmed): NEVER ask the owner to write or supply the reply itself. Any question shaped "what one-sentence / one-line / single-sentence reply should the inbox manager send / say / use when X?" is BANNED - that asks them to draft wording (the HOW), which the inbox manager composes on its own from the facts. Ask instead for the underlying fact, number, policy or stance (the WHAT) that decides the reply. Transform every situation question this way: not "what reply to decline a price?" but "is there any price information you are willing to share, or is it strictly on the call?"; not "what reply when spend is under 50k?" but "is under 50k a month a hard disqualifier, or are there exceptions?"; not "what reply to we-already-do-this?" but "what is the one difference from your competitors you most want leads to hear?". The words reply, sentence, line, say, respond, word it, or phrase it must never be the thing a question asks the owner to provide.
