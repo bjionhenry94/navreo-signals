@@ -18389,7 +18389,13 @@ def warmup_capacity_get() -> tuple[dict, int]:
         r = mirror_box.get(email)
         if r is None:
             return True   # unknown to the mirror — keep the bundle's verdict
-        return bool(r.get("warmup_enabled")) and not (r.get("message_per_day") or 0)
+        # Owner ruling 2026-09-07: "resting" means sending capacity is zero,
+        # full stop — warm-up state does not enter into it (warm-up should
+        # always be on; a box with it off is a separate defect the Not-warming
+        # tab surfaces, not a reason to hide a held box from this count). The
+        # old "warm-up ON and cap 0" rule under-read KRG by 89 boxes / 178 per
+        # day. The cap>0-is-never-resting rule above already guards the fleet.
+        return not (r.get("message_per_day") or 0)
     # Attribution maps: email→client (shared-fleet boxes under navreo, from the
     # campaign-membership map) and workspace-slug→display name (own-workspace
     # clients). Both are best-effort — a failure just leaves boxes under Navreo
