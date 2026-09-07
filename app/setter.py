@@ -5273,6 +5273,30 @@ def merge_correction_into_instructions(agent: dict, note: str, source: str = "ma
                 _cand_flat = candidate.replace(",", "")
                 _vals_ok = all(
                     (v.replace(",", "") in _cand_flat) for v in _note_vals)
+                if _vals_ok and source == "interview":
+                    # Reader audit 2026-09-07 (loop 3): "no obligation at all,
+                    # they keep the findings either way" carried no digits and
+                    # no URL, so the guarantee never looked and the merge dropped
+                    # it. Every answer must leave a trace: its most distinctive
+                    # word, else its digits, else its first words.
+                    _cand_l = candidate.lower()
+                    for _blk in note.split("\n\n"):
+                        if "\nA:" not in _blk:
+                            continue
+                        _ans = _blk.split("\nA:", 1)[1].strip()
+                        if not _ans or _ans.lower() in ("none", "no", "n/a", "yes"):
+                            continue
+                        _words = [w for w in re.findall(r"[A-Za-z][A-Za-z\-']{4,}", _ans)
+                                  if w.lower() not in ("their", "there", "which", "would", "about", "should",
+                                                       "please", "after", "before", "either", "every", "other")]
+                        if _words:
+                            _probe = max(_words, key=len).lower()
+                        else:
+                            _digs = re.findall(r"\d+", _ans)
+                            _probe = _digs[0] if _digs else _ans.lower()[:24]
+                        if _probe and _probe not in _cand_l:
+                            _vals_ok = False
+                            break
                 if candidate and old_urls.issubset(cand_urls) and len(candidate) <= max_len and _vals_ok:
                     new_text = candidate
                     how = "merged"
@@ -19426,7 +19450,28 @@ def route_training_interview(payload):
                 # _maybe_run_queued_retrain merges right behind the batch.
                 _flag_training_retrain_queued(agent_id, "pool" if share_token else True)
                 retrain = "queued"
-            return 200, {"ok": True, "saved": len(qa_lines), "at": at, "retrain": retrain}
+            # Reader audit 2026-09-07 (loop 3): the wizard checked a phone
+            # number but took "$888K+" from a euro-priced manual in silence.
+            _nudge = None
+            try:
+                _manual_l = str(_agent_instructions(agent) or "").lower()
+                _eur = len(re.findall(r"€|\beuros?\b|\beur\b", _manual_l))
+                _usd = len(re.findall(r"\$|\bdollars?\b|\busd\b", _manual_l))
+                for _qid, _ans in raw.items():
+                    _qt = by_id.get(str(_qid), "").lower()
+                    _a = _normalise_taught_answer(_qt, str(_ans or "").strip())
+                    if re.search(r"\bprice|pricing|\bcost", _qt) and _a:
+                        if "$" in _a and _eur > _usd:
+                            _nudge = {"kind": "note", "pending": False,
+                                      "text": (f"price saved as {_a}. Your manual prices in euros - if that should be "
+                                               f"{_a.replace('$', '€')}, answer the question again and we'll swap it.")}
+                        elif "€" in _a and _usd > _eur:
+                            _nudge = {"kind": "note", "pending": False,
+                                      "text": (f"price saved as {_a}. Your manual prices in dollars - if that should be "
+                                               f"{_a.replace('€', '$')}, answer the question again and we'll swap it.")}
+            except Exception:  # noqa: BLE001
+                _nudge = None
+            return 200, {"ok": True, "saved": len(qa_lines), "at": at, "retrain": retrain, "learned": _nudge}
 
         return 400, {"error": "Unknown action."}
     except Exception as e:  # noqa: BLE001
