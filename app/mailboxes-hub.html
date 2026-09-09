@@ -828,8 +828,19 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // Resting tab. Backend deletes a ledger row on restore, so restDue stays true.
   function restingSet() {
     var s = {};
-    ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
-    ((bundleView("rested")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
+    // Census first (owner ruling 2026-09-09: resting = cap 0). liveZeroCap is
+    // the complete map of domains with a held mailbox, published when the
+    // mirror is fresh; the audit views used to keep a domain after restore and
+    // hid six below-floor SENDING domains from the floor tab through this very
+    // set. The bundle now cleans the views at build time too; this is the
+    // belt to that braces. Fall back to the views only when the census is absent.
+    var lz = S.bundle && S.bundle.liveZeroCap;
+    if (lz && typeof lz === "object") {
+      Object.keys(lz).forEach(function (d) { if (d && (Number(lz[d]) || 0) > 0) s[d] = true; });
+    } else {
+      ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
+      ((bundleView("rested")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
+    }
     var rd = S.bundle && S.bundle.restDue;
     if (rd) Object.keys(rd).forEach(function (d) { if (d) s[d] = true; });
     return s;
@@ -924,7 +935,19 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     if (!rows) return null;
     return rows.length;
   }
+  // "truth as of": every tab is checked against the mirror of Smartlead's own
+  // settings, which syncs nightly. Shown next to the manager title; red past
+  // 26h so staleness can never hide again (owner ruling 2026-09-09).
+  function renderMgrTruth() {
+    var el = document.getElementById("mgrTruth"); if (!el) return;
+    var mt = S.bundle && S.bundle.mirrorTruth, asOf = (mt && mt.asOf) || (S.bundle && S.bundle.liveZeroCapAsOf);
+    var ts = asOf ? Date.parse(asOf) : NaN;
+    if (isNaN(ts)) { el.textContent = ""; return; }
+    var h = (Date.now() - ts) / 36e5, stale = h > 26;
+    el.innerHTML = ' <span class="' + (stale ? "t-r" : "t-mut") + '" style="font-size:12px;font-weight:400;text-transform:none;letter-spacing:0" title="Every tab is checked against the mirror of Smartlead\'s own settings (caps, warm-up, connection), which syncs nightly. Red = the mirror is more than a day old.">\u00b7 truth as of ' + esc(new Date(ts).toISOString().slice(0, 16).replace("T", " ")) + ' UTC, ' + (h < 1 ? Math.round(h * 60) + 'm' : Math.round(h) + 'h') + ' ago' + (stale ? ' \u2014 STALE' : '') + '</span>';
+  }
   function renderMgrTabs() {
+    renderMgrTruth();
     el("hub-mgr-tabs").innerHTML = MGR_TABS.map(function (t) {
       var c = mgrCount(t.key), badge = "";
       if (c != null) badge = ' <span class="tabbadge' + (c > 0 ? "" : " n") + '">' + comma(c) + '</span>';
@@ -1096,7 +1119,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         (r.resting_now ? ", resting now" + (r.resting_days ? " (day " + r.resting_days + ")" : "") : ", live") + ")";
     }).join("\n");
     return "These sending domains keep completing a rest cycle and failing again — see the Repeat parks tab in " +
-      "the Inbox & Domain Manager. 'Completed rest cycle' = the park landed, the domain's mailboxes stayed at cap 0 " +
+      "the Inbox & Domain Manager<span id="mgrTruth"></span>. 'Completed rest cycle' = the park landed, the domain's mailboxes stayed at cap 0 " +
       "for a real rest, and it came back to sending (verified against the daily cap snapshots, not the activity log). " +
       "A domain that keeps earning parks after every full rest is dead weight: every cycle burns a rest window plus restore sends.\n\n" +
       "For each domain below, weigh its trailing-30d reply rate and decide: RETIRE it (park it and " +
