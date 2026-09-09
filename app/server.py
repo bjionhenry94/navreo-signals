@@ -17696,6 +17696,14 @@ def _deliv_bundle_run_bg_inner():
             _deliv_merge_client_ws(out)
         except Exception as e:  # noqa: BLE001 — client merge failing must never void Navreo's bundle
             out["errors"]["clientWs"] = str(e)[:200]
+        # Mirror truth pass (owner ruling 2026-09-09, "do this with all the
+        # tabs"): every view row must agree with Smartlead's own fields in the
+        # mirror, and every box the mirror flags must be listed. Runs AFTER the
+        # client-ws merge so it covers every workspace; never voids the bundle.
+        try:
+            _deliv_apply_mirror_truth(out)
+        except Exception as e:  # noqa: BLE001
+            out["errors"]["mirrorTruth"] = str(e)[:200]
     ok = bool(out["views"]) or bool(out["dh"])
     err = json.dumps(out["errors"])[:300] if out["errors"] else None
     with _DELIV_BUNDLE_LOCK:
@@ -17708,6 +17716,83 @@ def _deliv_bundle_run_bg_inner():
     # domains to the live manager (caught on the 2026-07-11 live verify).
     if ok and not _deliv_mock_on():
         _deliv_bundle_persist(out)
+
+
+def _deliv_apply_mirror_truth(out):
+    """One truth pass over every manager view (owner ruling 2026-09-09, "do
+    this with all the tabs": resting = cap 0, warm-up always on).
+
+    The mirror of Smartlead's own fields is the truth for what a row CLAIMS: a
+    rested/inwarmup row must be a cap-0 box, a warmupoff row a warm-up-off box,
+    a reconnect row a failed connection. The audit's views keep a box after the
+    fact — on 2026-09-09 its rested view carried 1,868 sending boxes (96% of
+    it), which hid six below-floor SENDING domains from the floor tab. Rows the
+    mirror contradicts are dropped; boxes the views omit are added for
+    warmupoff and reconnect (inwarmup already carries every cap-0 box via the
+    client-ws merge + census). Maildoso is skipped for warm-up (it warms on
+    Instantly by design). Boxes the mirror does not know are kept. Stamps
+    out["mirrorTruth"] = {asOf, stats} so the manager can show how old the
+    truth is."""
+    mrows = sb_get_all("mailboxes?select=email,domain,workspace,message_per_day,"
+                       "warmup_enabled,smtp_ok,imap_ok,account_type,smtp_host,"
+                       "smartlead_id,tags,last_synced_at") or []
+    if not mrows:
+        return
+    mb = {str(r.get("email") or "").lower(): r for r in mrows if r.get("email")}
+
+    def _prov(r):
+        a = str(r.get("account_type") or "").upper()
+        if a == "SMTP" and "maildoso" in str(r.get("smtp_host") or "").lower():
+            return "MAILDOSO"
+        return a or "SMTP"
+    preds = {
+        "rested": lambda r: not (r.get("message_per_day") or 0),
+        "inwarmup": lambda r: not (r.get("message_per_day") or 0),
+        "warmupoff": lambda r: (not r.get("warmup_enabled")) and _prov(r) != "MAILDOSO",
+        "reconnect": lambda r: r.get("smtp_ok") is False or r.get("imap_ok") is False,
+    }
+    views = out.get("views") or {}
+    stats = {}
+    for k, pred in preds.items():
+        v = views.get(k)
+        if not isinstance(v, dict) or not isinstance(v.get("rows"), list):
+            continue
+        kept, dropped = [], 0
+        for row in v["rows"]:
+            m = mb.get(str((row or {}).get("email") or "").lower())
+            if m is not None and not pred(m):
+                dropped += 1
+                continue
+            kept.append(row)
+        v["rows"] = kept
+        stats[k] = {"rows": len(kept), "dropped": dropped, "added": 0}
+    for k in ("warmupoff", "reconnect"):
+        v = views.get(k)
+        if not isinstance(v, dict) or not isinstance(v.get("rows"), list):
+            continue
+        have = {str((r or {}).get("email") or "").lower() for r in v["rows"]}
+        for em, m in mb.items():
+            if em in have or not preds[k](m):
+                continue
+            tags = [str(t.get("tag_name") if isinstance(t, dict) else t)
+                    for t in (m.get("tags") or []) if t]
+            ws = str(m.get("workspace") or "navreo")
+            v["rows"].append({
+                "id": "mirror-%s" % (m.get("smartlead_id") or em), "email": em,
+                "domain": str(m.get("domain") or "").lower(), "workspace": ws,
+                "provider": _deliv_client_ws_provider(m.get("smtp_host")),
+                "cap": m.get("message_per_day") or 0, "maildoso": _prov(m) == "MAILDOSO",
+                "tags": ([ws] if ws != "navreo" else []) + tags[:2],
+                "warmup_status": None, "kind": k,
+                "reason": ("warm-up off" if k == "warmupoff" else "SMTP/IMAP connection failed"),
+                "reason_category": ("" if k == "warmupoff" else "conn fail"),
+                "reconnectable": k == "reconnect", "eligible": False,
+                "rested": False, "restedAt": None})
+            st = stats.setdefault(k, {"rows": 0, "dropped": 0, "added": 0})
+            st["added"] += 1
+            st["rows"] += 1
+    newest = max((str(r.get("last_synced_at") or "") for r in mrows), default="") or None
+    out["mirrorTruth"] = {"asOf": newest, "stats": stats}
 
 
 def _deliv_bundle_start(force=False):
