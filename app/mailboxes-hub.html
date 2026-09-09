@@ -170,7 +170,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       <!-- INBOX & DOMAIN MANAGER — the CLIENT picker lives here, and only changes this -->
       <section class="mbx-sec" id="sec-mgr">
       <div class="sec-h">
-        <h3>Inbox &amp; domain manager</h3>
+        <h3>Inbox &amp; domain manager<span id="mgrTruth"></span></h3>
         <span class="scope" id="hub-mgr-scope" aria-live="polite"><b>All clients</b></span>
         <div class="sec-ctrl mgr-ctrl">
           <span class="ctrl-lab">Client</span>
@@ -1119,7 +1119,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
         (r.resting_now ? ", resting now" + (r.resting_days ? " (day " + r.resting_days + ")" : "") : ", live") + ")";
     }).join("\n");
     return "These sending domains keep completing a rest cycle and failing again — see the Repeat parks tab in " +
-      "the Inbox & Domain Manager<span id="mgrTruth"></span>. 'Completed rest cycle' = the park landed, the domain's mailboxes stayed at cap 0 " +
+      "the Inbox & Domain Manager. 'Completed rest cycle' = the park landed, the domain's mailboxes stayed at cap 0 " +
       "for a real rest, and it came back to sending (verified against the daily cap snapshots, not the activity log). " +
       "A domain that keeps earning parks after every full rest is dead weight: every cycle burns a rest window plus restore sends.\n\n" +
       "For each domain below, weigh its trailing-30d reply rate and decide: RETIRE it (park it and " +

@@ -28264,6 +28264,43 @@ if os.environ.get("RENDER"):
     _grades_warm_timer.daemon = True
     _grades_warm_timer.start()
 
+# ── Daily truth refresh (owner ruling 2026-09-09: "ensure this is updating on
+# a daily basis"). The external hourly /api/cron/audit-refresh cron has not
+# fired once in 7 days (activity log), so the manager's bundle only rebuilt on
+# manual kicks and after releasing sweeps. This in-process loop needs no
+# external scheduler: every hour it refreshes the audit blob (TTL-respecting)
+# and the grade map, and rebuilds the deliverability bundle whenever it is
+# older than _TRUTH_MAX_AGE_S — so every tab sits at most a few hours behind
+# the nightly mirror sync (04:31 UTC), never a day. Ticks are logged under
+# /api/cron/truth-refresh so the cadence is auditable.
+_TRUTH_LOOP_INTERVAL_S = 3600
+_TRUTH_MAX_AGE_S = 6 * 3600
+
+
+def _deliv_truth_loop():
+    time.sleep(120)  # let boot settle: grades warm at 25 s, bundle restore first
+    while True:
+        try:
+            age = time.time() - float(_DELIV_BUNDLE.get("ts") or 0)
+            rebuilt = False
+            if _DELIV_BUNDLE.get("data") is None or age > _TRUTH_MAX_AGE_S:
+                _deliv_bundle_start(force=True)
+                rebuilt = True
+            _deliv_audit_start(force=False)
+            _grades_refresh_bg()
+            try:
+                log_activity("/api/cron/truth-refresh", action="truth_refresh",
+                             payload={"bundle_age_s": int(age), "rebuilt": rebuilt})
+            except Exception:  # noqa: BLE001 — logging is nice-to-have
+                pass
+        except Exception as e:  # noqa: BLE001 — a failed tick must not kill the loop
+            print(f"[truth-refresh] tick failed: {str(e)[:160]}", file=sys.stderr)
+        time.sleep(_TRUTH_LOOP_INTERVAL_S)
+
+
+if os.environ.get("RENDER"):
+    threading.Thread(target=_deliv_truth_loop, name="truth-refresh", daemon=True).start()
+
 if __name__ == "__main__":
     # Render injects $PORT and needs 0.0.0.0; locally, argv[1] or 7901 on 127.0.0.1.
     port = int(os.environ.get("PORT") or (sys.argv[1] if len(sys.argv) > 1 else 7901))
