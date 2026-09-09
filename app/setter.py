@@ -8152,6 +8152,7 @@ CLIENT_NAME_CLIENT_IDS = (
 # in one place).
 FLIP_NAME_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared)
+    "greenshift": "C0BQ954RBAL",   # #greenshift-navreo (client-shared)
 }
 
 # A FRESH positive on a navreo-hosted client campaign has no path to that
@@ -8164,6 +8165,7 @@ FLIP_NAME_CHANNELS = {
 # #revive-navreo (Bjion 2026-09-02, "positives -> shared channel").
 POSITIVE_SHARED_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared, Slack Connect)
+    "greenshift": "C0BQ954RBAL",   # #greenshift-navreo (client-shared; Bjion 2026-09-10)
 }
 
 # A "positive-re-reply" row is routeB's label for "an already-positive lead
