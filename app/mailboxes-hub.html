@@ -937,24 +937,31 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // floor). Reads the /api/deliverability/grades map (same grade the cap engine
   // acts on). Blank while the map is still loading; a muted "–" once loaded if
   // the domain has no 30-day sends to grade.
+  // A letter needs evidence. Below GRADE_MIN_SENDS the grade is the prior
+  // talking, not the domain — on 2026-09-09 a 16-send domain read "A" while
+  // resting. Same floor the early release uses, so a letter on the Resting tab
+  // always means "eligible"; a resting A is then a real anomaly, not noise.
+  var GRADE_MIN_SENDS = 300;
+  function gradeThin(g) { return !!g && (Number(g.sent_30d) || 0) < GRADE_MIN_SENDS; }
   function gradeBadge(dom) {
     if (!S.grades || !S.grades.grades) return '';
     var g = S.grades.grades[String(dom || "").toLowerCase()];
     if (!g || !g.grade) return '<span class="grade-badge gr-x" title="Not graded — no sends in the last 30 days">–</span>';
+    if (gradeThin(g)) return '<span class="grade-badge gr-x" title="Not graded yet — ' + comma(g.sent_30d || 0) + ' sends in 30 days, under the ' + GRADE_MIN_SENDS + ' needed for a grade">–</span>';
     var pct = (g.p_healthy != null) ? Math.round(g.p_healthy * 100) + '% likely healthy' : '';
     var act = g.action === 'park' ? 'rests' : g.action === 'cap_down' ? 'capped down' : 'keeps sending';
-    return '<span class="grade-badge gr-' + esc(g.grade) + '" title="Grade ' + esc(g.grade) + (pct ? ' · ' + pct : '') + ' · ' + act + '">' + esc(g.grade) + '</span>';
+    return '<span class="grade-badge gr-' + esc(g.grade) + '" title="Grade ' + esc(g.grade) + (pct ? ' · ' + pct : '') + ' · on ' + comma(g.sent_30d || 0) + ' sends · ' + act + '">' + esc(g.grade) + '</span>';
   }
   function gradeLegend() {
     if (!S.grades || !S.grades.grades) return '';
-    var items = [["A", "healthy"], ["B", "likely healthy"], ["C", "watch"], ["D", "cap down"], ["E", "rest"]];
+    var items = [["A", "healthy"], ["B", "likely healthy"], ["C", "watch"], ["D", "cap down"], ["E", "rest"], ["–", "under " + GRADE_MIN_SENDS + " sends, not graded", "x"]];
     return '<div class="grade-legend"><span class="t-mut">Grade:</span>' + items.map(function (i) {
-      return '<span class="gi"><span class="grade-badge gr-' + i[0] + '">' + i[0] + '</span>' + i[1] + '</span>';
+      return '<span class="gi"><span class="grade-badge gr-' + (i[2] || i[0]) + '">' + i[0] + '</span>' + i[1] + '</span>';
     }).join("") + '</div>';
   }
   function gradeOf(dom) {
     var G = S.grades && S.grades.grades, g = G && G[String(dom || "").toLowerCase()];
-    return (g && g.grade) || null;
+    return (g && g.grade && !gradeThin(g)) ? g.grade : null;   // thin sample = no grade (falls back to cycle count)
   }
   // Grade-informed Repeat-parks recommendation: Replace / Repair / Keep, from
   // the health grade (A healthiest … E confidently below floor) plus how many
