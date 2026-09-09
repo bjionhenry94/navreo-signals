@@ -865,12 +865,17 @@ table.heat tr.heat-all + tr td{padding-top:9px}
     // the whole fleet — take whichever is larger, so the number is never a
     // truncation artefact (see memory deliverability-count-truth-fix).
     var lz = (S.bundle && S.bundle.liveZeroCap) || {};
-    // Cap truth (2026-09-07): a domain the fleet census shows with NO cap-0
-    // mailboxes is sending, not resting, whichever audit view still lists it.
-    // The views keep a domain after restore, which inflated this tab and its
-    // badge (119 rows when ~28 domains were actually held). A domain the census
-    // does not know is kept — unknown is not "ghost-free".
-    order = order.filter(function (dom) { return !(dom in lz) || (Number(lz[dom]) || 0) > 0; });
+    // Cap truth (2026-09-07, corrected 2026-09-09): liveZeroCap is the
+    // census-complete map of domains with >= 1 cap-0 mailbox, published only
+    // when the census is fresh. So when it is PRESENT, a domain absent from it
+    // has no held mailbox and is sending — drop it, whatever the audit views
+    // say. The first cut kept absent domains ("unknown is not ghost-free"),
+    // which is right for the restore queue but wrong here: the views keep a
+    // domain after restore, so the tab listed 113 domains (81 of them grade A,
+    // actively sending) when the mirror held 18. When the map is absent (census
+    // not fresh) keep everything — no truth available to filter on.
+    var lzFresh = !!(S.bundle && S.bundle.liveZeroCap && typeof S.bundle.liveZeroCap === "object");
+    if (lzFresh) order = order.filter(function (dom) { return (Number(lz[dom]) || 0) > 0; });
     var entries = order.map(function (dom) {
       var rs = gr.g[dom] || [];
       var dueTs = rd[dom] || null;
