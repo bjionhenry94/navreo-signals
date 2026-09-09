@@ -147,18 +147,50 @@ def _fix_acronyms(s: str) -> str:
 # never touched. _CASE_KEEP_UPPER / _CASE_FORCE_TITLE are the manual overrides
 # for the rare word the length rule gets wrong (e.g. a 5-letter real word).
 _CASE_KEEP_UPPER = set()
-_CASE_FORCE_TITLE = set()
+# Common ≤5-letter English words that read as SHOUTING (not acronyms) when
+# upper-cased, so they title-case even at short length: "ICONIC SALES" ->
+# "Iconic Sales", not "Iconic SALES". True acronyms (TRB, EMS, DTC) are absent.
+_CASE_FORCE_TITLE = {
+    "SALES", "MEDIA", "CLOUD", "LABS", "FOODS", "HOMES", "LOANS", "WORKS",
+    "NEWS", "LEGAL", "DATA", "CARE", "TECH", "AUTO", "HOME", "FOOD", "SHOP",
+    "WORK", "PLAY", "LIVE", "GAMES", "TOURS", "FILMS", "CARS", "JOBS", "BANK",
+    "LOAN", "TEAM", "LABEL", "STORE", "TOOLS", "PARTS", "GOODS", "BRAND",
+}
 _CO_TITLE_MINOR = {"of", "and", "the", "for", "to", "in", "at", "a", "an", "or",
                    "on", "with", "de", "du", "van", "per", "as", "by", "und"}
+_LETTER_RUN = re.compile(r"[^\W\d_]+")  # unicode letter runs (keeps é, ø, …)
 
 
 def _shout_core(tok: str) -> str:
-    return re.sub(r"[^A-Za-z]", "", tok)
+    # Unicode letters only — so "PAPBJØRN" measures 8, not a broken ASCII 7.
+    return "".join(_LETTER_RUN.findall(tok))
+
+
+def _title_token(tok: str) -> str:
+    # Title-case each letter run, unicode-safe: "PAPBJØRN"->"Papbjørn",
+    # "BIO&PHARMA"->"Bio&Pharma". str.capitalize() lowercases the run tail
+    # (incl. accented letters) and upper-cases only its first letter.
+    return _LETTER_RUN.sub(lambda m: m.group(0).capitalize(), tok)
+
+
+def _is_hyphen_acronym(tok: str) -> bool:
+    # "DTC-GTM" / "B2B-SaaS"-style: every hyphen part is a short all-caps
+    # acronym, so keep the whole token upper rather than title-casing it.
+    if "-" not in tok:
+        return False
+    parts = [p for p in tok.split("-") if p]
+    if len(parts) < 2:
+        return False
+    return all(p == p.upper() and 0 < len(_shout_core(p)) <= 5 for p in parts)
 
 
 def _is_shout_token(tok: str) -> bool:
     core = _shout_core(tok)
-    return len(core) > 5 and tok == tok.upper() and core.upper() not in _CASE_KEEP_UPPER
+    if tok != tok.upper() or core.upper() in _CASE_KEEP_UPPER:
+        return False
+    if _is_hyphen_acronym(tok):
+        return False
+    return len(core) > 5
 
 
 def _normalise_shouting(s: str) -> str:
@@ -172,16 +204,18 @@ def _normalise_shouting(s: str) -> str:
     for i, t in enumerate(tokens):
         core = _shout_core(t)
         low = core.lower()
-        if len(core) < 2 or t != t.upper():  # digits-only / mixed-case -> leave
+        if len(core) < 2 or t != t.upper():   # digits-only / mixed-case -> leave
             out.append(t)
         elif core.upper() in _CASE_KEEP_UPPER:
             out.append(t)
-        elif i and low in _CO_TITLE_MINOR:    # of / and / the … -> lowercase
+        elif _is_hyphen_acronym(t):            # DTC-GTM -> keep
+            out.append(t)
+        elif i and low in _CO_TITLE_MINOR:     # of / and / the … -> lowercase
             out.append(low)
         elif len(core) <= 5 and core.upper() not in _CASE_FORCE_TITLE:
             out.append(t)                      # short letter-acronym -> keep upper
-        else:                                  # shouting word -> Title-case each run
-            out.append(re.sub(r"[A-Za-z]+", lambda m: m.group(0).capitalize(), t))
+        else:                                  # shouting word -> Title-case
+            out.append(_title_token(t))
     return " ".join(out)
 
 
