@@ -71,6 +71,12 @@ COMPANY_TAIL_RE = re.compile(r"\s*[—–|:]\s*\S.*$|\s+-\s+\S.*$")
 PARENT_CLAUSE_RE = re.compile(
     r"[,\s]+(?:an?|the)\s+\S.*?\s+(?:compan(?:y|ies)|group|brand)\s*$"
     r"|[,\s]+part\s+of\s+\S.*$", re.IGNORECASE)
+# Trailing scope/reach word — "Baxter International" -> "Baxter",
+# "TRB Chemedica International" -> "TRB Chemedica". Bjion ruling 2026-09-09:
+# a trailing "International" always trims. Only the tail, so "International
+# Paper" (leading) is untouched. Global/Worldwide are the same class.
+SCOPE_TAIL_RE = re.compile(
+    r"[,\s]+\b(international|int'?l\.?|global|worldwide)\s*\.?\s*$", re.IGNORECASE)
 
 
 def clean_company_name(company: Optional[str], fallback: bool = True) -> Optional[str]:
@@ -89,8 +95,9 @@ def clean_company_name(company: Optional[str], fallback: bool = True) -> Optiona
         return m.group(1)
     s = NON_LATIN_TAIL.sub("", s).strip()
     s = PARENTHETICAL.sub("", s).strip()
-    for _ in range(3):
+    for _ in range(4):  # peel stacked tails: "Baxter International Inc." -> "Baxter"
         new = LEGAL_RE.sub("", s).strip(" .,")
+        new = SCOPE_TAIL_RE.sub("", new).strip(" .,")
         if new == s:
             break
         s = new
@@ -98,9 +105,11 @@ def clean_company_name(company: Optional[str], fallback: bool = True) -> Optiona
     new = TLD_RE.sub("", s).strip()  # navreo.ai -> navreo
     if len(new) >= 2:
         s = new
-    # NOTE: do NOT title-case ALL-CAPS names — acronyms (NASA, CPB, HVAC) are meant
-    # to stay capitalised, and there's no reliable way to tell an acronym from a
-    # shouting brand, so leave all-caps as-is per user rule.
+    # Title-case SHOUTING brand names ("ADVANZ PHARMA" -> "Advanz Pharma",
+    # "BIOTRONIK" -> "Biotronik") while leaving genuine letter-acronyms upper
+    # (IQVIA, EMS, STADA, ICON). Per Bjion ruling 2026-09-09: "unless it's an
+    # abbreviation, always normalise the capitalised names." See _normalise_shouting.
+    s = _normalise_shouting(s)
     s = _fix_acronyms(s)  # only the mixed-case fix: "Buldrr Ai" -> "Buldrr AI"
     s = email_safe(s)  # strip trademark/pipe/emoji so a merged {{company}} is email-ready
     if len(s) < 2:
@@ -126,6 +135,54 @@ def _fix_acronyms(s: str) -> str:
     if not s:
         return s
     return " ".join(_ACRONYMS.get(w.upper(), w) for w in s.split())
+
+
+# ── Shouting-brand casing (Bjion ruling 2026-09-09) ──────────────────────────
+# "Unless it's an abbreviation, always normalise the capitalised names."
+# A genuine letter-acronym stays UPPER; a shouting word gets Title-cased.
+# We can't consult a dictionary, so the proxy is length: an all-caps alpha run
+# of >5 letters is treated as a shouting word (IQVIA/STADA=5, EMS/IBSA/KLS/TRB/
+# ICON ≤5 stay upper; BIOTRONIK/ADVANZ/PHARMA/URSAPHARM/MENARINI get cased).
+# We only recase a name that CONTAINS such a token, so a lone short acronym is
+# never touched. _CASE_KEEP_UPPER / _CASE_FORCE_TITLE are the manual overrides
+# for the rare word the length rule gets wrong (e.g. a 5-letter real word).
+_CASE_KEEP_UPPER = set()
+_CASE_FORCE_TITLE = set()
+_CO_TITLE_MINOR = {"of", "and", "the", "for", "to", "in", "at", "a", "an", "or",
+                   "on", "with", "de", "du", "van", "per", "as", "by", "und"}
+
+
+def _shout_core(tok: str) -> str:
+    return re.sub(r"[^A-Za-z]", "", tok)
+
+
+def _is_shout_token(tok: str) -> bool:
+    core = _shout_core(tok)
+    return len(core) > 5 and tok == tok.upper() and core.upper() not in _CASE_KEEP_UPPER
+
+
+def _normalise_shouting(s: str) -> str:
+    if not s:
+        return s
+    tokens = s.split()
+    force = any(_shout_core(t).upper() in _CASE_FORCE_TITLE for t in tokens)
+    if not force and not any(_is_shout_token(t) for t in tokens):
+        return s  # no shouting word present — a lone acronym is left untouched
+    out = []
+    for i, t in enumerate(tokens):
+        core = _shout_core(t)
+        low = core.lower()
+        if len(core) < 2 or t != t.upper():  # digits-only / mixed-case -> leave
+            out.append(t)
+        elif core.upper() in _CASE_KEEP_UPPER:
+            out.append(t)
+        elif i and low in _CO_TITLE_MINOR:    # of / and / the … -> lowercase
+            out.append(low)
+        elif len(core) <= 5 and core.upper() not in _CASE_FORCE_TITLE:
+            out.append(t)                      # short letter-acronym -> keep upper
+        else:                                  # shouting word -> Title-case each run
+            out.append(re.sub(r"[A-Za-z]+", lambda m: m.group(0).capitalize(), t))
+    return " ".join(out)
 
 
 # ── Email-safe sanitising + person-name cleaning ─────────────────────────────
