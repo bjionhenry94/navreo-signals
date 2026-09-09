@@ -23123,10 +23123,51 @@ def _grades_compute() -> dict:
             "generated_at": datetime.now(timezone.utc).isoformat()}
 
 
-def _grades_refresh_bg() -> bool:
+_GRADES_SNAP_ID = "domain_grades_v1"
+
+
+def _grades_seed_from_snapshot() -> bool:
+    """Cold process (every deploy restarts it): reload the last grade map from
+    the Supabase blob snapshot instead of recomputing it. Egress check-in
+    2026-09-09: 45 deploys in two days each wiped _GRADES_CACHE, and every
+    cold boot re-ran the three provider previews (~230 chunk reads, ~23 MB) -
+    the 3 h TTL never got to apply. Returns True if the cache was seeded."""
+    with _GRADES_LOCK:
+        if _GRADES_CACHE["data"]:
+            return False
+    try:
+        snap = _blob_snapshot_load_aged(_GRADES_SNAP_ID, _GRADES_TTL_S)
+    except Exception:  # noqa: BLE001 — a missing snapshot just means compute
+        snap = None
+    if not (isinstance(snap, dict) and isinstance(snap.get("data"), dict)
+            and snap["data"].get("grades")):
+        return False
+    with _GRADES_LOCK:
+        if _GRADES_CACHE["data"]:
+            return False
+        _GRADES_CACHE.update(data=snap["data"], ts=float(snap.get("ts") or time.time()))
+    return True
+
+
+def _grades_store(out: dict) -> None:
+    """Cache + persist a freshly computed map (persist is best-effort)."""
+    ts = time.time()
+    _GRADES_CACHE.update(data=out, ts=ts)
+    if out.get("grades"):
+        _blob_snapshot_save(_GRADES_SNAP_ID, {"data": out, "ts": ts})
+
+
+def _grades_refresh_bg(force: bool = False) -> bool:
     """Kick a background recompute of the grade map unless one is already
-    running. Returns True if a refresh was started. A failed refresh keeps the
+    running OR the cached map is still inside _GRADES_TTL_S (the hourly truth
+    loop and every hub load used to trigger a full recompute regardless of
+    age). Returns True if a refresh was started. A failed refresh keeps the
     last good map in place."""
+    if not force:
+        _grades_seed_from_snapshot()
+        with _GRADES_LOCK:
+            if _GRADES_CACHE["data"] and (time.time() - _GRADES_CACHE["ts"]) < _GRADES_TTL_S:
+                return False
     with _GRADES_LOCK:
         if _GRADES_CACHE["computing"]:
             return False
@@ -23135,7 +23176,7 @@ def _grades_refresh_bg() -> bool:
     def _run():
         try:
             out = _grades_compute()
-            _GRADES_CACHE.update(data=out, ts=time.time())
+            _grades_store(out)
         except Exception as e:  # noqa: BLE001 — keep the last good map
             print(f"[grades] background refresh failed: {str(e)[:160]}", flush=True)
         finally:
@@ -23158,10 +23199,12 @@ def grades_get(force: bool = False) -> tuple[dict, int]:
     the cache) blocked on the 3-provider recompute, 502'd at the proxy, and the
     page — which never retried — stayed grade-less until a manual reload."""
     ent = _GRADES_CACHE
+    if not ent["data"]:
+        _grades_seed_from_snapshot()
     fresh = bool(ent["data"]) and (time.time() - ent["ts"]) < _GRADES_TTL_S
     if fresh and not force:
         return ent["data"], 200
-    _grades_refresh_bg()
+    _grades_refresh_bg(force=force)
     if ent["data"]:
         return {**ent["data"], "stale": True, "computing": bool(ent["computing"])}, 200
     return {"ok": True, "computing": True, "grades": {}, "count": 0,
@@ -23186,10 +23229,12 @@ def _grades_map_for_sweep() -> dict:
     Never raises — an empty map just means no early release this pass."""
     try:
         ent = _GRADES_CACHE
+        if not ent["data"]:
+            _grades_seed_from_snapshot()
         if ent["data"] and (time.time() - ent["ts"]) < _GRADES_TTL_S:
             return ent["data"].get("grades") or {}
         out = _grades_compute()
-        _GRADES_CACHE.update(data=out, ts=time.time())
+        _grades_store(out)
         return out.get("grades") or {}
     except Exception:  # noqa: BLE001
         return {}

@@ -6512,6 +6512,10 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
             replies = None
         if isinstance(replies, list):
             settings = _load_settings()
+            _pre_h = _existing_keys_batch(WORKSPACE, [
+                (r.get("smartlead_campaign_id"), (r.get("email") or "").strip().lower(),
+                 str(r.get("smartlead_message_id") or r.get("message_id") or r.get("id") or ""))
+                for r in replies if isinstance(r, dict)])
             for r in replies:
                 if swept >= 30:
                     break
@@ -6527,7 +6531,7 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                 # Rows adopted in step 1 (and anything else already queued)
                 # correctly match here and get skipped - that is intentional,
                 # not a bug: it means no reply is processed twice.
-                if _existing_row(WORKSPACE, cid, email, mid):
+                if ((str(cid), email, mid) in _pre_h) if _pre_h is not None else _existing_row(WORKSPACE, cid, email, mid):
                     continue
                 reply = {
                     "workspace": WORKSPACE, "campaign_id": cid, "email": email,
@@ -8930,6 +8934,11 @@ def _sweep_uncategorised(agents, settings, since_iso: str, summary: dict) -> Non
                 seen_ids.add(key)
                 candidates.append(r)
         taken = 0
+        # One batched "already queued?" read for all candidates instead of one
+        # GET per candidate (residual N+1 after #146; egress check-in 2026-09-09).
+        _pre_q = _existing_keys_batch(WORKSPACE, [
+            (r.get("smartlead_campaign_id"), (r.get("email") or "").strip().lower(),
+             str(r.get("smartlead_message_id") or r.get("id") or "")) for r in candidates])
         for r in candidates:
             if taken >= UNCAT_PER_TICK:
                 break
@@ -8963,7 +8972,7 @@ def _sweep_uncategorised(agents, settings, since_iso: str, summary: dict) -> Non
                             continue
                     except (ValueError, TypeError):
                         pass
-            if _existing_row(WORKSPACE, cid, email, mid):
+            if ((str(cid), email, mid) in _pre_q) if _pre_q is not None else _existing_row(WORKSPACE, cid, email, mid):
                 continue
             reply = {
                 "workspace": WORKSPACE, "campaign_id": cid, "email": email,
