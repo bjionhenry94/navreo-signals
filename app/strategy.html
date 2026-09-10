@@ -300,7 +300,9 @@ window.addEventListener('hashchange',()=>{const r=runIdFromHash();if(r!==RUN_ID)
 // Client mode sees ALL pages including Summary + Launch (Bjion 2026-08-02);
 // what stays GTME-only is the ACTIONS: the Build button and the share block
 // never render for a client. 'live' key kept for state compat; label = Launch.
-const TABS_ALL=[['tgt','Targeting'],['first','Icebreaker'],['copy','Copy'],['build','Preview'],['live','Launch']];
+// Launch tab hidden permanently (Bjion 2026-09-10). 'live' key kept for state
+// compat / launch-code logic; it is simply no longer a selectable tab.
+const TABS_ALL=[['tgt','Targeting'],['first','Icebreaker'],['copy','Copy'],['build','Preview']];
 const TABS=TABS_ALL;
 const ICEB=[["Safe opener", true, "A polite, personal-feeling opening line that always works. Our best performer.", "Apologies if this isn't relevant, wasn't sure who at {company} was the best person for this."], ["Company detail", false, "References something specific we found about their company.", "Saw {company} covers three states now. Growth like that usually strains the pipeline side."], ["Colleague mention", false, "Names a colleague we found, only where we're confident it's right.", "I wasn't sure if you or {colleague} was the right person to ask at {company}."]];
 // Pre-launch checks live on the Live page (wizard-summary-restage, 2026-08-02):
@@ -1067,7 +1069,9 @@ function addUpdate(note,updated){
 // page-follows-chat: when chat says it's working somewhere (focus.view), jump the
 // board to that idea + tab and spotlight it — unless your hand is on the board,
 // in which case hold and offer a "Catch up" chip so we never yank you mid-edit.
-const VIEW_TAB={targeting:'tgt',emails:'copy',opener:'first',checks:'live',signoff:'live',building:'build'};
+// checks/signoff formerly jumped to the Launch ('live') tab; that tab is hidden
+// now, so route them to Preview ('build') and never set tab='live'.
+const VIEW_TAB={targeting:'tgt',emails:'copy',opener:'first',checks:'build',signoff:'build',building:'build'};
 let lastTouch=0;
 document.addEventListener('click',()=>{lastTouch=Date.now();},true);
 function spotlightPanel(){const p=document.querySelector('.panel');if(!p)return;
