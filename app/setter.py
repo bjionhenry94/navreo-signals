@@ -8660,6 +8660,18 @@ CLIENT_ALERT_CHANNELS = {
     "krg": "C0A7EJ4DL9K",     # #krg-advisors-navreo
 }
 
+# Workspaces whose positives ALSO post to the internal #client-interested-replies
+# (Bjion 2026-09-11, Asad: "set up Grout's alert in Client-Interested-Reply now
+# ... we are handling it now"). The Navreo team works Grout's positives from the
+# setter, so it needs the internal card in the same lane every other client's
+# positives use. The client-channel card above is unchanged (one post to
+# #grouts-navreo, one to the internal lane — two different channels, so nothing
+# double-posts to the same place). The internal copy carries the owner
+# permalink, not the client share link. Mirror is best-effort: the row is
+# stamped once the client-channel post is accepted, so a mirror failure is
+# counted in failed_posts but never re-sends the client card.
+CLIENT_INTERNAL_MIRROR = frozenset({"grout"})
+
 # Every channel a CLIENT reads: their Slack Connect shared channel or their own
 # alert channel. An alert composed for one of these carries the client's share
 # link, not the login-only owner permalink (Bjion 2026-09-05: "whichever chat
@@ -8795,6 +8807,21 @@ def run_client_positive_alerts() -> dict:
             except Exception:   # noqa: BLE001 — hook down: retry next tick
                 summary["failed_posts"] += 1
                 summary["ok"] = False
+            if posted and ws in CLIENT_INTERNAL_MIRROR \
+                    and chan != CLIENT_INTERNAL_CHANNEL:
+                # Internal mirror (CLIENT_INTERNAL_MIRROR): the same positive
+                # into #client-interested-replies with the owner link.
+                mtext = _cp_compose(row, cname, link, channel=CLIENT_INTERNAL_CHANNEL)
+                mpayload = {"event_type": "EVER_POSITIVE_ALERT", "text": mtext,
+                            "channel": CLIENT_INTERNAL_CHANNEL}
+                mpayload.update(_ep_thread_fields(row, re_reply=False))
+                try:
+                    _HTTP("POST", EVER_POSITIVE_HOOK, {}, mpayload)
+                except ValueError:
+                    pass            # non-JSON 2xx ("Accepted") = success
+                except Exception:   # noqa: BLE001 — mirror down: count, keep going
+                    summary["failed_posts"] += 1
+                    summary["ok"] = False
             if posted:
                 # stamp ONLY after the hook accepted — fail-closed, retryable
                 _ep_stamp(rid, "client-positive-alerted")

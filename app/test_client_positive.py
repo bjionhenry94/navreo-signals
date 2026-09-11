@@ -146,7 +146,9 @@ def test_client_positive_alerts_once():
     http = FakeHTTP()
     wire(sb, http)
     res = setter.run_client_positive_alerts()
-    check("1a client positive posts exactly one alert", len(http.posts) == 1, str(res))
+    # grout is in CLIENT_INTERNAL_MIRROR: one client-channel card + one
+    # internal mirror (2026-09-11) — two posts, two different channels.
+    check("1a grout positive posts client card + internal mirror", len(http.posts) == 2, str(res))
     check("1b alert went to the ever-positive hook",
           http.posts and http.posts[0][0] == setter.EVER_POSITIVE_HOOK)
     body = (http.posts[0][1] or {}) if http.posts else {}
@@ -157,7 +159,14 @@ def test_client_positive_alerts_once():
     check("1d text names the workspace", "grout" in txt)
     check("1e text names the category", "Information Request" in txt)
     check("1f text names the campaign", "Roman's LinkedIn network" in txt)
-    check("1g text carries the reply body", "how much do u charge?" in txt)
+    check("1g reply body rides the threaded child field", body.get("reply_text") == "how much do u charge?", str(body))
+    mbody = (http.posts[1][1] or {}) if len(http.posts) > 1 else {}
+    check("1g2 mirror goes to #client-interested-replies (C0B96LNPWDB)",
+          mbody.get("channel") == "C0B96LNPWDB", str(mbody))
+    check("1g3 mirror is the same positive", "grout" in (mbody.get("text") or "")
+          and "Roman's LinkedIn network" in (mbody.get("text") or ""))
+    check("1g4 mirror carries the owner link, not a client share",
+          "setter.html#/r/" in (mbody.get("text") or "") and "share=" not in (mbody.get("text") or ""), str(mbody))
     row = sb._row(22872)
     check("1h row stamped client-positive-alerted",
           row.get("notify_kind") == "client-positive-alerted" and row.get("notify_alerted_at"))
@@ -185,7 +194,9 @@ def test_unmapped_client_uses_default_channel():
     res = setter.run_client_positive_alerts()
     body = (http.posts[0][1] or {}) if http.posts else {}
     check("4a unmapped client still alerts", res.get("alerted") == 1)
-    check("4b unmapped client sends NO channel (hook default)", "channel" not in body, str(body))
+    check("4b unmapped client routes to #client-interested-replies (C0B96LNPWDB)",
+          body.get("channel") == "C0B96LNPWDB", str(body))
+    check("4c unmapped client posts once (no mirror)", len(http.posts) == 1)
 
 
 def test_opan_test_positive_not_touched():
@@ -214,7 +225,7 @@ def test_marker_holds_across_runs():
     wire(sb, http)
     setter.run_client_positive_alerts()
     setter.run_client_positive_alerts()
-    check("5 same row across two runs alerts once", len(http.posts) == 1)
+    check("5 same row across two runs alerts once (card + mirror, no repeat)", len(http.posts) == 2)
 
 
 def test_hook_failure_is_retried():
@@ -227,7 +238,7 @@ def test_hook_failure_is_retried():
     check("6b row NOT stamped on failure", not sb._row(22872).get("notify_alerted_at"))
     http.fail = False
     res2 = setter.run_client_positive_alerts()
-    check("6c next run retries and posts", len(http.posts) == 1 and res2.get("alerted") == 1)
+    check("6c next run retries and posts", len(http.posts) == 2 and res2.get("alerted") == 1)
     check("6d row stamped after success",
           sb._row(22872).get("notify_kind") == "client-positive-alerted")
 
@@ -252,10 +263,25 @@ def test_post_cap_trips_loudly():
     http = FakeHTTP()
     wire(sb, http)
     res = setter.run_client_positive_alerts()
-    check("8a cap posts exactly CP_POST_CAP", len(http.posts) == setter.CP_POST_CAP, str(res))
+    check("8a cap alerts exactly CP_POST_CAP rows (each = card + mirror)",
+          res.get("alerted") == setter.CP_POST_CAP and len(http.posts) == 2 * setter.CP_POST_CAP, str(res))
     check("8b capped reported loudly", res.get("capped") is True and res.get("ok") is False)
     unstamped = [r for r in sb.replies if not r.get("notify_alerted_at")]
     check("8c leftovers left unstamped for next tick", len(unstamped) == 2)
+
+
+def test_mapped_unmirrored_client_posts_once():
+    # krg is mapped to its own channel but NOT in CLIENT_INTERNAL_MIRROR:
+    # exactly one post, to #krg-advisors-navreo, no internal copy.
+    krg = dict(GROUT_POS, id=7, workspace="krg", email="lead@krg.com")
+    sb = FakeSB([krg])
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    body = (http.posts[0][1] or {}) if http.posts else {}
+    check("10a mapped, unmirrored client posts once", len(http.posts) == 1 and res.get("alerted") == 1, str(res))
+    check("10b ... to its own channel", body.get("channel") == "C0A7EJ4DL9K", str(body))
+    check("10c mirror set is grout only", setter.CLIENT_INTERNAL_MIRROR == frozenset({"grout"}))
 
 
 def test_no_supabase_skips():
@@ -276,4 +302,5 @@ if __name__ == "__main__":
     test_outside_lookback_not_selected()
     test_post_cap_trips_loudly()
     test_no_supabase_skips()
+    test_mapped_unmirrored_client_posts_once()
     sys.exit(1 if report() else 0)
