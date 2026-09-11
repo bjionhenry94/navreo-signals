@@ -156,15 +156,26 @@ def test_client_positive_alerts_once():
     check("1c2 grout routes to #grouts-navreo (C0BEGAKS8TX)",
           body.get("channel") == "C0BEGAKS8TX", str(body))
     txt = body.get("text") or ""
-    check("1d text names the workspace", "grout" in txt)
-    check("1e text names the category", "Information Request" in txt)
-    check("1f text names the campaign", "Roman's LinkedIn network" in txt)
+    # Client-safe card (design doc 2026-09-11): _cp_compose also lands in the
+    # CLIENT's own channel, so our internal labelling never renders - no
+    # workspace, no category taxonomy, no campaign.
+    check("1d text carries NO workspace label", "grout" not in txt.lower(), txt)
+    check("1e text carries NO internal category word",
+          "Information Request" not in txt, txt)
+    check("1f text carries NO campaign line",
+          "Roman's LinkedIn network" not in txt and "Campaign" not in txt, txt)
+    check("1f2 text is the positive card: header, lead, when, one link",
+          txt.startswith("*\U0001F389 New positive reply")
+          and txt.count("|Open conversation>") == 1
+          and "smartlead.ai" not in txt and "---" not in txt, txt)
     check("1g reply body rides the threaded child field", body.get("reply_text") == "how much do u charge?", str(body))
     mbody = (http.posts[1][1] or {}) if len(http.posts) > 1 else {}
     check("1g2 mirror goes to #client-interested-replies (C0B96LNPWDB)",
           mbody.get("channel") == "C0B96LNPWDB", str(mbody))
-    check("1g3 mirror is the same positive", "grout" in (mbody.get("text") or "")
-          and "Roman's LinkedIn network" in (mbody.get("text") or ""))
+    check("1g3 mirror is the same positive card as the client post",
+          (mbody.get("text") or "").split("\n")[:2] == txt.split("\n")[:2]
+          and (mbody.get("text") or "").startswith("*\U0001F389 New positive reply"),
+          str(mbody.get("text"))[:200])
     check("1g4 mirror carries the owner link, not a client share",
           "setter.html#/r/" in (mbody.get("text") or "") and "share=" not in (mbody.get("text") or ""), str(mbody))
     row = sb._row(22872)

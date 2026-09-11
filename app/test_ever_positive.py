@@ -15,7 +15,8 @@ Covers the loop's Goal scenarios:
   10-16. a "positive-re-reply" row bound for a client's SHARED channel is READ
      first: negative -> the once-positive flip alert (client's flip channel,
      real earlier category named, never the routeB label); still-positive ->
-     "replied again", never "New positive reply"; classifier down -> retry
+     the client-safe "Reply in ongoing conversation" frame, never "New positive
+     reply" and never our category word; classifier down -> retry
      inside the grace window, then a neutral post; auto-reply -> silent;
      navreo-own rows never touch the classifier (routeB's alert owns them)
   plus: a hook failure leaves the row unstamped and a later run retries it;
@@ -302,10 +303,11 @@ def test_re_reply_negative_becomes_flip():
     check("10b flip lands in the client's flip channel (revive -> shared)",
           body.get("channel") == "C0BP9A6D28H", str(body.get("channel")))
     check("10c wording is the once-positive flip, never a positive claim",
-          "ONCE-POSITIVE lead replied \u2014 now: Not Interested" in text
+          text.startswith("*\U0001F514 Once-positive lead replied")
+          and "*Now* \u00b7 Not Interested" in text
           and "New positive reply" not in text and "positive-re-reply" not in text, text[:120])
     check("10d names the earlier positive by its real category",
-          "Originally positive: Interested on" in text, text[:200])
+          "*Was positive* \u00b7 Interested on" in text, text[:200])
     check("10e stamped re-reply-flip-alerted after the hook accepted",
           _stamped(sb, 21, "re-reply-flip-alerted"), str(sb.patches))
     check("10f classifier was given the prior category",
@@ -319,9 +321,11 @@ def test_re_reply_positive_announced_as_re_reply():
     text = body.get("text", "")
     check("11a positive re-reply posts once to the shared channel",
           len(http.posts) == 1 and body.get("channel") == "C0BP9A6D28H", str(body)[:120])
-    check("11b header says replied again + verdict, never New positive reply",
-          text.startswith("\U0001F501 Interested lead replied again \u2014 Information Request")
-          and "New positive reply" not in text and "positive-re-reply" not in text, text[:120])
+    check("11b header is the client-safe conversation frame, no category word",
+          text.startswith("*\U0001F501 Reply in ongoing conversation")
+          and "New positive reply" not in text
+          and "Information Request" not in text
+          and "positive-re-reply" not in text, text[:120])
     check("11c stamped positive-shared", _stamped(sb, 21, "positive-shared"), str(sb.patches))
 
 
@@ -335,8 +339,10 @@ def test_re_reply_classifier_down_retries_then_neutral():
     res = setter.run_ever_positive_alerts()
     body = http.posts[0][1] if http.posts else {}
     text = body.get("text", "")
-    check("12b past grace: neutral 'replied again' post with no category claim",
-          len(http.posts) == 1 and text.startswith("\U0001F501 Interested lead replied again\n")
+    check("12b past grace: neutral re-reply post with no category claim",
+          len(http.posts) == 1
+          and text.startswith("*\U0001F501 Reply in ongoing conversation")
+          and "Interested" not in text
           and res["re_reply_unclassified"] == 1, text[:120])
     check("12c stamped positive-shared-unclassified",
           _stamped(sb, 21, "positive-shared-unclassified"), str(sb.patches))
@@ -397,8 +403,8 @@ def test_flip_names_real_prior_not_label():
     setter.run_ever_positive_alerts()
     text = http.posts[0][1].get("text", "") if http.posts else ""
     check("16 flip alert names the real earlier category, never the routeB label",
-          "Originally positive: Meeting Request on" in text and "positive-re-reply" not in text,
-          text[:200])
+          "*Was positive* \u00b7 Meeting Request on" in text
+          and "positive-re-reply" not in text, text[:200])
 
 
 if __name__ == "__main__":
