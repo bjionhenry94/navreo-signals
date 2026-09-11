@@ -7,7 +7,9 @@ What the card must NEVER carry, and what these tests police on every composer:
 no "Workspace" / "(client)" internal labelling, no "---" divider, no
 "Not on file" / "Role n/a" placeholders (a missing fact is OMITTED), no raw
 https:// outside Slack's <url|label> syntax, no smartlead.ai link, and exactly
-ONE link - the trailing "Open conversation" to app.navreo.ai.
+ONE link - the "Open conversation" to app.navreo.ai. Every card CLOSES with a
+30-underscore separator line (Bjion 2026-09-11) so two consecutive cards from
+the same bot do not run together in the channel.
 
 NO network: _alert_lead_facts is stubbed, Supabase is None.
 Run: python3 test_positive_card_composers.py   (exit 1 on any failure)
@@ -69,6 +71,10 @@ NAMES = {"3879940": "Navreo | Amazon Agencies - recontact [Sep 2026]",
 BANNED = ("Workspace", "(client)", "---", "Not on file", "Role n/a",
           "smartlead.ai", "n/a")
 
+# the closing rule every card ends on - kept as a literal here so a drift in
+# setter._CARD_SEPARATOR fails these tests rather than silently matching.
+SEP = "_" * 30
+
 
 def raw_urls(text):
     """Every https:// that is NOT immediately opening a Slack <url|label>."""
@@ -89,7 +95,10 @@ def hygiene(label, text):
           text.count("|Open conversation>") == 1, text)
     check(f"{label}: the one link is app.navreo.ai",
           text.count("<https://app.navreo.ai/") == 1
-          and text.rstrip().endswith("|Open conversation>"), text)
+          and text.split("\n")[-2].rstrip().endswith("|Open conversation>"), text)
+    check(f"{label}: closes on the 30-underscore separator, once",
+          text.split("\n")[-1] == SEP and text.count(SEP) == 1
+          and setter._CARD_SEPARATOR == SEP, repr(text))
     check(f"{label}: no empty <https://|> link", "<https://|" not in text, text)
     check(f"{label}: no blank line", "\n\n" not in text and not text.endswith("\n"), repr(text))
     for ln in text.split("\n"):
@@ -114,7 +123,7 @@ def test_ep_compose():
         "*Campaign* · Navreo | Amazon Agencies - recontact [Sep 2026]\n"
         "*Replied* · 10 Sep, 22:18 UTC\n"
         "\U0001F3AF <https://app.navreo.ai/app/setter.html"
-        "#/r/jl%40skalestrategy.com/m-7|Open conversation>")
+        "#/r/jl%40skalestrategy.com/m-7|Open conversation>\n" + SEP)
     check("1a internal re-reply card renders the approved shape exactly",
           t == want, repr(t))
     check("1b internal card KEEPS the Campaign line, once, and never the prior one",
@@ -147,10 +156,10 @@ def test_ep_positive_shared_text():
             "✉️ info@kamsah.com  ·  \U0001F310 <https://kamsah.com|kamsah.com>\n"
             "*Replied* · 10 Sep, 22:18 UTC\n"
             "\U0001F3AF <https://app.navreo.ai/app/setter.html"
-            "#/r/info%40kamsah.com/m-7|Open conversation>")
+            "#/r/info%40kamsah.com/m-7|Open conversation>\n" + SEP)
     check("2a company-only shared card renders the design shape exactly",
           t == want, repr(t))
-    check("2b the name line is GONE, not blank", t.count("\n") == 3, repr(t))
+    check("2b the name line is GONE, not blank", t.count("\n") == 4, repr(t))
     check("2c client card drops the Campaign line (cname passed, never rendered)",
           "Campaign" not in t and "Amazon" not in t, t)
     check("2d client card drops the category word", "Interested" not in t, t)
@@ -163,7 +172,7 @@ def test_ep_positive_shared_text():
              "✉️ kabir@infeedo.com  ·  \U0001F310 <https://infeedo.com|infeedo.com>\n"
              "*Replied* · 10 Sep, 22:18 UTC\n"
              "\U0001F3AF <https://app.navreo.ai/app/setter.html"
-             "#/r/kabir%40infeedo.com/m-7|Open conversation>")
+             "#/r/kabir%40infeedo.com/m-7|Open conversation>\n" + SEP)
     check("2e re-reply header + name-without-title renders exactly", t2 == want2, repr(t2))
     check("2f re-reply wording is the conversation frame, never 'again'",
           "Reply in ongoing conversation" in t2 and "again" not in t2, t2)
@@ -182,7 +191,7 @@ def test_cp_compose():
             "\U0001F517 <https://www.linkedin.com/in/jlneedham1/|LinkedIn>\n"
             "*Replied* · 10 Sep, 22:18 UTC\n"
             "\U0001F3AF <https://app.navreo.ai/app/setter.html"
-            "#/r/jl%40skalestrategy.com/m-7|Open conversation>")
+            "#/r/jl%40skalestrategy.com/m-7|Open conversation>\n" + SEP)
     check("3a client positive renders the design shape exactly", t == want, repr(t))
     check("3b the workspace word 'grout' appears nowhere", "grout" not in t.lower(), t)
     check("3c header is fixed, never the workspace/category",
@@ -200,11 +209,12 @@ def test_empty_facts_worst_case():
                 "✉️ jane.doe@gmail.com\n"
                 "*Replied* · 11 Sep, 14:03 UTC\n"
                 "\U0001F3AF <https://app.navreo.ai/app/setter.html"
-                "#/r/jane.doe%40gmail.com/m-7|Open conversation>")
-        check(f"4a[{label}] empty facts -> the 4-line worst case, exactly",
+                "#/r/jane.doe%40gmail.com/m-7|Open conversation>\n" + SEP)
+        check(f"4a[{label}] empty facts -> the worst case + separator, exactly",
               t == want, repr(t))
-        check(f"4b[{label}] four lines, none blank",
-              len(t.split("\n")) == 4 and all(x.strip() for x in t.split("\n")), repr(t))
+        check(f"4b[{label}] five lines, none blank, separator last",
+              len(t.split("\n")) == 5 and all(x.strip() for x in t.split("\n"))
+              and t.split("\n")[-1] == SEP, repr(t))
         check(f"4c[{label}] header carries no dangling separator",
               t.split("\n")[0] == "*\U0001F389 New positive reply*", t)
         hygiene(f"4[{label}]", t)
@@ -226,8 +236,8 @@ def test_helpers():
           setter._fmt_day("2026-09-01T10:00:00Z"))
     bare = setter._card_text("H", "", "", "", "a@b.com", "", "", campaign=None,
                              replied_at=None, chat_url="")
-    check("5e _card_text with one fact renders two lines, no placeholders",
-          bare == "*H*\n✉️ a@b.com", repr(bare))
+    check("5e _card_text with one fact renders two lines + separator",
+          bare == "*H*\n✉️ a@b.com\n" + SEP, repr(bare))
     notitle = setter._card_text("H", "Co", "Ann", "", "a@b.com", "b.com", "",
                                 replied_at="2026-09-10T22:18:00+00:00",
                                 chat_url="https://app.navreo.ai/x")
@@ -236,7 +246,7 @@ def test_helpers():
     check("5g extra lines land above Campaign/Replied",
           setter._card_text("H", "", "", "", "a@b.com", "", "", campaign="C",
                             extra=["*Now* · X", ""])
-          == "*H*\n✉️ a@b.com\n*Now* · X\n*Campaign* · C",
+          == "*H*\n✉️ a@b.com\n*Now* · X\n*Campaign* · C\n" + SEP,
           setter._card_text("H", "", "", "", "a@b.com", "", "", campaign="C",
                             extra=["*Now* · X", ""]))
     h = setter._humanise_category

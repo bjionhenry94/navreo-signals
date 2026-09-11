@@ -57,9 +57,11 @@ def wire(drafts=DRAFTS, registry=REGISTRY):
 
 
 def open_link(text):
-    """The card's ONE link: the trailing "Open conversation". Taking the first
-    `<` would now grab the website chip instead (design doc 2026-09-11)."""
-    return text.rsplit("\n", 1)[-1].split("<", 1)[1].split("|", 1)[0]
+    """The card's ONE link: the "Open conversation" line. Taking the first `<`
+    would grab the website chip instead (design doc 2026-09-11); the LAST line
+    is the underscore separator every card now closes on (Bjion 2026-09-11),
+    so the link lives on the second-to-last line."""
+    return text.split("\n")[-2].split("<", 1)[1].split("|", 1)[0]
 
 
 def share_client(url):
