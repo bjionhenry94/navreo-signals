@@ -56,6 +56,12 @@ def wire(drafts=DRAFTS, registry=REGISTRY):
     return sb
 
 
+def open_link(text):
+    """The card's ONE link: the trailing "Open conversation". Taking the first
+    `<` would now grab the website chip instead (design doc 2026-09-11)."""
+    return text.rsplit("\n", 1)[-1].split("<", 1)[1].split("|", 1)[0]
+
+
 def share_client(url):
     """(client_id, test_flag) verified from a share URL, or None."""
     if "?share=" not in url:
@@ -126,7 +132,7 @@ def test_composers():
            "category": "Interested", "replied_at": "2026-09-05T10:00:00+00:00", "workspace": "navreo"}
     shared = setter.POSITIVE_SHARED_CHANNELS["revive"]
     t = setter._ep_positive_shared_text(row, "REViVE | Pet", "", channel=shared)
-    link = t.split("<", 1)[1].split("|", 1)[0]
+    link = open_link(t)
     check("5a shared positive text carries the revive share link", share_client(link) == ("revive", False), t)
     check("5b ...and no owner permalink", "setter.html#/r/" not in t, t)
     t2 = setter._ep_positive_shared_text(row, "REViVE | Pet", "")
@@ -134,14 +140,14 @@ def test_composers():
     krg = {"email": "j@krg-lead.com", "smartlead_message_id": "", "smartlead_campaign_id": 3421811,
            "category": "Meeting Request", "replied_at": "2026-09-05T10:00:00+00:00", "workspace": "krg"}
     t3 = setter._cp_compose(krg, "KRG - GLP-1", "", channel=setter.CLIENT_ALERT_CHANNELS["krg"])
-    link3 = t3.split("<", 1)[1].split("|", 1)[0]
+    link3 = open_link(t3)
     check("5d client positive into #krg-advisors-navreo -> krg share link", share_client(link3) == ("krg", False), t3)
     t4 = setter._cp_compose(krg, "KRG - GLP-1", "", channel=setter.CLIENT_INTERNAL_CHANNEL)
     check("5e client positive into internal lane -> owner permalink", "setter.html#/r/" in t4 and "?share=" not in t4, t4)
     prior = {"category": "Interested", "replied_at": "2026-09-01T10:00:00+00:00", "smartlead_campaign_id": 3879940}
     t5 = setter._ep_compose(dict(row, category="Not Interested"), prior, {"3879940": "REViVE | Pet"},
                             channel=setter.FLIP_NAME_CHANNELS["revive"])
-    link5 = t5.split("<", 1)[1].split("|", 1)[0]
+    link5 = open_link(t5)
     check("5f REViVE churn flip into the shared channel -> revive share link", share_client(link5) == ("revive", False), t5)
     t6 = setter._ep_compose(dict(row, category="Not Interested"), prior, {"3879940": "REViVE | Pet"}, channel=None)
     check("5g flip into the hook default -> owner permalink", "setter.html#/r/" in t6 and "?share=" not in t6, t6)

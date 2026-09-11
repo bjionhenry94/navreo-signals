@@ -8282,28 +8282,134 @@ def _ep_name_channel(mapping, workspace, campaign_id):
     return None
 
 
+# --- the ONE positive-alert card shape -------------------------------------
+# Design: docs/positive-alert-card-design-2026-09-11.md SS1/SS4. Every
+# positive-reply Slack card (internal once-positive, client-shared, client
+# positive) renders through _card_text: labelled links only, a missing fact
+# OMITTED rather than placeholdered ("Not on file" / "Role n/a" / "<https://|>"
+# were the 2026-09-11 bugs), no divider rule, no internal workspace labels, and
+# exactly one link - the trailing "Open conversation".
+
+
+def _fmt_when(iso) -> str:
+    """"10 Sep, 22:18 UTC" - the card's reply timestamp. %-d is not portable
+    across libcs, so the day comes off the datetime. "" when unparseable."""
+    try:
+        d = _parse_iso(str(iso or ""))
+    except Exception:  # noqa: BLE001 - a bad stamp just drops the line
+        return ""
+    if not d:
+        return ""
+    d = d.astimezone(_dt.timezone.utc)
+    return f"{d.day} {d:%b}, {d:%H:%M} UTC"
+
+
+def _fmt_day(iso) -> str:
+    """"10 Sep" - the ORIGINAL positive is a date, not a moment."""
+    try:
+        d = _parse_iso(str(iso or ""))
+    except Exception:  # noqa: BLE001
+        return ""
+    if not d:
+        return ""
+    d = d.astimezone(_dt.timezone.utc)
+    return f"{d.day} {d:%b}"
+
+
+def _card_text(header: str, company: str, name: str, title: str, email: str,
+               website: str, linkedin: str, campaign=None, replied_at=None,
+               chat_url: str = "", extra=None) -> str:
+    """The ONE positive-alert card shape. A missing fact is omitted, never
+    placeholdered. No workspace labels, no raw URLs, no divider."""
+    lines = [f"*{header}" + (f" \u00b7 {company}" if company else "") + "*"]
+    if name:
+        lines.append(name + (f" \u00b7 {title}" if title else ""))
+    seg = []
+    if email:
+        seg.append(f"\u2709\ufe0f {email}")
+    if website:
+        seg.append(f"\U0001F310 <https://{website}|{website}>")
+    if linkedin:
+        seg.append(f"\U0001F517 <{linkedin}|LinkedIn>")
+    if seg:
+        lines.append("  \u00b7  ".join(seg))
+    lines.extend([x for x in (extra or []) if x])
+    if campaign:
+        lines.append(f"*Campaign* \u00b7 {campaign}")
+    when = _fmt_when(replied_at)
+    if when:
+        lines.append(f"*Replied* \u00b7 {when}")
+    if chat_url:
+        lines.append(f"\U0001F3AF <{chat_url}|Open conversation>")
+    return "\n".join(lines)
+
+
+_FACTS_CACHE = {}          # (email, campaign_id) -> (ts, facts dict)
+_FACTS_TTL_S = 900
+_FACTS_CACHE_CAP = 2000
+
+
+def _alert_lead_facts(campaign_id, email: str) -> dict:
+    """name / title / company / linkedin / website for one alert card, from a
+    single cached Smartlead /leads/ read. The `replies` row carries no lead
+    facts, and hydrate_lead is not reused - it costs a SECOND Smartlead call
+    for message history and returns no company/title/website. Never raises: a
+    Smartlead miss still yields the website (resolve_lead_website works off the
+    email alone), so the card degrades one field at a time."""
+    key = ((email or "").strip().lower(), str(campaign_id or ""))
+    hit = _FACTS_CACHE.get(key)
+    if hit and (_time.time() - hit[0]) < _FACTS_TTL_S:
+        return hit[1]
+    try:
+        r = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id) or {}
+        if not isinstance(r, dict):
+            r = {}
+        cf = r.get("custom_fields")
+        cf = cf if isinstance(cf, dict) else {}
+        nm = [str(r.get("first_name") or "").strip(),
+              str(r.get("last_name") or "").strip()]
+        out = {"name": " ".join(x for x in nm if x),
+               "title": str(cf.get("title") or "").strip(),
+               "company": str(r.get("company_name") or "").strip(),
+               "linkedin": str(r.get("linkedin_profile") or "").strip(),
+               "website": resolve_lead_website(r, email)}
+    except Exception as e:  # noqa: BLE001 - decoration, never load-bearing
+        print(f"[setter] alert lead facts failed: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        try:
+            out = {"name": "", "title": "", "company": "", "linkedin": "",
+                   "website": resolve_lead_website({}, email)}
+        except Exception:  # noqa: BLE001
+            out = {"name": "", "title": "", "company": "", "linkedin": "",
+                   "website": ""}
+    _FACTS_CACHE[key] = (_time.time(), out)
+    if len(_FACTS_CACHE) > _FACTS_CACHE_CAP:
+        for k in sorted(_FACTS_CACHE, key=lambda x: _FACTS_CACHE[x][0])[
+                :len(_FACTS_CACHE) - _FACTS_CACHE_CAP]:
+            _FACTS_CACHE.pop(k, None)
+    return out
+
+
 def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = None,
                              channel: str = None) -> str:
-    """Client-facing positive alert for a shared channel — no internal
-    workspace labelling (the client reads this). `header` replaces the
-    "New positive reply" line for re-replies, which are never new. `channel`
-    is where it will be posted: a client-facing channel gets the client's
-    own share link (see _alert_chat_link)."""
-    cat = row.get("category") or "positive"
-    lines = [
-        header or f"\U0001F3AF New positive reply \u2014 {cat}",
-        "---------------------------",
-        f"Lead: {row.get('email')}",
-        f"Campaign: {cname}",
-        f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
-    ]
-    chat = _alert_chat_link(row, channel)
-    # One link only (Bjion 2026-09-07): "Open conversation" -> the setter (a
-    # client share link on a client-facing channel, the owner permalink
-    # internally). The Smartlead master-inbox link is gone from every alert.
-    if chat:
-        lines.append(f":dart: <{chat}|Open conversation>")
-    return "\n".join(lines)
+    """Client-facing positive alert for a shared channel — ZERO internal
+    labelling (the client reads this): no workspace, no category word (our
+    taxonomy, and a mis-categorised reply shown to a client costs more trust
+    than the word earns), no campaign, no Smartlead link. `header` replaces the
+    "New positive reply" line for re-replies, which are never new. `channel` is
+    where it will be posted: a client-facing channel gets the client's own
+    share link (see _alert_chat_link).
+
+    `cname` / `link` stay in the signature — callers are unchanged — but no
+    longer render (design doc §4)."""
+    email = (row.get("email") or "").strip()
+    f = _alert_lead_facts(row.get("smartlead_campaign_id"), email)
+    return _card_text(header or "\U0001F389 New positive reply",
+                      f.get("company"), f.get("name"), f.get("title"), email,
+                      f.get("website"), f.get("linkedin"),
+                      campaign=None,            # client channel — dropped
+                      replied_at=row.get("replied_at"),
+                      chat_url=_alert_chat_link(row, channel))
 
 
 def _ep_thread_fields(row: dict, re_reply: bool = False) -> dict:
@@ -8435,32 +8541,31 @@ def _ep_smartlead_link(campaign_id, email: str) -> str:
 
 
 def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -> str:
+    """INTERNAL once-positive alert — the only card that keeps the Campaign
+    line and the category words, because this alert exists precisely because
+    the category flipped: `*Now*` is the new verdict and `*Was positive*` the
+    fact that justifies the ping."""
     cid = str(row.get("smartlead_campaign_id") or "")
     cname = camp_names.get(cid) or f"campaign {cid}"
     if cname in ("Interested Reply", "Meeting Request"):
         cname += " (subsequence)"
     pcid = str(prior.get("smartlead_campaign_id") or "")
     pname = camp_names.get(pcid) or (f"campaign {pcid}" if pcid else "earlier campaign")
-    cat = row.get("category") or "uncategorised"
-    link = ""   # Smartlead link dropped from alerts (Bjion 2026-09-07)
-    lines = [
-        f"🔔 ONCE-POSITIVE lead replied — now: {cat}",
-        "---------------------------",
-        f"Lead: {row.get('email')}",
-        f"Campaign: {cname}",
-        ((f"Originally positive: {prior.get('category')} on "
-          f"{str(prior.get('replied_at') or '')[:10]} ({pname})")
-         if prior.get("replied_at") else
-         f"Originally positive: {prior.get('category') or 'earlier in this thread'}"),
-        f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
-    ]
-    chat = _alert_chat_link(row, channel)
-    # One link only (Bjion 2026-09-07): "Open conversation" -> the setter (a
-    # client share link on a client-facing channel, the owner permalink
-    # internally). The Smartlead master-inbox link is gone from every alert.
-    if chat:
-        lines.append(f":dart: <{chat}|Open conversation>")
-    return "\n".join(lines)
+    email = (row.get("email") or "").strip()
+    f = _alert_lead_facts(row.get("smartlead_campaign_id"), email)
+    was = ((f"*Was positive* · {prior.get('category')} on "
+            f"{_fmt_day(prior.get('replied_at'))} · {pname}")
+           if prior.get("replied_at") else
+           (f"*Was positive* · "
+            f"{prior.get('category') or 'earlier in this thread'}"))
+    return _card_text("\U0001F514 Once-positive lead replied",
+                      f.get("company"), f.get("name"), f.get("title"), email,
+                      f.get("website"), f.get("linkedin"),
+                      campaign=cname,           # internal — kept
+                      replied_at=row.get("replied_at"),
+                      chat_url=_alert_chat_link(row, channel),
+                      extra=[f"*Now* · {row.get('category') or 'uncategorised'}",
+                             was])
 
 
 def run_ever_positive_alerts() -> dict:
@@ -8521,7 +8626,7 @@ def run_ever_positive_alerts() -> dict:
                             if rt_dt and (now - rt_dt) < _dt.timedelta(minutes=EP_CLASSIFY_GRACE_MIN):
                                 summary["deferred_classify"] += 1   # retry next tick
                                 continue
-                            header = "\U0001F501 Interested lead replied again"
+                            header = "\U0001F501 Reply in ongoing conversation"
                             kind = "positive-shared-unclassified"
                         elif verdict in EP_RE_REPLY_SILENT:
                             _ep_stamp(rid, "re-reply-ooo")      # auto-reply: nothing to tell
@@ -8551,7 +8656,10 @@ def run_ever_positive_alerts() -> dict:
                                 summary["re_reply_flips"] += 1
                             continue
                         else:
-                            header = f"\U0001F501 Interested lead replied again \u2014 {verdict}"
+                            # A client channel never carries our category
+                            # taxonomy: the verdict decides WHETHER to
+                            # post, it is not printed (design doc \u00a70).
+                            header = "\U0001F501 Reply in ongoing conversation"
                     if summary["alerted"] >= EP_POST_CAP:
                         summary["capped"] = True
                         summary["ok"] = False       # leftovers retry next tick
@@ -8723,23 +8831,19 @@ def _cp_smartlead_link(campaign_id, email: str) -> str:
 
 
 def _cp_compose(row: dict, cname: str, link: str, channel: str = None) -> str:
-    ws = row.get("workspace") or "client"
-    cat = row.get("category") or "positive"
-    lines = [
-        f"🎯 New positive reply — {ws} · {cat}",
-        "---------------------------",
-        f"Lead: {row.get('email')}",
-        f"Campaign: {cname}",
-        f"Workspace: {ws} (client)",
-        f"Time of Reply: {str(row.get('replied_at') or '')[:16]} UTC",
-    ]
-    chat = _alert_chat_link(row, channel)
-    # One link only (Bjion 2026-09-07): "Open conversation" -> the setter (a
-    # client share link on a client-facing channel, the owner permalink
-    # internally). The Smartlead master-inbox link is gone from every alert.
-    if chat:
-        lines.append(f":dart: <{chat}|Open conversation>")
-    return "\n".join(lines)
+    """Client positive. CLIENT-SAFE everywhere: this composer routes to the
+    internal lane AND to client-facing channels (grout, krg), so the workspace
+    header, the `Workspace: <ws> (client)` line and the category word are all
+    gone — a client must never read our internal labelling. `cname` / `link`
+    stay available to callers but neither renders (design doc §4)."""
+    email = (row.get("email") or "").strip()
+    f = _alert_lead_facts(row.get("smartlead_campaign_id"), email)
+    return _card_text("\U0001F389 New positive reply",
+                      f.get("company"), f.get("name"), f.get("title"), email,
+                      f.get("website"), f.get("linkedin"),
+                      campaign=None,            # client-safe — dropped
+                      replied_at=row.get("replied_at"),
+                      chat_url=_alert_chat_link(row, channel))
 
 
 def run_client_positive_alerts() -> dict:
