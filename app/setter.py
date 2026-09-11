@@ -8540,32 +8540,60 @@ def _ep_smartlead_link(campaign_id, email: str) -> str:
     return ""
 
 
+_CATEGORY_WORDS = {
+    "positive-re-reply": "Positive",
+    "information request": "Information request",
+    "not interested": "Not interested",
+    "meeting request": "Meeting request",
+    "out of office": "Out of office",
+    "wrong person": "Wrong person",
+    "do not contact": "Do not contact",
+    "interested": "Interested",
+}
+
+
+def _humanise_category(cat) -> str:
+    """Our taxonomy slug/label as a human would write it. A raw slug
+    ("positive-re-reply") never reaches a card. Unknown values fall back to a
+    sentence-cased phrase; empty stays empty so the caller can drop the line."""
+    raw = str(cat or "").strip()
+    if not raw:
+        return ""
+    key = raw.replace("-", " ").replace("_", " ").lower()
+    hit = _CATEGORY_WORDS.get(raw.lower()) or _CATEGORY_WORDS.get(key)
+    if hit:
+        return hit
+    return key[:1].upper() + key[1:]
+
+
 def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -> str:
     """INTERNAL once-positive alert — the only card that keeps the Campaign
-    line and the category words, because this alert exists precisely because
-    the category flipped: `*Now*` is the new verdict and `*Was positive*` the
-    fact that justifies the ping."""
+    line, because this alert exists precisely because a lead we already booked
+    as interested has come back. Bjion's wording 2026-09-11: the header states
+    that fact plainly; `*Now*` appears ONLY when the new reply is NOT positive
+    (a positive re-reply needs no verdict line), and `*Interested since*`
+    carries the date of the original positive."""
     cid = str(row.get("smartlead_campaign_id") or "")
     cname = camp_names.get(cid) or f"campaign {cid}"
     if cname in ("Interested Reply", "Meeting Request"):
         cname += " (subsequence)"
-    pcid = str(prior.get("smartlead_campaign_id") or "")
-    pname = camp_names.get(pcid) or (f"campaign {pcid}" if pcid else "earlier campaign")
+    prior = prior or {}
     email = (row.get("email") or "").strip()
     f = _alert_lead_facts(row.get("smartlead_campaign_id"), email)
-    was = ((f"*Was positive* · {prior.get('category')} on "
-            f"{_fmt_day(prior.get('replied_at'))} · {pname}")
-           if prior.get("replied_at") else
-           (f"*Was positive* · "
-            f"{prior.get('category') or 'earlier in this thread'}"))
-    return _card_text("\U0001F514 Once-positive lead replied",
+    extra = []
+    cat = str(row.get("category") or "").strip()
+    if cat not in POSITIVE_CATEGORY_NAMES:
+        extra.append(f"*Now* · {_humanise_category(cat) or 'Uncategorised'}")
+    since = _fmt_day(prior.get("replied_at"))
+    if since:
+        extra.append(f"*Interested since* · {since}")
+    return _card_text("\U0001F501 Interested lead replied again",
                       f.get("company"), f.get("name"), f.get("title"), email,
                       f.get("website"), f.get("linkedin"),
                       campaign=cname,           # internal — kept
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
-                      extra=[f"*Now* · {row.get('category') or 'uncategorised'}",
-                             was])
+                      extra=extra)
 
 
 def run_ever_positive_alerts() -> dict:

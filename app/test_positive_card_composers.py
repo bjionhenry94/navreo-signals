@@ -104,30 +104,39 @@ def test_ep_compose():
     t = setter._ep_compose(row("jl@skalestrategy.com", category="Not Interested"),
                            PRIOR, NAMES)
     want = (
-        "*\U0001F514 Once-positive lead replied · Skale Strategy*\n"
+        "*\U0001F501 Interested lead replied again · Skale Strategy*\n"
         "Jason Needham · Cofounder, CEO, now Chair\n"
         "✉️ jl@skalestrategy.com  ·  "
         "\U0001F310 <https://skalestrategy.com|skalestrategy.com>  ·  "
         "\U0001F517 <https://www.linkedin.com/in/jlneedham1/|LinkedIn>\n"
-        "*Now* · Not Interested\n"
-        "*Was positive* · Interested on 1 Sep · Navreo | Amazon C2\n"
+        "*Now* · Not interested\n"
+        "*Interested since* · 1 Sep\n"
         "*Campaign* · Navreo | Amazon Agencies - recontact [Sep 2026]\n"
         "*Replied* · 10 Sep, 22:18 UTC\n"
         "\U0001F3AF <https://app.navreo.ai/app/setter.html"
         "#/r/jl%40skalestrategy.com/m-7|Open conversation>")
-    check("1a internal once-positive renders the design shape exactly",
+    check("1a internal re-reply card renders the approved shape exactly",
           t == want, repr(t))
-    check("1b internal card KEEPS the Campaign line", "*Campaign* · Navreo |" in t, t)
-    check("1c ...and the was-positive fact that justifies the alert",
-          "*Was positive* · Interested on 1 Sep" in t, t)
+    check("1b internal card KEEPS the Campaign line, once, and never the prior one",
+          t.count("*Campaign* · ") == 1 and "Navreo | Amazon C2" not in t, t)
+    check("1c a non-positive new category is named, humanised, under *Now*",
+          "*Now* · Not interested" in t and "Not Interested" not in t, t)
     hygiene("1", t)
+    tp = setter._ep_compose(row("jl@skalestrategy.com", category="positive-re-reply"),
+                            PRIOR, NAMES)
+    check("1d a positive re-reply carries NO *Now* line (nothing flipped)",
+          "*Now*" not in tp and "positive-re-reply" not in tp
+          and tp.startswith("*\U0001F501 Interested lead replied again"), tp)
+    check("1e ...and still carries *Interested since* + Campaign",
+          "*Interested since* · 1 Sep" in tp and "*Campaign* · Navreo |" in tp, tp)
+    hygiene("1d", tp)
     t2 = setter._ep_compose(row("jl@skalestrategy.com", category=None),
                             {"category": "Meeting Request"}, {})
-    check("1d prior with no date: was-positive drops the date, no orphan word",
-          "*Was positive* · Meeting Request" in t2 and " on " not in t2, t2)
-    check("1e missing category falls back, never blank",
-          "*Now* · uncategorised" in t2, t2)
-    hygiene("1e", t2)
+    check("1f prior with no date: the *Interested since* line is omitted",
+          "*Interested since*" not in t2, t2)
+    check("1g missing category falls back, never blank, never a slug",
+          "*Now* · Uncategorised" in t2, t2)
+    hygiene("1f", t2)
 
 
 # --- 2. client-shared (_ep_positive_shared_text) ---------------------------
@@ -230,6 +239,23 @@ def test_helpers():
           == "*H*\n✉️ a@b.com\n*Now* · X\n*Campaign* · C",
           setter._card_text("H", "", "", "", "a@b.com", "", "", campaign="C",
                             extra=["*Now* · X", ""]))
+    h = setter._humanise_category
+    check("5h _humanise_category maps every taxonomy word we ship",
+          [h(x) for x in ("positive-re-reply", "Information Request",
+                          "Not Interested", "Meeting Request", "Out Of Office",
+                          "Wrong Person", "Do Not Contact", "Interested")]
+          == ["Positive", "Information request", "Not interested",
+              "Meeting request", "Out of office", "Wrong person",
+              "Do not contact", "Interested"],
+          str([h(x) for x in ("positive-re-reply", "Information Request",
+                              "Not Interested", "Meeting Request",
+                              "Out Of Office", "Wrong Person",
+                              "Do Not Contact", "Interested")]))
+    check("5i an unknown category sentence-cases, never leaves a slug",
+          h("some-new_category") == "Some new category"
+          and h("BOUNCED") == "Bounced", f"{h('some-new_category')} / {h('BOUNCED')}")
+    check("5j empty in, empty out (the caller drops the line)",
+          h("") == "" and h(None) == "" and h("   ") == "")
 
 
 # --- 6. _alert_lead_facts: one cached call, never raises --------------------
@@ -276,8 +302,10 @@ def test_caller_header_strings():
     src = open(setter.__file__, encoding="utf-8").read()
     check("7a run_ever_positive_alerts passes the conversation-frame header twice",
           src.count("Reply in ongoing conversation") == 2, "")
-    check("7b the old 'Interested lead replied again' header is gone",
-          "Interested lead replied again" not in src)
+    check("7b the re-reply card states the fact, and the old flip wording is gone",
+          src.count("Interested lead replied again") == 1
+          and "Once-positive lead replied" not in src
+          and "*Was positive*" not in src, "")
     check("7c no composer still calls the Smartlead master-inbox helpers",
           src.count("_ep_smartlead_link(") == 1 and src.count("_cp_smartlead_link(") == 1)
 

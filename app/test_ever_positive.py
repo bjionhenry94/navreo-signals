@@ -156,9 +156,10 @@ def test_prev_positive_negative_alerts_once():
     body = (http.posts[0][1] or {}) if http.posts else {}
     check("1c payload is EVER_POSITIVE_ALERT", body.get("event_type") == "EVER_POSITIVE_ALERT")
     txt = body.get("text") or ""
-    check("1d text names the new category", "Not Interested" in txt)
-    check("1e text names the original positive",
-          "Information Request" in txt and "Parent Campaign" in txt)
+    check("1d text names the new category, humanised", "*Now* \u00b7 Not interested" in txt,
+          txt[:200])
+    check("1e text dates the original positive and drops the prior campaign",
+          "*Interested since* \u00b7 " in txt and "Parent Campaign" not in txt, txt[:200])
     check("1f subsequence campaign labelled", "Interested Reply (subsequence)" in txt)
     row = sb._row(10)
     check("1g row stamped ever-positive-alerted",
@@ -233,7 +234,9 @@ def test_null_category_grace_and_stale():
     check("7a fresh null deferred, not stamped",
           res.get("deferred_null") == 1 and not sb._row(14).get("notify_alerted_at"))
     check("7b stale null alerts as uncategorised",
-          len(http.posts) == 1 and "uncategorised" in (http.posts[0][1].get("text") or ""))
+          len(http.posts) == 1
+          and "*Now* \u00b7 Uncategorised" in (http.posts[0][1].get("text") or ""),
+          (http.posts[0][1].get("text") if http.posts else ""))
     check("7c stale null stamped", sb._row(15).get("notify_kind") == "ever-positive-alerted")
 
 
@@ -302,12 +305,12 @@ def test_re_reply_negative_becomes_flip():
           len(http.posts) == 1 and res["alerted"] == 1 and res["re_reply_flips"] == 1, str(res))
     check("10b flip lands in the client's flip channel (revive -> shared)",
           body.get("channel") == "C0BP9A6D28H", str(body.get("channel")))
-    check("10c wording is the once-positive flip, never a positive claim",
-          text.startswith("*\U0001F514 Once-positive lead replied")
-          and "*Now* \u00b7 Not Interested" in text
+    check("10c wording is the re-reply flip, never a positive claim",
+          text.startswith("*\U0001F501 Interested lead replied again")
+          and "*Now* \u00b7 Not interested" in text
           and "New positive reply" not in text and "positive-re-reply" not in text, text[:120])
-    check("10d names the earlier positive by its real category",
-          "*Was positive* \u00b7 Interested on" in text, text[:200])
+    check("10d dates the earlier positive instead of naming its category",
+          "*Interested since* \u00b7 " in text and "*Was positive*" not in text, text[:200])
     check("10e stamped re-reply-flip-alerted after the hook accepted",
           _stamped(sb, 21, "re-reply-flip-alerted"), str(sb.patches))
     check("10f classifier was given the prior category",
@@ -402,8 +405,8 @@ def test_flip_names_real_prior_not_label():
     wire(sb, http)
     setter.run_ever_positive_alerts()
     text = http.posts[0][1].get("text", "") if http.posts else ""
-    check("16 flip alert names the real earlier category, never the routeB label",
-          "*Was positive* \u00b7 Meeting Request on" in text
+    check("16 flip alert dates the earlier positive, never leaks the routeB label",
+          "*Interested since* \u00b7 " in text
           and "positive-re-reply" not in text, text[:200])
 
 
