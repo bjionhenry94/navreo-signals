@@ -8122,7 +8122,7 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 # modules 33/51) applies the same rule via campaign-name markers; this is
 # the sweep-side half.
 CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
-CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greenshift")
+CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greenshift", "quillbrook")  # quillbrook = routing drill (remove after)
 
 # Campaign-name marker -> the client_id a CLIENT SHARE token scopes to. The same
 # "name contains X" law server.py's _SHARED_WS_CLIENTS applies to Analytics /
@@ -8153,6 +8153,7 @@ CLIENT_NAME_CLIENT_IDS = (
 FLIP_NAME_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared)
     "greenshift": "C0BQ954RBAL",   # #greenshift-navreo (client-shared)
+    "quillbrook": "C0C156DH9V0",   # #quillbrook-navreo (routing DRILL, fictitious client; remove after)
 }
 
 # A FRESH positive on a navreo-hosted client campaign has no path to that
@@ -8166,6 +8167,7 @@ FLIP_NAME_CHANNELS = {
 POSITIVE_SHARED_CHANNELS = {
     "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared, Slack Connect)
     "greenshift": "C0BQ954RBAL",   # #greenshift-navreo (client-shared; Bjion 2026-09-10)
+    "quillbrook": "C0C156DH9V0",   # #quillbrook-navreo (routing DRILL, fictitious client; remove after)
 }
 
 # A "positive-re-reply" row is routeB's label for "an already-positive lead
