@@ -12993,6 +12993,157 @@ def _enrichment_row(email: str):
         return None
 
 
+# ── Website waterfall (positive-alert cards, 2026-09-11) ─────────────────────
+# ONE resolver for "what is this lead's company website", shared by the client
+# card payload (server.compose_positive_card_payload), the sidebar's
+# lead-contact lookup and the app-side alert composers, so a website we hold
+# ANYWHERE reaches the card. Returns a BARE lowercase domain ("kamsah.com") or
+# "" - never a URL, never a placeholder - and never raises: a card must degrade
+# to an omitted line, not a 500.
+
+_FREEMAIL_DOMAINS = {
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "msn.com", "yahoo.com", "icloud.com", "me.com", "mac.com", "proton.me",
+    "protonmail.com", "aol.com", "gmx.com", "yandex.com", "zoho.com", "mail.com",
+}
+# First-label stems catch the ccTLD variants (yahoo.co.uk, gmx.de, yandex.ru)
+# without eating live-nation.com. "mail" is deliberately NOT a stem: it would
+# swallow mail.<client>.com, so mail.com stays full-match only.
+_FREEMAIL_STEMS = {
+    "gmail", "googlemail", "outlook", "hotmail", "live", "msn", "yahoo",
+    "icloud", "me", "mac", "proton", "protonmail", "aol", "gmx", "yandex", "zoho",
+}
+
+_WEBSITE_SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://")
+_WEBSITE_DOMAIN_RE = re.compile(r"[a-z0-9\-.]+\.[a-z]{2,24}")
+
+
+def _norm_domain(v) -> str:
+    """Anything website-shaped -> a bare lowercase domain, or "". Strips the
+    scheme, a pasted email's local part, www., any port/path/query/fragment and
+    a trailing slash; rejects junk ("n/a", "TBC", a bare single label)."""
+    try:
+        d = str(v or "").strip().lower()
+        if not d:
+            return ""
+        d = _WEBSITE_SCHEME_RE.sub("", d)
+        d = d.split("@")[-1]
+        d = d.split("/")[0].split("?")[0].split("#")[0].split(":")[0]
+        if d.startswith("www."):
+            d = d[4:]
+        d = d.strip(". ")
+        return d if ("." in d and _WEBSITE_DOMAIN_RE.fullmatch(d)) else ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _is_freemail(domain: str) -> bool:
+    """Exact-token match on the normalised domain, plus its first label, so the
+    ccTLD variants are caught and live-nation.com is not."""
+    d = _norm_domain(domain)
+    if not d:
+        return False
+    return d in _FREEMAIL_DOMAINS or d.split(".")[0] in _FREEMAIL_STEMS
+
+
+_WEBSITE_CACHE: dict = {}       # email_lower -> (fetched_at, domain, source)
+_WEBSITE_TTL_HIT = 900.0        # found one - hold it
+_WEBSITE_TTL_MISS = 300.0       # nothing yet - a lead enriched minutes later fills in
+_WEBSITE_CACHE_CAP = 2000
+_WEBSITE_CF_KEYS = ("website", "company_website", "domain", "company_url")
+
+
+def _website_cache_get(key: str):
+    hit = _WEBSITE_CACHE.get(key)
+    if not hit:
+        return None
+    ttl = _WEBSITE_TTL_HIT if hit[1] else _WEBSITE_TTL_MISS
+    if (_time.time() - hit[0]) >= ttl:
+        _WEBSITE_CACHE.pop(key, None)
+        return None
+    return (hit[1], hit[2])
+
+
+def _website_cache_put(key: str, domain: str, source: str):
+    _WEBSITE_CACHE[key] = (_time.time(), domain, source)
+    if len(_WEBSITE_CACHE) > _WEBSITE_CACHE_CAP:
+        stale = sorted(_WEBSITE_CACHE, key=lambda k: _WEBSITE_CACHE[k][0])
+        for k in stale[:len(_WEBSITE_CACHE) - _WEBSITE_CACHE_CAP]:
+            _WEBSITE_CACHE.pop(k, None)
+
+
+def resolve_lead_website_traced(lead: dict, email: str):
+    """(domain, source) - the waterfall plus WHICH step answered, for live
+    tracing. `source` is one of: lead_website, custom_field:<key>, enrichment,
+    companies, email_domain, cache:<source>, none."""
+    try:
+        lead = lead if isinstance(lead, dict) else {}
+        # 1. the Smartlead lead's own website - free, so it runs before the cache
+        d = _norm_domain(lead.get("website"))
+        if d:
+            return d, "lead_website"
+        # 2. custom fields, any casing/spacing ("Website", "Company Website")
+        cf = lead.get("custom_fields")
+        if isinstance(cf, dict):
+            low = {}
+            for k, v in cf.items():
+                lk = str(k or "").strip().lower().replace(" ", "_")
+                if lk not in low:
+                    low[lk] = v
+            for k in _WEBSITE_CF_KEYS:
+                d = _norm_domain(low.get(k))
+                if d:
+                    return d, "custom_field:" + k
+        key = str(email or "").strip().lower()
+        if not key:
+            return "", "none"
+        cached = _website_cache_get(key)
+        if cached is not None:
+            return cached[0], "cache:" + cached[1]
+        out, src = "", "none"
+        # 3. OUR OWN enrichment table - the step that fixes the 2026-09-11 leads
+        try:
+            if _SB:
+                rows = _SB("GET", "setter_lead_enrichment"
+                                  f"?lead_email=eq.{quote(key, safe='')}"
+                                  "&select=company_domain&limit=1")
+                if isinstance(rows, list) and rows:
+                    out = _norm_domain((rows[0] or {}).get("company_domain"))
+                    if out:
+                        src = "enrichment"
+        except Exception:  # noqa: BLE001 - a Supabase blip just falls through
+            out = ""
+        edom = _norm_domain(key.split("@")[-1]) if "@" in key else ""
+        free = _is_freemail(edom)
+        # 4. a `companies` row for the email domain: existence check only, and we
+        # return the DOMAIN KEY - never companies.name (the skalestrategy.com
+        # row's name reads "Consensus").
+        if not out and edom and not free:
+            try:
+                if _SB:
+                    rows = _SB("GET", f"companies?domain=eq.{quote(edom, safe='')}"
+                                      "&select=domain&limit=1")
+                    if isinstance(rows, list) and rows:
+                        out = _norm_domain((rows[0] or {}).get("domain"))
+                        if out:
+                            src = "companies"
+            except Exception:  # noqa: BLE001
+                pass
+        # 5. the email domain itself, unless it is a free-mail provider
+        if not out and edom and not free:
+            out, src = edom, "email_domain"
+        _website_cache_put(key, out, src)
+        return out, src
+    except Exception:  # noqa: BLE001 - the card omits the line, never 500s
+        return "", "none"
+
+
+def resolve_lead_website(lead: dict, email: str) -> str:
+    """Bare lowercase company domain for this lead, or "". See
+    resolve_lead_website_traced for the waterfall and its order."""
+    return resolve_lead_website_traced(lead, email)[0]
+
+
 def _company_row(domain: str) -> dict:
     try:
         if not domain:
@@ -13778,6 +13929,7 @@ def route_lead_contact_get(params):
         except Exception:  # noqa: BLE001 - Supabase miss just falls through to Smartlead
             pass
         sl_phone = ""  # kept so the call-list can offer it even once a mobile wins primary
+        resp = None    # bound before the try so the website fallback below can read it
         try:
             resp = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
             if isinstance(resp, dict):
@@ -13795,6 +13947,11 @@ def route_lead_contact_get(params):
                         break
         except Exception:  # noqa: BLE001 - a missing lookup just means no quick link
             pass
+        # Neither `people` nor Smartlead knew it: run the shared waterfall
+        # (custom fields -> our enrichment table -> companies -> email domain)
+        # so the sidebar shows the same website the alert card does.
+        if not out["website"]:
+            out["website"] = resolve_lead_website(resp if isinstance(resp, dict) else {}, email)
         # Warm-call facts (owner ask 2026-08-15): phone + company breakdown +
         # a Likely-qualified verdict + the client's own context, all from the
         # Supabase side. The enrichment cache outranks Smartlead's phone (the

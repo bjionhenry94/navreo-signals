@@ -15906,7 +15906,11 @@ def compose_positive_card_payload(lead: dict, history: list, campaign_id, catego
             "first_name": lead.get("first_name") or "",
             "last_name": lead.get("last_name") or "",
             "company_name": lead.get("company_name") or "",
-            "website": lead.get("website") or "",
+            # The website WATERFALL (setter.resolve_lead_website), not the raw
+            # Smartlead field: a lead whose website is blank there is still
+            # known from its custom fields / our enrichment table / the email
+            # domain, and the client card used to read "Not on file" (Kamsah).
+            "website": setter.resolve_lead_website(lead, lead.get("email") or ""),
             "linkedin_profile": lead.get("linkedin_profile") or "",
             "location": lead.get("location") or "",
             "phone_number": lead.get("phone_number") or "",
