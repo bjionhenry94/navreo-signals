@@ -8289,6 +8289,13 @@ def _ep_name_channel(mapping, workspace, campaign_id):
 # OMITTED rather than placeholdered ("Not on file" / "Role n/a" / "<https://|>"
 # were the 2026-09-11 bugs), no divider rule, no internal workspace labels, and
 # exactly one link - the trailing "Open conversation".
+#
+# Every card CLOSES with _CARD_SEPARATOR (Bjion 2026-09-11): two consecutive
+# cards from the same bot run together in Slack with no visual break, so the
+# last line of every card is a plain underscore rule. A run of underscores with
+# no enclosed text is not italic markup in Slack mrkdwn, so it renders
+# literally.
+_CARD_SEPARATOR = "_" * 30
 
 
 def _fmt_when(iso) -> str:
@@ -8341,6 +8348,7 @@ def _card_text(header: str, company: str, name: str, title: str, email: str,
         lines.append(f"*Replied* \u00b7 {when}")
     if chat_url:
         lines.append(f"\U0001F3AF <{chat_url}|Open conversation>")
+    lines.append(_CARD_SEPARATOR)
     return "\n".join(lines)
 
 
