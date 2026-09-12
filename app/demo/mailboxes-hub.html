@@ -1,0 +1,1574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><script src="fx-index.js"></script><script src="demo-shim.js"></script><link rel="stylesheet" href="demo-layer.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mailboxes 2 · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* mailboxes-hub (Mailboxes 2, preview) — deliverability as a founder-first hub.
+   Reuses navreo.css primitives verbatim: .stats/.stat/.num-hero (KPIs),
+   .chip (client filter), .tab (manager views), .tbl (tables), .pill (status).
+   Only the heat-map cells + a couple of layout rows are page-scoped.
+   Data (all real): /api/deliverability (verdict, KPIs, fix-today, manager
+   tabs), /api/client-windows (client chips + per-client heat-map rows),
+   /api/tag-performance (tag table). Every section degrades to a representative
+   placeholder if its endpoint is empty/unreachable, so the page never blanks. */
+.mbx-head{max-width:1240px;padding:8px 0 4px}
+/* Confidence-grade badge (A healthiest … E least healthy), shown left of the
+   domain in the manager tables. Colours ramp green → red with the grade. */
+.grade-badge{display:inline-flex;align-items:center;justify-content:center;width:19px;height:19px;border-radius:5px;font:600 11px/1 var(--mono,"JetBrains Mono",monospace);margin-right:9px;vertical-align:middle;flex:0 0 auto;cursor:default}
+.grade-badge.gr-A{background:#D6EBDD;color:#14512F}
+.grade-badge.gr-B{background:#E8F0D2;color:#47570F}
+.grade-badge.gr-C{background:#F8EAC4;color:#6B4A00}
+.grade-badge.gr-D{background:#F6DFC9;color:#8A3D0E}
+.grade-badge.gr-E{background:#F7DCD5;color:#861E10}
+.grade-badge.gr-x{background:#F2F2F0;color:#8A857D}
+.grade-legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.grade-legend .gi{display:inline-flex;align-items:center;gap:6px}
+.mbx-head h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
+.mbx-head .sub{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
+.hub{max-width:1240px}
+
+.hub-seg{display:inline-flex;border:1px solid var(--line-2);border-radius:999px;overflow:hidden}
+.hub-seg button{border:0;background:transparent;padding:6px 14px;font:500 12.5px var(--font-sans);color:var(--ink-2);cursor:pointer}
+.hub-seg button.on{background:var(--orange);color:#fff}
+.hub-chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+
+/* Section header with a docked, section-scoped control on the right.
+   Each filter physically lives inside the section it governs — this is what
+   makes the split filtering read as unambiguous (range->heat map, client->manager). */
+.sec-h{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:26px 2px 12px}
+.sec-h h3{font-size:11.5px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;color:var(--ink-3);margin:0}
+/* read-only scope caption — deliberately NOT pill-shaped so it can't be mistaken
+   for a button; a low-contrast "Showing:" prefix marks it as status, not control. */
+.sec-h .scope{font-size:12px;font-weight:500;color:var(--ink-3);cursor:default}
+.sec-h .scope b{font-weight:600;color:var(--ink-2)}
+.sec-h .scope::before{content:"Showing: ";color:var(--ink-3);font-weight:400}
+.sec-h .hint{font-size:12px;color:var(--ink-3)}
+.sec-h .sec-ctrl{display:flex;align-items:center;gap:8px;margin-left:auto;flex-wrap:wrap;justify-content:flex-end}
+.sec-h .sec-ctrl .ctrl-lab{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);font-weight:600}
+/* Client picker drops to its OWN full-width row, left-aligned beneath the
+   "Inbox & domain manager" title (many chips read better on their own line than
+   crammed right). The heat-map Range control stays docked on the title row. */
+.sec-h .mgr-ctrl{width:100%;margin-left:0;justify-content:flex-start}
+.sec-h .mgr-ctrl .hub-chips{justify-content:flex-start}
+/* the control asserts its OWN blast-radius, so scope is legible without interacting */
+.sec-h .sec-ctrl .ctrl-scope{font-size:11px;color:var(--ink-3);font-weight:500;white-space:nowrap}
+/* stronger keyboard focus (active state was colour-only) */
+.hub-seg button:focus-visible,.hub-chips .chip:focus-visible{outline:2px solid var(--orange);outline-offset:2px}
+.hub-seg{box-shadow:0 1px 0 rgba(0,0,0,.03)}
+/* section fence — a subtle band ties the docked control to the card it governs */
+.mbx-sec{border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px 14px;margin:22px 0 0;background:var(--bg)}
+.mbx-sec > .sec-h{margin:0 2px 12px}
+.mbx-sec > .card{margin:0}
+@media(max-width:640px){.sec-h .sec-ctrl{width:100%;margin-left:0}.sec-h .mgr-ctrl,.hub-chips{justify-content:flex-start}}
+/* pinned aggregate verdict chip + brief "just changed" pulse on a re-rendered section */
+table.heat tr.heat-all td.n .fleetv{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:7px;vertical-align:middle}
+.fleetv.g{background:var(--green)}.fleetv.a{background:var(--amber)}.fleetv.r{background:var(--red)}
+@keyframes secpulse{0%{box-shadow:0 0 0 0 rgba(214,90,32,.35)}100%{box-shadow:0 0 0 6px rgba(214,90,32,0)}}
+.mbx-sec.reacted{animation:secpulse 1.1s ease-out 1}
+
+.fixrow{display:flex;gap:13px;align-items:flex-start;padding:15px 17px;border-left:3px solid var(--line)}
+.fixrow + .fixrow{border-top:1px solid var(--line)}
+.fixrow.r{border-left-color:var(--red)}.fixrow.a{border-left-color:var(--amber)}
+.fixrow .fic{width:32px;height:32px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:15px}
+.fixrow .fic.r{background:var(--red-bg)}.fixrow .fic.a{background:var(--amber-bg)}
+.fixrow h4{margin:0 0 2px;font-size:14.5px;font-weight:600}
+.fixrow p{margin:0;color:var(--ink-2);font-size:12.5px}
+.fixrow .who{display:inline-block;font-size:10.5px;font-weight:600;background:var(--bg-sunken);border-radius:6px;padding:2px 7px;margin-right:5px;color:var(--ink-2)}
+.fixrow .fbtn{margin-left:auto;align-self:center;white-space:nowrap;font:600 12.5px var(--font-sans);color:#fff;border:0;background:var(--ink);border-radius:9px;padding:8px 14px;cursor:pointer}
+.allclear{background:var(--green-bg);color:#195C3F;border-radius:var(--radius);padding:11px 14px;font-size:13px;font-weight:600}
+
+.heatwrap{overflow-x:auto}
+table.heat{border-collapse:separate;border-spacing:5px;width:100%;min-width:640px}
+table.heat th{font-size:10.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-3);font-weight:600;padding:6px 4px;text-align:center}
+table.heat th.n,table.heat td.n{text-align:left;white-space:nowrap}
+table.heat td.n{font-weight:600;font-size:14px;padding-left:8px}
+table.heat td.n small{display:block;color:var(--ink-3);font-weight:400;font-size:10.5px}
+.hcell{border-radius:10px;height:48px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:#fff;font-weight:600;font-size:14px;line-height:1}
+.hcell small{font-weight:500;font-size:9.5px;opacity:.9;margin-top:2px}
+.h-g1{background:var(--green)}.h-g2{background:#4E9A76}.h-a1{background:var(--amber)}.h-r1{background:var(--red)}.h-mut{background:#C9C4BD}.h-blk{background:var(--ink)}
+/* Aggregate "All clients" total row — visually pinned above the per-client rows. */
+table.heat tr.heat-all td.n{font-weight:700;font-size:15px}
+table.heat tr.heat-all td.n small{color:var(--ink-2);font-weight:600}
+table.heat tr.heat-all .hcell{box-shadow:inset 0 0 0 2px rgba(0,0,0,.14)}
+table.heat tr.heat-all + tr td{padding-top:9px}
+.heat-legend{display:flex;gap:10px;margin-top:12px;align-items:center;flex-wrap:wrap;font-size:11.5px;color:var(--ink-3)}
+.heat-legend .sw{display:inline-flex;align-items:center;gap:5px}
+.heat-legend .box{width:12px;height:12px;border-radius:3px}
+
+.t-g{color:var(--green);font-weight:600}.t-a{color:var(--amber);font-weight:600}.t-r{color:var(--red);font-weight:600}.t-mut{color:var(--ink-3)}
+.tbl td.num,.tbl th.num{text-align:right;font-variant-numeric:tabular-nums}
+/* Standalone tag table scrolls under a 500px cap — pin its header row so the
+   columns stay labelled while paging the tags. */
+#hub-tags-body thead th{position:sticky;top:0;z-index:1;background:var(--bg,#fff)}
+.mgr-tabs{display:flex;gap:2px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+.mgr-tabs .tab{margin-bottom:-1px}
+.tabbadge{font-size:10.5px;background:var(--red-bg);color:#861E10;border-radius:10px;padding:1px 6px;margin-left:5px;font-weight:600}
+.tabbadge.n{background:#F2F2F0;color:var(--ink-2)}
+.mgr-empty{padding:26px 18px;color:var(--ink-3);font-size:13px}
+.skel{color:var(--ink-3);font-size:13px;padding:16px 4px}
+@keyframes hpulse{0%,100%{opacity:1}50%{opacity:.4}}
+.hcell.sk{background:#DED9D1;animation:hpulse 1.15s ease-in-out infinite}
+.hub-refresh{border:1px solid var(--line-2);background:transparent;border-radius:999px;width:28px;height:28px;display:inline-grid;place-items:center;font-size:14px;color:var(--ink-2);cursor:pointer;margin-left:6px}
+.hub-refresh.busy{animation:hspin 1s linear infinite;pointer-events:none}
+@keyframes hspin{to{transform:rotate(360deg)}}
+.heat-sk-n{height:18px;width:110px;border-radius:6px;background:#DED9D1;animation:hpulse 1.15s ease-in-out infinite}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main">
+    <div class="mbx-head">
+      <h1>Mailboxes</h1>
+      <div class="sub">Is our email landing, and what needs fixing today. <span class="pill o" style="margin-left:6px"><span class="dot"></span>Preview</span></div>
+    </div>
+
+    <div class="hub">
+      <!-- FLEET HEAT MAP — the RANGE picker lives here, and only changes this -->
+      <section class="mbx-sec" id="sec-heat">
+      <div class="sec-h">
+        <h3>Fleet heat map</h3>
+        <span class="scope" id="hub-heat-scope" aria-live="polite"><b>Whole fleet</b> · last 24 hours</span>
+        <div class="sec-ctrl">
+          <span class="ctrl-lab">Range</span>
+          <div class="hub-seg" id="hub-range" role="radiogroup" aria-label="Heat map date range">
+            <button data-win="1" type="button" role="radio" aria-checked="true" class="on">24H</button><button data-win="7" type="button" role="radio" aria-checked="false">7d</button><button data-win="14" type="button" role="radio" aria-checked="false">14d</button><button data-win="30" type="button" role="radio" aria-checked="false">30d</button>
+          </div>
+          <button id="hub-refresh" type="button" class="hub-refresh" title="Recalculate now" aria-label="Recalculate the heat map now">&#10227;</button>
+          <span class="ctrl-scope">↑ changes this heat map only</span>
+        </div>
+      </div>
+      <div class="card heatwrap" style="padding:10px" id="hub-heat"><div class="skel">Loading fleet…</div></div>
+      </section>
+
+      <!-- PERFORMANCE BY TAG — fleet-wide, its OWN section below the heat map
+           (owner 2026-08-25). Pulled out of the manager tab strip so it isn't
+           scoped by the client chips. FIXED at the 30-day window: the audit of
+           2026-08-25 proved 7/14-day sends can't be computed accurately from the
+           current data (windowed Sent was a delta of the ROLLING-30d sent_30d
+           counter, which collapses toward 0 for steady sending — Smartlead
+           showed the 7d number was ~10x understated). sent_30d IS Smartlead's
+           own 30-day counter, so the 30-day view is exact; the shorter windows
+           return only once daily_sent_count capture is repaired. Height-capped +
+           scrollable. -->
+      <section class="mbx-sec" id="sec-tags">
+      <div class="sec-h">
+        <h3>Performance by tag</h3>
+        <span class="scope"><b>Whole fleet</b> · last 30 days</span>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div id="hub-tags-body" style="max-height:500px;overflow:auto"><div class="skel" style="padding:18px">Loading…</div></div>
+      </div>
+      </section>
+
+      <!-- INBOX & DOMAIN MANAGER — the CLIENT picker lives here, and only changes this -->
+      <section class="mbx-sec" id="sec-mgr">
+      <div class="sec-h">
+        <h3>Inbox &amp; domain manager</h3>
+        <span class="scope" id="hub-mgr-scope" aria-live="polite"><b>All clients</b></span>
+        <div class="sec-ctrl mgr-ctrl">
+          <span class="ctrl-lab">Client</span>
+          <div id="hub-chips" class="hub-chips" role="radiogroup" aria-label="Filter the inbox &amp; domain manager by client"><button class="chip on" data-client="All" type="button" role="radio" aria-checked="true">All clients</button></div>
+          <span class="ctrl-scope">↑ changes this list only</span>
+        </div>
+      </div>
+      <div class="card" style="padding:0;overflow:hidden">
+        <div class="mgr-tabs" id="hub-mgr-tabs" style="padding:8px 10px 0"></div>
+        <div id="hub-mgr-body" style="max-height:500px;overflow:auto"><div class="skel" style="padding:18px">Loading…</div></div>
+      </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<script src="shell.js"></script>
+<script>
+(function () {
+  "use strict";
+  var el = function (id) { return document.getElementById(id); };
+  el("rail").outerHTML = renderRail("mbxhub");
+
+  /* ---------- state ---------- */
+  var LS = "mbxhub.client";
+  // S.win = the HEAT MAP range only (1/7/14/30, where 1 = the 24H snapshot). The Inbox & Domain manager is
+  // deliberately NOT range-scoped — it always shows the full MGR_WIN window so
+  // the two filters stay cleanly separated (range->heat map, client->manager).
+  var MGR_WIN = 30;
+  // TAG_WIN = the Performance-by-tag window. FIXED at 30 (audit 2026-08-25):
+  // the backend's 7/14d Sent is a delta of the rolling-30d sent_30d counter,
+  // which under-reports badly (Smartlead-verified ~10x low at 7d), so only the
+  // 30d view — which reads sent_30d directly = Smartlead's own 30d counter — is
+  // trustworthy. The picker is removed until daily_sent_count capture is fixed.
+  var TAG_WIN = 30;
+  // win: heat-map range. Default 1 = the last-24h snapshot (real-time, owner
+  // 2026-08-28). 24H reads the most recent day of the day-wise series client-
+  // side (see winData) — the sample fallback is never the default view.
+  var S = { client: "All", win: 1, deliv: null, cw: null, tags: null, labels: {}, vol: {}, grades: null };
+  try { var v = localStorage.getItem(LS); if (v) S.client = v; } catch (e) {}
+
+  /* ---------- helpers ---------- */
+  function esc(s) { return String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
+  function n(x) { x = Number(x) || 0; return x >= 1000 ? (x >= 100000 ? Math.round(x / 1000) + "k" : (x / 1000).toFixed(1).replace(/\.0$/, "") + "k") : String(Math.round(x)); }
+  function comma(x) { return (Number(x) || 0).toLocaleString("en-US"); }
+  function pct(part, whole) { whole = Number(whole) || 0; if (!whole) return null; return (100 * (Number(part) || 0) / whole); }
+  function fx(v, d) { return v == null ? "—" : (Number(v).toFixed(d == null ? 1 : d) + "%"); }
+  function replyTone(v) { return v == null ? "mut" : v >= 1.1 ? "g1" : v >= 0.8 ? "a1" : "r1"; }
+  function bounceTone(v) { return v == null ? "mut" : v < 2 ? "g1" : v < 3 ? "a1" : "r1"; }
+  // Actively-sending tone (owner 2026-08-24): <80 red, 80-90 amber, 90+ green.
+  function capTone(v) { return v == null ? "mut" : v >= 90 ? "g1" : v >= 80 ? "a1" : "r1"; }
+  function warmTone(v) { return v == null ? "mut" : v <= 15 ? "g1" : v <= 30 ? "g2" : v <= 50 ? "a1" : "r1"; }
+  function tclass(tone) { return tone === "g1" ? "t-g" : tone === "g2" ? "t-g" : tone === "a1" ? "t-a" : tone === "r1" ? "t-r" : "t-mut"; }
+
+  /* ---------- representative fallback (only used if an endpoint is empty) ---------- */
+  var REP_CLIENTS = [
+    { name: "Navreo", dom: 12, inbox: 88, reply: 4.2, bounce: 1.1, sent: 271000, positives: 41, warm: 8, cap: 91, bl: 0 },
+    { name: "Halden Advisors", dom: 8, inbox: 61, reply: 3.9, bounce: 0.9, sent: 183000, positives: 28, warm: 24, cap: 76, bl: 0 },
+    { name: "Meridian", dom: 3, inbox: 24, reply: 4.0, bounce: 1.0, sent: 72000, positives: 14, warm: 6, cap: 88, bl: 0 },
+    { name: "Ascent Capital", dom: 5, inbox: 34, reply: 3.1, bounce: 1.8, sent: 96000, positives: 12, warm: 10, cap: 58, bl: 0 },
+    { name: "Fieldstone", dom: 4, inbox: 28, reply: 2.2, bounce: 3.1, sent: 84000, positives: 7, warm: 32, cap: 71, bl: 0 },
+    { name: "Brightcart", dom: 6, inbox: 42, reply: 1.4, bounce: 6.2, sent: 118000, positives: 3, warm: 28, cap: 44, bl: 2 }
+  ];
+  var REP_TAGS = [
+    { tag: "Hiring-signal", mailboxes: 62, sent: 48200, utilisation: 89, reply_rate: 4.1, bounce_rate: 0.9, positive: 41, per_positive: 1180 },
+    { tag: "Fixed-list", mailboxes: 54, sent: 39600, utilisation: 82, reply_rate: 3.5, bounce_rate: 1.1, positive: 28, per_positive: 1414 },
+    { tag: "Events", mailboxes: 31, sent: 22400, utilisation: 76, reply_rate: 3.0, bounce_rate: 1.4, positive: 14, per_positive: 1600 },
+    { tag: "Engagement-signal", mailboxes: 44, sent: 31100, utilisation: 61, reply_rate: 2.8, bounce_rate: 1.7, positive: 17, per_positive: 1829 },
+    { tag: "Followers", mailboxes: 27, sent: 18900, utilisation: 71, reply_rate: 2.1, bounce_rate: 2.4, positive: 7, per_positive: 2700 },
+    { tag: "Lookalike", mailboxes: 22, sent: 14700, utilisation: 58, reply_rate: 1.6, bounce_rate: 3.4, positive: 3, per_positive: 4900 }
+  ];
+  var USING_REP = { heat: false, tags: false, fix: false };
+
+  /* ---------- per-client rows from /api/client-windows ---------- */
+  // The analytics/client-windows layer injects a demo client "Acme" (hardcoded
+  // _DEMO_ACME_WINDOW_30D) — never a real client; keep it out of chips + heat.
+  function isDemoClient(name) { return /^acme$/i.test(String(name || "").trim()); }
+  // Sum the last k elements of a day-wise series array (k = window days).
+  function tailSum(a, k) {
+    if (!Array.isArray(a) || !a.length) return 0;
+    var t = a.slice(-k), s = 0;
+    for (var i = 0; i < t.length; i++) s += Number(t[i]) || 0;
+    return s;
+  }
+  // Which day the 24H snapshot reads: the most recent WEEKDAY strictly before
+  // today. Today is always skipped (a partial, still-ramping bucket — verified
+  // 2026-08-28 a Friday mid-morning read 420 sent vs a normal ~31k day). Weekends
+  // are skipped on the CALENDAR, so Saturday, Sunday and Monday all resolve to
+  // Friday (owner 2026-08-28) — deterministic, independent of whether that weekday
+  // happened to send.
+  //
+  // The search starts from the last entry whose DATE is strictly before today
+  // rather than from days[-2]: since the 2026-09-02 ruling the sweep's axis ends
+  // yesterday, but an older cached blob still ends today, and both must resolve
+  // to the same day. Returns -1 for an empty or all-future axis.
+  // UTC, because the sweep stamps its day list in UTC. A LOCAL date compare lets
+  // today's partial bucket through for a viewer ahead of UTC (between their local
+  // midnight and UTC midnight local "today" is already tomorrow's date), which is
+  // exactly the still-ramping day the 24H snapshot exists to skip.
+  function todayISO() { return new Date().toISOString().slice(0, 10); }
+  function snapDayIndex(days) {
+    if (!Array.isArray(days) || !days.length) return -1;
+    var today = todayISO(), last = -1, i;
+    for (i = days.length - 1; i >= 0; i--) {
+      if (String(days[i] || "").slice(0, 10) < today) { last = i; break; }
+    }
+    if (last < 0) return -1;
+    for (i = last; i >= 0; i--) {
+      var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(days[i] || "")); if (!m) continue;
+      var wd = new Date(+m[1], +m[2] - 1, +m[3]).getDay();   // 0=Sun … 6=Sat, local
+      if (wd !== 0 && wd !== 6) return i;                     // first weekday before today
+    }
+    return last;   // all-weekend series: the last day before today
+  }
+  // "2026-08-27" → "27 Aug" for the scope label, so the snapshot day is explicit.
+  var _MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function fmtDay(iso) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso || "")); if (!m) return "";
+    return String(+m[3]) + " " + (_MON[(+m[2]) - 1] || "");
+  }
+  // The heat-map window entry { client:{sent,replied,bounced}, __all:{…} } for a
+  // range. 7/14/30 come straight from the backend sweep (Smartlead-reconciled,
+  // archived-campaign complete). 24H (win 1) is derived HERE from the SAME day-
+  // wise series the capacity column already reads — one day's slice at
+  // snapDayIndex, which IS Smartlead's own day-wise number for that date, so it
+  // verifies against the platform to the digit at zero extra API cost. Deriving
+  // on the FE also means the real-time DEFAULT never falls through to the
+  // REP_CLIENTS sample while a fresh blob (which carries no "1" key) propagates.
+  // Any other window absent from windows{} degrades to a k-day series sum, so
+  // this stays forward-safe.
+  function winData(win) {
+    win = String(win);
+    var cw = S.cw; if (!cw) return null;
+    if (cw.windows && cw.windows[win]) return cw.windows[win];
+    var ser = cw.series; if (!ser) return null;
+    var out = {}, hasClient = false;
+    var idx = win === "1" ? snapDayIndex(cw.days) : -1;
+    if (win === "1" && idx < 0) return null;
+    Object.keys(ser).forEach(function (name) {
+      if (name === "__navreo_ws") return;   // raw workspace line, never a client
+      var s = ser[name] || {};
+      var one = function (a) { return (Array.isArray(a) && idx < a.length) ? (Number(a[idx]) || 0) : 0; };
+      out[name] = win === "1"
+        ? { sent: one(s.sent), replied: one(s.replied), bounced: one(s.bounced) }
+        : { sent: tailSum(s.sent, Number(win) || 1), replied: tailSum(s.replied, Number(win) || 1), bounced: tailSum(s.bounced, Number(win) || 1) };
+      if (name !== "__all") hasClient = true;
+    });
+    return hasClient ? out : null;         // __all alone isn't a fleet worth drawing
+  }
+  // Capacity-used detail for one heat-map row, via the ONE shared helper.
+  // 24H truncates the series to END at the snapshot day and reads that single
+  // day, so utilisation reflects the same day reply/bounce do — not today's
+  // still-empty bucket. 7/14/30 read the last `win` days, weekdays only.
+  // wsKey "__all" is the fleet sum; meridian/halden/fieldstone own their pool; every
+  // other client shares the navreo pool and is resolved by name.
+  function capWsKeyFor(name) {
+    var lc = String(name).toLowerCase();
+    if (name === "__all") return "__all";
+    return (lc === "meridian" || lc === "halden" || lc === "fieldstone") ? lc : null;
+  }
+  function usedDetailFor(name, snapIdx, winN) {
+    if (!window.NavreoCapacity || !S.cap || !S.cw || !S.cw.series) return null;
+    var ser = S.cw.series[name];
+    var sent = ser && ser.sent, days = S.cw.days, n = winN;
+    if (!Array.isArray(sent) || !sent.length || !Array.isArray(days)) return null;
+    if (snapIdx >= 0) { sent = sent.slice(0, snapIdx + 1); days = days.slice(0, snapIdx + 1); n = 1; }
+    return NavreoCapacity.usedDetail({ sent: sent, sentDays: days, cap: S.cap,
+                                       name: name, wsKey: capWsKeyFor(name), days: n });
+  }
+  function clientRows() {
+    var cw = S.cw, win = String(S.win);
+    var w = winData(win);
+    if (!w) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
+    var labels = cw.labels || cw.ws_labels || {};
+    var names = Object.keys(w).filter(function (k) { return k !== "__all" && k !== "__navreo_ws" && k.indexOf("__") !== 0 && !isDemoClient(k); });
+    if (!names.length) { USING_REP.heat = true; return REP_CLIENTS.slice(); }
+    USING_REP.heat = false;
+    var winN = Number(win) || 30;
+    // 24H reads ONE day (the snapshot day) — capacity-used must read the same
+    // day as reply/bounce, else a healthy snapshot sits beside a 0% "actively
+    // sending" pulled from today's still-empty bucket.
+    var snapIdx = win === "1" ? snapDayIndex(cw.days) : -1;
+    var rows = names.map(function (name) {
+      var e = w[name] || {};
+      var reply = pct(e.replied, e.sent), bounce = pct(e.bounced, e.sent);
+      var pw = perClientWarmPct(name, labels);          // % of the client's mailboxes actively warming (inwarmup only)
+      var wcap = warmCapFor(name, labels);              // estimated sends/day IN WARM-UP (being repaired), by provider
+      var capDay = capFor(name, labels);                 // current per-day cap — ONLY for the "N/day cap" label text
+      // Capacity-used via the ONE shared helper (NavreoCapacity in shell.js):
+      // weekday sends ÷ weekday capacity, the identical call the Analytics tab
+      // makes, so the two surfaces can never disagree. See its header comment
+      // for the 2026-09-02 weekdays-only ruling.
+      var cu = usedDetailFor(name, snapIdx, winN);
+      return {
+        name: prettyClient(name, labels), dom: null, inbox: pw ? pw.total : null,
+        reply: reply, bounce: bounce, sent: e.sent, positives: e.positives != null ? e.positives : null,
+        warm: pw ? pw.warmPct : null, warmKnown: !!pw,
+        warmCap: wcap ? wcap.capacityPerDay : null, warmBoxes: wcap ? wcap.boxes : null, warmCapKnown: !!wcap,
+        // % of the client's TOTAL sending capacity currently in warm-up =
+        // warmup ÷ (warmup + available), where "available" is the SAME capDay
+        // the Capacity-used column shows — the two columns stay mathematically
+        // consistent by construction (a client at 100% here would have 0/day
+        // available there). The backend's mirror-derived warmPct is NOT used:
+        // the mirror's campaign_count/message_per_day are unreliable for some
+        // workspaces (Halden read active=0 while visibly sending 2.2k/day).
+        warmPct: (wcap && capDay != null && (wcap.capacityPerDay + capDay) > 0)
+          ? Math.round(100 * wcap.capacityPerDay / (wcap.capacityPerDay + capDay)) : null,
+        // ~TOTAL sending capacity = the SAME two numbers this row already shows
+        // added together: In-warm-up volume + Available (Actively-sending's
+        // capDay). Owner 2026-08-24: the columns must visibly ADD UP — a
+        // range-averaged available made warm + available ≠ total on one row.
+        totalCap: (wcap == null && capDay == null) ? null
+          : Math.round((wcap ? wcap.capacityPerDay : 0) + (capDay || 0)),
+        // cap = the % shown in "Actively sending"; sentW/capW/capDays/capExceeded
+        // are the numbers BEHIND it, so the sub-label under the % describes the
+        // same days the % was measured over (WI-2) and the All row can re-add
+        // them instead of averaging percentages.
+        cap: cu ? cu.pct : null, sentW: cu ? cu.sent : null, capW: cu ? cu.cap : null,
+        capDays: cu ? cu.days : null, capExceeded: cu ? cu.exceeded : 0,
+        capDay: capDay, bl: null
+      };
+    });
+    rows.sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
+    return rows;
+  }
+  function prettyClient(key, labels) {
+    for (var lbl in labels) { if (labels[lbl] === key) return lbl; }
+    return key.charAt(0).toUpperCase() + key.slice(1);
+  }
+  // Estimated sends/day currently being repaired in warm-up for this client
+  // (Σ per warming box of its provider default: Outlook 2, Gmail 20, SMTP 15),
+  // from /api/warmup-capacity → S.warmcap.perWorkspace. Returns null until that
+  // feed is wired (or for shared-fleet clients not separable from Navreo's pool)
+  // → the "In warm-up" cell shows "—". NOTE: origin/main shipped the CALLERS of
+  // this function (clientRows + renderHeat use wcap/r.warmCap) without the
+  // definition, which threw ReferenceError and stranded the heat map on
+  // REP_CLIENTS sample rows for everyone; this defines it (null-safe) so live
+  // rows render again, and it lights up automatically when the loader lands.
+  function warmCapFor(name, labels) {
+    var wc = S.warmcap; if (!wc) return null;
+    // Per CLIENT now (owner ask: Navreo is an individual client, and every
+    // client under it gets its OWN warm-up capacity via the mailbox→client map
+    // — no "shared" bucket). Match the row's client name against perClient
+    // case-insensitively; fall back to the old perWorkspace-by-slug lookup so
+    // own-workspace clients still resolve if perClient is ever absent.
+    var pc = wc.perClient;
+    if (pc) {
+      if (pc[name]) return pc[name];
+      var nl = String(name).toLowerCase();
+      for (var k in pc) { if (k.toLowerCase() === nl) return pc[k]; }
+    }
+    var pw = wc.perWorkspace; if (!pw) return null;
+    var ws = labels[name] || String(name).toLowerCase();
+    var e = pw[ws] || pw[String(name).toLowerCase()];
+    if (!e) { for (var k2 in pw) { if (k2.toLowerCase() === String(ws).toLowerCase()) { e = pw[k2]; break; } } }
+    return e || null;
+  }
+  // Real per-day send capacity for a client — the SAME /api/fleet-capacity the
+  // analytics page uses: client_caps for shared-fleet clients, capacity[ws]
+  // latest for own-workspace clients (Meridian/Halden/Fieldstone). null until it lands.
+  function capFor(name, labels) {
+    var cap = S.cap; if (!cap) return null;
+    var cc = cap.client_caps || {};
+    if (cc[name] != null) return cc[name];
+    for (var k in cc) { if (k.toLowerCase() === String(name).toLowerCase()) return cc[k]; }
+    // No client_caps yet (today's per-client blob is written overnight) → the
+    // client's own daily series first, then the workspace line. The series'
+    // final point is today's IN-PROGRESS high-water figure that grows through
+    // the day (a morning read showed Navreo "7.2k/day" against a real ~23k),
+    // so take max(today-so-far, latest completed day) — never the raw last point.
+    var ccd = cap.client_caps_daily || {};
+    var series = ccd[name];
+    if (!series) { for (var k2 in ccd) { if (k2.toLowerCase() === String(name).toLowerCase()) { series = ccd[k2]; break; } } }
+    if (!Array.isArray(series)) {
+      var ws = labels[name] || String(name).toLowerCase();
+      series = cap.capacity && cap.capacity[ws];
+    }
+    if (!Array.isArray(series) || !series.length) return null;
+    var today = series[series.length - 1], done = null;
+    for (var i = series.length - 2; i >= 0; i--) if (series[i] != null) { done = series[i]; break; }
+    if (today == null && done == null) return null;
+    return Math.max(today || 0, done || 0);
+  }
+  // Emails ACTIVELY WARMING — the inwarmup view ONLY (warm-up-OFF boxes are not
+  // warming; counting them here was the bug that made every client read ~34%).
+  function inWarmEmailSet() {
+    if (!S.bundle) return null; var s = {};
+    ((bundleView("inwarmup")) || []).forEach(function (r) { if (r.email) s[String(r.email).toLowerCase()] = 1; });
+    return s;
+  }
+  // % of a client's mailboxes currently warming, via mailbox→client map ∩ inwarmup.
+  // null when the map hasn't attributed this client (own-workspace clients) → "—".
+  function perClientWarmPct(rawName, labels) {
+    var mcm = S.mcm; if (!mcm || mcm.status !== "ready" || !mcm.clients) return null;
+    var iw = inWarmEmailSet(); if (!iw) return null;
+    var key = prettyClient(rawName, labels).toLowerCase();
+    var emails = mcm.clients[key] || mcm.clients[String(rawName).toLowerCase()];
+    if (!emails || !emails.length) return null;
+    var total = emails.length, wc = 0;
+    emails.forEach(function (e) { if (iw[String(e).toLowerCase()]) wc++; });
+    return { total: total, warmPct: Math.round(100 * wc / total) };
+  }
+
+  // Count-truth: the headline counts the reconciled ACTION LIST (the same
+  // Fix-today rows the founder sees), NOT a raw sum of every flagged row —
+  // so "Inbox issues" can't read 1,300 when there are a handful of real jobs.
+  // Each row still carries its own magnitude ("294 domains blacklisted").
+  function buildFixItems(A) {
+    if (!A) return [];
+    var items = [];
+    var bl = A.blacklistRows || (Array.isArray(A.blacklist) ? A.blacklist : []);
+    if (bl.length) {
+      var doms = bl.map(function (b) { return b.domain; }).filter(Boolean);
+      items.push({ lvl: "r", ic: "🚫", h: bl.length + " domain" + (bl.length > 1 ? "s" : "") + " blacklisted",
+        p: (doms.slice(0, 3).join(", ") || "Flagged on a public blacklist") + (doms.length > 3 ? " +" + (doms.length - 3) + " more" : "") + " — mail from them is bouncing.", btn: "Pause & replace" });
+    }
+    var hb = A.campaignsFlagged || (Array.isArray(A.highbCamps) ? A.highbCamps : []);
+    if (hb.length) {
+      var c0 = hb[0];
+      items.push({ lvl: "r", ic: "📈", h: hb.length + " campaign" + (hb.length > 1 ? "s" : "") + " bouncing too high",
+        p: esc(c0.name || ("campaign " + c0.id)) + (c0.bounce_pct != null ? " at " + c0.bounce_pct + "% bounce" : "") + " — heading toward spam if it keeps sending.", btn: "Review" });
+    }
+    var recon = bundleView("reconnect"); var rn = recon ? recon.length : 0;
+    if (rn) items.push({ lvl: "r", ic: "🔌", h: rn + " mailbox" + (rn > 1 ? "es" : "") + " need reconnecting",
+      p: "Failed to authenticate — silently sending nothing until reconnected.", btn: "Reconnect" });
+    var nw = A.warmupConfig && Array.isArray(A.warmupConfig.notWarming) ? A.warmupConfig.notWarming : [];
+    if (nw.length) items.push({ lvl: "a", ic: "😴", h: nw.length + " mailbox" + (nw.length > 1 ? "es" : "") + " have warm-up OFF",
+      p: "Sitting dormant — not sending, not warming, just losing time.", btn: "Turn warm-up on" });
+    var sig = A.signature && Array.isArray(A.signature.missing) ? A.signature.missing : [];
+    if (sig.length) items.push({ lvl: "a", ic: "✍️", h: sig.length + " mailbox" + (sig.length > 1 ? "es" : "") + " missing a signature",
+      p: "A blank signature reads as spammy and hurts deliverability.", btn: "Fix" });
+    return items;
+  }
+  /* ---------- renderers ---------- */
+  // NOTE: The "Fix today" widget was removed — its blacklist / high-bounce /
+  // reconnect items duplicated the Inbox & domain manager tabs below, and the
+  // "missing a signature" item is now its own manager tab. buildFixItems()
+  // is kept only because the "Inbox issues" KPI + verdict headline count it.
+
+  function heatCell(tone, big, small, title) {
+    return '<td' + (title ? ' title="' + esc(title) + '"' : '') + '><div class="hcell h-' + tone + '">' +
+      big + (small ? '<small>' + small + '</small>' : '') + '</div></td>';
+  }
+  // Aggregate "All clients" total row — reconciles from RAW totals (not an
+  // average of per-client percentages): reply/bounce from the __all window
+  // totals, warm-up/capacity from summed capacity, blacklist summed. Range-scoped
+  // like every heat-map row. Returned as a row-shaped object so the existing
+  // per-client renderer draws it unchanged (with an isAll flag for styling).
+  function allClientsRow(rows) {
+    var win = String(S.win);
+    var wd = winData(win);
+    var all = wd && wd["__all"];
+    var reply = (all && all.sent) ? pct(all.replied, all.sent) : null;
+    var bounce = (all && all.sent) ? pct(all.bounced, all.sent) : null;
+    // Warm-up % = Σ(warm) / (Σ(warm) + Σ(available)) over clients where BOTH are
+    // known — the SAME total-sending-capacity definition as the per-client cells
+    // (warm ÷ capacity-alone produced 254% nonsense), paired so the fleet %
+    // stays ≤100 by construction.
+    var sumWarm = 0, capForWarm = 0, sumTotal = 0, totalKnown = false;
+    var sSent = 0, sCap = 0, sDays = 0, sExc = 0, anyRow = false;
+    rows.forEach(function (r) {
+      if (r.warmCap != null && r.capDay != null) { sumWarm += r.warmCap; capForWarm += r.capDay; }
+      if (r.sentW != null && r.capW) { sSent += r.sentW; sCap += r.capW; sDays = Math.max(sDays, r.capDays || 0); sExc += (r.capExceeded || 0); anyRow = true; }
+      if (r.totalCap != null) { sumTotal += r.totalCap; totalKnown = true; }
+    });
+    // Capacity used % — Σsent ÷ Σcap, NEVER a mean of percentages (a 200-send
+    // client at 90% must not weigh the same as a 300k client at 60%). Read the
+    // fleet's OWN __all series through the same helper the client rows use, so
+    // this row matches the Analytics All-clients KPI to the digit and stays in
+    // the same scope as the reply/bounce cells beside it (which already read
+    // __all, and so include campaigns that belong to no client chip). Summing
+    // the client rows is the fallback for a blob with no __all series.
+    var allCu = usedDetailFor("__all", win === "1" ? snapDayIndex((S.cw && S.cw.days) || []) : -1, Number(win) || 30);
+    var capPct = (allCu && allCu.pct != null) ? allCu.pct
+               : (anyRow && sCap > 0 ? Math.round(100 * sSent / sCap) : null);
+    return {
+      isAll: true, name: "All clients", dom: null, inbox: null,
+      reply: reply, bounce: bounce,
+      warmPct: (sumWarm + capForWarm) > 0 ? Math.round(100 * sumWarm / (sumWarm + capForWarm)) : null,
+      warmCap: capForWarm > 0 ? sumWarm : null, warmCapKnown: true,
+      cap: capPct,
+      sentW: allCu ? allCu.sent : (anyRow ? sSent : null),
+      capW: allCu ? allCu.cap : (anyRow ? sCap : null),
+      capDays: allCu ? allCu.days : (anyRow ? sDays : null),
+      capExceeded: allCu ? allCu.exceeded : sExc,
+      capDay: null, totalCap: totalKnown ? sumTotal : null, bl: null, nClients: rows.length
+    };
+  }
+  function renderHeat() {
+    var rows = clientRows();
+    // "1 Sep" for the 24H sub-labels, so the cap a % was measured against names
+    // its own day. Empty for 7/14/30 (those say "avg" instead).
+    var snapTxt = "";
+    if (S.win === 1 && S.cw && S.cw.days) {
+      var si = snapDayIndex(S.cw.days);
+      if (si >= 0) snapTxt = fmtDay(S.cw.days[si]);
+    }
+    // Lazy-load: never pre-paint the REP_CLIENTS sample (fabricated numbers
+    // coloured as if real read as genuine fleet health). Until /api/client-windows
+    // resolves, show a pulsing grey skeleton the shape of the heat map; once it
+    // resolves with no live rows, say so honestly.
+    if (USING_REP.heat) {
+      if (S.cwDone) {
+        el("hub-heat").innerHTML = '<div class="skel" style="padding:16px 4px">No live per-client rows yet for this window.</div>';
+      } else {
+        var sk = "";
+        for (var i = 0; i < 6; i++) {
+          sk += '<tr><td class="n"><div class="heat-sk-n"></div></td>';
+          for (var c = 0; c < 5; c++) sk += '<td><div class="hcell sk"></div></td>';
+          sk += '</tr>';
+        }
+        el("hub-heat").innerHTML = '<div class="heatwrap"><table class="heat"><tr><th class="n">Client</th><th>Reply rate</th><th>Bounce</th><th>Resting</th><th>Actively sending</th><th>Total capacity</th></tr>' + sk + '</table></div>';
+      }
+      return;
+    }
+    // Pin the aggregate "All clients" total as the first row.
+    var withAll = [allClientsRow(rows)].concat(rows);
+    var body = withAll.map(function (r) {
+      var meta = r.isAll ? ("Fleet health · " + (r.nClients || 0) + " client" + (r.nClients === 1 ? "" : "s"))
+                         : ((r.dom != null ? r.dom + " dom" : "") + (r.inbox != null ? " · " + r.inbox + " inbox" : "")).replace(/^ · /, "");
+      // Verdict dot on the aggregate row so fleet health reads at a glance
+      // (worst of reply + bounce). Sourced from the row's own tones, not r.bl
+      // (which the aggregate no longer carries).
+      var vdot = "";
+      if (r.isAll) {
+        var tones = [replyTone(r.reply), bounceTone(r.bounce)];
+        var vc = tones.indexOf("r1") >= 0 ? "r" : (tones.indexOf("a1") >= 0 ? "a" : "g");
+        vdot = '<span class="fleetv ' + vc + '" aria-hidden="true"></span>';
+      }
+      var tds = '<td class="n">' + vdot + esc(r.name) + (meta ? '<small>' + esc(meta) + '</small>' : '') + '</td>';
+      tds += heatCell(replyTone(r.reply), r.reply == null ? "—" : fx(r.reply), r.reply == null ? "" : (r.reply >= 3 ? "strong" : r.reply >= 1.5 ? "ok" : "soft"));
+      tds += heatCell(bounceTone(r.bounce), r.bounce == null ? "—" : fx(r.bounce), r.bounce == null ? "" : (r.bounce < 2 ? "low" : r.bounce < 3 ? "watch" : "high"));
+      // In warm-up = estimated sends/day currently being "repaired": Σ per
+      // warming box of its provider default (Outlook 2, Gmail 20, SMTP 15),
+      // from /api/warmup-capacity. Shared-fleet clients (not their own
+      // workspace) can't be split out of Navreo's pool → "—/shared".
+      // In warm-up = the SHARE of the client's total sending capacity currently
+      // in warm-up (being repaired): top = that %, bottom = the descriptor.
+      // Falls back to raw sends/day when the % can't be computed, and to
+      // "—/not mapped" for a client we can't attribute yet.
+      // In warm-up, ONE consistent format (owner ruling): top = the volume in
+      // warm-up ("2.9k/day"), bottom = its share of total sending capacity
+      // ("12% of total sending capacity"; "in warm-up" while the % is unknown).
+      var warmVal = null, warmSub = null;
+      if (r.warmCap != null) {
+        // "~" because this is Sigma(resting mailboxes x provider default), not a
+        // Smartlead-reported volume — printing it bare read as a measurement.
+        warmVal = "~" + n(r.warmCap) + "/day";
+        // A real-but-tiny share rounds to 0 (e.g. 102/day of a 23k fleet =
+        // 0.44%): print "<1%" so a non-zero volume never reads "0%".
+        warmSub = r.warmPct != null
+          ? (r.warmPct === 0 && r.warmCap > 0 ? "<1" : r.warmPct) + "% of total sending capacity"
+          : "in warm-up";
+      }
+      // Warm-up tone (owner 2026-08-24): <=20% green, 20-30% amber, 30%+ red
+      // (share of total sending capacity tied up in repair).
+      var warmTn = r.warmPct == null ? "g2"
+        : (r.warmPct <= 20 ? "g1" : r.warmPct < 30 ? "a1" : "r1");
+      // Until the warm-up feed lands for this row, show the lazy-load pulsing
+      // skeleton (owner 2026-08-24) rather than a dash that reads like a value.
+      tds += (r.warmCap == null) ? '<td><div class="hcell sk"></div></td>'
+        : heatCell(warmTn, warmVal, warmSub,
+                   "Estimated: resting mailboxes \u00d7 provider default (Outlook 2 \u00b7 Gmail 20 \u00b7 Maildoso 15 \u00b7 SMTP 15 per day)");
+      // Actively sending: the % on top, and underneath it the capacity THAT %
+      // WAS MEASURED AGAINST — the same day (24H) or the same window average
+      // (7/14/30), never today's live cap. Pairing the window % with today's cap
+      // was how a cell could read 112% of a number printed right beneath it.
+      // Today's live client_caps figure appears only in the Total-capacity column.
+      //
+      // The visible sub-label is ONE sentence in ONE shape for every row and every
+      // range — "of 38.8k/day active sending capacity" (owner ruling 2026-09-02).
+      // Which day it was measured on, and the over-cap caveat, live on hover: they
+      // are the explanation, not the number, and varying the label per row made a
+      // column that should scan in one pass unreadable.
+      var capSub = "", capTitle = "", capBig = r.cap == null ? "—" : r.cap + "%";
+      if (r.cap != null && r.capW && r.capDays) {
+        // 24H measures ONE day, so its capW IS that day's cap; a multi-day window
+        // shows the mean weekday cap it was actually divided by.
+        var capBasis = S.win === 1 ? r.capW : Math.round(r.capW / r.capDays);
+        capSub = "of " + n(capBasis) + "/day active sending capacity";
+        capTitle = S.win === 1
+          ? "Measured on " + (snapTxt || "the last weekday") +
+            ": weekday sends \u00f7 the capacity recorded for that day"
+          : "Weekday sends \u00f7 weekday capacity, averaged over the last " + S.win + " days";
+        if (r.capExceeded > 0) {
+          // The own-workspace pools were high-water-snapped just ONCE a day (04:30)
+          // until the hourly top-up shipped today, so a historical day's recorded
+          // cap can sit BELOW what that day actually sent — and those days keep
+          // their single morning snapshot until they scroll out of the window.
+          // usedDetail already counts such a day at what it really sent, so the
+          // ratio is clamped at 100 and the visible cell keeps its NORMAL tone
+          // (owner ruling 2026-09-02: no amber, the label stays uniform). The
+          // caveat belongs on hover, where it explains rather than alarms.
+          capTitle += ", cap snapshot below sends on " + r.capExceeded +
+            " day" + (r.capExceeded === 1 ? "" : "s") +
+            " \u2014 those days count at what they actually sent";
+        }
+        capTitle += ".";
+      }
+      tds += heatCell(capTone(r.cap), capBig, capSub, capTitle);
+      // ~Total sending capacity (black box) — the sum of the two numbers this
+      // row already shows (warm-up + available). Top = per day, bottom = the
+      // estimated monthly total at ×20 SENDING DAYS: Navreo never sends on
+      // weekends (owner law 2026-08-24 — a month is ~20 weekdays, always),
+      // so ×30 overstated every monthly figure by 50%.
+      var moCap = r.totalCap == null ? null : r.totalCap * 20;
+      var moTxt = moCap == null ? "" :
+        (moCap >= 1e6 ? "~" + (Math.round(moCap / 1e5) / 10) + "M/month" : "~" + n(moCap) + "/month");
+      tds += heatCell("blk", r.totalCap == null ? "—" : "~" + n(r.totalCap) + "/day", moTxt);
+      return '<tr' + (r.isAll ? ' class="heat-all"' : '') + '>' + tds + "</tr>";
+    }).join("");
+    el("hub-heat").innerHTML =
+      '<div class="heatwrap"><table class="heat"><tr><th class="n">Client</th><th>Reply rate</th><th>Bounce</th><th>Resting</th><th>Actively sending</th><th>Total capacity</th></tr>' + body + '</table></div>' +
+      '<div class="heat-legend">' +
+        '<span class="sw"><span class="box" style="background:var(--green)"></span>Great</span>' +
+        '<span class="sw"><span class="box" style="background:#4E9A76"></span>Good</span>' +
+        '<span class="sw"><span class="box" style="background:var(--amber)"></span>Watch</span>' +
+        '<span class="sw"><span class="box" style="background:var(--red)"></span>Fix now</span>' +
+        '</div>';
+  }
+
+  function renderTags() { var h = el("hub-tags-body"); if (h) h.innerHTML = tagsTable(); }
+  function tagsTable() {
+    // Performance-by-tag is a static, fleet-wide cut — it lives in its own
+    // section below the heat map and is NOT scoped by the client chips or the
+    // heat-map date range (owner 2026-08-25).
+    var rows = null, D = S.tags;
+    if (D && D.tagStats && D.tagStats[String(TAG_WIN)]) rows = D.tagStats[String(TAG_WIN)].filter(function (r) { return r.mailboxes > 0; });
+    /* Fidelity fix (23 Aug 2026): never paint REP_TAGS' fabricated reply/bounce/
+       per-positive numbers as if real — the heat table warns when it falls back
+       but this table did not, so empty tag stats read as genuine performance.
+       Show an honest empty state instead of made-up rates. */
+    if (!rows || !rows.length) {
+      USING_REP.tags = true;
+      return '<div class="tbl-empty" style="padding:18px;color:var(--fg-subtle);font-size:.9rem">' +
+        'No per-tag performance yet for this window — tag your mailboxes and this fills from live sends.</div>';
+    }
+    USING_REP.tags = false;
+    var body = rows.map(function (r) {
+      var rt = r.reply_rate, bt = r.bounce_rate, pp = r.per_positive, ut = r.utilisation;
+      function span(tone, txt) { return '<span class="' + tclass(tone) + '">' + txt + '</span>'; }
+      return '<tr><td>' + esc(r.tag) + '</td>' +
+        '<td class="num">' + (r.mailboxes || 0) + '</td>' +
+        '<td class="num">' + comma(r.sent) + '</td>' +
+        '<td class="num">' + (ut == null ? '<span class="t-mut">—</span>' : span(capTone(ut), ut + "%")) + '</td>' +
+        '<td class="num">' + (rt == null ? '<span class="t-mut">—</span>' : span(replyTone(rt), rt + "%")) + '</td>' +
+        '<td class="num">' + (bt == null ? '<span class="t-mut">—</span>' : span(bounceTone(bt), bt + "%")) + '</td>' +
+        '<td class="num">' + (r.positive || 0) + '</td>' +
+        '<td class="num">' + (pp == null ? '<span class="t-mut">—</span>' : span(pp < 1000 ? "g1" : pp < 2000 ? "a1" : "r1", comma(pp))) + '</td></tr>';
+    }).join("");
+    // No inner overflow wrapper here: the standalone #hub-tags-body owns the
+    // scroll (max-height:500px; overflow:auto) on BOTH axes. A nested
+    // overflow-x div would form its own scroll context and swallow the
+    // vertical scroll, leaving the 500px cap unable to page the rows.
+    return '<table class="tbl" style="min-width:720px"><thead><tr>' +
+      '<th>Tag</th><th class="num">Mailboxes</th><th class="num">Sent</th><th class="num">Capacity used</th><th class="num">Reply %</th><th class="num">Bounce %</th><th class="num">Positives</th><th class="num">Sent / positive</th>' +
+      '</tr></thead><tbody>' + body + '</tbody></table>';
+  }
+
+  /* ---------- manager tabs ----------
+     Rows come from /api/deliverability/_bundle .views.{warmupoff,inwarmup,
+     reconnect} (each { rows:[{email,domain,tags[],cap,provider,reason,
+     warmup_status}] }); "Below reply floor" + "High bounce-rate" come from the
+     audit blob (lowrep / highbCamps). Exactly the owner's tab set + tags. */
+  var MGR_TABS = [
+    { key: "lowrep", label: "Below reply floor" },
+    { key: "warmupoff", label: "Not warming" },
+    { key: "inwarmup", label: "Resting" },
+    { key: "parkchurn", label: "Repeat parks" },
+    { key: "reconnect", label: "Needs reconnect" },
+    { key: "highb", label: "High bounce-rate" },
+    { key: "signature", label: "Missing signature" }
+  ];
+  var mgrActive = "warmupoff";
+  var MGR_CAP = 250; // rows shown per view (fleet lists run to thousands)
+
+  function bundleView(key) {
+    var b = S.bundle && S.bundle.views && S.bundle.views[key];
+    return (b && Array.isArray(b.rows)) ? b.rows : null;
+  }
+
+  /* ---- client membership (the CLIENT filter scopes ONLY the manager) ----
+     A manager row belongs to the selected client if either:
+       • its workspace stamp matches the client's workspace slug (own-workspace
+         clients: Meridian / Halden / Fieldstone, stamped by _deliv_merge_client_ws), OR
+       • its mailbox / domain is in the shared-fleet client's set from
+         /api/mailbox-client-map (Navreo-fleet mailboxes running that client's
+         campaigns).
+     Returns null for "All clients" — meaning no filtering. */
+  function clientMembership() {
+    if (S.client === "All") return null;
+    var labels = (S.cw && (S.cw.ws_labels || S.cw.labels)) || {};
+    var slug = String(labels[S.client] || S.client).toLowerCase();
+    var emails = {}, domains = {}, mapped = false;
+    var mcm = S.mcm, key = String(S.client).toLowerCase();
+    var list = mcm && mcm.clients && (mcm.clients[key] || null);
+    if (list && list.length) {
+      mapped = true;
+      list.forEach(function (e) { e = String(e).toLowerCase(); emails[e] = 1; var d = e.split("@")[1]; if (d) domains[d] = 1; });
+    }
+    return { slug: slug, emails: emails, domains: domains, mapped: mapped };
+  }
+  function mbxMatch(m, mem) {
+    if (!mem) return true;
+    if (m.workspace && String(m.workspace).toLowerCase() === mem.slug) return true;
+    if (m.email && mem.emails[String(m.email).toLowerCase()]) return true;
+    if (m.domain && mem.domains[String(m.domain).toLowerCase()]) return true;
+    return false;
+  }
+  function domMatch(d, mem) {
+    if (!mem) return true;
+    if (d.workspace && String(d.workspace).toLowerCase() === mem.slug) return true;
+    if (d.domain && mem.domains[String(d.domain).toLowerCase()]) return true;
+    return false;
+  }
+  // Client-scoped accessors used by the manager tabs + badges.
+  function bundleViewC(key) { var r = bundleView(key); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (x) { return mbxMatch(x, m); }) : r; }
+  function floorListC() { var r = floorList(); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (d) { return domMatch(d, m); }) : r; }
+  function highbListC() { var r = highbList(); if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (d) { return domMatch(d, m); }) : r; }
+  function restingEntriesC() { var e = restingDomainEntries(); if (e == null) return null; var m = clientMembership(); return m ? e.filter(function (en) { return domMatch({ domain: en.dom }, m) || (en.rs && en.rs.some(function (r) { return mbxMatch(r, m); })); }) : e; }
+  // Missing-signature rows come from the audit blob (S.deliv.signature.missing),
+  // each carrying { email, domain, batch, from_name }. Client-scoped like the
+  // other manager views so the badge + table honour the current client filter.
+  function signatureListC() { var A = S.deliv; var r = (A && A.signature && Array.isArray(A.signature.missing)) ? A.signature.missing : null; if (r == null) return null; var m = clientMembership(); return m ? r.filter(function (x) { return mbxMatch(x, m); }) : r; }
+  // Repeat-park offenders from /api/park-churn — rows carry {domain, workspace,
+  // parks, first_parked, last_parked, resting_now, boxes}, so the standard
+  // domain-level client scoping applies unchanged.
+  function parkChurnListC() {
+    var j = S.parkchurn; var r = (j && Array.isArray(j.rows)) ? j.rows : null;
+    if (r == null) return null;
+    var m = clientMembership();
+    return m ? r.filter(function (d) { return domMatch(d, m); }) : r;
+  }
+
+  /* ---- shared data helpers (match the OLD deliverability manager) ---- */
+  var FLOOR_STD = 0.7, FLOOR_MD = 0.5, BOUNCE_HOT = 3; // same thresholds as the old tab
+  function dhRows() { // domain-health rows — manager uses the FIXED MGR_WIN, not the heat-map range
+    var dh = S.bundle && S.bundle.dh; if (!dh) return null;
+    var w = dh[String(MGR_WIN)] || dh["30"] || dh["7"]; return (w && w.rows) || null;
+  }
+  function floorList() { var r = dhRows(); if (r == null) return null; var ms = (S.bundle && S.bundle.minSent) || 500; var resting = restingSet();
+    // Paused/resting domains belong to the In warm-up tab, not here — a domain that is
+    // already resting has no live sends to be "below the floor", so exclude it outright.
+    return r.filter(function (d) { return !resting[d.domain] && d.reply_rate != null && (d.sent || 0) >= ms && d.reply_rate < (d.maildoso ? FLOOR_MD : FLOOR_STD); })
+      .sort(function (a, b) { return a.reply_rate - b.reply_rate; }); }
+  function highbList() { var r = dhRows(); if (r == null) return null;
+    return r.filter(function (d) { return d.bounce_rate != null && d.bounce_rate >= BOUNCE_HOT; })
+      .sort(function (a, b) { return b.bounce_rate - a.bounce_rate; }); }
+  function groupByDomain(rows) { var g = {}, order = []; rows.forEach(function (r) { var d = r.domain || "—"; if (!g[d]) { g[d] = []; order.push(d); } g[d].push(r); }); return { g: g, order: order }; }
+  // Every domain that is genuinely resting — the union of the Smartlead
+  // "inwarmup" + "rested" views AND the rest LEDGER (bundle.restDue). The
+  // ledger is the source of truth for a paused domain: Smartlead often never
+  // classifies a warm-up-job-paused domain as "inwarmup", so reading that view
+  // alone leaked resting domains onto "Below reply floor" and hid them from the
+  // Resting tab. Backend deletes a ledger row on restore, so restDue stays true.
+  function restingSet() {
+    var s = {};
+    ((bundleView("inwarmup")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
+    ((bundleView("rested")) || []).forEach(function (m) { if (m.domain) s[m.domain] = true; });
+    var rd = S.bundle && S.bundle.restDue;
+    if (rd) Object.keys(rd).forEach(function (d) { if (d) s[d] = true; });
+    return s;
+  }
+  // Canonical resting domain list — shared by the Resting tab and its badge so
+  // both count the same thing. Returns [{dom, rs, boxes, hb, dueTs}] sorted
+  // soonest-due first, or null while the views are still loading. Merges
+  // inwarmup+rested mailbox rows (deduped) and synthesizes a domain-only entry
+  // for any ledger domain with no held-box rows in either view.
+  //
+  // A high-bounce domain is NOT dropped here (it used to be). Resting and high
+  // bounce are two different facts about one domain and both are true at once:
+  // hiding the overlap made Halden's Resting badge read 2 when 21 of its domains
+  // were genuinely resting with 1,089 mailboxes held. The domain stays in the
+  // High bounce-rate tab too and carries hb:true so the row can say so.
+  function restingDomainEntries() {
+    var iw = bundleView("inwarmup"), rv = bundleView("rested");
+    if (iw == null && rv == null) return null;
+    var seen = {}, rows = [];
+    (iw || []).concat(rv || []).forEach(function (m) {
+      var k = String(m.email || m.id || (m.domain + "#" + rows.length)).toLowerCase();
+      if (seen[k]) return; seen[k] = 1; rows.push(m);
+    });
+    var hbSet = {}; (highbList() || []).forEach(function (d) { if (d.domain) hbSet[d.domain] = true; });
+    var gr = groupByDomain(rows);
+    var order = gr.order.slice(), inList = {};
+    order.forEach(function (d) { inList[d] = true; });
+    var rd = (S.bundle && S.bundle.restDue) || {};
+    Object.keys(rd).forEach(function (d) { if (d && !inList[d]) { order.push(d); gr.g[d] = gr.g[d] || []; } });
+    // Mailbox count: the audit backend truncates each view at 2,000 rows, so
+    // counting held rows can undercount a big domain. liveZeroCap is the
+    // census-complete per-domain count of cap-0 (sends-paused) mailboxes across
+    // the whole fleet — take whichever is larger, so the number is never a
+    // truncation artefact (see memory deliverability-count-truth-fix).
+    var lz = (S.bundle && S.bundle.liveZeroCap) || {};
+    var entries = order.map(function (dom) {
+      var rs = gr.g[dom] || [];
+      var dueTs = rd[dom] || null;
+      if (dueTs == null) {
+        // Derive the due date from when the boxes were actually rested. If we
+        // hold no rest date either, LEAVE IT NULL — the old `Date.now() + 7d`
+        // fallback re-based itself on every render, so a domain with no ledger
+        // row read "due in 7d" every day forever (the placeholder the
+        // 2026-08-23 ruling banned; memory dueback-ledger-one-clock). A rest
+        // date we do not hold is not a rest date.
+        var due = rs.map(restedMs).filter(Boolean).map(function (t) { return t + 7 * 864e5; });
+        dueTs = due.length ? Math.min.apply(null, due) : null;
+      }
+      return { dom: dom, rs: rs, boxes: Math.max(rs.length, Number(lz[dom]) || 0),
+               hb: !!hbSet[dom], dueTs: dueTs };
+    });
+    // soonest-due first; domains with no known due date sort last (they are not
+    // "due now", they are unknown)
+    entries.sort(function (a, b) {
+      if (a.dueTs == null || b.dueTs == null) return (a.dueTs == null ? 1 : 0) - (b.dueTs == null ? 1 : 0);
+      return a.dueTs - b.dueTs;
+    });
+    return entries;
+  }
+  // No due date on file reads "date unknown", not "—": a dash looks like an empty
+  // column, and inventing "due in 7d" was worse. The domain is still resting and
+  // still restorable — we just do not know when its rest started.
+  function dueChip(ts) { if (!ts) return '<span class="pill n">date unknown</span>'; var left = ts - Date.now();
+    if (left <= 0) return '<span class="pill g">ready now</span>';
+    var dl = Math.ceil(left / 864e5); return '<span class="pill ' + (dl <= 2 ? "a" : "n") + '">due in ' + dl + 'd</span>'; }
+  function restedMs(m) { var v = m.restedAt; if (v == null) return null; if (typeof v === "number") return v < 1e12 ? v * 1000 : v; var p = Date.parse(v); return isNaN(p) ? null : p; }
+
+  function mgrCount(key) {
+    if (key === "tags") return null;
+    // Every badge reflects the CURRENT client filter (client-scoped accessors),
+    // so the tab counts always match what the table shows for that client.
+    if (key === "lowrep") { var f = floorListC(); return f ? f.length : null; }
+    if (key === "highb") { var h = highbListC(); return h ? h.length : null; }
+    // Resting is a domain-grouped view (many mailboxes per domain, plus
+    // ledger-only domains), so its badge counts DISTINCT resting domains via
+    // the same canonical list the table renders — never just inwarmup rows.
+    if (key === "inwarmup") { var e = restingEntriesC(); return e ? e.length : null; }
+    if (key === "parkchurn") { var pc = parkChurnListC(); return pc ? pc.length : null; }
+    if (key === "signature") { var sg = signatureListC(); return sg ? sg.length : null; }
+    var rows = bundleViewC(key);
+    if (!rows) return null;
+    return rows.length;
+  }
+  function renderMgrTabs() {
+    el("hub-mgr-tabs").innerHTML = MGR_TABS.map(function (t) {
+      var c = mgrCount(t.key), badge = "";
+      if (c != null) badge = ' <span class="tabbadge' + (c > 0 ? "" : " n") + '">' + comma(c) + '</span>';
+      return '<button class="tab' + (mgrActive === t.key ? " on" : "") + '" data-tab="' + t.key + '">' + t.label + badge + '</button>';
+    }).join("");
+    renderMgrBody();
+  }
+  function tableWrap(head, rows, empty, foot) {
+    if (!rows) return '<div class="mgr-empty">' + esc(empty || "Nothing here — all clear.") + '</div>';
+    return '<div style="overflow-x:auto"><table class="tbl" style="min-width:640px"><thead><tr>' + head + '</tr></thead><tbody>' + rows + '</tbody></table></div>' +
+      (foot ? '<div style="padding:11px 16px;font-size:11.5px;color:var(--ink-3)">' + foot + '</div>' : '');
+  }
+  function pill(cls, txt) { return '<span class="pill ' + cls + '"><span class="dot"></span>' + esc(txt) + '</span>'; }
+  // Confidence-grade badge for a domain: A (healthiest) → E (confidently below
+  // floor). Reads the /api/deliverability/grades map (same grade the cap engine
+  // acts on). Blank while the map is still loading; a muted "–" once loaded if
+  // the domain has no 30-day sends to grade.
+  function gradeBadge(dom) {
+    if (!S.grades || !S.grades.grades) return '';
+    var g = S.grades.grades[String(dom || "").toLowerCase()];
+    if (!g || !g.grade) return '<span class="grade-badge gr-x" title="Not graded — no sends in the last 30 days">–</span>';
+    var pct = (g.p_healthy != null) ? Math.round(g.p_healthy * 100) + '% likely healthy' : '';
+    var act = g.action === 'park' ? 'rests' : g.action === 'cap_down' ? 'capped down' : 'keeps sending';
+    return '<span class="grade-badge gr-' + esc(g.grade) + '" title="Grade ' + esc(g.grade) + (pct ? ' · ' + pct : '') + ' · ' + act + '">' + esc(g.grade) + '</span>';
+  }
+  function gradeLegend() {
+    if (!S.grades || !S.grades.grades) return '';
+    var items = [["A", "healthy"], ["B", "likely healthy"], ["C", "watch"], ["D", "cap down"], ["E", "rest"]];
+    return '<div class="grade-legend"><span class="t-mut">Grade:</span>' + items.map(function (i) {
+      return '<span class="gi"><span class="grade-badge gr-' + i[0] + '">' + i[0] + '</span>' + i[1] + '</span>';
+    }).join("") + '</div>';
+  }
+  function gradeOf(dom) {
+    var G = S.grades && S.grades.grades, g = G && G[String(dom || "").toLowerCase()];
+    return (g && g.grade) || null;
+  }
+  // Grade-informed Repeat-parks recommendation: Replace / Repair / Keep, from
+  // the health grade (A healthiest … E confidently below floor) plus how many
+  // verified rest cycles the domain has churned through. Returns [label, pill
+  // class, why]. Falls back to the cycle count while grades are still loading.
+  function parkRec(dom, cycAll) {
+    var g = gradeOf(dom);
+    if (g === "E") return ["Replace", "r", "grade E — confidently below the reply floor"];
+    if (g === "D") return cycAll >= 3 ? ["Replace", "r", "grade D and parked " + cycAll + "× — keeps failing after every rest"] : ["Repair", "a", "grade D — weak; one more cap-down cycle before replacing"];
+    if (g === "C") return ["Repair", "a", "grade C — marginal; watch and re-grade"];
+    if (g === "A" || g === "B") return ["Keep", "g", "grade " + g + " — healthy now; the churn was noise, stop cycling it"];
+    return cycAll >= 3 ? ["Replace", "r", "parked " + cycAll + "× with no recent sends to grade"] : ["Keep", "g", "not enough recent data — keep for now"];
+  }
+  function actBtn(act, domain, id, label, primary) {
+    var attrs = 'data-act="' + act + '"' + (domain != null ? ' data-domain="' + esc(domain) + '"' : '') + (id != null ? ' data-id="' + esc(id) + '"' : '');
+    // Design-system button (navreo.css): .btn.sm base, .primary for the orange emphasis variant.
+    return '<button class="btn sm' + (primary ? ' primary' : '') + '" ' + attrs + '>' + esc(label) + '</button>';
+  }
+  // Domain-health rows are stamped with the workspace they were pulled from
+  // (navreo rows carry no stamp). The SAME domain can appear twice — once under
+  // navreo and once under a client workspace — because both workspaces hold
+  // mailboxes on it, and two untagged identical rows read as a duplication bug.
+  // Tag the client-workspace row so the pair is legible; navreo stays bare.
+  function wsPill(row) {
+    var ws = row && row.workspace;
+    if (!ws) return "";
+    var labels = (S.cw && (S.cw.ws_labels || S.cw.labels)) || {};
+    var label = ws;
+    for (var lbl in labels) { if (String(labels[lbl]).toLowerCase() === String(ws).toLowerCase()) { label = lbl; break; } }
+    return ' <span class="pill n">' + esc(label) + '</span>';
+  }
+  // "N row(s) over X across D domain(s)" — plus how many of those domains send
+  // from two workspaces, so a doubled domain reads as a fact, not a glitch.
+  function domSpread(rows) {
+    var byDom = {}, dupes = 0;
+    rows.forEach(function (d) { (byDom[d.domain] = byDom[d.domain] || []).push(d.workspace || "navreo"); });
+    Object.keys(byDom).forEach(function (d) {
+      var seen = {}, n = 0;
+      byDom[d].forEach(function (w) { if (!seen[w]) { seen[w] = 1; n++; } });
+      if (n > 1) dupes++;
+    });
+    return { domains: Object.keys(byDom).length, dupes: dupes };
+  }
+  function tagChips(tags) {
+    if (!Array.isArray(tags) || !tags.length) return '<span class="t-mut">—</span>';
+    return tags.slice(0, 2).map(function (t) { return '<span class="pill n" style="margin-right:3px">' + esc(t) + '</span>'; }).join("") + (tags.length > 2 ? '<span class="t-mut"> +' + (tags.length - 2) + '</span>' : "");
+  }
+  function shortReason(r) { if (!r) return "conn fail"; r = String(r).replace(/^RTPS[^:]*:-?\s*/, ""); return r.length > 90 ? r.slice(0, 88) + "…" : r; }
+
+  // ---- Below reply floor (old flow "floor"): Domain·Sent·Leads·Reply·Positive·Bounce·Action
+  function mgrFloor() {
+    var rows = floorListC(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ No domains below the ' + FLOOR_STD + '% reply floor in the last ' + MGR_WIN + ' days.</div>';
+    var body = rows.map(function (d) {
+      // Every domain here has live sends below the floor (paused ones are filtered out
+      // in floorList and live in the In warm-up tab), so the only action is Warm up.
+      var action = actBtn("warmup", d.domain, null, "Warm up domain", true);
+      return '<tr><td class="mono">' + gradeBadge(d.domain) + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+        '<td class="num">' + comma(d.sent) + '</td>' +
+        '<td class="num">' + comma(d.lead || 0) + '</td>' +
+        '<td class="num t-r">' + (d.reply_rate).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
+        '<td class="num">' + (d.positive_rate || 0).toFixed(2) + '%</td>' +
+        '<td class="num' + (d.bounce_rate >= 3 ? ' t-r' : '') + '">' + (d.bounce_rate || 0).toFixed(2) + '%</td>' +
+        '<td style="text-align:right">' + action + '</td></tr>';
+    }).join("");
+    var spF = domSpread(rows);
+    return gradeLegend() + tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Leads</th><th class="num">Reply rate</th><th class="num">Positive</th><th class="num">Bounce</th><th style="text-align:right">Action</th>', body, null,
+      rows.length + ' row(s) below the ' + FLOOR_STD + '% floor (0.5% Maildoso) across ' + spF.domains + ' domain(s)' +
+      (spF.dupes ? ' · ' + spF.dupes + ' domain(s) send from two workspaces' : '') +
+      ' · min ' + comma((S.bundle && S.bundle.minSent) || 500) + ' sent · last ' + MGR_WIN + ' days. One button rests every mailbox on the domain.');
+  }
+  // ---- High bounce-rate (old flow "highbounce"): Domain·Sent·Bounces·Bounce rate·Reply rate·Action
+  function mgrHighb() {
+    var rows = highbListC(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ No domains over ' + BOUNCE_HOT + '% bounce in the last ' + MGR_WIN + ' days.</div>';
+    var body = rows.map(function (d) {
+      var bn = (typeof d.bounced === "number") ? d.bounced : Math.round((d.bounce_rate || 0) * (d.sent || 0) / 100);
+      return '<tr><td class="mono">' + gradeBadge(d.domain) + esc(d.domain) + wsPill(d) + (d.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</td>' +
+        '<td class="num">' + comma(d.sent) + '</td>' +
+        '<td class="num" style="font-weight:700">' + comma(bn) + '</td>' +
+        '<td class="num t-r">' + (d.bounce_rate).toFixed(2) + '%</td>' +
+        '<td class="num">' + (d.reply_rate || 0).toFixed(2) + '% <span class="t-mut">(' + (d.replied || 0) + ')</span></td>' +
+        '<td style="text-align:right">' + actBtn("bounce-pause", d.domain, null, "Pause", true) + '</td></tr>';
+    }).join("");
+    var sp = domSpread(rows);
+    return tableWrap('<th>Domain</th><th class="num">Sent</th><th class="num">Bounces</th><th class="num">Bounce rate</th><th class="num">Reply rate</th><th style="text-align:right">Action</th>', body, null,
+      rows.length + ' row(s) over ' + BOUNCE_HOT + '% bounce across ' + sp.domains + ' domain(s)' +
+      (sp.dupes ? ' · ' + sp.dupes + ' domain(s) send from two workspaces' : '') +
+      ' · last ' + MGR_WIN + ' days. Pause zeroes every mailbox on the domain; Resume restores the saved caps.');
+  }
+  // ---- In warm-up (old flow "inwarmup", domain-grouped): Domain·Mailboxes·Due back·Status·Action(Restore)
+  function mgrInWarmup() {
+    var doms = restingEntriesC(); if (doms == null) return null;
+    if (!doms.length) return '<div class="mgr-empty">None right now — nothing is resting.</div>';
+    var mbxTotal = 0, hbCount = 0;
+    var body = doms.map(function (e) {
+      var dom = e.dom, rs = e.rs, dueTs = e.dueTs, md = rs.some(function (r) { return r.maildoso; });
+      mbxTotal += e.boxes;
+      if (e.hb) hbCount++;
+      var mbx = e.boxes ? (' <span class="t-mut">· ' + e.boxes + ' mbx</span>') : '';
+      return '<tr><td class="mono">' + gradeBadge(dom) + esc(dom) + mbx + (md ? ' <span class="pill n">Maildoso</span>' : '') +
+        // resting AND over the bounce floor — the domain is listed in both tabs
+        (e.hb ? ' <span class="pill a">also high bounce</span>' : '') + '</td>' +
+        '<td class="num">' + (e.boxes || '—') + '</td>' +
+        '<td>' + dueChip(dueTs) + '</td>' +
+        '<td>' + pill("n", "warming — sends held") + '</td>' +
+        '<td style="text-align:right">' + actBtn("reactivate", dom, null, "Restore", dueTs != null && dueTs <= Date.now()) + '</td></tr>';
+    }).join("");
+    return tableWrap('<th>Domain / mailbox</th><th class="num">Mailboxes</th><th>Due back</th><th>Status</th><th style="text-align:right">Action</th>', body, null,
+      doms.length + ' domain(s) resting' + (mbxTotal ? ' · ' + mbxTotal + ' mailbox(es)' : '') +
+      (hbCount ? ' · ' + hbCount + ' also over the ' + BOUNCE_HOT + '% bounce floor' : '') +
+      '. None are sending while they warm (normal). Restore returns a whole domain to sending.');
+  }
+  // ---- Repeat parks: domains that keep completing a rest cycle ---------------
+  // Owner audit 2026-09-02: park ORDERS and even "landed" parks over-counted —
+  // the cap history showed most never held a rest (park↔restore ping-pong).
+  // A cycle now = the park landed, the boxes stayed at cap 0 for a real rest,
+  // and the domain came BACK to sending — verified server-side from the daily
+  // cap snapshots (mailbox_stats_daily), not from the activity log. Parks
+  // that never held are shown separately, and a rest still in progress is a
+  // countdown, not a cycle. 3+ completed cycles = retire candidate.
+  function parkPrompt(rows) {
+    var list = rows.map(function (r) {
+      return "- " + r.domain + " (" + (r.cycles || 0) + " completed rest cycle(s) in the window, " + (r.cycles_all || r.cycles || 0) +
+        " all time, last ordered " + (r.last_parked || "?") +
+        (r.reply_rate_30d != null ? ", reply rate 30d " + r.reply_rate_30d.toFixed(2) + "% on " + (r.sent_30d || 0) + " sent" : ", no 30d sends") +
+        (r.resting_now ? ", resting now" + (r.resting_days ? " (day " + r.resting_days + ")" : "") : ", live") + ")";
+    }).join("\n");
+    return "These sending domains keep completing a rest cycle and failing again — see the Repeat parks tab in " +
+      "the Inbox & Domain Manager. 'Completed rest cycle' = the park landed, the domain's mailboxes stayed at cap 0 " +
+      "for a real rest, and it came back to sending (verified against the daily cap snapshots, not the activity log). " +
+      "A domain that keeps earning parks after every full rest is dead weight: every cycle burns a rest window plus restore sends.\n\n" +
+      "For each domain below, weigh its trailing-30d reply rate and decide: RETIRE it (park it and " +
+      "dismiss it from auto-restore so it stops cycling, and detach its mailboxes from campaigns) " +
+      "or give it one last cycle if there is a concrete reason it might recover. Queue replacement " +
+      "domains for whatever capacity is retired. Report what you did per domain.\n\nDomains:\n" + list;
+  }
+  function mgrParkChurn() {
+    var rows = parkChurnListC(); if (rows == null) return null;
+    var days = (S.parkchurn && S.parkchurn.days) || 42;
+    var sinceAll = (S.parkchurn && S.parkchurn.snapshots_since) || "2026-07-08";
+    if (!rows.length) return '<div class="mgr-empty">✓ No domain has completed a verified rest cycle since ' + esc(sinceAll) + '.</div>';
+    // Reply rate (30d) comes from the same row: the server sums Smartlead's
+    // rolling sent_30d / replies_30d over every mailbox on the domain from
+    // the latest daily snapshot. The old join to the audit backend's
+    // domain-health rows read "—" for most flagged domains (its inventory
+    // never knew them) — kept only as a fallback.
+    var dh = dhRows() || []; var rrByDom = {};
+    dh.forEach(function (d) { if (d.domain) rrByDom[d.domain] = d; });
+    var restDue = (S.bundle && S.bundle.restDue) || {};
+    var retire = 0, cycTotal = 0, cycAllTotal = 0;
+    var body = rows.slice(0, MGR_CAP).map(function (r) {
+      var cyc = r.cycles || 0, cycAll = r.cycles_all != null ? r.cycles_all : cyc;
+      cycTotal += cyc; cycAllTotal += cycAll;
+      var rec = parkRec(r.domain, cycAll); if (rec[0] === "Replace") retire++;
+      var rr;
+      if (r.reply_rate_30d != null) rr = r.reply_rate_30d.toFixed(2) + '% <span class="t-mut">(' + comma(r.sent_30d || 0) + ' sent)</span>';
+      else { var d = rrByDom[r.domain];
+        rr = (d && d.reply_rate != null) ? d.reply_rate.toFixed(2) + '% <span class="t-mut">(' + comma(d.sent || 0) + ' sent)</span>'
+          : '<span class="t-mut">no sends in 30d</span>'; }
+      var status = r.resting_now
+        ? pill("n", "resting now" + (r.resting_days ? " · day " + r.resting_days : "")) + (restDue[r.domain] ? ' ' + dueChip(restDue[r.domain]) : '')
+        : pill("g", "live — sending");
+      var verdict = '<span class="pill ' + rec[1] + '" title="' + esc(rec[2]) + '">' + rec[0] + '</span>';
+      var spans = Array.isArray(r.cycle_spans) && r.cycle_spans.length
+        ? ' title="' + esc(r.cycle_spans.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
+      var spansAll = Array.isArray(r.cycle_spans_all) && r.cycle_spans_all.length
+        ? ' title="' + esc(r.cycle_spans_all.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
+      return '<tr><td class="mono">' + gradeBadge(r.domain) + esc(r.domain) +
+        (r.workspace && r.workspace !== "navreo" ? ' <span class="pill n">' + esc(r.workspace) + '</span>' : '') + '</td>' +
+        '<td class="num" style="font-weight:700"' + spans + '>' + cyc + '×</td>' +
+        '<td class="num" style="font-weight:700"' + spansAll + '>' + cycAll + '×</td>' +
+        '<td class="num">' + esc(r.last_parked || "—") + '</td>' +
+        '<td class="num">' + rr + '</td>' +
+        '<td>' + status + '</td>' +
+        '<td>' + verdict + '</td></tr>';
+    }).join("");
+    var asOf = S.parkchurn && S.parkchurn.stats_as_of;
+    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + " domains. " : "") +
+      rows.length + " domain(s) with a verified rest cycle · " + cycTotal + " completed in the last " + days + " days, " + cycAllTotal + " all time (since " + esc(sinceAll) + ", when daily cap snapshots began). " +
+      "<b>Completed rest cycle</b> = the park landed, the mailboxes stayed at cap 0 for a full rest, and the domain came back to sending — " +
+      "verified against the daily cap snapshots (hover a number for the dates). Park orders that were undone before a rest was served are NOT counted. " +
+      "A rest still in progress shows as a countdown and is not a cycle until the domain is back. " +
+      "<b>Reply rate (30d)</b> = Smartlead's rolling 30-day replies ÷ sent across every mailbox on the domain" + (asOf ? ", snapshot " + esc(asOf) : "") + ". " +
+      "<b>Recommendation</b> pairs the health grade with the cycle count: <b>Replace</b> = grade E, or grade D parked 3+ times; <b>Repair</b> = grade C/D worth one more cap-down cycle; <b>Keep</b> = grade A/B, where the churn was just noise. " +
+      (retire ? '<button class="btn sm primary" data-act="copy-park-prompt-all">Copy a replace prompt for the ' + retire + ' Replace candidate(s)</button> — paste it into Claude Code to work through them.' : '');
+    return gradeLegend() + tableWrap('<th>Domain</th><th class="num">Completed rest cycles (' + days + 'd)</th><th class="num">All time</th><th class="num">Last ordered</th><th class="num">Reply rate (30d)</th><th>Status</th><th>Recommendation</th>', body, null, foot);
+  }
+  // ---- Not warming (old flow "notwarming"): Domain / mailbox·Batch·Warmup·Action(Re-enable)
+  function mgrWarmupOff() {
+    var rows = bundleViewC("warmupoff"); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">None right now — every mailbox is warming as expected.</div>';
+    var shown = rows.slice(0, MGR_CAP);
+    var body = shown.map(function (m) {
+      var batch = (Array.isArray(m.tags) && m.tags.length) ? esc(m.tags[0]) : '<span class="t-mut">—</span>';
+      return '<tr><td><div>' + esc(m.email || "—") + (m.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</div><div class="mono t-mut" style="font-size:11px">' + esc(m.domain || "") + '</div></td>' +
+        '<td>' + batch + '</td>' +
+        '<td>' + pill("a", m.warmup_status || "OFF") + '</td>' +
+        '<td style="text-align:right">' + actBtn("reenable", null, mgrRowKey(m), "Re-enable", false) + '</td></tr>';
+    }).join("");
+    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + " mailboxes. " : "") +
+      "Warm-up is OFF on these mailboxes. Re-enable turns warm-up back on for that box. Maildoso boxes warm on Instantly.";
+    return tableWrap('<th>Domain / mailbox</th><th>Batch</th><th>Warmup</th><th style="text-align:right">Action</th>', body, null, foot);
+  }
+  function mgrRowKey(m) { return String(m.id != null ? m.id : m.email); } // same key the old tab uses
+  // ---- Needs reconnect (old flow "reconnect", flat rows): Mailbox·Failure reason·Action(Reconnect)
+  function mgrReconnect() {
+    var rows = bundleViewC("reconnect"); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ Nothing needs attention — every mailbox is connected.</div>';
+    var body = rows.slice(0, MGR_CAP).map(function (m) {
+      return '<tr><td><div>' + esc(m.email || "—") + (m.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + (m.workspace ? ' <span class="pill n">' + esc(m.workspace) + '</span>' : '') + '</div><div class="mono t-mut" style="font-size:11px">' + esc(m.domain || "") + '</div></td>' +
+        '<td><span class="pill r">' + esc(m.reason_category || "conn fail") + '</span> <span class="t-mut" style="font-size:12px" title="' + esc(m.reason || "") + '">' + esc(shortReason(m.reason)) + '</span></td>' +
+        '<td style="text-align:right">' + actBtn("reconnect", null, mgrRowKey(m), "Reconnect", false) + '</td></tr>';
+    }).join("");
+    return tableWrap('<th>Mailbox</th><th>Failure reason</th><th style="text-align:right">Action</th>', body, null,
+      rows.length + " mailbox(es) stopped authenticating — silently sending nothing until reconnected.");
+  }
+  // ---- Missing signature: Mailbox·Batch·Sender name·Action(Copy fix prompt)
+  // Applying a signature needs a brand template (the signature manager modal),
+  // so instead of a half-action the row hands the founder a ready-to-paste
+  // Claude Code prompt that fixes it end-to-end.
+  function sigPrompt(rows) {
+    var list = rows.map(function (r) { return "- " + (r.email || "?") + " (" + (r.domain || "?") + (r.batch ? ", batch: " + r.batch : "") + (r.from_name ? ", from-name: " + r.from_name : "") + ")"; }).join("\n");
+    return "Apply the correct Navreo brand email signature to the following mailboxes, which are currently sending with a blank/missing signature. Use the signature manager (POST /api/deliverability/fix-signatures with the right brand template per mailbox), verify each mailbox afterwards, and report which succeeded.\n\nMailboxes missing a signature:\n" + list;
+  }
+  function copyText(txt) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(txt);
+    return new Promise(function (res, rej) {
+      try { var ta = document.createElement("textarea"); ta.value = txt; ta.style.position = "fixed"; ta.style.opacity = "0"; document.body.appendChild(ta); ta.select(); document.execCommand("copy"); document.body.removeChild(ta); res(); }
+      catch (e) { rej(e); }
+    });
+  }
+  function mgrSignature() {
+    var rows = signatureListC(); if (rows == null) return null;
+    if (!rows.length) return '<div class="mgr-empty">✓ Every mailbox has a signature — nothing to fix.</div>';
+    var shown = rows.slice(0, MGR_CAP);
+    var body = shown.map(function (m) {
+      return '<tr><td><div>' + esc(m.email || "—") + (m.maildoso ? ' <span class="pill n">Maildoso</span>' : '') + '</div><div class="mono t-mut" style="font-size:11px">' + esc(m.domain || "") + '</div></td>' +
+        '<td>' + ((Array.isArray(m.tags) && m.tags.length) ? esc(m.tags[0]) : (m.batch ? esc(m.batch) : '<span class="t-mut">—</span>')) + '</td>' +
+        '<td>' + (m.from_name ? esc(m.from_name) : '<span class="t-mut">—</span>') + '</td>' +
+        '<td style="text-align:right">' + actBtn("copy-sig-prompt", null, mgrRowKey(m), "Copy fix prompt", false) + '</td></tr>';
+    }).join("");
+    var foot = (rows.length > MGR_CAP ? "Showing first " + MGR_CAP + " of " + comma(rows.length) + " mailboxes. " : "") +
+      "A blank signature reads as spammy and hurts deliverability. " +
+      '<button class="btn sm primary" data-act="copy-sig-prompt-all">Copy a Claude Code prompt for all ' + comma(rows.length) + '</button> — paste it into Claude Code to apply the right brand signature to every one.';
+    return tableWrap('<th>Mailbox</th><th>Batch</th><th>Sender name</th><th style="text-align:right">Action</th>', body, null, foot);
+  }
+  // Can we attribute mailboxes/domains to the selected client at all? True when
+  // we have a mailbox-client-map entry (shared-fleet) OR any bundle/dh row is
+  // stamped with the client's workspace slug (own-workspace clients). When it's
+  // false, the client-scoped tables would all filter to empty and read as a
+  // misleading "all clear" — so renderMgrBody shows an honest notice instead.
+  function clientResolvable(mem) {
+    if (!mem) return true;
+    if (Object.keys(mem.emails).length || Object.keys(mem.domains).length) return true;
+    var slug = mem.slug, hit = false;
+    var views = (S.bundle && S.bundle.views) || {};
+    Object.keys(views).forEach(function (k) {
+      var rows = views[k] && views[k].rows;
+      if (Array.isArray(rows)) rows.forEach(function (r) { if (r.workspace && String(r.workspace).toLowerCase() === slug) hit = true; });
+    });
+    var dh = (S.bundle && S.bundle.dh) || {};
+    Object.keys(dh).forEach(function (k) {
+      var rows = dh[k] && dh[k].rows;
+      if (Array.isArray(rows)) rows.forEach(function (r) { if (r.workspace && String(r.workspace).toLowerCase() === slug) hit = true; });
+    });
+    return hit;
+  }
+  function renderMgrBody() {
+    var host = el("hub-mgr-body"), html;
+    // Client selected but not yet attributable — say so plainly rather than
+    // paint empty "all clear" tables (which would read as "this client is fine").
+    var mem = clientMembership();
+    if (mem && !clientResolvable(mem)) {
+      var stillLoading = !S.mcm || S.mcm.status !== "ready" || S.bundleLoading;
+      host.innerHTML = '<div class="mgr-empty">' + (stillLoading
+        ? 'Attributing ' + esc(S.client) + '’s mailboxes…'
+        : 'We can’t map ' + esc(S.client) + '’s individual mailboxes yet, so the per-client detail isn’t available. Switch to <b>All clients</b> to see the whole fleet.') + '</div>';
+      return;
+    }
+    var builder = mgrActive === "lowrep" ? mgrFloor : mgrActive === "highb" ? mgrHighb : mgrActive === "warmupoff" ? mgrWarmupOff : mgrActive === "inwarmup" ? mgrInWarmup : mgrActive === "parkchurn" ? mgrParkChurn : mgrActive === "signature" ? mgrSignature : mgrReconnect;
+    try { html = builder(); } catch (e) { html = null; }
+    if (html == null) { host.innerHTML = '<div class="skel" style="padding:18px">' + (S.bundleLoading ? "Loading manager data…" : "Loading…") + '</div>'; return; }
+    host.innerHTML = html;
+  }
+
+  /* ---------- filter chips ---------- */
+  function renderChips() {
+    var seen = {}, names = [], labels = S.labels || {}, vol = S.vol || {};
+    function add(c) { if (c && !/^(all|__)/i.test(c) && !isDemoClient(c) && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
+    Object.keys(labels).forEach(add);
+    Object.keys(vol).forEach(add);
+    add(S.client);
+    names.sort(function (a, b) { var va = (vol[a] && vol[a].sent) || 0, vb = (vol[b] && vol[b].sent) || 0; return vb !== va ? vb - va : (a.toLowerCase() < b.toLowerCase() ? -1 : 1); });
+    names = ["All"].concat(names);
+    el("hub-chips").innerHTML = names.map(function (c) {
+      var on = S.client === c;
+      return '<button class="chip' + (on ? " on" : "") + '" data-client="' + esc(c) + '" type="button" role="radio" aria-checked="' + (on ? "true" : "false") + '">' + (c === "All" ? "All clients" : esc(c)) + '</button>';
+    }).join("");
+    renderMgrScope();
+  }
+
+  // Scope captions keep each filter's reach legible without interacting. They are
+  // aria-live so a screen reader hears the new scope the instant a filter changes.
+  function renderHeatScope() {
+    var s = el("hub-heat-scope"); if (!s) return;
+    // 7/14/30 say "weekdays" because Actively-sending measures weekday sends
+    // against weekday capacity (weekends never send) — see NavreoCapacity.
+    var txt = "last " + S.win + " days · weekdays";
+    if (S.win === 1) {
+      txt = "last 24 hours";
+      var days = S.cw && S.cw.days;
+      if (days) { var i = snapDayIndex(days); if (i >= 0 && days[i]) txt += " · " + fmtDay(days[i]); }
+    }
+    s.innerHTML = "<b>Whole fleet</b> · " + txt;
+  }
+  function renderMgrScope() {
+    var s = el("hub-mgr-scope"); if (!s) return;
+    if (S.client === "All") { s.innerHTML = "<b>All clients</b>"; return; }
+    var mem = clientMembership();
+    if (mem && clientResolvable(mem)) { s.innerHTML = "<b>" + esc(S.client) + "</b>"; return; }
+    var loading = !S.mcm || S.mcm.status !== "ready" || S.bundleLoading;
+    s.innerHTML = "<b>" + esc(S.client) + "</b>" + (loading ? " · attributing…" : " · not mapped");
+  }
+  // Briefly outline the section that just re-rendered, so a scoped change is
+  // noticed even when the two sections are scrolled apart.
+  function flashSection(id) {
+    var n = el(id); if (!n) return;
+    n.classList.remove("reacted"); void n.offsetWidth; n.classList.add("reacted");
+    n.addEventListener("animationend", function h(){ n.classList.remove("reacted"); n.removeEventListener("animationend", h); });
+  }
+
+  // Whole-page paint (initial load + background data lands). Range/client
+  // events use the section-scoped renderers below instead, so a filter only
+  // ever repaints the section it governs.
+  function renderAll() {
+    renderHeatScope(); renderHeat(); renderMgrScope(); renderMgrTabs();
+  }
+
+  /* ---------- events — each filter repaints ONLY its own section ---------- */
+  el("hub-chips").addEventListener("click", function (e) {   // CLIENT → manager only
+    var b = e.target.closest(".chip"); if (!b) return;
+    S.client = b.getAttribute("data-client");
+    try { localStorage.setItem(LS, S.client); } catch (e2) {}
+    renderChips(); renderMgrScope(); renderMgrTabs(); flashSection("sec-mgr");
+  });
+  el("hub-range").addEventListener("click", function (e) {   // RANGE → heat map only
+    var b = e.target.closest("button"); if (!b) return;
+    S.win = +b.getAttribute("data-win");
+    Array.prototype.forEach.call(el("hub-range").children, function (x) {
+      var on = x === b; x.classList.toggle("on", on); x.setAttribute("aria-checked", on ? "true" : "false");
+    });
+    renderHeatScope(); renderHeat(); flashSection("sec-heat");
+  });
+  el("hub-refresh").addEventListener("click", function () {   // hard refresh → recompute warm-up + capacity now
+    var b = el("hub-refresh"); b.classList.add("busy");
+    S.warmcap = null; renderHeat();            // warm cells drop to the pulsing skeleton while recomputing
+    var wc = fetch("/api/warmup-capacity?refresh=1", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.perWorkspace) S.warmcap = j; })
+      .catch(function () {});
+    Promise.all([wc, loadCap()]).then(function () {
+      b.classList.remove("busy"); renderHeat(); flashSection("sec-heat");
+    }, function () { b.classList.remove("busy"); renderHeat(); });
+  });
+  el("hub-mgr-tabs").addEventListener("click", function (e) {
+    var b = e.target.closest(".tab"); if (!b) return;
+    mgrActive = b.getAttribute("data-tab");
+    renderMgrTabs();
+  });
+
+  /* ---------- row actions: send-to-warm-up / restore ---------------------
+     Same endpoint the old tab (and the auto-park engine) use:
+     POST /api/warmup-job { op:"pause"|"resume", domains:[domain] }.
+     pause = rest the domain (send to warm-up); resume = restore to sending. */
+  function toast(msg, kind) {
+    var t = el("hub-toast"); if (!t) { t = document.createElement("div"); t.id = "hub-toast"; document.body.appendChild(t); }
+    t.textContent = msg;
+    t.style.cssText = "position:fixed;left:50%;bottom:26px;transform:translateX(-50%);z-index:9999;padding:11px 18px;border-radius:10px;font:600 13px var(--font-sans);color:#fff;box-shadow:var(--shadow);background:" + (kind === "err" ? "var(--red)" : kind === "ok" ? "var(--green)" : "var(--ink)");
+    t.style.opacity = "1";
+    clearTimeout(toast._t); toast._t = setTimeout(function () { t.style.transition = "opacity .4s"; t.style.opacity = "0"; }, 3200);
+  }
+  // Action map — the SAME endpoints the old deliverability tab fires.
+  // domain-scoped: warmup-job pause/resume + bounce-pause/resume.
+  // id-scoped: reconnect + reenable (per mailbox). All are live-fleet writes.
+  var ACTIONS = {
+    warmup:        { verb: "Warm up domain", scope: "domain", job: true, run: function (d) { return warmupJob("pause", d); }, note: "Every mailbox on the domain stops sending and starts warming. Reversible with Reactivate." },
+    reactivate:    { verb: "Restore to sending", scope: "domain", job: true, run: function (d) { return warmupJob("resume", d); }, note: "Its mailboxes return to sending at their saved caps." },
+    "bounce-pause":  { verb: "Pause (high bounce)", scope: "domain", job: true, run: function (d) { return delivPost("bounce-pause?domain=" + encodeURIComponent(d)); }, note: "Sets every mailbox on the domain to 0/day. Saved caps restore on Resume." },
+    "bounce-resume": { verb: "Resume sending", scope: "domain", job: true, run: function (d) { return delivPost("bounce-resume?domain=" + encodeURIComponent(d)); }, note: "Restores the caps saved when the domain was paused." },
+    reconnect:     { verb: "Reconnect mailbox", scope: "id", job: true, run: function (id) { return delivPost("reconnect?id=" + encodeURIComponent(id)); }, note: "Re-authenticates this mailbox so it can send again." },
+    reenable:      { verb: "Re-enable warm-up", scope: "id", run: function (id) { return delivPost("reenable?id=" + encodeURIComponent(id)); }, note: "Turns warm-up back on for this mailbox." }
+  };
+  function warmupJob(op, domain) {
+    return fetch("/api/warmup-job", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ op: op, domains: [domain] }) })
+      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); });
+  }
+  function delivPost(path) { // liveAction path → POST /api/deliverability/<path>
+    return fetch("/api/deliverability/" + path, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" } })
+      .then(function (r) { return r.json().catch(function () { return { ok: r.ok }; }); });
+  }
+  el("hub-mgr-body").addEventListener("click", function (e) {
+    var b = e.target.closest("[data-act]"); if (!b) return;
+    var act = b.getAttribute("data-act");
+    if (act === "copy-park-prompt-all") {
+      // Replace candidates (grade-informed: grade E, or grade D parked 3+ times,
+      // or a churner with no recent data) first; fall back to every flagged domain.
+      var pcAll = parkChurnListC() || [];
+      var pcRows = pcAll.filter(function (r) { return parkRec(r.domain, (r.cycles_all != null ? r.cycles_all : r.cycles) || 0)[0] === "Replace"; });
+      if (!pcRows.length) pcRows = pcAll;
+      if (!pcRows.length) return;
+      var pcOld = b.textContent;
+      copyText(parkPrompt(pcRows)).then(function () { toast("Prompt copied — paste it into Claude Code", "ok"); b.textContent = "Copied ✓"; setTimeout(function () { b.textContent = pcOld; }, 1800); }).catch(function () { toast("Couldn't copy — select the text manually", "err"); });
+      return;
+    }
+    if (act === "copy-sig-prompt" || act === "copy-sig-prompt-all") {
+      var all = signatureListC() || [];
+      var rows = act === "copy-sig-prompt-all" ? all : all.filter(function (m) { return mgrRowKey(m) === b.getAttribute("data-id"); });
+      if (!rows.length) rows = all;
+      var oldl = b.textContent;
+      copyText(sigPrompt(rows)).then(function () { toast("Prompt copied — paste it into Claude Code", "ok"); b.textContent = "Copied ✓"; setTimeout(function () { b.textContent = oldl; }, 1800); }).catch(function () { toast("Couldn't copy — select the text manually", "err"); });
+      return;
+    }
+    var spec = ACTIONS[act];
+    if (!spec) return;
+    var target = spec.scope === "domain" ? b.getAttribute("data-domain") : b.getAttribute("data-id");
+    if (!target) return;
+    var label = spec.scope === "domain" ? target : (b.closest("tr") ? b.closest("tr").querySelector("td div").textContent.trim() : target);
+    if (!window.confirm(spec.verb + " — " + label + "?\n\n" + spec.note)) return;
+    b.disabled = true; var old = b.textContent; b.textContent = "Working…";
+    spec.run(target)
+      .then(function (j) {
+        if (j && j.ok === false) { toast(spec.verb + " failed — " + (j.message || "see logs"), "err"); b.disabled = false; b.textContent = old; return; }
+        if (spec.job) {
+          // Background job — hand it to the shared Tasks panel (which polls
+          // /api/jobs and reconciles the real outcome) and point the user there.
+          if (window.NavreoJobs && window.NavreoJobs.ping) window.NavreoJobs.ping();
+          toast(spec.verb + " — " + label + " queued · track it in the Tasks panel", "ok");
+        } else {
+          toast(spec.verb + " done — " + label, "ok");
+        }
+        bundleTries = 0; loadBundle(); renderMgrTabs();
+      })
+      .catch(function (err) { toast("Failed — " + err, "err"); b.disabled = false; b.textContent = old; });
+  });
+
+  /* ---------- data loads ---------- */
+  function loadDeliv() {
+    // /_audit returns { blob, ts, running, error, stale, ... }; the findings we
+    // read (blacklist, warmupConfig, signature, inactive, highbCamps, reply_pct,
+    // bounce_pct, inboxes, domains, sent) live under .blob.
+    return fetch("/api/deliverability/_audit", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j && j.blob) S.deliv = j.blob; })
+      .catch(function () {});
+  }
+  // client-windows feeds the client chips AND every live heat-map row. The boot
+  // fires 6 loaders at once, so this one can transiently 429/502 in the burst —
+  // and a single miss used to strand the page on REP_CLIENTS sample rows forever
+  // (no retry). Retry with backoff like loadBundle/loadMcm, re-rendering on each
+  // attempt so live rows replace the sample the moment the data lands.
+  var cwTries = 0;
+  function loadCw() {
+    var retry = function () {
+      if (cwTries < 8) { cwTries++; setTimeout(function () { loadCw().then(function () { renderChips(); renderAll(); }); }, 3000); }
+      else { S.cwDone = true; renderHeat(); }   // retries exhausted — stop the skeleton, show honest empty
+    };
+    return fetch("/api/client-windows", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (cw) {
+        if (!cw || !cw.windows) { retry(); return; }   // transient failure or gated body — try again
+        cwTries = 0; S.cwDone = true;
+        S.cw = cw; S.labels = cw.ws_labels || {}; S.vol = (cw.windows && cw.windows["30"]) || {};
+      })
+      .catch(function () { retry(); });
+  }
+  function loadTags() {
+    return fetch("/api/tag-performance", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) { if (j) S.tags = j; })
+      .catch(function () {});
+  }
+  // /_bundle returns { bundle:{ views:{warmupoff,inwarmup,reconnect,...} }, running }.
+  // It can still be building on first hit — poll a few times while running.
+  var bundleTries = 0;
+  function loadBundle() {
+    S.bundleLoading = true;
+    return fetch("/api/deliverability/_bundle", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.bundle) S.bundle = j.bundle;
+        S.bundleLoading = !!(j && j.running);
+        renderAll(); // bundle feeds per-client warm/live + the reconnect count in Fix-today/verdict
+        if (j && j.running && bundleTries < 8) { bundleTries++; setTimeout(loadBundle, 4000); }
+      })
+      .catch(function () { S.bundleLoading = false; });
+  }
+  // /api/mailbox-client-map → { status:"ready", clients:{ Name:[emails] } }.
+  // Attributes shared-fleet mailboxes to the client whose campaigns they run —
+  // lets the heat map show REAL per-client warm-up / live %, not a fleet broadcast,
+  // AND drives the manager's client filter.
+  //
+  // The server rebuild can take a while (it rides a 30-min sweep of campaign
+  // membership), which used to mean the client filter "never loaded" on a fresh
+  // page. Two fixes: (1) a stale-while-revalidate localStorage CACHE so the last
+  // known map is applied INSTANTLY on load and the filter works immediately,
+  // refreshing quietly in the background; (2) a much longer poll budget so a
+  // genuinely cold map still lands instead of giving up after ~30s.
+  var MCM_LS = "mbxhub.mcm";
+  var MCM_TTL = 7 * 864e5;   // trust a cached map for a week (membership drifts slowly)
+  function applyMcm(clients, ts, fromCache) {
+    var norm = {}; Object.keys(clients).forEach(function (k) { norm[k.toLowerCase()] = clients[k]; });
+    S.mcm = { status: "ready", clients: norm, ts: ts || Date.now(), cached: !!fromCache };
+    renderHeat(); renderMgrScope(); renderMgrTabs();   // attribution feeds both the heat map AND the manager
+  }
+  function hydrateMcmFromCache() {
+    try {
+      var raw = localStorage.getItem(MCM_LS); if (!raw) return;
+      var c = JSON.parse(raw);
+      if (c && c.clients && c.ts && (Date.now() - c.ts) < MCM_TTL) applyMcm(c.clients, c.ts, true);
+    } catch (e) {}
+  }
+  var mcmTries = 0;
+  function loadMcm() {
+    return fetch("/api/mailbox-client-map", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (m) {
+        if (m && m.status === "ready" && m.clients && Object.keys(m.clients).length) {
+          var ts = Date.now();
+          applyMcm(m.clients, ts, false);
+          try { localStorage.setItem(MCM_LS, JSON.stringify({ clients: m.clients, ts: ts })); } catch (e) {}
+        } else if (mcmTries < 45) {  // ~30 fast tries then slower — up to a few minutes for a cold map
+          mcmTries++; setTimeout(loadMcm, mcmTries < 15 ? 4000 : 8000);
+        }
+      })
+      .catch(function () { if (mcmTries < 45) { mcmTries++; setTimeout(loadMcm, 8000); } });
+  }
+  // /api/fleet-capacity → { client_caps:{Name:cap/day}, capacity:{ws:[series]}, days }.
+  // The SAME source the Analytics page uses for real daily send capacity — feeds
+  // the heat map's Capacity-used column (sent/day ÷ capacity/day).
+  var capTries = 0;
+  function loadCap() {
+    return fetch("/api/fleet-capacity?days=30", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && (j.client_caps || j.capacity)) { capTries = 0; S.cap = j; renderHeat(); }
+        else if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); }   // transient miss — retry, don't leave the column blank
+      })
+      .catch(function () { if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); } });
+  }
+
+  // /api/warmup-capacity → { perWorkspace:{ws:{capacityPerDay,boxes,byProvider}} }
+  // Estimated sends/day currently IN WARM-UP (being "repaired"), per workspace,
+  // from the Smartlead mirror by provider default (Outlook 2, Gmail 20, SMTP 15).
+  // Feeds warmCapFor → the heat map's "In warm-up" column. Same transient-retry
+  // pattern as loadCap so a slow mirror read never leaves the column blank.
+  var warmCapTries = 0, warmMapTries = 0;
+  function loadWarmCap() {
+    return fetch("/api/warmup-capacity", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.perWorkspace) {
+          warmCapTries = 0; S.warmcap = j; renderHeat();
+          // Attribution map still warming (fresh deploy / cold sweep): the
+          // shared-fleet clients read "not mapped" until it lands, so keep
+          // re-polling — up to ~7 min — and re-render when the split appears.
+          if (!j.mapReady && warmMapTries < 20) { warmMapTries++; setTimeout(loadWarmCap, 20000); }
+        }
+        else if (warmCapTries < 8) { warmCapTries++; setTimeout(loadWarmCap, 3000); }
+      })
+      .catch(function () { if (warmCapTries < 8) { warmCapTries++; setTimeout(loadWarmCap, 3000); } });
+  }
+
+  // /api/park-churn → { ok, days, min_parks, rows:[...] } — repeat-park
+  // offenders for the manager's "Repeat parks" tab. Same transient-retry
+  // pattern as loadCap so a boot-burst 429 never leaves the badge blank.
+  var pcTries = 0;
+  function loadParkChurn() {
+    return fetch("/api/park-churn", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.ok && Array.isArray(j.rows)) { pcTries = 0; S.parkchurn = j; renderMgrTabs(); }
+        else if (pcTries < 8) { pcTries++; setTimeout(loadParkChurn, 3000); }
+      })
+      .catch(function () { if (pcTries < 8) { pcTries++; setTimeout(loadParkChurn, 3000); } });
+  }
+
+  // Confidence grades (A healthiest … E least healthy) — the same grade the cap
+  // engine acts on, one map keyed by domain. Loads after paint and re-renders
+  // the manager so the badges fill in; the tables never block on it.
+  var gradesTries = 0;
+  function loadGrades() {
+    return fetch("/api/deliverability/grades", { credentials: "same-origin" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        var have = !!(j && j.ok && j.grades && Object.keys(j.grades).length);
+        if (have) { S.grades = j; renderMgrTabs(); }
+        // Cold cache after a deploy (the server answers instantly with
+        // computing:true and recomputes in the background) or a failed fetch:
+        // poll until the map lands. The old code gave up on the first miss and
+        // the page stayed grade-less until a manual reload.
+        if ((!have || (j && j.computing)) && gradesTries < 20) { gradesTries++; setTimeout(loadGrades, 4000); }
+        else if (have) gradesTries = 0;
+      })
+      .catch(function () { if (gradesTries < 20) { gradesTries++; setTimeout(loadGrades, 4000); } });
+  }
+
+  // paint immediately with placeholders/representative, then fill as data lands
+  hydrateMcmFromCache();   // apply last-known mailbox→client map instantly (before any fetch)
+  renderChips(); renderAll();
+  loadCw().then(function () { renderChips(); renderAll(); });
+  loadDeliv().then(function () { renderAll(); });
+  loadTags().then(function () { renderTags(); renderMgrTabs(); });
+  loadBundle();
+  loadMcm();
+  loadCap();
+  loadWarmCap();
+  loadParkChurn();
+  loadGrades();
+})();
+</script>
+<script src="demo-layer.js"></script></body>
+</html>
