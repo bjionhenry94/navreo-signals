@@ -1,0 +1,3425 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><script src="fx-index.js"></script><script src="demo-shim.js"></script><link rel="stylesheet" href="demo-layer.css">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Analytics · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+
+<!-- ── Analytics hub styles — ported from the chosen P3 "Funnel" prototype
+     (app/prototypes/analytics-hub-p3.html), scoped under .ah. The engine
+     room's own styles now live with it on mailboxes.html. ── -->
+<style>
+.ah{max-width:1240px}
+.ah .num{font-variant-numeric:tabular-nums}
+.ah .pagehead{display:flex;align-items:flex-end;justify-content:space-between;gap:24px;padding:8px 0 24px}
+.ah h1{font-family:var(--font-display);font-weight:400;font-size:34px;line-height:1;letter-spacing:-0.03em}
+.ah .verdict{margin-top:9px;font-size:13.5px;font-weight:500;color:var(--ink-2)}
+.ah .pagehead-right{display:flex;flex-direction:column;align-items:flex-end;gap:11px}
+.ah .dateline{text-align:right;font-size:13px;color:var(--ink-3);line-height:1.6}
+.ah .dateline b{font-weight:600;color:var(--ink-2)}
+.ah .chips{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.ah .chip{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;padding:7px 14px;border:1px solid var(--line-2);border-radius:999px;background:var(--card);color:var(--ink-2);cursor:pointer}
+.ah .chip:hover{border-color:var(--ink-3)}
+.ah .chip.on{background:var(--ink);border-color:var(--ink);color:#fff}
+
+.ah .hero{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:22px 28px 18px}
+.ah .hero .subline{margin-top:4px}
+.ah .hero .take{margin-top:12px}
+.ah .card-head{display:flex;align-items:center;justify-content:space-between;gap:14px}
+.ah .kicker{font-size:11px;font-weight:600;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3)}
+
+.ah .filterbar{position:sticky;top:0;z-index:30;background:var(--bg);padding:10px 0;margin:0 0 6px}
+.ah .filterbar::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--line);opacity:0;transition:opacity .15s}
+.ah .filterbar.stuck::after{opacity:1}
+.ah .filterrow{display:flex;gap:12px;align-items:center;flex-wrap:wrap;justify-content:space-between}
+.ah .filterrow .chips{justify-content:flex-start}
+.ah .rangeseg{display:inline-flex;gap:3px;background:var(--bg-sunken);border-radius:999px;padding:3px;flex-shrink:0}
+.ah .rangeseg button{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;color:var(--ink-2);background:transparent;border:0;padding:6px 13px;border-radius:999px;cursor:pointer}
+.ah .rangeseg button:hover{color:var(--ink)}
+.ah .rangeseg button.on{background:var(--ink);color:#fff}
+.ah .wkndtog{font:600 11.5px/1 var(--font-sans);color:var(--ink-3);background:var(--bg-sunken);border:1px solid transparent;padding:6px 12px;border-radius:999px;cursor:pointer;white-space:nowrap}
+.ah .wkndtog:hover{color:var(--ink)}
+.ah .wkndtog.on{background:var(--ink);color:#fff}
+.ah .seg{display:inline-flex;gap:3px;flex-shrink:0}
+.ah .seg button{font:600 11px/1 var(--font-sans);color:var(--ink-3);background:transparent;border:0;padding:4px 9px;border-radius:999px;cursor:pointer;letter-spacing:.01em}
+.ah .seg button:hover{color:var(--ink)}
+.ah .seg button.on{background:var(--bg-sunken);color:var(--ink)}
+
+.ah .lchips{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 6px}
+.ah .lchip{display:inline-flex;align-items:center;gap:7px;font:500 12px var(--font-sans);color:var(--ink);background:var(--card);border:1px solid var(--line-2);border-radius:999px;padding:6px 12px;cursor:pointer}
+.ah .lchip:hover{border-color:var(--ink-3)}
+.ah .lchip .sw{width:10px;height:10px;border-radius:3px;flex-shrink:0}
+.ah .lchip b{font-weight:700}
+.ah .lchip:not(.on){color:var(--ink-3)}
+.ah .lchip:not(.on) .sw{filter:grayscale(1);opacity:.45}
+.ah .lchip.off{cursor:default;opacity:.78}
+.ah .lchip.tot{cursor:default;opacity:1}
+.ah .lchip.tot .sw{filter:none;opacity:1}
+.ah .totpill{margin-left:6px;font-size:9px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--ink-3);background:var(--bg-sunken);border-radius:4px;padding:1px 4px;vertical-align:middle}
+.ah .lchip.off{opacity:.38;cursor:default;pointer-events:none}
+.ah svg.trend{display:block;width:100%;height:auto;cursor:crosshair}
+.ah .trend text{font-family:var(--font-sans)}
+.ah .trendwrap{position:relative}
+/* Reply-rate graph fills the leftover height of its (grid-stretched) card so
+   it lines up with the taller bounce card beside it. renderWeek() reads this
+   wrapper's pixel aspect and sets the viewBox to match — the line scales
+   uniformly, no distortion. */
+.ah .week-wrap{flex:1 1 auto;min-height:150px}
+.ah #week-svg{display:block;width:100%;height:100%}
+.ah .charttip{position:absolute;top:0;left:0;pointer-events:none;background:var(--card);border:1px solid var(--line-2);border-radius:9px;padding:8px 11px;font-size:11.5px;line-height:1.6;color:var(--ink-2);white-space:nowrap;z-index:5}
+.ah .charttip b{display:block;font-size:11px;color:var(--ink);margin-bottom:2px}
+.ah .charttip .row{display:flex;align-items:center;gap:6px}
+.ah .charttip .row i{width:8px;height:8px;border-radius:2px;flex-shrink:0}
+.ah .charttip .row .v{margin-left:auto;font-weight:600;color:var(--ink);padding-left:12px;font-variant-numeric:tabular-nums}
+
+.ah svg.funnel{display:block;width:100%;height:auto}
+.ah .funnel{display:block;width:100%;max-width:920px;margin:0 auto}
+.ah .funnel text{font-family:var(--font-sans)}
+.ah .fnum{font-family:var(--font-display);font-size:26px;letter-spacing:-0.03em;fill:var(--ink);font-variant-numeric:tabular-nums}
+.ah .fslab{fill:var(--ink);transition:y .45s ease,height .45s ease}
+.ah a.fstage{cursor:pointer;text-decoration:none}
+.ah a.fstage:hover .fslab{fill:var(--ink-2)}
+.ah a.fstage:hover .fnum{fill:var(--ink-2)}
+.ah .fribbon{fill:var(--cream-50);stroke:var(--line-2);stroke-width:1}
+.ah .fribbon.leak{fill:var(--orange-100);stroke:var(--orange)}
+.ah .fslab.leak{fill:var(--orange)}
+.ah .frate{font-size:11.5px;fill:var(--ink-3)}
+.ah .frate.leak{fill:var(--orange-700);font-weight:600}
+.ah .fpill-r{fill:var(--orange)}
+.ah .fpill-t{font-size:10px;font-weight:700;letter-spacing:.08em;fill:var(--cream)}
+.ah .fleakline{stroke:var(--orange);stroke-width:1}
+.ah .fnum,.ah .frate{transition:opacity .17s ease}
+.ah .funnel.swap .fnum,.ah .funnel.swap .frate{opacity:0}
+
+.ah .hero-flow{display:block}
+/* stage labels align under the funnel's four stages (x≈0.125/0.375/0.625/0.875
+   of the 880-wide viewBox = the centres of four equal columns) */
+.ah .stagestrip{display:grid;grid-template-columns:repeat(4,1fr);border-top:1px solid var(--line);padding-top:12px;max-width:920px;margin:8px auto 0}
+.ah .stagecell{text-align:center;text-decoration:none;padding:2px 8px}
+.ah .scname{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-2)}
+.ah .scstat{margin-top:5px;font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:6px}
+.ah .stagecell:hover .scname{color:var(--ink);text-decoration:underline;text-underline-offset:3px}
+.ah .dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.ah .dot.amber{background:var(--amber)} .ah .dot.green{background:var(--green)}
+.ah .dot.red{background:var(--red)} .ah .dot.mute{background:var(--brown-300)}
+
+.ah .leakbar{margin-top:16px;background:var(--orange-100);border-radius:10px;padding:13px 18px;display:flex;align-items:center;gap:24px}
+.ah .leakbar .lk-left{flex:1;min-width:0}
+.ah .leak-head{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--orange-700)}
+.ah .leak-body{margin-top:3px;font-size:13px;color:var(--ink-2)}
+.ah .leak-fix{font-size:14px;font-weight:700;color:var(--orange-700);white-space:nowrap}
+
+.ah .lanes{position:relative;margin-top:34px;display:flex;flex-direction:column;gap:36px}
+.ah .lane{position:relative;padding-left:58px;scroll-margin-top:24px}
+.ah .lane::before{content:"";position:absolute;left:14px;top:32px;bottom:-36px;width:1px;background:var(--line-2)}
+.ah .lane:last-child::before{display:none}
+.ah .node{position:absolute;left:1px;top:0;width:27px;height:27px;border-radius:50%;background:var(--card);border:1px solid var(--line-2);display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;color:var(--ink-2)}
+.ah .lane:target .node{border-color:var(--orange);color:var(--orange-600)}
+.ah .lane-head{display:flex;align-items:baseline;justify-content:space-between;gap:16px;margin-bottom:14px}
+.ah .lane-q{font-size:19px;font-weight:600;letter-spacing:-0.01em}
+.ah .lane-tag{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);white-space:nowrap}
+
+.ah .cards{display:grid;gap:14px}
+.ah .c3{grid-template-columns:repeat(3,1fr)}
+.ah .c23{grid-template-columns:2fr 3fr 3fr}
+.ah .c-land{grid-template-columns:3fr 4fr}
+.ah .c32{grid-template-columns:3fr 2fr}
+.ah .acard{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:18px 20px;display:flex;flex-direction:column;gap:12px;min-width:0}
+.ah .card-kick{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3)}
+
+/* ── bounce card ── red/amber/green here mean one thing only: where you sit
+   against the 2% limit. At or over it is red — the older <2 green / <3 amber
+   banding painted six days over the limit the colour of caution. */
+.ah .bounce .bnc-hero{font-family:var(--font-display);font-size:42px;line-height:1.05;letter-spacing:-0.03em;cursor:help}
+.ah .bounce .bnc-chart{position:relative;height:96px;margin-top:14px}
+.ah .bounce .bnc-chart svg{display:block;width:100%;height:100%}
+.ah .bounce .bnc-limlab{position:absolute;left:0;font-size:10px;color:var(--ink-3);
+                        background:var(--card);padding-right:4px;transform:translateY(-50%)}
+.ah .bounce .bnc-rows{display:flex;flex-direction:column}
+.ah .bounce .bnc-row{display:grid;grid-template-columns:1fr auto 52px;gap:10px;align-items:baseline;
+                     padding:7px 0;border-top:1px solid var(--line)}
+.ah .bounce .bnc-name{font-size:13px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ah .bounce .bnc-name a{color:inherit;text-decoration:none;cursor:pointer}
+.ah .bounce .bnc-name a:hover{text-decoration:underline}
+.ah .bounce .bnc-small{font-size:10.5px;color:var(--brown-400);font-weight:400}
+.ah .bounce .bnc-came{font-size:11.5px;color:var(--ink-3)}
+.ah .bounce .bnc-pct{font-size:14px;font-weight:600;text-align:right}
+.ah .bounce .bnc-g{color:var(--green)} .ah .bounce .bnc-a{color:var(--amber)} .ah .bounce .bnc-r{color:var(--red)}
+.ah .bignum{font-size:34px;font-weight:600;line-height:1;letter-spacing:-0.02em;font-variant-numeric:tabular-nums}
+.ah .bignum.warn{color:var(--amber)}
+.ah .bignum small{font-size:15px;font-weight:500;letter-spacing:0;color:var(--ink-3)}
+.ah .subline{font-size:12.5px;color:var(--ink-3)}
+#trend-sub{display:none}  /* day-by-day chart descriptive sub-line removed — Bjion 2026-08-19 (capacity % lives in the legend pill) */
+.ah .take{margin-top:auto;padding-top:12px;border-top:1px solid var(--line);font-size:13px;font-weight:600;color:var(--ink);display:flex;gap:8px;align-items:baseline}
+.ah .take .arr{color:var(--brown-400);font-weight:400;flex-shrink:0}
+.ah .take.side{margin:0;padding:0;border:0}
+.ah .fleetnote{font-size:11px;color:var(--ink-3);margin:0 0 6px}
+
+.ah .apill{display:inline-flex;align-items:center;font-size:10.5px;font-weight:700;padding:2px 9px;border-radius:999px;white-space:nowrap;letter-spacing:.02em}
+.ah .apill.green{background:var(--green-bg);color:var(--green)}
+.ah .apill.amber{background:var(--amber-bg);color:var(--amber)}
+.ah .apill.red{background:var(--red-bg);color:var(--red)}
+.ah .apill.mute{background:var(--bg-sunken);color:var(--ink-3)}
+
+.ah .brows{display:flex;flex-direction:column;gap:9px}
+.ah .wspeed{margin-top:2px}
+.ah .wspeed-head{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px}
+.ah .wspeed-bars{display:flex;align-items:flex-end;gap:10px;height:96px}
+.ah .wcol{flex:1;min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;gap:5px;height:100%}
+.ah .wcol .wv{font-size:12px;font-weight:600;color:var(--ink);line-height:1}
+.ah .wcol .wbar{width:100%;max-width:44px;border-radius:6px 6px 2px 2px;background:var(--brown-300);min-height:3px;transition:height .35s ease}
+.ah .wcol.best .wbar{background:var(--ink)}
+.ah .wcol .wl{font-size:10.5px;color:var(--ink-3);white-space:nowrap;line-height:1.2}
+.ah .wcol .wn{font-size:10px;color:var(--ink-3);line-height:1}
+.ah .brow{display:grid;grid-template-columns:118px 1fr 42px;align-items:center;gap:10px;font-size:12.5px}
+.ah .brow .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .brow .lbl.strong{font-weight:600;color:var(--ink)}
+.ah .brow .val{text-align:right;font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .brow .val.bad{color:var(--red)}
+.ah .ocol{display:grid;grid-template-columns:1fr 92px 92px;align-items:center;gap:10px;font-size:12.5px;padding:4px 0}
+.ah .ocol + .ocol{border-top:1px solid var(--line)}
+.ah .ocol .lbl{color:var(--ink-2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .ocol .lbl.strong{font-weight:600;color:var(--ink)}
+.ah .ocol .val{text-align:right;font-size:13px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .ocol .val.win{color:var(--orange)}
+.ah .ocol.ohead{font-size:10.5px;letter-spacing:.02em;text-transform:uppercase;color:var(--ink-3);border:0;padding-bottom:2px}
+.ah .ocol.ohead span{text-align:right;font-weight:500}
+.ah .fill{height:9px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.ah .fill.orange{background:var(--orange)}
+/* ── who's-replying · winning-combination heatmap (title × company size) ── */
+.ah .whm{display:grid;gap:4px;margin-top:6px;min-width:0}
+.ah .whm-ch{font-size:9.5px;color:var(--ink-3);text-align:center;font-weight:600;align-self:end;padding-bottom:2px;white-space:nowrap}
+.ah .whm-rl{font-size:11px;color:var(--ink-2);display:flex;align-items:center;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;padding-right:4px}
+.ah .whm-cell{min-height:34px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:700;font-variant-numeric:tabular-nums}
+.ah .whm-cell.win{box-shadow:0 0 0 2px var(--card),0 0 0 4px var(--ink);position:relative;z-index:1}
+/* ── third card · follow-up (subsequence) effectiveness — benchmark meters ── */
+.ah .m5-meter+.m5-meter{margin-top:20px}
+.ah .m5-mtop{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:8px}
+.ah .m5-mlab{font-size:13px;font-weight:600;color:var(--ink)}
+.ah .m5-right{display:flex;align-items:center;gap:8px}
+.ah .m5-mval{font-size:16px;font-weight:700;font-variant-numeric:tabular-nums}
+.ah .m5-track{position:relative;height:13px;background:var(--bg-sunken);border-radius:7px;overflow:hidden}
+.ah .m5-fill{position:absolute;left:0;top:0;bottom:0;border-radius:7px;transition:width .4s ease}
+.ah .m5-gap{position:absolute;top:0;bottom:0;background:rgba(20,17,14,.06)}
+.ah .m5-tick{position:absolute;top:0;bottom:0;width:3px;background:var(--ink);border-radius:2px}
+.ah .m5-axis{position:relative;height:15px;margin-top:6px}
+.ah .m5-ticklab{position:absolute;top:0;transform:translateX(-50%);font-size:10px;font-weight:600;color:var(--ink-2);white-space:nowrap}
+.ah .tone-green{color:var(--green)} .ah .bg-green{background:var(--green)}
+.ah .tone-amber{color:var(--amber)} .ah .bg-amber{background:var(--amber)}
+.ah .tone-red{color:var(--red)} .ah .bg-red{background:var(--red)}
+.ah .m5-chip{font:700 10px var(--font-sans);letter-spacing:.03em;text-transform:uppercase;padding:3px 8px;border-radius:999px;white-space:nowrap}
+.ah .m5-chip.c-green{background:var(--green-bg);color:#195C3F}
+.ah .m5-chip.c-amber{background:var(--amber-bg);color:#6B4A00}
+.ah .m5-chip.c-red{background:var(--red-bg);color:#861E10}
+
+.ah .split{display:flex;gap:2px;height:12px}
+.ah .split .g{background:var(--green);border-radius:4px 2px 2px 4px;transition:flex-grow .35s ease}
+.ah .split .r{background:var(--red);border-radius:2px 4px 4px 2px;transition:flex-grow .35s ease}
+.ah .splitlbl{display:flex;justify-content:space-between;font-size:11.5px;color:var(--ink-3);margin-top:6px}
+.ah .splitlbl b{font-weight:600;color:var(--ink)}
+
+.ah .rank{display:flex;flex-direction:column}
+.ah .rrow{display:grid;grid-template-columns:20px minmax(180px,1fr) 62px 62px 68px 70px 70px;gap:12px;align-items:center;padding:9px 0;border-top:1px solid var(--line);font-size:12.5px}
+.ah .rcost{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
+.ah .rcost.mute{color:var(--ink-3)}
+.ah .rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.ah .rrow .idx{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
+.ah .rname{font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;min-width:0}
+.ah .rname .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .rname a.nm{color:inherit;text-decoration:none;cursor:pointer}
+.ah .rname a.nm:hover{text-decoration:underline}
+.ah .rsub{font-size:11px;color:var(--ink-3);font-weight:400;margin-top:1px}
+.ah .rrate,.ah .rint,.ah .rmtg{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .rint,.ah .rmtg{color:var(--ink-2)}
+.ah .rrate.bad{color:var(--red)}
+.ah .rbar{height:8px;border-radius:4px;background:var(--ink);transition:width .35s ease}
+.ah .rbar.bad{background:var(--red)}
+
+.ah .dying{margin-top:4px;background:var(--red-bg);border-radius:9px;padding:11px 14px;display:flex;align-items:center;gap:16px}
+.ah .dying .dcol{flex:1;min-width:0;display:flex;flex-direction:column;gap:5px}
+.ah .dying .dtxt{font-size:12.5px;color:var(--ink-2)}
+.ah .dying .dfixrow{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.ah .dying .dfix{font-size:13px;font-weight:700;color:var(--red)}
+.ah .dying a.btn{background:var(--card);flex-shrink:0;text-decoration:none}
+
+
+.ah .meet{flex-direction:row;align-items:center;gap:36px}
+.ah .meet .mleft{display:flex;flex-direction:column;gap:10px;align-items:flex-start}
+.ah .mcompare{display:flex;gap:22px;align-items:flex-end}
+.ah .mcol{display:flex;flex-direction:column;align-items:center;gap:6px}
+.ah .mcol .mv{font-size:12px;font-weight:600;font-variant-numeric:tabular-nums}
+.ah .mcol .mb{width:46px;border-radius:4px;transition:height .35s ease}
+.ah .mcol .mb.past{background:var(--brown-300)}
+.ah .mcol .mb.now{background:var(--ink)}
+.ah .mcol .ml{font-size:11px;color:var(--ink-3)}
+.ah .meet .take.side{max-width:300px;margin-left:auto}
+
+.ah .databar{display:none;font-size:12px;color:var(--ink-2);background:var(--amber-bg);border:1px solid var(--amber-line);border-radius:9px;padding:8px 14px;margin-bottom:14px}
+.ah .databar.show{display:flex;align-items:center;gap:12px}
+.ah .databar button{margin-left:auto}
+/* inline "Retry" inside a card's own subline, for reads that fail per-card
+   (who-replies) rather than at boot */
+.ah a.who-retry{color:var(--orange-700);font-weight:600;text-decoration:underline}
+
+.ah .moved-note{margin-top:14px;font-size:12.5px;color:var(--ink-3)}
+.ah .moved-note a{color:var(--ink-2);font-weight:600;text-decoration:none}
+.ah .moved-note a:hover{text-decoration:underline}
+
+@media (max-width:1280px){
+  .ah .rrow{grid-template-columns:20px minmax(214px,246px) 1fr 46px 56px 58px 54px}
+  .ah .brow{grid-template-columns:104px 1fr 42px}
+  .ah .ocol{grid-template-columns:1fr 74px 74px;gap:8px}
+  .ah .hero-flow{grid-template-columns:240px 1fr}
+}
+@media (max-width:980px){
+  .ah .c3,.ah .c23,.ah .c-land,.ah .c32{grid-template-columns:1fr}
+  .ah .hero-flow{grid-template-columns:1fr}
+  .ah .fuelcard{grid-row:auto}
+  .ah .stagestrip{grid-column:1}
+}
+/* Double-tap (collision) warning bar — under the fresh-leads widgets. Amber,
+   and quiet until it has something to flag (JS adds .on when count > 0). */
+.ah .dtwarn{display:none;align-items:center;justify-content:space-between;gap:16px;
+  margin-top:14px;padding:13px 18px;background:var(--amber-bg);
+  border:1px solid var(--amber-line);border-radius:var(--radius)}
+.ah .dtwarn.on{display:flex}
+.ah .dtwarn-main{display:flex;align-items:center;gap:13px;min-width:0}
+.ah .dtwarn-ico{font-size:18px;line-height:1;color:var(--amber);flex:none}
+.ah .dtwarn-txt{min-width:0}
+.ah .dtwarn-head{font-size:14px;font-weight:600;color:var(--ink);letter-spacing:-0.005em}
+.ah .dtwarn-head .num{color:var(--amber);font-variant-numeric:tabular-nums}
+.ah .dtwarn-sub{font-size:12.5px;color:var(--ink-2);margin-top:2px}
+.ah .dtwarn-copy{font:600 12.5px/1 var(--font-sans);letter-spacing:-0.005em;
+  color:#fff;background:var(--amber);border:1px solid var(--amber);padding:9px 16px;
+  border-radius:999px;cursor:pointer;white-space:nowrap;flex:none;transition:opacity .12s}
+.ah .dtwarn-copy:hover{opacity:.88}
+.ah .dtwarn-copy.copied{background:var(--card);color:var(--amber)}
+@media(max-width:640px){.ah .dtwarn{flex-direction:column;align-items:stretch}
+  .ah .dtwarn-copy{width:100%}}
+/* Freshness stamps — every card says when its numbers were computed. Amber =
+   past the freshness budget: stale data may render, never silently as-if-live. */
+.ah .stamp{font:500 10.5px/1.5 var(--font-sans);color:var(--ink-3);
+  letter-spacing:0;text-transform:none;white-space:nowrap}
+.ah .stamp.stale{color:var(--amber);font-weight:600}
+.ah .dtwarn-sub.stale{color:var(--amber)}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main class="main" id="main">
+  <div class="ah">
+
+  <div class="databar" id="ah-databar"><span id="ah-databar-msg">Live data unavailable.</span><button class="btn sm" id="ah-retry">Retry</button></div>
+
+  <!-- ══ page header — title only (Bjion 2026-07-29); the client-report share
+       button rides on the right (client-report-share, 2026-08-16) ══ -->
+  <header class="pagehead">
+    <div>
+      <h1>Analytics</h1>
+    </div>
+    <div class="pagehead-right" style="position:relative">
+      <button class="chip" id="rs-open" type="button">Share with client</button>
+      <!-- plain positioned popover, never <dialog>: native dialogs die in
+           embedded/headless views (lilly-strategy-fidelity) -->
+      <div id="rs-pop" style="display:none;position:absolute;right:0;top:40px;z-index:60;width:300px;background:var(--card);border:1px solid var(--line-2);border-radius:12px;box-shadow:0 10px 30px rgba(20,17,14,.12);padding:16px;text-align:left">
+        <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:10px">Share a client report</div>
+        <label style="display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px">Client</label>
+        <select id="rs-client" style="width:100%;font:500 13px var(--font-sans);padding:7px 9px;border:1px solid var(--line-2);border-radius:8px;background:var(--card);color:var(--ink);margin-bottom:10px"></select>
+        <div style="display:flex;gap:8px;margin-bottom:12px">
+          <div style="flex:1"><label style="display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px">From</label>
+            <input type="date" id="rs-start" style="width:100%;font:500 12.5px var(--font-sans);padding:6px 8px;border:1px solid var(--line-2);border-radius:8px;color:var(--ink)"></div>
+          <div style="flex:1"><label style="display:block;font-size:11.5px;color:var(--ink-3);margin-bottom:3px">To</label>
+            <input type="date" id="rs-end" style="width:100%;font:500 12.5px var(--font-sans);padding:6px 8px;border:1px solid var(--line-2);border-radius:8px;color:var(--ink)"></div>
+        </div>
+        <button class="chip on" id="rs-create" type="button" style="width:100%;justify-content:center;display:inline-flex">Create link</button>
+        <div id="rs-out" style="display:none;margin-top:10px">
+          <input id="rs-url" readonly style="width:100%;font:500 11px var(--font-mono);padding:7px 8px;border:1px solid var(--line-2);border-radius:8px;color:var(--ink-2);background:var(--bg-sunken)">
+          <div style="display:flex;gap:8px;margin-top:8px">
+            <button class="chip" id="rs-copy" type="button" style="flex:1;justify-content:center;display:inline-flex">Copy link</button>
+            <a class="chip" id="rs-openlink" target="_blank" rel="noopener" style="flex:1;justify-content:center;display:inline-flex;text-decoration:none">Open</a>
+          </div>
+        </div>
+        <div class="subline" id="rs-msg" style="margin-top:8px">The link shows only this client, over these dates (inside the last 30 days). It works without a login.</div>
+      </div>
+    </div>
+  </header>
+
+  <!-- THE two page dimensions: who (client) and when (7/14/30 days). Sticky so
+       re-filtering never means scrolling back to the top (the whole point of
+       the page is easy filtering — 2026-07-28 tester). One range, one client,
+       every widget below follows both. -->
+  <div class="filterbar" id="ah-filterbar">
+    <div class="filterrow">
+      <div class="chips" id="ah-chips" role="group" aria-label="Client filter"></div>
+      <div class="rangeseg" id="ah-range" role="group" aria-label="Date range">
+        <button data-range="7" aria-pressed="false">7 days</button>
+        <button data-range="14" aria-pressed="false">14 days</button>
+        <button class="on" data-range="30" aria-pressed="true">30 days</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ HERO — your month, day by day ══ -->
+  <section class="hero" aria-label="Your month, day by day">
+    <div class="card-head">
+      <span class="kicker" id="hero-kick">Day by day · last 30 days</span> <span class="stamp" id="hero-stamp"></span>
+      <button class="wkndtog" id="ah-weekend" type="button" aria-pressed="false" title="Weekends are near-zero sending days">Hide weekends</button>
+    </div>
+    <div class="lchips" id="ah-lchips" role="group" aria-label="Show or hide lines"></div>
+    <div class="trendwrap">
+      <svg class="trend" id="trend-svg" viewBox="0 0 1120 264" role="img" aria-label="Daily counts"></svg>
+      <div class="charttip" id="trend-tip" hidden></div>
+    </div>
+    <div class="subline" id="trend-sub">Every line is a count per day.</div>
+    <div class="take"><span class="arr">→</span><span id="trend-take">&nbsp;</span></div>
+  </section>
+
+  <!-- ══ LANES — six questions ══ -->
+  <div class="lanes">
+
+    <!-- ── 1 · WHERE CAN WE IMPROVE THE MOST? — the funnel ── -->
+    <section class="lane" id="lane-improve" aria-label="Where can we improve the most lane">
+      <span class="node num">1</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Where can we improve the most?</h2>
+        <span class="lane-tag num" id="tag-pipeline">Your pipeline</span> <span class="stamp" id="funnel-stamp"></span>
+      </div>
+      <div class="hero">
+        <div class="hero-flow">
+
+          <svg class="funnel" id="funnel" viewBox="0 0 880 282" role="img" aria-label="Pipeline">
+            <path class="fribbon" id="fr1" d=""/>
+            <path class="fribbon" id="fr2" d=""/>
+            <path class="fribbon" id="fr3" d=""/>
+            <a class="fstage" href="#lane-sent">
+              <title>Emails sent — jump to its lane</title>
+              <rect class="fslab" id="fs1" x="74" y="54" width="72" height="192" rx="4"/>
+              <text class="fnum num" id="fn1" x="110" y="42" text-anchor="middle">–</text>
+            </a>
+            <a class="fstage" href="#lane-replies">
+              <title>Replies — jump to its lane</title>
+              <rect class="fslab" id="fs2" x="294" y="122" width="72" height="56" rx="4"/>
+              <text class="fnum num" id="fn2" x="330" y="110" text-anchor="middle">–</text>
+            </a>
+            <a class="fstage" href="#lane-interested">
+              <title>Interested replies — jump to its lane</title>
+              <rect class="fslab" id="fs3" x="514" y="134" width="72" height="32" rx="4"/>
+              <text class="fnum num" id="fn3" x="550" y="122" text-anchor="middle">–</text>
+            </a>
+            <a class="fstage" href="#lane-meetings">
+              <title>Meetings booked — jump to its lane</title>
+              <rect class="fslab" id="fs4" x="734" y="142" width="72" height="16" rx="4"/>
+              <text class="fnum num" id="fn4" x="770" y="130" text-anchor="middle">–</text>
+            </a>
+            <text class="frate num" id="fc0" x="110" y="268" text-anchor="middle"></text>
+            <text class="frate num" id="fc1" x="220" y="234" text-anchor="middle"></text>
+            <text class="frate num" id="fc2" x="440" y="194" text-anchor="middle"></text>
+            <text class="frate num" id="fc3" x="660" y="184" text-anchor="middle"></text>
+            <g id="leak-pill">
+              <rect class="fpill-r" id="lp-r" x="606" y="78" width="108" height="22" rx="11"/>
+              <text class="fpill-t" id="lp-t" x="660" y="93" text-anchor="middle">BIGGEST LEAK</text>
+              <line class="fleakline" id="lp-l" x1="660" y1="104" x2="660" y2="130"/>
+            </g>
+          </svg>
+
+          <!-- stage labels only (the dot sub-stats were removed per the PDF,
+               but the column labels stay so the funnel reads left-to-right) -->
+          <nav class="stagestrip" aria-label="Pipeline stages">
+            <a class="stagecell" href="#lane-sent"><div class="scname">Emails sent</div></a>
+            <a class="stagecell" href="#lane-replies"><div class="scname">Replies</div></a>
+            <a class="stagecell" href="#lane-interested"><div class="scname">Interested</div></a>
+            <a class="stagecell" href="#lane-meetings"><div class="scname">Meetings</div></a>
+          </nav>
+        </div>
+
+        <div class="leakbar" id="leakbar" style="display:none">
+          <div class="lk-left">
+            <div class="leak-head" id="leak-head">Biggest leak</div>
+            <div class="leak-body num" id="leak-body"></div>
+          </div>
+          <div class="leak-fix" id="leak-fix"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 2 · FUEL — FRESH LEADS ── -->
+    <section class="lane" id="lane-leads" aria-label="Fresh leads lane">
+      <span class="node num">2</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Do you have enough leads?</h2>
+        <span class="lane-tag num">Fuel · leads still to work · <span id="tag-leads">–</span></span>
+      </div>
+      <div class="cards c3">
+
+        <div class="acard">
+          <div class="card-kick" id="run-kick">Days of leads left</div><span class="stamp" id="run-stamp"></span>
+          <div class="bignum warn num" id="run-big">–</div>
+          <div class="subline num" id="run-sub">&nbsp;</div>
+          <svg viewBox="0 0 380 120" width="100%" role="img" id="run-svg" aria-label="Lead runway">
+            <line x1="12" y1="96" x2="368" y2="96" stroke="var(--line)" stroke-width="1"/>
+            <polygon id="run-poly" points="12,96 12,96 12,96" fill="var(--amber-bg)"/>
+            <line id="run-line" x1="12" y1="96" x2="12" y2="96" stroke="var(--amber)" stroke-width="2"/>
+            <circle id="run-dot" cx="12" cy="96" r="3.5" fill="var(--amber)"/>
+            <text x="12" y="12" font-size="11" fill="var(--ink-3)" id="run-t0"></text>
+            <text id="run-t1" x="330" y="112" font-size="11" font-weight="600" fill="var(--amber)" text-anchor="middle"></text>
+          </svg>
+          <div class="take"><span class="arr">→</span><span id="run-take">&nbsp;</span></div>
+        </div>
+
+        <div class="acard">
+          <div class="card-kick"><span id="sig-kick">New people found</span> <span id="sig-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· whole fleet</span> <span class="stamp" id="sig-stamp"></span></div>
+          <div class="bignum num" id="sig-big">–</div>
+          <div class="brows" id="sig-rows"></div>
+          <div class="take"><span class="arr">→</span><span id="sig-take">&nbsp;</span></div>
+        </div>
+
+        <div class="acard">
+          <div class="card-kick" id="nc-kick">New campaigns</div><span class="stamp" id="nc-stamp"></span>
+          <div class="bignum num" id="nc-big">–</div>
+          <div class="subline" id="nc-live">&nbsp;</div>
+          <div class="subline" id="nc-latest">&nbsp;</div>
+          <div class="take"><span class="arr">→</span><span id="nc-take">&nbsp;</span></div>
+        </div>
+
+      </div>
+
+      <!-- Double-tap (collision) warning bar — flags leads live in 2+ of the
+           SAME client's ACTIVE campaigns. Client-specific; on the All view it
+           collates every client's count into one fleet total. Copy prompt hands
+           Claude a client-scoped brief to route the backlog out. Stays hidden
+           (no .on) until there is something to flag. Fed by /api/collisions. -->
+      <div class="dtwarn" id="dtwarn" role="alert" aria-live="polite">
+        <div class="dtwarn-main">
+          <span class="dtwarn-ico" aria-hidden="true">&#9888;</span>
+          <div class="dtwarn-txt">
+            <div class="dtwarn-head"><span class="num" id="dtwarn-n">–</span> <span id="dtwarn-lbl">double-tap leads</span></div>
+            <div class="dtwarn-sub" id="dtwarn-sub">&nbsp;</div>
+          </div>
+        </div>
+        <button type="button" class="dtwarn-copy" id="dtwarn-copy" title="Copy a ready-to-run prompt for Claude">Copy prompt</button>
+      </div>
+    </section>
+
+    <!-- ── 3 · EMAILS SENT + THE DELIVERABILITY TOOLSET ── -->
+    <section class="lane" id="lane-sent" aria-label="Emails sent lane">
+      <span class="node num">3</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Are your emails landing?</h2>
+        <span class="lane-tag num">Emails sent · <span id="tag-sent">–</span></span>
+      </div>
+      <div class="cards c-land">
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick" id="week-kick">Reply rate over time</div><span class="stamp" id="week-stamp"></span>
+          </div>
+          <div class="trendwrap week-wrap" style="margin-top:0">
+            <svg viewBox="0 0 620 170" preserveAspectRatio="xMidYMid meet" role="img" id="week-svg" aria-label="Replies by weekday"></svg>
+            <div class="charttip" id="week-tip" hidden></div>
+          </div>
+          <div class="take"><span class="arr">→</span><span id="week-take">&nbsp;</span></div>
+        </div>
+
+        <!-- Bounce rate — today's number, the trend against the 2% limit, and
+             who the returned mail is coming from. Fleet-wide trend (bounce_pct
+             is fleet-only in the data layer); the list narrows with the client
+             chips. -->
+        <div class="acard bounce">
+          <div class="card-head">
+            <div class="card-kick">Emails that came back <span class="stamp" id="bnc-stamp"></span></div>
+          </div>
+
+          <div class="bnc-hero num" id="bnc-big" title="">–</div>
+
+          <div class="bnc-chart" id="bnc-chart">
+            <svg id="bnc-svg" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <span class="bnc-limlab" id="bnc-limlab">2% limit</span>
+          </div>
+
+          <div>
+            <div class="card-kick" style="margin-bottom:2px" id="bnc-kick">Where it comes from</div>
+            <div class="bnc-rows num" id="bnc-rows"></div>
+          </div>
+        </div>
+
+      </div>
+
+      <!-- The engine room (inbox & domain manager) used to be embedded here in
+           a fold; it now lives on its own Mailboxes tab (mailboxes.html). -->
+      <div class="moved-note">Mailbox &amp; domain health has moved → <a href="mailboxes-hub.html">Mailboxes</a></div>
+    </section>
+
+    <!-- ── 4 · REPLIES ── -->
+    <section class="lane" id="lane-replies" aria-label="Replies lane">
+      <span class="node num">4</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Which campaigns, and which messages, are winning?</h2>
+        <span class="lane-tag num">Pipeline · Replies · <span id="tag-replies">–</span></span>
+      </div>
+      <div class="cards c32">
+
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">Campaigns, best to worst <span style="text-transform:none;letter-spacing:0;font-weight:500" id="rank-scope">· all time</span> <span class="stamp" id="rank-stamp"></span></div>
+          </div>
+          <div class="rank num">
+            <div id="rank-rows"></div>
+            <div class="dying" id="dying" style="display:none">
+              <div class="dcol">
+                <span class="dtxt num" id="dying-txt"></span>
+                <div class="dfixrow">
+                  <span class="dfix" id="dying-fix"></span>
+                  <a class="btn sm" id="dying-link" href="#">Open campaign</a>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="take"><span class="arr">→</span><span id="rank-take">&nbsp;</span></div>
+        </div>
+
+        <!-- What is the offer — the thing each campaign asks for (a Loom, a
+             written breakdown, a quick call), priced in the emails it costs to
+             buy one positive reply and one meeting. Sits where "Opening lines"
+             did: same question shape, one level up — the ask beats the wording. -->
+        <div class="acard">
+          <div class="card-head">
+            <div class="card-kick">What is the offer? <span id="offer-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· whole book</span> <span class="stamp" id="offer-stamp"></span></div>
+          </div>
+          <div id="offer-rows"><div class="subline">Reading the offer off each campaign's copy…</div></div>
+          <div class="subline" id="offer-sub">&nbsp;</div>
+          <div class="take" id="offer-take-row" style="display:none"><span class="arr">→</span><span id="offer-take">&nbsp;</span></div>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ── 5 · INTERESTED ── -->
+    <section class="lane" id="lane-interested" aria-label="Interested lane">
+      <span class="node num">5</span>
+      <div class="lane-head">
+        <h2 class="lane-q">Who actually replies?</h2>
+        <span class="lane-tag num">Pipeline · Interested · <span id="tag-int">–</span></span>
+      </div>
+      <div class="cards c-land">
+        <div class="acard">
+          <div class="card-kick">Who's replying <span style="text-transform:none;letter-spacing:0;font-weight:500">· <span id="who-n">–</span> interested with a known title</span></div>
+          <div class="brows num" id="who-rows"><div class="subline">Fills in after the next daily optimiser run.</div></div>
+          <div class="subline" id="who-size" style="margin-top:8px">&nbsp;</div>
+          <div class="take" id="who-take-row" style="display:none"><span class="arr">→</span><span id="who-take"></span></div>
+        </div>
+        <div class="acard">
+          <div class="card-kick">How effective are our follow-ups <span id="subseq-scope" style="text-transform:none;letter-spacing:0;font-weight:500">· automated subsequences</span></div>
+          <div id="subseq-body"><div class="subline">Fills in after the next follow-up sync.</div></div>
+          <div class="take" id="subseq-take-row" style="display:none"><span class="arr">→</span><span id="subseq-take"></span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ── 6 · MEETINGS ── -->
+    <section class="lane" id="lane-meetings" aria-label="Meetings lane">
+      <span class="node num">6</span>
+      <div class="lane-head">
+        <h2 class="lane-q">How many meetings did it book?</h2>
+        <span class="lane-tag num">Pipeline · Meetings · <span id="tag-meet">–</span></span>
+      </div>
+      <div class="cards c32">
+        <div class="acard meet">
+          <div class="mleft">
+            <div class="card-kick" id="meet-kick">Meetings booked this month</div><span class="stamp" id="meet-stamp"></span>
+            <div class="bignum num" id="meet-big">–</div>
+            <span class="apill mute num" id="meet-pill">&nbsp;</span>
+            <div class="subline num" id="meet-src">&nbsp;</div>
+          </div>
+          <div class="mcompare num">
+            <div class="mcol"><span class="mv" id="meet-mv1">–</span><div class="mb past" id="meet-mb1" style="height:8px"></div><span class="ml" id="meet-ml1">last month</span></div>
+            <div class="mcol"><span class="mv" id="meet-mv2">–</span><div class="mb now" id="meet-mb2" style="height:8px"></div><span class="ml" id="meet-ml2">this month</span></div>
+          </div>
+          <div class="take side"><span class="arr">→</span><span id="meet-take">&nbsp;</span></div>
+        </div>
+        <div class="acard">
+          <div class="card-kick">How fast we answer</div>
+          <div class="bignum num" id="wait-big">–</div>
+          <div class="subline" id="wait-sub">&nbsp;</div>
+          <div class="wspeed" id="wait-chart" style="display:none">
+            <div class="wspeed-head">Booked-call rate by how fast we answered</div>
+            <div class="wspeed-bars num" id="wait-bars"></div>
+          </div>
+          <div class="take"><span class="arr">→</span><span id="wait-take">&nbsp;</span></div>
+        </div>
+      </div>
+    </section>
+
+  </div>
+  </div>
+  </main>
+</div>
+
+<script src="shell.js"></script>
+<script>
+  document.getElementById("rail").outerHTML = renderRail("deliverability");
+  // The engine-room manager script no longer loads here — it has its own
+  // Mailboxes tab (mailboxes.html), so the hub's boot owns the browser's
+  // connection pool outright.
+</script>
+
+<script>
+(function () {
+"use strict";
+/* ── Analytics hub — every number on this page is live. Sources:
+   /api/analytics-hub (rpc analytics_hub_v1) · /api/deliverability-trends ·
+   /api/campaign-scorecard · /api/cockpit/insights · /api/campaigns-unified ·
+   /api/signals/daily · /api/sources · /api/deliverability/_audit.
+   Client chips re-slice everything client-side except the fleet-wide bits
+   (hero Sent/Bounces, landing, signals). ── */
+var $ = function (id) { return document.getElementById(id); };
+var escq = function (s) { return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+var fmtN = function (n) { return (n == null || isNaN(n)) ? "–" : Math.round(n).toLocaleString("en-GB"); };
+var getOrd = function (d) { return d % 10 === 1 && d !== 11 ? "st" : d % 10 === 2 && d !== 12 ? "nd" : d % 10 === 3 && d !== 13 ? "rd" : "th"; };
+// ── Freshness stamps ── every card carries "updated X ago" from its payload's
+// real timestamp (asof / generated_at). Past-budget ages go amber (.stale):
+// stale data may render, but never silently as-if-live.
+function ageH(iso) {
+  if (!iso) return null;
+  var t = Date.parse(iso);
+  return isNaN(t) ? null : (Date.now() - t) / 36e5;
+}
+function setStamp(id, iso, budgetH) {
+  var el = $(id);
+  if (!el) return;
+  var h = ageH(iso);
+  var txt = "";
+  if (h != null) {
+    h = Math.max(0, h);
+    txt = h < 1 ? "updated " + Math.max(1, Math.round(h * 60)) + " min ago"
+        : h < 48 ? "updated " + Math.round(h) + " h ago"
+                 : "updated " + Math.round(h / 24) + " days ago";
+  }
+  el.textContent = txt;
+  el.classList.toggle("stale", h != null && h > (budgetH || 6));
+}
+
+function j(url) {
+  return fetch(url, { credentials: "same-origin" }).then(function (r) {
+    if (r.status === 401) { location.href = "#?next=" + encodeURIComponent(location.pathname); throw new Error("auth"); }
+    if (!r.ok) throw new Error(url + " " + r.status);
+    return r.json();
+  });
+}
+// Shared-fetch registry: hub sections that read the same endpoint reuse one
+// boot promise instead of issuing a second identical request (it also served
+// the engine-room embed before that moved to mailboxes.html).
+window.__ahFetch = window.__ahFetch || {};
+function jShared(url) {
+  // evict on rejection: a cached rejected promise made the Retry button a
+  // no-op for trends/insights/signals until a full reload (panel round-1)
+  if (!window.__ahFetch[url]) {
+    window.__ahFetch[url] = j(url).catch(function (e) {
+      delete window.__ahFetch[url];
+      throw e;
+    });
+  }
+  return window.__ahFetch[url];
+}
+
+var HUB = null, TRENDS = null, SCORE = null, INS = null, UNI = null, SIG = null, SRC = null, AUDIT = null, CW = null, COLL = null;
+// Which boot reads FAILED, by the plain-English name of what they feed. Every
+// failure used to be swallowed by an empty rejection handler: a 503 on
+// /api/sources left lane 2 rendering a confident runway with nothing on screen
+// to say a read had died, and the databar only ever appeared when BOTH the hub
+// and the scorecard were gone. Anything in here is named in the databar.
+var DEGRADED = {};
+function markDegraded(what, failed) {
+  if (failed) DEGRADED[what] = 1; else delete DEGRADED[what];
+  renderDataBar();
+}
+function renderDataBar() {
+  var bar = $("ah-databar"), msg = $("ah-databar-msg");
+  if (!bar || !msg) return;
+  var names = Object.keys(DEGRADED);
+  if (!names.length) { bar.classList.remove("show"); return; }
+  msg.textContent = names.length === 1
+    ? names[0] + " could not be loaded."
+    : "Live data unavailable: " + names.join(", ") + ".";
+  bar.classList.add("show");
+}
+var CAP = null;   // /api/fleet-capacity — per-day sending capacity per workspace (P1 headroom bars)
+// Bounce-Rate defaults OFF: it's a % on the right axis now (it no longer
+// flattens anything), but the landing card owns the bounce story and the
+// line stays one chip-tap away.
+// TWO page dimensions and only two: state.client + state.range (7/14/30 —
+// never all-time). Every widget below reads both. The pair survives a reload
+// via localStorage (losing your filters on refresh was round-1 friction).
+// sent defaults ON now — it renders as faint BARS (its own scale), so it no
+// longer flattens the reply/meeting lines the way the old sent LINE did, and
+// per-day sent is the thing Bjion most wants to see (2026-07-28).
+// hideWeekends: a CHART-ONLY toggle — drop Sat/Sun from the day-by-day bars and
+// lines (weekends are ~0 sends and flatten the weekday rhythm). It does NOT
+// touch the Capacity-used figure, which is always weekday-only (owner ruling
+// 2026-09-02); see NavreoCapacity in shell.js.
+var state = { client: "All", range: 30, hideWeekends: false,
+              on: { sent: true, replies: true, interested: true, meetings: true, bounces: false, rate: true } };
+try {
+  var _saved = JSON.parse(localStorage.getItem("ah_filters") || "{}");
+  if ([7, 14, 30].indexOf(_saved.range) >= 0) state.range = _saved.range;
+  if (typeof _saved.client === "string" && _saved.client) state.client = _saved.client;
+  if (typeof _saved.hideWeekends === "boolean") state.hideWeekends = _saved.hideWeekends;
+  if (_saved.on && typeof _saved.on.sent === "boolean") state.on.sent = _saved.on.sent;
+} catch (e) { /* fresh defaults */ }
+function saveFilters() {
+  try {
+    localStorage.setItem("ah_filters", JSON.stringify({
+      client: state.client, range: state.range,
+      hideWeekends: state.hideWeekends, on: { sent: state.on.sent } }));
+  } catch (e) { /* private mode */ }
+}
+
+function ckey() { return state.client === "All" ? "__all" : state.client; }
+function clientOfName(name, ws) {
+  ws = (ws || "navreo").toLowerCase();
+  // Every connected client workspace labels as itself — the map comes from the
+  // server (client-windows ws_labels, same source as analytics_hub_v1's cmap),
+  // so adding a workspace needs no edit here.
+  if (ws !== "navreo") {
+    var lbls = (CW && CW.ws_labels) || {};
+    for (var L in lbls) { if (lbls[L] === ws) return L; }
+    return ws.charAt(0).toUpperCase() + ws.slice(1);
+  }
+  var n = (name || "").toLowerCase();
+  if (n.indexOf("amplif") >= 0) return "Brightcart";
+  if (n.indexOf("vellum") >= 0) return "Vellum";
+  if (n.indexOf("qwintiq") >= 0) return "Qwintiq";
+  if (n.indexOf("skylark") >= 0) return "Skylark";   // its own client
+  if (n.indexOf("navreo") >= 0) return "Navreo";             // name-gated like every client
+  // No keyword → belongs to NO client. Must never fall back to Navreo (that
+  // silently inflated Navreo's numbers by every unmatched campaign).
+  return "__unassigned";
+}
+function clientDisplay(c) { return c === "__unassigned" ? "Unassigned" : c; }
+function campClient(id, c) {
+  // ONE label authority: campaign_scorecard.client, written server-side by
+  // _client_win_label. It arrives on the scorecard payload (c.client) and as
+  // the hub's campaign_clients map (same column). The local keyword cascade is
+  // only a fallback for rows that predate the column.
+  if (c && c.client) return c.client;
+  if (HUB && HUB.campaign_clients && HUB.campaign_clients[id]) return HUB.campaign_clients[id];
+  return clientOfName(c && c.name, c && c.workspace);
+}
+function scoreRows() {   // [{id, ...scorecard row}] for the selected client
+  var out = [];
+  if (!SCORE || !SCORE.campaigns) return out;
+  Object.keys(SCORE.campaigns).forEach(function (id) {
+    var c = SCORE.campaigns[id];
+    if (state.client !== "All" && campClient(id, c) !== state.client) return;
+    out.push(Object.assign({ id: id }, c));
+  });
+  return out;
+}
+function bookRow(kind) {  // live book-scope insight payload by kind/key
+  if (!INS || !INS.insights) return null;
+  for (var i = 0; i < INS.insights.length; i++) {
+    var r = INS.insights[i];
+    if (r.scope === "book" && (r.insight_key === kind || (r.payload && r.payload.kind === kind))) return r.payload;
+  }
+  return null;
+}
+function bookRowTs(kind) {  // the row's OWN generated_at — feeds its stamp
+  if (!INS || !INS.insights) return null;
+  for (var i = 0; i < INS.insights.length; i++) {
+    var r = INS.insights[i];
+    if (r.scope === "book" && (r.insight_key === kind || (r.payload && r.payload.kind === kind))) return r.generated_at || null;
+  }
+  return null;
+}
+
+/* ── hero trend graph ── */
+var COL = { sent: "#1971C2", replies: "#7048E8", interested: "#2F9E44", meetings: "#E8590C", bounces: "#E03131", rate: "#0B7285" };
+var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounce-Rate", rate: "Reply rate" };
+var ORDER = ["sent", "replies", "interested", "meetings", "bounces", "rate"];
+var RAXIS = { rate: 1, bounces: 1 };   // % series that ride the right-hand axis
+// sent/bounces/rate totals are real for EVERY client via /api/client-windows;
+// a day-by-day LINE additionally exists when cwSeries() has one (All, Meridian,
+// Halden — clients that map to a whole Smartlead workspace).
+// Chart geometry the HOVER needs to place its markers. Only the fields read in
+// trendMove live here — `n`/`off`/`keep` used to be written and never read, and
+// `off` was the last reference to a local the trimmed-axis change removed.
+var GEO = { ymax: 60 };
+var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+var DAYS3 = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
+function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
+
+function fleetSeries() {  // {sent[], bounces[] (%), bounceN[], rate[]} on the chart axis, from trends
+  var out = { sent: [], bounces: [], bounceN: [], rate: [] };
+  if (!HUB) return out;
+  var map = {};
+  if (TRENDS && TRENDS.series && TRENDS.series.days) {
+    TRENDS.series.days.forEach(function (d, i) {
+      var s = TRENDS.series.sent[i] || 0;
+      var bp = TRENDS.series.bounce_pct[i];
+      var rp = TRENDS.series.reply_pct[i];
+      // same rule as perf_daily's RATE_MIN_SENT: a 16-send day at 3 replies is
+      // not a 19% reply rate — suppress both rates on days under 1,000 sends
+      map[d] = { s: s, b: (bp == null || s < 1000 ? null : bp),
+                 bn: (bp == null ? 0 : Math.round(s * bp / 100)),
+                 r: (rp == null || s < 1000 ? null : rp) };
+    });
+  }
+  chartAxisDays().forEach(function (d) {   // trimmed axis: the fleet line ends yesterday too
+    var m = map[d];
+    out.sent.push(m ? m.s : 0);
+    out.bounces.push(m ? m.b : null);   // bounce-rate %, right axis — gap on quiet days
+    out.bounceN.push(m ? m.bn : 0);     // raw bounce count — footnote total only
+    out.rate.push(m ? m.r : null);   // null = no sends that day → gap, not zero
+  });
+  return out;
+}
+// The day-by-day chart draws two independently-clocked sources on one axis:
+// analytics-hub (interested/meetings — computed live, its day list ends TODAY)
+// and client-windows (sent/replies/rate — a ≤2h SWR cache that can be a full day
+// stale, so its day list ends YESTERDAY). The chart plots series by array index
+// against the analytics-hub axis, so any drift between the two day lists slides
+// the client-windows lines one day earlier — and with weekends hidden that parks
+// Monday's real sent/replies/rate onto the dropped Sunday slot, drawing Monday as
+// ~0 (owner report 2026-08-07). alignDaily re-keys a client-windows series onto
+// the chart axis by DATE so index i always describes axis day i, whatever the two
+// clocks say.
+// Freshness horizon: client-windows is only COMPLETE for days BEFORE the day it
+// was built (CW.asof) — the as-of day itself holds partial data (it was captured
+// mid-day) and later days are missing entirely. So for any axis day on or after
+// CW.asof we prefer `fb` (an already-axis-aligned fresher/live series) and fall
+// back to the client-windows value only if there is no fresher source; days
+// strictly before CW.asof are trusted from client-windows. Without this a stale
+// cache would draw yesterday from its own partial morning snapshot (e.g. 9 sends
+// instead of ~18,600).
+// "Today" in UTC, because every axis the server stamps is a UTC date. A LOCAL
+// date compare is wrong for a viewer ahead of UTC: between their local midnight
+// and UTC midnight, local "today" is already tomorrow's date, so the real
+// today's bucket stops being trimmed and its near-empty partial day leaks back
+// into the chart, the legend sums and the capacity figure.
+function todayUTC() { return new Date().toISOString().slice(0, 10); }
+// Trim an axis to the last date STRICTLY BEFORE today. Windows end yesterday
+// (owner ruling 2026-09-02) — today is a partial, still-ramping bucket. The
+// analytics-hub RPC still stamps its day list to today, so the cut is made here
+// on the front end, once, and EVERY series the chart plots is index-aligned to
+// this axis: trim the axis and the whole page moves with it.
+function axisEndingYesterday(days) {
+  if (!Array.isArray(days) || !days.length) return [];
+  var t = todayUTC();
+  for (var i = days.length - 1; i >= 0; i--) {
+    if (String(days[i] || "").slice(0, 10) < t) return days.slice(0, i + 1);
+  }
+  return [];
+}
+// Normally the axis ends YESTERDAY, so every average, legend sum, reply-rate and
+// capacity figure ignores today's still-ramping partial day. The chart and its
+// hover, however, DRAW today's column too (team ask, 2026-09-04): while they plot
+// we point the axis at the full day list through _AXIS_OVERRIDE, and a try/finally
+// always restores it — so no NUMBER ever sees today, only the drawn bar/line does.
+var _AXIS_OVERRIDE = null;
+function chartAxisDays() {
+  if (_AXIS_OVERRIDE) return _AXIS_OVERRIDE;
+  return axisEndingYesterday((HUB && HUB.days) || (CW && CW.days) || []);
+}
+// The raw day list, running through today — the plotting axis for the chart/hover.
+function chartPlotDays() { return (HUB && HUB.days) || (CW && CW.days) || []; }
+// A raw analytics-hub series is keyed to HUB.days, which still runs to today.
+// Cut it to the chart axis so index i always describes axis day i.
+function hubAligned(arr) {
+  if (!Array.isArray(arr)) return arr;
+  var n = chartAxisDays().length;
+  return arr.length > n ? arr.slice(0, n) : arr;
+}
+function cwAsofDate() { return (CW && CW.asof) ? String(CW.asof).slice(0, 10) : null; }
+function alignDaily(srcArr, srcDays, fill, fb) {
+  var ax = chartAxisDays();
+  if (!srcArr || !srcDays || !ax.length) return srcArr;
+  var cutoff = cwAsofDate();   // client-windows is settled only for days < cutoff
+  var m = {};
+  for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = srcArr[i];
+  return ax.map(function (d, j) {
+    var settled = m[d] !== undefined && !(cutoff && d >= cutoff);
+    if (settled) return m[d];                          // trust a complete CW day
+    if (fb && fb[j] != null) return fb[j];             // fresher source for as-of/tail days
+    if (m[d] !== undefined) return m[d];               // no fresher source — CW is best we have
+    return fill;
+  });
+}
+/* ── client-windows (/api/client-windows): per-client sent/replies/bounces
+   for the exact 7/14/30 windows, plus true daily lines for clients that map
+   1:1 to a Smartlead workspace (Meridian, Halden) and for the all-client sum. ── */
+// Panel round-1 HIGH: a boot-time 429 burst once shipped a client-windows
+// daily series covering ~10% of the true fleet — the page drew wrong bars,
+// funnel replies and rate, stamped fresh. The server now drops incomplete
+// series; this gate also refuses any cached/old blob whose __all daily sum
+// is materially short of the verified window total.
+function cwTrusted(key) {
+  // series for key, or null unless its own 30d sum backs the verified window
+  // total (>=0.8x, same threshold the server gate uses). Per KEY, round 3:
+  // one lost workspace must not throw away every other client's good line.
+  var s = CW && CW.series && CW.series[key];
+  if (!s || !s.sent) return null;
+  var w = CW.windows && CW.windows["30"] && CW.windows["30"][key];
+  if (w && w.sent) {
+    var sum = s.sent.reduce(function (a, b) { return a + (b || 0); }, 0);
+    if (sum < 0.8 * w.sent) return null;
+  }
+  return s;
+}
+function cwFor(client) {  // {sent,replied,bounced} for a client over state.range
+  var w = CW && CW.windows && CW.windows[String(state.range)];
+  return (w && w[client === "All" ? "__all" : client]) || null;
+}
+// a day under this many sends has no readable rate — scaled to scope
+function rateMinSent() { return state.client === "All" ? 1000 : 100; }
+// Per-day SENT for the current client, full 30-day array (renderTrend slices).
+// Exact for clients that own a Smartlead workspace (All/Meridian/Halden/Fieldstone);
+// for clients that SHARE the Navreo workspace (Navreo/Brightcart/Vellum) there is
+// no daily line, so split the Navreo-workspace daily series by this client's
+// share of the window total — the window total stays exact, only the daily
+// SHAPE is estimated (Bjion: per-day sent per client is super important).
+// Overlay today's live partial sent (CW.today, refreshed by the client-windows
+// cron) onto the drawn bar. chartAxisDays() carries today ONLY during the
+// plotting pass (_AXIS_OVERRIDE); every number path runs with the axis ended
+// yesterday, so today is a no-op there and no figure ever counts it.
+function sentDailyFull() {
+  var arr = _sentDailyBase();
+  if (!arr || !CW || !CW.today || !CW.today.sent) return arr;
+  var key = state.client === "All" ? "__all" : state.client;
+  var val = CW.today.sent[key];
+  if (val == null) return arr;
+  var ax = chartAxisDays(), t = todayUTC(), out = arr.slice();
+  for (var i = 0; i < ax.length; i++) {
+    if (i < out.length && String(ax[i] || "").slice(0, 10) === t) out[i] = val;
+  }
+  return out;
+}
+function _sentDailyBase() {
+  if (!CW || !CW.series) return null;
+  var key = state.client === "All" ? "__all" : state.client;
+  var s = cwTrusted(key);
+  if (s && s.sent) return alignDaily(s.sent, CW.days, 0,
+      state.client === "All" ? fleetSeries().sent : null);
+  // the apportioned split is only honest for clients that genuinely SHARE the
+  // Navreo workspace — an own-workspace client whose line was gate-dropped
+  // must not get bars shaped like another workspace's rhythm (round-3 panel)
+  if (state.client !== "All" && CW.ws_labels && CW.ws_labels[state.client]) return null;
+  var wsS = CW.series["__navreo_ws"];
+  var cw = cwFor(state.client);
+  if (wsS && wsS.sent && cw && cw.sent > 0) {
+    var wsWin = wsS.sent.slice(Math.max(0, wsS.sent.length - state.range))
+                        .reduce(function (a, b) { return a + (b || 0); }, 0);
+    if (wsWin > 0) {
+      var share = cw.sent / wsWin;
+      return alignDaily(wsS.sent.map(function (v) { return Math.round((v || 0) * share); }),
+                        CW.days, 0, null);
+    }
+  }
+  return null;
+}
+function sentDailyEstimated() {
+  // true when the daily shape is an apportioned estimate (shared-workspace client)
+  var key = state.client === "All" ? "__all" : state.client;
+  return !!(CW && CW.series && !(CW.series[key] && CW.series[key].sent) && sentDailyFull());
+}
+// ── Sending CAPACITY (P1 headroom bars) ──────────────────────────────────
+// Which capacity series backs the selected client. EXACT for the all-clients
+// sum and the own-workspace clients (Meridian/Halden/Fieldstone). navreo-workspace clients
+// (Navreo/Brightcart/Vellum/…) share one untagged pool, so NavreoCapacity.capSeries
+// builds their line from the recorded per-client caps, falling back to the navreo
+// pool scaled to the client's own cap — so capacity shows on EVERY client
+// (Bjion 2026-08-19). wsKey null means "resolve this client by name".
+function capWsKey() {
+  if (state.client === "All") return "__all";
+  var k = state.client.toLowerCase();
+  return (k === "meridian" || k === "halden" || k === "fieldstone") ? k : null;
+}
+function alignCap(arr, srcDays) {   // re-key a capacity series onto the chart axis by DATE
+  var ax = chartAxisDays();
+  if (!arr || !srcDays || !ax.length) return null;
+  var m = {};
+  for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = arr[i];
+  return ax.map(function (d) { return (m[d] == null ? null : m[d]); });
+}
+// per-client capacity for a navreo-workspace client = Σ REAL caps of the boxes on
+// its ACTIVE campaigns (CAP.client_caps, from the campaign-membership map).
+// Replaces the old sent-share split, which mis-sized clients that under-send
+// their dedicated infra (Northwind 50k/mo, Ascent 20k/mo).
+function clientCapValue() {
+  var cc = CAP && CAP.client_caps;
+  if (!cc) return null;
+  if (cc[state.client] != null) return cc[state.client];
+  var lc = state.client.toLowerCase();
+  for (var key in cc) if (key.toLowerCase() === lc) return cc[key];
+  return null;
+}
+// case-insensitive lookup of the client's REAL per-day capacity line, written
+// daily by the reply-rate cap crons (CAP.client_caps_daily). null until it lands.
+function ccdKey() {
+  var cc = CAP && CAP.client_caps_daily;
+  if (!cc) return null;
+  if (cc[state.client]) return state.client;
+  var lc = state.client.toLowerCase();
+  for (var key in cc) if (key.toLowerCase() === lc) return key;
+  return null;
+}
+function clientCapRealDaily() {   // aligned real per-day client capacity, or null
+  var kk = ccdKey();
+  if (!kk) return null;
+  var a = alignCap(CAP.client_caps_daily[kk], CAP.days);
+  return (a && a.some(function (v) { return v != null; })) ? a : null;
+}
+// shared navreo-workspace client: an ESTIMATE only until the daily per-client
+// capacity history (client_caps_daily) has filled in for this client.
+function capEstimated() {
+  if (state.client === "All" || capWsKey() || clientCapValue() == null) return false;
+  return clientCapRealDaily() == null;
+}
+// The client's per-day capacity on the CHART axis. ONE definition, shared with
+// the Fleet heat map: NavreoCapacity.capSeries (shell.js) picks the exact
+// own-workspace/__all series or builds the shared-client series from
+// client_caps_daily + a scaled navreo pool. This page used to carry its own
+// copy of that logic, which then missed the latest-recorded-cap fallback and
+// drifted from the heat map — never fork it again.
+function capacityDailyAligned() {
+  if (!CAP || !CAP.capacity || !CAP.days || !window.NavreoCapacity) return null;
+  return alignCap(NavreoCapacity.capSeries(CAP, state.client, capWsKey()), CAP.days);
+}
+// Per-day capacity for the CHART — one rule shared by the bar drawing and the
+// hover, so the two can never disagree, and the same rule NavreoCapacity
+// .usedDetail applies to the window figure: a day that sent MORE than the
+// capacity on record counts as having used exactly its own sends. So a sent bar
+// can never overshoot its own capacity bar, and the day reads 100%, not 120%.
+// The hover still names the recorded figure ("cap on record 2,400") so the
+// reader can see why the two numbers differ.
+// WHY such days exist: the own-workspace pools were high-water-snapped just ONCE
+// a day (04:30) until the hourly capacity top-up shipped 2026-09-02, so a
+// historical day's recorded cap can sit below what that day actually sent — and
+// those days keep their single morning snapshot until they scroll out of the
+// window. Fieldstone on Tue 1 Sep: 2,891 sent against a 2,400 morning snapshot.
+function capDayDrawn(sent, capOnRecord) {
+  if (capOnRecord == null) return null;
+  var s = sent || 0;
+  return s > capOnRecord ? s : capOnRecord;
+}
+// THE capacity-used figure for the current client + range, with the numbers
+// behind it (see NavreoCapacity.usedDetail): weekday sends / weekday capacity.
+// The chart's "Hide weekends" toggle does NOT change it.
+//
+// It is computed on client-windows' OWN day axis, NOT the chart axis. The chart
+// axis comes from /api/analytics-hub, whose day list can START a day later than
+// the sweep's, and one extra Monday inside a 30-day window is worth a whole
+// percentage point — enough to print 86% here beside 87% for the same fleet on
+// the Fleet heat map, which reads the sweep's axis. Same inputs, same helper,
+// same number on both pages. The chart axis is only the fallback, for a client
+// with no daily line of its own (its sent bars are an apportioned split then).
+function capacityUsedDetail() {
+  if (!CAP || !window.NavreoCapacity) return null;
+  var cs = CW && CW.series && CW.series[ckey()];
+  if (cs && cs.sent && CW.days && CW.days.length) {
+    return NavreoCapacity.usedDetail({ sent: cs.sent, sentDays: CW.days, cap: CAP,
+                                       name: state.client, wsKey: capWsKey(), days: state.range });
+  }
+  var sent = sentDailyFull(), axis = chartAxisDays();
+  if (!sent || !axis.length) return null;
+  return NavreoCapacity.usedDetail({ sent: sent, sentDays: axis, cap: CAP,
+                                     name: state.client, wsKey: capWsKey(), days: state.range });
+}
+// ── Days-of-leads runway inputs (Bjion 2026-08-21) ────────────────────────
+// CURRENT per-day sending capacity for the selected client (latest non-null of
+// its capacity series; the flat client-cap value as a fallback).
+function capacityNow() {
+  var arr = capacityDailyAligned();
+  if (arr) for (var i = arr.length - 1; i >= 0; i--) if (arr[i] != null) return arr[i];
+  return clientCapValue();
+}
+// Per-WEEKDAY follow-up load = sends owed to leads already in flight (all steps
+// bar the first), from the sweep's 14-day first-touch split. 10 = weekdays in a
+// 14-day window, matching the capacity cap (a per-sending-day number). null when
+// the split hasn't been built yet (old cache) → the widget hides the day count
+// rather than inventing a runway.
+function followupPerDay() {
+  var ft = CW && CW.first_touch;
+  if (!ft) return null;
+  if (state.client === "All") {
+    var tot = 0, has = false;
+    for (var k in ft) { tot += Math.max(0, (ft[k].total14 || 0) - (ft[k].ft14 || 0)); has = true; }
+    return has ? tot / 10 : null;
+  }
+  var e = ft[state.client];
+  return e ? Math.max(0, (e.total14 || 0) - (e.ft14 || 0)) / 10 : null;
+}
+// Per-WEEKDAY first-touch rate = new leads we're ALREADY starting each day (seq-1
+// sends), the floor under new-lead headroom: when a client's recorded capacity is
+// understated (below what it actually sends, e.g. Halden borrowing shared infra),
+// capacity - follow-ups can go to ~0 and invent a runway of thousands of days —
+// but we can never start FEWER new leads than we demonstrably already are.
+function firstTouchPerDay() {
+  var ft = CW && CW.first_touch;
+  if (!ft) return null;
+  if (state.client === "All") {
+    var tot = 0, has = false;
+    for (var k in ft) { tot += (ft[k].ft14 || 0); has = true; }
+    return has ? tot / 10 : null;
+  }
+  var e = ft[state.client];
+  return e ? (e.ft14 || 0) / 10 : null;
+}
+function niceCeil(x) {   // ceiling with clean quarter-ticks: 4 × a nice quarter step,
+  if (x <= 0) return 1;  // so per-client axes (2k … 50k) all fill tight and label round
+  var q = x / 4, p = Math.pow(10, Math.floor(Math.log10(q))), f = q / p;
+  var steps = [1, 1.25, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10];
+  for (var i = 0; i < steps.length; i++) if (f <= steps[i]) return 4 * steps[i] * p;
+  return 40 * p;
+}
+function capLabel(v) {   // compact axis label: 1.1M / 66k / 12.5k / 600
+  v = Math.round(v);
+  if (v >= 1e6) { var m = v / 1e6; return (m % 1 === 0 ? m : +m.toFixed(1)) + "M"; }
+  if (v >= 1000) { var k = v / 1000; return (k % 1 === 0 ? k : +k.toFixed(1)) + "k"; }
+  return fmtN(v);
+}
+function cwSeries(k) {    // daily array for sent/bounces/rate, or null if none exists
+  var s = cwTrusted(state.client === "All" ? "__all" : state.client);
+  if (!s) return null;
+  var all = state.client === "All";
+  if (k === "sent") return alignDaily(s.sent, CW.days, 0, all ? fleetSeries().sent : null);
+  if (k === "bounces") {   // bounce-rate % per day, same low-send suppression as rate
+    var bmin = rateMinSent();
+    var bpc = s.sent.map(function (v, i) {
+      return (v >= bmin && s.bounced[i] != null) ? Math.round(s.bounced[i] * 10000 / v) / 100 : null;
+    });
+    return alignDaily(bpc, CW.days, null, all ? fleetSeries().bounces : null);
+  }
+  if (k === "rate") {
+    var min = rateMinSent();
+    var rate = s.sent.map(function (v, i) {
+      return (v >= min && s.replied[i] != null) ? Math.round(s.replied[i] * 10000 / v) / 100 : null;
+    });
+    return alignDaily(rate, CW.days, null, all ? fleetSeries().rate : null);
+  }
+  return null;
+}
+// Daily reply-rate for a shared-workspace client (Navreo/Brightcart/Vellum):
+// EXACT daily replies (hub series) ÷ the estimated daily sent split. Lets those
+// clients show a reply-rate line too, not just a total (Bjion 2026-07-28).
+function rateDailyShared() {
+  var hs = HUB && HUB.series && HUB.series[ckey()];
+  var sd = sentDailyFull();
+  if (!hs || !hs.replies || !sd) return null;
+  return sd.map(function (v, i) {
+    return (v >= 50 && hs.replies[i] != null) ? Math.round((hs.replies[i] || 0) * 10000 / v) / 100 : null;
+  });
+}
+function seriesFor(k) {   // full 30-day array for series k under current client, or null
+  // Don't gate the whole chart on the analytics-hub RPC (the slowest boot read).
+  // sent/bounces/rate/replies all come from client-windows for workspace clients
+  // (All/Meridian/Halden/Fieldstone), so they can plot the moment CW lands — the hub-only
+  // lines (interested/meetings) fill in when HUB arrives, via the guarded tail.
+  if (k === "sent" || k === "bounces" || k === "rate") {
+    var cs = cwSeries(k);
+    if (cs) return cs;
+    if (k === "rate" && state.client !== "All") {
+      var rs = rateDailyShared();   // shared-workspace client gets a rate line too
+      if (rs) return rs;
+    }
+    // no per-client daily line exists yet → null;
+    // "All" falls back to the fleet trends while client-windows still builds
+    return state.client === "All" ? fleetSeries()[k] : null;
+  }
+  if (k === "replies") {
+    // Replies: workspace telemetry when the client HAS a workspace (Meridian,
+    // Halden, All) — the archive misses client-workspace replies (38 vs 116 on
+    // Meridian, caught by the 2026-07-28 testers). Navreo-ws clients keep the
+    // archive, which is complete for them.
+    var ws = cwTrusted(state.client === "All" ? "__all" : state.client);
+    if (ws && ws.replied) return alignDaily(ws.replied, CW.days, 0,
+        (HUB && HUB.series && HUB.series[ckey()]) ? HUB.series[ckey()].replies : null);
+    // an exact window total exists but no TRUSTED daily line — never plot the
+    // partial archive as the reply rhythm (round-3 panel: the chip said 9
+    // while the funnel correctly said 182 in the same viewport)
+    var cwr = cwFor(state.client);
+    if (cwr && cwr.replied != null) return null;
+  }
+  if (k === "interested") {
+    // Interested has ONE source on this page: Smartlead's positive-reply stat,
+    // carried by the client-windows sweep (owner ruling 2026-09-02). The chart
+    // line, the legend chip, the funnel and the KPI must all be that number —
+    // plotting the local reply archive here while the funnel read Smartlead let
+    // the chip say 413 next to a funnel saying 381. The archive series is the
+    // fallback only for a key whose Smartlead pull failed.
+    var cs2 = CW && CW.series && CW.series[ckey()];
+    if (cs2 && cs2.positives) return alignDaily(cs2.positives, CW.days, 0,
+        (HUB && HUB.series && HUB.series[ckey()]) ? HUB.series[ckey()].interested : null);
+  }
+  var s = HUB && HUB.series && HUB.series[ckey()];
+  return hubAligned(s && s[k]) || [];
+}
+function repliesShown() { // THE reply count every widget shows for this view
+  // No trusted daily line -> use the EXACT client-windows window total before
+  // ever falling back to the archive sum: the archive undercounts client
+  // workspaces (round-2 panel replayed Halden at 9 archive replies vs 182 real).
+  var ws = cwTrusted(state.client === "All" ? "__all" : state.client);
+  if (!(ws && ws.replied)) {
+    var cwx = cwFor(state.client);
+    if (cwx && cwx.replied != null) return cwx.replied;
+  }
+  var r = seriesFor("replies");
+  var sum = r ? slice(r).reduce(function (a, b) { return a + (b || 0); }, 0) : 0;
+  // a keyword client not yet in the hub series (e.g. Skylark before its
+  // migration) has no daily reply line — use its exact client-windows total
+  if (sum === 0 && state.client !== "All") {
+    var cw = cwFor(state.client);
+    if (cw && cw.replied) return cw.replied;
+  }
+  return sum;
+}
+function sentShown() {    // THE sent count every widget shows for this view
+  var cw = cwFor(state.client);
+  if (cw) return cw.sent;
+  return slice(fleetSeries().sent).reduce(function (a, b) { return a + b; }, 0);
+}
+function rateAvg() {      // ONE reply rate: repliesShown ÷ sentShown — the same
+  var S = sentShown();    // two numbers the legend and the funnel display, so
+  if (!S) return null;    // the chip and "X in 100 reply" can never disagree
+  return Math.round(repliesShown() / S * 1000) / 10;
+}
+function bounceAvg() {    // ONE bounce rate for this view: bounced ÷ sent
+  var cw = cwFor(state.client);
+  if (cw) return cw.sent ? Math.round(cw.bounced / cw.sent * 1000) / 10 : null;
+  var fs = fleetSeries();
+  var S = slice(fs.sent).reduce(function (a, b) { return a + b; }, 0);
+  if (!S) return null;
+  return Math.round(slice(fs.bounceN).reduce(function (a, b) { return a + b; }, 0) / S * 1000) / 10;
+}
+function slice(a) { return a.slice(Math.max(0, a.length - state.range)); }
+function rangeLabel() { return "last " + state.range + " days"; }
+function priorComparison() {
+  // "how does this window compare to the one before it" in one sentence —
+  // round 2's founder had to memorise the 30d chips to compare against 7d.
+  // Only exact numbers: prior-7 sent = 14d − 7d; prior-14 sent needs a daily
+  // series; replies always have a 30-day series. 30d has no prior window.
+  if (state.range === 30 || !CW || !CW.windows) return "";
+  var kk = state.client === "All" ? "__all" : state.client;
+  var cur = cwFor(state.client);
+  if (!cur) return "";
+  var prevSent = null;
+  if (state.range === 7) {
+    var w14 = CW.windows["14"] && CW.windows["14"][kk];
+    if (w14) prevSent = w14.sent - cur.sent;
+  } else if (state.range === 14) {
+    var ser = CW.series && CW.series[kk];
+    if (ser) prevSent = ser.sent.slice(-28, -14).reduce(function (a, b) { return a + (b || 0); }, 0);
+  }
+  var repArr = seriesFor("replies");
+  var repCur = null, repPrev = null;
+  if (repArr && repArr.length >= state.range * 2) {
+    repCur = slice(repArr).reduce(function (a, b) { return a + (b || 0); }, 0);
+    repPrev = repArr.slice(-state.range * 2, -state.range).reduce(function (a, b) { return a + (b || 0); }, 0);
+  }
+  var bits = [];
+  if (prevSent != null && prevSent >= 0) bits.push("sent " + fmtN(cur.sent) + " (was " + fmtN(prevSent) + ")");
+  if (repCur != null) bits.push("replies " + fmtN(repCur) + " (was " + fmtN(repPrev) + ")");
+  return bits.length ? " Vs the " + state.range + " days before: " + bits.join(" · ") + "." : "";
+}
+
+function renderChips() {
+  // Chips come from every source that knows a client name — hub RPC, the
+  // client-windows sweep, and the scorecard — so one cold/failed call can
+  // never leave the page with just "All clients" (seen live after the
+  // 2026-07-28 redeploy, when the hub RPC was still waking up).
+  // dedup case-INSENSITIVELY: the scorecard fallback title-cases a workspace
+  // slug ("Halden") before CW.ws_labels arrives with the canonical "Halden", and an
+  // exact-string dedup rendered BOTH as separate chips (seen live 2026-07-28).
+  // Sources are added canonical-first (hub → CW → scorecard) so the first
+  // casing wins.
+  var seen = {}, names = [];
+  function add(c) { if (c && c !== "__all" && c !== "__unassigned" && !seen[c.toLowerCase()]) { seen[c.toLowerCase()] = 1; names.push(c); } }
+  ((HUB && HUB.clients) || []).forEach(add);
+  if (CW && CW.windows && CW.windows["30"]) Object.keys(CW.windows["30"]).forEach(add);
+  if (SCORE && SCORE.campaigns) {
+    Object.keys(SCORE.campaigns).forEach(function (id) { add(campClient(id, SCORE.campaigns[id])); });
+  }
+  // stable order: biggest sender first when the sweep is in (meaningful and
+  // deterministic), else alphabetical — so chips don't reshuffle between the
+  // incremental-boot paints as sources arrive (2026-07-28 tester)
+  var vol = (CW && CW.windows && CW.windows["30"]) || {};
+  names.sort(function (a, b) {
+    var va = (vol[a] && vol[a].sent) || 0, vb = (vol[b] && vol[b].sent) || 0;
+    if (va !== vb) return vb - va;
+    return a.toLowerCase() < b.toLowerCase() ? -1 : 1;
+  });
+  names = ["All"].concat(names);
+  $("ah-chips").innerHTML = names.map(function (c) {
+    return '<button class="chip' + (state.client === c ? " on" : "") + '" data-client="' + escq(c) + '" aria-pressed="' + (state.client === c) + '">' + (c === "All" ? "All clients" : escq(c)) + "</button>";
+  }).join("");
+}
+function renderLegend() {
+  // Until the hub lands, replies/interested/meetings are UNKNOWN, not zero —
+  // rendering "0" and "Reply rate 0%" next to a populated headline looked
+  // broken for the ~20s incremental boot (2026-07-28 tester). Show a resting
+  // dash so the legend reads as "loading", never as real zeros.
+  if (!HUB) {
+    $("ah-lchips").innerHTML = ORDER.map(function (k) {
+      return '<button class="lchip off" data-s="' + k + '" aria-pressed="false" disabled>' +
+        '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">…</b></button>';
+    }).join("");
+    return;
+  }
+  var cw = cwFor(state.client);
+  $("ah-lchips").innerHTML = ORDER.map(function (k) {
+    var hasLine = seriesFor(k) != null;
+    // Sent is bars now and works for every client (exact or estimated split),
+    // so its chip is a normal toggle, never greyed to "total only".
+    if (k === "sent") hasLine = sentDailyFull() != null;
+    var val = null;
+    if (k === "rate") { var ra = rateAvg(); val = ra == null ? "–" : ra + "%"; }
+    else if (k === "bounces") { var ba = bounceAvg(); val = ba == null ? "–" : ba + "%"; }
+    else if (k === "sent") val = cw ? fmtN(cw.sent) : "–";
+    else if (k === "replies") val = fmtN(repliesShown());   // the ONE reply count — chip can never disagree with the funnel
+    // Same rule for Interested: read the ONE number the funnel and the KPI show
+    // (Smartlead's positive-reply stat) instead of re-summing a series. Summing
+    // its own series here is how the chip came to read 413 beside a funnel
+    // reading 381 — two books for one word, in one viewport.
+    else if (k === "interested") val = fmtN(funnelSums().pos);
+    else if (hasLine) val = fmtN(slice(seriesFor(k)).reduce(function (a, b) { return a + (b || 0); }, 0));
+    else val = "–";
+    // "noline" = a real total exists but no day-by-day line (shared-workspace
+    // client). Don't grey it into looking broken — keep the number bright and
+    // tag it "total" so it reads as intentional, not disabled (2026-07-28).
+    var noline = !hasLine;
+    var realTotal = noline && val !== "–";
+    return '<button class="lchip' + (state.on[k] && !noline ? " on" : "") + (realTotal ? " tot" : (noline ? " off" : "")) +
+      '" data-s="' + k + '" aria-pressed="' + (state.on[k] && !noline) + '"' +
+      (noline ? ' title="Real total for ' + escq(state.client) + " over the " + rangeLabel() +
+                ' — the day-by-day line only exists for all clients, Meridian and Halden."' : "") + ">" +
+      '<i class="sw" style="background:' + COL[k] + '"></i>' + NAME[k] + ' <b class="num">' + val + "</b>" +
+      (realTotal ? '<span class="totpill">total</span>' : "") + "</button>";
+  }).join("");
+}
+// indices (into the sliced window) to KEEP — all of them, or weekdays only
+// when Hide weekends is on. Shared by renderTrend and the hover.
+function chartKeep(windowDays) {
+  if (!state.hideWeekends) return windowDays.map(function (_, i) { return i; });
+  var keep = [];
+  windowDays.forEach(function (d, i) {
+    var dow = new Date(d + "T12:00:00Z").getUTCDay();
+    if (dow !== 0 && dow !== 6) keep.push(i);
+  });
+  return keep;
+}
+function renderTrend() {
+  renderLegend();
+  $("hero-kick").textContent = "Day by day · " + rangeLabel() +
+    (state.client === "All" ? "" : " · " + state.client);
+  setStamp("hero-stamp", (CW && CW.asof) || (HUB && HUB.asof), 6);
+  // Draw today's column too: point the axis at the full day list for the whole
+  // plotting pass, and restore it (try/finally) before any number is computed
+  // below, so the legend/averages/capacity stay ended yesterday.
+  _AXIS_OVERRIDE = chartPlotDays();
+  var capMode, sentFull;
+  try {
+  // Axis = the hub's day list, or client-windows' aligned day list while the hub
+  // RPC is still in flight. Either one lets the chart draw; only when BOTH are
+  // missing do we show the loading frame.
+  var allDays = slice(chartAxisDays());
+  if (!allDays.length) {   // no axis yet (or nothing before today)
+    // hub still loading — say so instead of leaving a silent empty frame
+    $("trend-svg").innerHTML = '<text x="560" y="132" text-anchor="middle" font-size="13" fill="var(--ink-3)">Loading your ' + rangeLabel() + "…</text>";
+    $("trend-sub").textContent = "Fetching live data…";
+    $("trend-take").textContent = "";
+    return;
+  }
+  // Weekend filter: drop Sat/Sun from the plotted chart when the toggle is on.
+  var keep = chartKeep(allDays);
+  var days = keep.map(function (i) { return allDays[i]; });
+  var n = days.length;
+  if (!n) { $("trend-svg").innerHTML = ""; $("trend-sub").textContent = "No weekdays in this window."; $("trend-take").textContent = ""; return; }
+  function pick(full) { return keep.map(function (i) { return full[i]; }); }
+  // Sent renders as BARS (own scale), so it's OUT of the line set — that's why
+  // turning it on no longer flattens the reply/interest/meeting lines.
+  var lineVis = ORDER.filter(function (k) { return k !== "sent" && state.on[k] && seriesFor(k) != null; });
+  var data = {};
+  lineVis.forEach(function (k) { data[k] = pick(slice(seriesFor(k))); });
+  var sentFull = state.on.sent ? sentDailyFull() : null;
+  var sentBars = sentFull ? pick(slice(sentFull)) : null;
+  var hasRate = lineVis.some(function (k) { return RAXIS[k]; });
+  // Capacity ceiling (P1 headroom bars): per-day sending capacity for the current
+  // scope, or null when it isn't separable (shared-workspace clients / no data).
+  var capFull = (state.on.sent && sentBars) ? capacityDailyAligned() : null;
+  var capBars = capFull ? pick(slice(capFull)) : null;
+  // ── Best-guess fill for missing / near-zero days ──────────────────────────
+  // Weekends (and other gap days) send ~0, so their bars vanish and their rate
+  // points are null. Bjion (2026-08-22) prefers an interpolated best-guess over
+  // an empty slot — drawn as a NORMAL day (no special styling), so the pre-fix
+  // gaps simply fill in. Only holes are filled; real values are untouched.
+  function _med(a) { var f = a.filter(function (v) { return v != null && v > 0; }).sort(function (x, y) { return x - y; }); return f.length ? f[Math.floor(f.length / 2)] : 0; }
+  function _fill(arr, triv) {
+    var out = arr.slice(), mask = [], i, j;
+    for (i = 0; i < arr.length; i++) mask[i] = false;
+    if (!arr.some(function (v, k) { return !triv(v, k); })) return { vals: out, mask: mask };
+    for (i = 0; i < arr.length; i++) {
+      if (!triv(arr[i], i)) continue;
+      mask[i] = true; var lo = null, hi = null;
+      for (j = i - 1; j >= 0; j--) { if (!triv(arr[j], j)) { lo = j; break; } }
+      for (j = i + 1; j < arr.length; j++) { if (!triv(arr[j], j)) { hi = j; break; } }
+      out[i] = (lo != null && hi != null) ? arr[lo] + (arr[hi] - arr[lo]) * (i - lo) / (hi - lo) : lo != null ? arr[lo] : arr[hi];
+    }
+    return { vals: out, mask: mask };
+  }
+  var _sentMask = null;
+  // Low-volume days (weekends, the current partial day) are MASKED so the rate
+  // lines don't spike on tiny denominators — but the BARS stay at their real sent
+  // amounts. We do not interpolate bars up to their neighbours: a 33-send day must
+  // read as 33, not get best-guessed to yesterday's 16k (Bjion 2026-08-25: the UI
+  // must match the data amounts).
+  if (sentBars) { var _sm = _med(sentBars), _st = function (v) { return v == null || v < Math.max(5, 0.15 * _sm); }; _sentMask = _fill(sentBars, _st).mask; sentBars = sentBars.map(function (v) { return Math.round(v || 0); }); }
+  if (capBars) {
+    capBars = _fill(capBars, function (v) { return v == null || v === 0; }).vals;
+    // never draw a ceiling below the bar it is supposed to cap (see capDayDrawn)
+    capBars = capBars.map(function (v, ii) { return capDayDrawn(sentBars ? sentBars[ii] : 0, v); });
+  }
+  lineVis.forEach(function (k) { if (!RAXIS[k]) return; data[k] = _fill(data[k], function (v, ii) { return v == null || (_sentMask && _sentMask[ii]); }).vals; });
+  var capMode = !!(capBars && capBars.some(function (v) { return v; }));
+  var L = 40, R = 132, T = 12, B = 26, W = 1120, H = 264, pw = W - L - R, ph = H - T - B;
+  var max = 1;
+  lineVis.forEach(function (k) { if (RAXIS[k]) return; data[k].forEach(function (v) { if (v > max) max = v; }); });
+  var ladder = [12, 20, 30, 40, 60, 80, 120, 160, 240, 320, 480, 640, 900, 1200, 1600, 2400, 3200, 4800, 6400, 9600, 12800, 19200, 25600, 40000];
+  var ymax = ladder[ladder.length - 1];
+  for (var i = 0; i < ladder.length; i++) { if (ladder[i] >= max) { ymax = ladder[i]; break; } }
+  // reply-rate and bounce-rate share the right-hand % axis
+  var rmax = 1;
+  if (hasRate) {
+    var rladder = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20], rmx = 0;
+    lineVis.forEach(function (k) {
+      if (!RAXIS[k]) return;
+      data[k].forEach(function (v) { if (v != null && v > rmx) rmx = v; });
+    });
+    rmax = rladder[rladder.length - 1];
+    for (i = 0; i < rladder.length; i++) { if (rladder[i] >= rmx) { rmax = rladder[i]; break; } }
+  }
+  // Sent bars ride their own scale (own peak), independent of the line axis.
+  var sentMax = 1;
+  if (sentBars) sentBars.forEach(function (v) { if (v > sentMax) sentMax = v; });
+  // capacity mode: bars ride a real EMAIL axis (0 → the fleet's daily capacity)
+  var AXCAP = 1;
+  if (capMode) {
+    var cmax = 1;
+    capBars.forEach(function (v) { if (v && v > cmax) cmax = v; });
+    sentBars.forEach(function (v) { if (v > cmax) cmax = v; });
+    AXCAP = niceCeil(cmax);
+  }
+  GEO = { ymax: ymax, rmax: rmax, sentMax: sentMax,
+          capMode: capMode, axcap: AXCAP, capFull: capMode ? slice(capFull) : null };
+  function X(ii) { return n === 1 ? L : L + ii * pw / (n - 1); }
+  function Y(v) { return T + (1 - v / ymax) * ph; }
+  function YR(v) { return T + (1 - v / rmax) * ph; }
+  function CAPY(v) { return T + (1 - v / AXCAP) * ph; }
+  var s = "";
+  // SENT bars first, so every line paints on top of them. In capacity mode each
+  // bar fills toward that day's sending capacity (solid = sent, ghost = idle,
+  // with a drawn ceiling); otherwise it's the faint own-scale bar.
+  if (capMode) {
+    var bwc = n > 1 ? Math.max(3, Math.min(24, pw / (n - 1) * 0.55)) : 40;
+    sentBars.forEach(function (v, ii) {
+      var cap = capBars[ii];
+      if (cap == null) return;
+      var xb = X(ii) - bwc / 2, yCap = CAPY(cap), ySent = CAPY(v || 0);
+      s += '<rect x="' + xb.toFixed(1) + '" y="' + yCap.toFixed(1) + '" width="' + bwc.toFixed(1) +
+        '" height="' + Math.max(0, ySent - yCap - 1.5).toFixed(1) + '" fill="var(--line-2)" rx="1.5"/>';
+      s += '<rect x="' + xb.toFixed(1) + '" y="' + ySent.toFixed(1) + '" width="' + bwc.toFixed(1) +
+        '" height="' + Math.max(0, T + ph - ySent).toFixed(1) + '" fill="' + COL.sent + '" opacity="0.5" rx="1.5"/>';
+      s += '<line x1="' + xb.toFixed(1) + '" y1="' + yCap.toFixed(1) + '" x2="' + (xb + bwc).toFixed(1) +
+        '" y2="' + yCap.toFixed(1) + '" stroke="var(--ink-3)" stroke-width="1.25"/>';
+    });
+  } else if (sentBars) {
+    var bw = n > 1 ? Math.max(3, Math.min(24, pw / (n - 1) * 0.55)) : 40;
+    sentBars.forEach(function (v, ii) {
+      if (!v) return;
+      var bh = (v / sentMax) * ph, bx = X(ii) - bw / 2, by = T + ph - bh;
+      s += '<rect x="' + bx.toFixed(1) + '" y="' + by.toFixed(1) + '" width="' + bw.toFixed(1) +
+        '" height="' + bh.toFixed(1) + '" fill="' + COL.sent + '" opacity="0.13" rx="1.5"/>';
+    });
+    s += '<text x="' + (L + 2) + '" y="' + (T + 10) + '" font-size="10" fill="' + COL.sent + '" opacity="0.75">bars: emails sent/day · peak ' + fmtN(sentMax) + '</text>';
+  }
+  for (i = 0; i <= 4; i++) {
+    var gv = ymax * i / 4, gy = Y(gv);
+    s += '<line x1="' + L + '" y1="' + gy.toFixed(1) + '" x2="' + (W - R) + '" y2="' + gy.toFixed(1) + '" stroke="var(--line)" stroke-width="1"/>';
+    s += '<text x="' + (L - 7) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="end" class="num">' + (capMode ? capLabel(AXCAP * i / 4) : fmtN(gv)) + "</text>";
+    if (hasRate) {
+      var rv = rmax * i / 4;
+      s += '<text x="' + (W - 8) + '" y="' + (gy + 3.5).toFixed(1) + '" font-size="10.5" fill="' + COL.rate + '" text-anchor="end" class="num">' + (rmax < 4 ? rv.toFixed(1) : Math.round(rv)) + "%</text>";
+    }
+  }
+  var ticks = (n <= 7) ? [0, 2, 4, n - 1] : (n <= 14 ? [0, 4, 9, n - 1] : [0, 10, 17, 24, n - 1]);
+  ticks.forEach(function (t) {
+    s += '<text x="' + X(t).toFixed(1) + '" y="' + (H - 8) + '" font-size="10.5" fill="var(--ink-3)" text-anchor="middle">' + dlabel(days[t]) + "</text>";
+  });
+  var ends = [];
+  lineVis.forEach(function (k) {
+    if (RAXIS[k]) {
+      // right-axis % lines with gaps on quiet days; rate stays the only dashed
+      // line so it and bounce-rate never read as one series
+      var dash = k === "rate" ? ' stroke-dasharray="5 4"' : "";
+      var seg = "", lastY = null;
+      data[k].forEach(function (v, ii) {
+        if (v == null) {
+          if (seg) { s += '<polyline points="' + seg + '" fill="none" stroke="' + COL[k] + '" stroke-width="2"' + dash + ' stroke-linejoin="round" stroke-linecap="round"/>'; seg = ""; }
+          return;
+        }
+        lastY = YR(v);
+        seg += (seg ? " " : "") + X(ii).toFixed(1) + "," + lastY.toFixed(1);
+      });
+      if (seg) s += '<polyline points="' + seg + '" fill="none" stroke="' + COL[k] + '" stroke-width="2"' + dash + ' stroke-linejoin="round" stroke-linecap="round"/>';
+      if (lastY != null) ends.push({ k: k, x: X(n - 1), y: lastY });
+      return;
+    }
+    var pts = "";
+    data[k].forEach(function (v, ii) { pts += (ii ? " " : "") + X(ii).toFixed(1) + "," + Y(v || 0).toFixed(1); });
+    s += '<polyline points="' + pts + '" fill="none" stroke="' + COL[k] + '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+    ends.push({ k: k, x: X(n - 1), y: Y(data[k][n - 1] || 0) });
+  });
+  ends.sort(function (a, b) { return a.y - b.y; });
+  var pos = ends.map(function (e) { return e.y; });
+  for (i = 1; i < pos.length; i++) { if (pos[i] < pos[i - 1] + 13) pos[i] = pos[i - 1] + 13; }
+  var over = (pos.length ? pos[pos.length - 1] : 0) - (H - B - 2);
+  if (over > 0) {
+    for (i = 0; i < pos.length; i++) pos[i] -= over;
+    for (i = pos.length - 2; i >= 0; i--) { if (pos[i] > pos[i + 1] - 13) pos[i] = pos[i + 1] - 13; }
+  }
+  ends.forEach(function (e, ii) {
+    s += '<circle cx="' + e.x.toFixed(1) + '" cy="' + e.y.toFixed(1) + '" r="3" fill="' + COL[e.k] + '"/>';
+    s += '<text x="' + (e.x + 8).toFixed(1) + '" y="' + (pos[ii] + 3.5).toFixed(1) + '" font-size="10.5" font-weight="600" fill="' + COL[e.k] + '">' + NAME[e.k] + "</text>";
+  });
+  $("trend-svg").innerHTML = s;
+  } finally { _AXIS_OVERRIDE = null; }   // axis back to ending-yesterday for all numbers below
+  var cw = cwFor(state.client);
+  var sentTot = cw ? cw.sent : slice(fleetSeries().sent).reduce(function (a, b) { return a + b; }, 0);
+  var bTot = cw ? cw.bounced : slice(fleetSeries().bounceN).reduce(function (a, b) { return a + b; }, 0);
+  var sub = (capMode ? "Bars fill to each day's sending capacity — solid is sent, grey is idle headroom; lines are counts per day"
+                     : state.on.sent && sentFull ? "Faint bars are emails sent each day; lines are counts per day"
+                     : "Every line is a count per day") +
+    (sentTot > 0 ? " — about " + Math.max(1, Math.round(bTot / sentTot * 1000) / 10) + " in 100 bounce." : ".");
+  if (capMode) {
+    // The BARS above are the chart (they follow the Hide-weekends toggle and the
+    // chart's own gap-fill). The NUMBER below is not derived from them: it comes
+    // from the one shared helper and is always weekday-only, so the KPI pill, the
+    // footnote and the Fleet heat map can never disagree. See NavreoCapacity.
+    var cu = capacityUsedDetail();
+    if (cu && cu.pct != null) {
+      var overNote = cu.exceeded > 0
+        ? " On " + cu.exceeded + " day" + (cu.exceeded === 1 ? "" : "s") + " we sent more than the capacity on record for that day, so those days count at what they actually sent."
+        : "";
+      sub += " You used " + cu.pct + "% of sending capacity here — " +
+        fmtN(cu.sent) + " of " + fmtN(cu.cap) + " possible on the " + cu.days +
+        " weekday" + (cu.days === 1 ? "" : "s") + " in this window (weekends never send, so they are left out)." + overNote +
+        " The left axis reads the period total; reply / interested / meeting lines keep their own scale.";
+      if (capEstimated()) sub += " " + escq(state.client) + "'s capacity is the cap of the mailboxes on its campaigns, tracking the fleet's daily warm-up.";
+      // Capacity-used pill in the legend chip row (renderLegend already built it).
+      var capTip = fmtN(cu.sent) + " of " + fmtN(cu.cap) + " weekday capacity over the " + rangeLabel() + " (weekdays only)" +
+        (cu.exceeded > 0 ? " · cap snapshot below sends on " + cu.exceeded + " day(s)" : "");
+      var lc = $("ah-lchips");
+      if (lc) lc.insertAdjacentHTML("beforeend",
+        '<span class="lchip cap-pill" style="cursor:default" title="' + escq(capTip) + '">' +
+        '<i class="sw" style="background:linear-gradient(to top,' + COL.sent + ' 0 55%,var(--line-2) 55% 100%)"></i>' +
+        "Capacity used <b class=\"num\">" + cu.pct + "%</b></span>");
+    }
+  }
+  if (state.on.sent && sentFull && sentDailyEstimated()) {
+    sub += " " + escq(state.client) + " shares the Navreo fleet, so its daily bars are an estimated split of the fleet's daily sending (its window total is exact).";
+  }
+  if (state.hideWeekends) sub += " Weekends hidden from the chart.";
+  sub += priorComparison();
+  // close the ledger: the all-clients total includes campaigns archived since
+  // they sent, which belong to no chip (9,081 unattributed sends confused
+  // round 2's CRO) — and greyed chips get their explanation in plain sight
+  if (state.client === "All" && CW && CW.windows) {
+    var wAll = CW.windows[String(state.range)] || {};
+    var clientSum = 0;
+    Object.keys(wAll).forEach(function (k) { if (k !== "__all") clientSum += wAll[k].sent || 0; });
+    var orphan = (wAll.__all ? wAll.__all.sent : 0) - clientSum;
+    if (orphan > Math.max(50, sentTot * 0.002)) {
+      sub += " Includes " + fmtN(orphan) + " sent by campaigns since archived — they sit under no client chip.";
+    }
+  }
+  if (cw && seriesFor("sent") == null) {
+    sub += " " + escq(state.client) + "'s totals here are exact; day-by-day lines exist for the whole book, Meridian and Halden.";
+  }
+  $("trend-sub").textContent = sub;
+  // FULL series, not the range slice: "this week vs last week" needs 14
+  // trailing days even when the page shows 7 (the sliced version claimed
+  // "up on last week's 0" on every 7-day view)
+  $("trend-take").textContent = takeLine(seriesFor("replies") || [], seriesFor("meetings") || []);
+  hideTip();
+}
+function halfSum(a, back) { var t = 0; for (var i = Math.max(0, a.length - back); i < a.length; i++) t += a[i] || 0; return t; }
+function takeLine(rep, mtg) {
+  // RANGE-AWARE: the take-line reads the SELECTED window (7/14/30) so it never
+  // contradicts the chart title above it (three rounds of testers kept reading
+  // a fixed "this week" line under a 30-day chart as a bug, 2026-07-28).
+  var R = state.range;
+  var rWin = halfSum(rep, R), mWin = halfSum(mtg, R);
+  if (rWin < 10) return "Small numbers in this view — read the counts, not the trend.";
+  // prior EQUAL window when the 30-day series holds two of them (7, 14); the
+  // 30-day view has no prior 30, so it compares the recent half to the earlier
+  var lab = "Last " + R + " days: ";
+  if (rep.length >= R * 2) {
+    var r1 = halfSum(rep, R), r0 = halfSum(rep, R * 2) - r1;
+    var m1 = halfSum(mtg, R), m0 = halfSum(mtg, R * 2) - m1;
+    var rPh = r1 > r0 * 1.15 ? "up on" : (r1 < r0 * 0.85 ? "down on" : "level with");
+    return lab + fmtN(m1) + " meeting" + (m1 === 1 ? "" : "s") + " (" + fmtN(m0) +
+      " the " + R + " before) · " + fmtN(r1) + " replies, " + rPh + " the prior " + fmtN(r0) + ".";
+  }
+  var half = Math.floor(R / 2);
+  var recent = halfSum(rep, half), earlier = rWin - recent;
+  var ph = recent > earlier * 1.15 ? "picking up" : (recent < earlier * 0.85 ? "slowing" : "holding steady");
+  return lab + fmtN(mWin) + " meeting" + (mWin === 1 ? "" : "s") + " · " + fmtN(rWin) +
+    " replies, " + ph + " in the recent half.";
+}
+function hideTip() {
+  var g = document.getElementById("tr-hov");
+  if (g) g.parentNode.removeChild(g);
+  $("trend-tip").hidden = true;
+}
+function trendMove(ev) {
+  var svg = $("trend-svg"), r = svg.getBoundingClientRect();
+  if (!r.width) return;
+  _AXIS_OVERRIDE = chartPlotDays();   // hover reads the same to-today axis the bars were drawn on
+  try {
+  var allD = slice(chartAxisDays());
+  if (!allD.length) return;
+  var keep = chartKeep(allD);
+  var days = keep.map(function (i) { return allD[i]; });
+  var n = days.length;
+  if (!n) return;
+  var L = 40, Rp = 132, T = 12, B = 26, pw = 1120 - L - Rp, ph = 264 - T - B;
+  var sx = (ev.clientX - r.left) * 1120 / r.width;
+  var idx = Math.round((sx - L) / pw * (n - 1));
+  if (idx < 0) idx = 0; if (idx > n - 1) idx = n - 1;
+  var oi = keep[idx];   // original index into the full (unfiltered) window arrays
+  var X = n === 1 ? L : L + idx * pw / (n - 1);
+  var html = '<line x1="' + X.toFixed(1) + '" y1="' + T + '" x2="' + X.toFixed(1) + '" y2="' + (T + ph) + '" stroke="var(--line-2)" stroke-width="1"/>';
+  var rows = "";
+  // Sent first — always show the day's sent count (the thing Bjion most wants),
+  // with a marker at the top of that day's bar.
+  if (state.on.sent) {
+    var sf = sentDailyFull();
+    if (sf) {
+      var sv = slice(sf)[oi] || 0;
+      var denom = GEO.capMode ? (GEO.axcap || 1) : (GEO.sentMax || 1);
+      var sby = T + ph - (sv / denom) * ph;
+      html += '<circle cx="' + X.toFixed(1) + '" cy="' + sby.toFixed(1) + '" r="3" fill="' + COL.sent + '" stroke="#fff" stroke-width="1.5"/>';
+      rows += '<div class="row"><i style="background:' + COL.sent + '"></i>Sent<span class="v num">' + fmtN(sv) + "</span></div>";
+      if (GEO.capMode && GEO.capFull) {
+        var cv = GEO.capFull[oi];                     // the capacity ON RECORD for that day
+        if (cv) {
+          var cd = capDayDrawn(sv, cv);               // what that day's bar was drawn at
+          rows += '<div class="row"><i style="background:var(--line-2)"></i>Capacity used<span class="v num">' +
+            Math.round(sv / cd * 100) + '% · ' + (cd > cv ? "cap on record " : "") + fmtN(cv) + "</span></div>";
+        }
+      }
+    }
+  }
+  ORDER.forEach(function (k) {
+    if (k === "sent") return;   // shown above (bars)
+    if (!state.on[k] || seriesFor(k) == null) return;
+    var v = slice(seriesFor(k))[oi];
+    if (RAXIS[k]) {
+      if (v == null) return;   // no sends that day — the line has a gap here
+      var Yr = T + (1 - v / (GEO.rmax || 1)) * ph;
+      html += '<circle cx="' + X.toFixed(1) + '" cy="' + Yr.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
+      rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] + '<span class="v num">' + v + "%</span></div>";
+      return;
+    }
+    v = v || 0;
+    var Y = T + (1 - v / GEO.ymax) * ph;
+    html += '<circle cx="' + X.toFixed(1) + '" cy="' + Y.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
+    rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] + '<span class="v num">' + fmtN(v) + "</span></div>";
+  });
+  var old = document.getElementById("tr-hov");
+  if (old) old.parentNode.removeChild(old);
+  svg.insertAdjacentHTML("beforeend", '<g id="tr-hov">' + html + "</g>");
+  var tip = $("trend-tip");
+  tip.innerHTML = "<b>" + dfull(days[idx]) + "</b>" + rows;
+  tip.hidden = false;
+  var wrap = svg.parentNode, ww = wrap.offsetWidth, px = X * r.width / 1120;
+  var left = px + 16;
+  if (left + tip.offsetWidth > ww - 4) left = px - 16 - tip.offsetWidth;
+  if (left < 4) left = 4;
+  var top = (ev.clientY - r.top) - tip.offsetHeight / 2;
+  if (top < 0) top = 0;
+  var maxTop = r.height - tip.offsetHeight;
+  if (maxTop > 0 && top > maxTop) top = maxTop;
+  tip.style.left = left.toFixed(0) + "px";
+  tip.style.top = top.toFixed(0) + "px";
+  } finally { _AXIS_OVERRIDE = null; }
+}
+
+/* ── funnel + leak (lifetime, per client, from the scorecard) ── */
+var MID = 150;
+function ribbon(x0, x1, t0, b0, t1, b1) {
+  var a = x0 + 69, b = x0 + 85;
+  return "M" + x0 + "," + t0 + " C" + a + "," + t0 + " " + b + "," + t1 + " " + x1 + "," + t1 +
+         " L" + x1 + "," + b1 + " C" + b + "," + b1 + " " + a + "," + b0 + " " + x0 + "," + b0 + " Z";
+}
+function funnelSums() {
+  // Lifetime sums power the runway maths (leads left, emails per lead) and
+  // stay the fallback while /api/client-windows is still building; the funnel
+  // itself shows the selected client + range whenever the windows exist.
+  var v = { sent: 0, rep: 0, pos: 0, mtg: 0, total: 0, completed: 0, active: 0, leadsLeft: 0,
+            sentLT: 0, repLT: 0, win: false };
+  scoreRows().forEach(function (c) {
+    v.sentLT += c.sent || 0; v.repLT += c.replied || 0;
+    v.total += c.total || 0; v.completed += c.completed || 0;
+    if (c.status === "ACTIVE") { v.active++; v.leadsLeft += Math.max(0, (c.total || 0) - (c.completed || 0)); }
+  });
+  var cw = cwFor(state.client);
+  if (cw) {
+    v.win = true;
+    // hubAligned: the analytics-hub arrays still run to today, and slice() takes
+    // the LAST `range` entries — untrimmed, a 30-day read would count today's
+    // partial day and drop the oldest real one.
+    var sum = function (a) { return slice(hubAligned(a) || []).reduce(function (x, y) { return x + (y || 0); }, 0); };
+    var s = HUB && HUB.series && HUB.series[ckey()];
+    // sent + replies through the same helpers the hero legend uses, so the
+    // funnel and the graph can never disagree about the same window
+    v.sent = sentShown();
+    v.rep = repliesShown();
+    // Interested = Smartlead's own positive-reply stat for this client and
+    // window when the sweep carries it (owner ruling 2026-09-02: Smartlead is
+    // the source of truth). The analytics-hub series, built from our local reply
+    // archive, is the fallback for a key whose Smartlead pull failed — it drifts
+    // from the platform (All 30d read 413 against Smartlead's 381).
+    v.posFromSmartlead = cw.positives != null;
+    v.pos = v.posFromSmartlead ? cw.positives : sum(s && s.interested);
+    v.mtg = sum(s && s.meetings);
+  } else if (CW && CW.windows) {
+    // client-windows IS loaded, this client just has no sends in the window
+    // (e.g. a dormant/new client like Fieldstone) — show honest window zeros, NOT
+    // the lifetime fallback, and NOT a "warming up" label (Elena, 2026-07-28)
+    v.win = true; v.empty = true;
+  } else {
+    // still building — lifetime fallback carries the page until the sweep lands
+    v.sent = v.sentLT; v.rep = v.repLT;
+    scoreRows().forEach(function (c) { v.pos += c.positives || 0; v.mtg += c.meetings || 0; });
+  }
+  return v;
+}
+function plain1in(n) { return n >= 2 ? "1 in " + fmtN(n) : "most"; }
+function renderFunnel() {
+  var v = funnelSums();
+  var nums = [v.sent, v.rep, v.pos, v.mtg];
+  var h = [192, 12, 12, 12], i;
+  for (i = 1; i < 4; i++) {
+    h[i] = v.sent > 0 && nums[i] > 0 ? Math.max(12, Math.round(192 * Math.pow(nums[i] / v.sent, 0.42))) : 12;
+  }
+  var y = [];
+  for (i = 0; i < 4; i++) y[i] = MID - h[i] / 2;
+  for (i = 0; i < 4; i++) {
+    var sl = $("fs" + (i + 1));
+    sl.setAttribute("y", y[i]); sl.setAttribute("height", h[i]);
+    var t = $("fn" + (i + 1));
+    t.setAttribute("y", y[i] - 12);
+    // interested/meetings come only from the hub RPC — while it is missing
+    // they are UNKNOWN, and an en-dash is honest where a hard 0 was a lie
+    t.textContent = (i >= 2 && !(HUB && HUB.series)) ? "–" : fmtN(nums[i]);
+  }
+  $("fr1").setAttribute("d", ribbon(143, 297, y[0], y[0] + h[0], y[1], y[1] + h[1]));
+  $("fr2").setAttribute("d", ribbon(363, 517, y[1], y[1] + h[1], y[2], y[2] + h[2]));
+  $("fr3").setAttribute("d", ribbon(583, 737, y[2], y[2] + h[2], y[3], y[3] + h[3]));
+  $("tag-pipeline").textContent = "Your pipeline · " +
+    (v.empty ? rangeLabel() + " — no sending yet"
+             : v.win ? rangeLabel()
+                     : "all time — the " + rangeLabel() + " view is warming up (first build takes a few minutes)");
+  setStamp("funnel-stamp", (CW && CW.asof) || (HUB && HUB.asof), 6);
+  var r1 = v.sent ? v.rep / v.sent : 0, r2 = v.rep ? v.pos / v.rep : 0, r3 = v.pos ? v.mtg / v.pos : 0;
+  // "each lead gets ~N emails" is a lifetime property of the sequences — it
+  // has no meaning inside a 7/14/30 window, so it only shows in fallback mode
+  var epl = (!v.win && v.completed > 0) ? Math.round(v.sentLT / v.completed) : null;
+  $("fc0").textContent = epl ? "each lead gets about " + epl + " emails" : "";
+  $("fc1").textContent = v.sent ? (Math.round(r1 * 1000) / 10) + " in 100 reply" : "";
+  $("fc2").textContent = v.pos ? "about " + plain1in(Math.round(1 / (r2 || 1))) + " replies is interested" : "";
+  $("fc3").textContent = v.mtg ? plain1in(Math.round(1 / (r3 || 1))) + " interested becomes a meeting" : "";
+  // ── Biggest leak (Bjion 2026-07-28 spec) ────────────────────────────────
+  // Two conversion stages have healthy ranges; the leak is the one furthest
+  // BELOW its range average. When BOTH are in range, the biggest FIX is Email
+  // Sent — send more to put more leads in the pipeline. leak index maps to the
+  // ribbon: 0 = email sent (fr1), 1 = replies→interested (fr2), 2 = interested
+  // →meeting (fr3).
+  var posRate = v.rep > 0 ? v.pos / v.rep * 100 : null;   // healthy 5–15%, mid 10
+  var mtgRate = v.pos > 0 ? v.mtg / v.pos * 100 : null;   // healthy 15–40%, mid 27.5
+  var LEAK = { INT: { lo: 5, mid: 10 }, MEET: { lo: 15, mid: 27.5 } };
+  var leak, leakStage = "sent";
+  var belowInt = posRate != null && posRate < LEAK.INT.lo;
+  var belowMeet = mtgRate != null && mtgRate < LEAK.MEET.lo;
+  if (v.rep === 0) {
+    leak = 0; leakStage = "sent";   // no replies yet — more/better sending first
+  } else if (belowInt || belowMeet) {
+    var shortInt = belowInt ? (LEAK.INT.mid - posRate) / LEAK.INT.mid : -1;
+    var shortMeet = belowMeet ? (LEAK.MEET.mid - mtgRate) / LEAK.MEET.mid : -1;
+    if (shortInt >= shortMeet) { leak = 1; leakStage = "interest"; }
+    else { leak = 2; leakStage = "meeting"; }
+  } else {
+    leak = 0; leakStage = "sent";   // both conversions healthy → send more
+  }
+  v.leakStage = leakStage; v.posRate = posRate; v.mtgRate = mtgRate;
+  // Highlight the ribbon for a conversion leak; the SENT BAR for the send-more
+  // fix. rib index: interest→fr2 (1), meeting→fr3 (2), sent→none.
+  var rib = leakStage === "interest" ? 1 : (leakStage === "meeting" ? 2 : -1);
+  ["fr1", "fr2", "fr3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === rib); });
+  ["fc1", "fc2", "fc3"].forEach(function (id, ii) { $(id).classList.toggle("leak", ii === rib); });
+  ["fs1", "fs2", "fs3", "fs4"].forEach(function (id) { $(id).classList.remove("leak"); });
+  if (leakStage === "sent") $("fs1").classList.add("leak");
+  var cx = leakStage === "sent" ? 110 : (leakStage === "interest" ? 440 : 660);
+  var half = leakStage === "sent" ? 44 : 54;
+  $("lp-t").textContent = leakStage === "sent" ? "SEND MORE" : "BIGGEST LEAK";
+  $("lp-r").setAttribute("x", cx - half); $("lp-r").setAttribute("width", half * 2);
+  $("lp-t").setAttribute("x", cx);
+  $("lp-l").setAttribute("x1", cx); $("lp-l").setAttribute("x2", cx);
+  $("funnel").setAttribute("aria-label", "Pipeline, " + (v.win ? rangeLabel() : "all time") + ": " +
+    fmtN(v.sent) + " emails sent, " + fmtN(v.rep) +
+    " replies, " + fmtN(v.pos) + " interested, " + fmtN(v.mtg) + " meetings.");
+  renderLeakbar(leak, v);
+  renderTags(v);
+  return v;
+}
+function fmtMins(m) {
+  if (m == null) return "–";
+  var h = Math.floor(m / 60), mm = m % 60;
+  return h > 0 ? h + " h " + mm + " m" : mm + " m";
+}
+function renderLeakbar(leak, v) {
+  if (!(HUB && HUB.series)) {   // interested/meetings unknown — the funnel
+    $("leakbar").style.display = "none";   // shows en-dashes; a leak verdict
+    return;                                // from unknown data would be a lie
+  }
+  var lat = HUB && HUB.latency && HUB.latency[ckey()];
+  var bar = $("leakbar"), head = $("leak-head"), body = $("leak-body"), fix = $("leak-fix");
+  // Deliverability is UPSTREAM of every pipeline stage — if emails aren't
+  // landing, the reply/interest/meeting leaks below can't be trusted. So when
+  // the selected view's bounce is over the 2% limit, THAT is the first action,
+  // and the leak bar says so instead of competing with section 3 for "do this
+  // first" (Jordan/Priya/Elena, 2026-07-28).
+  var cwB = cwFor(state.client);
+  if (cwB && cwB.sent > 0 && (cwB.bounced / cwB.sent * 100) >= BNC_LIMIT) {
+    head.textContent = "Fix this first — deliverability";
+    body.textContent = (Math.round(cwB.bounced / cwB.sent * 1000) / 10) +
+      " in 100 emails bounce (over the 2% limit) — fix that before the pipeline leaks below, or the numbers under it can't be trusted.";
+    fix.textContent = "Pause the worst-bounce campaigns (right), re-check their lists, then read the rest.";
+    bar.style.display = "";
+    return;
+  }
+  var stage = v.leakStage;
+  if (stage === "meeting" && lat && lat.n > 0 && (lat.fast_share || 0) < 0.8) {
+    // the interested→meeting stage is the leak AND answers are slow — name the
+    // fixable cause (answer speed)
+    head.textContent = "Biggest leak — slow answers";
+    body.textContent = "Only " + (v.mtgRate == null ? "–" : Math.round(v.mtgRate)) +
+      "% of interested replies book a call (healthy is 15–40%), and answers take " +
+      fmtMins(lat.avg_mins) + " on average — only " + Math.round((lat.fast_share || 0) * 100) +
+      " in 100 get an answer within the hour.";
+    fix.textContent = "Answer within the hour to book more.";
+  } else if (stage === "meeting") {
+    head.textContent = "Biggest leak — booking the call";
+    body.textContent = v.mtg === 0
+      ? "None of the " + fmtN(v.pos) + " interested replies in this window has booked a call yet (healthy is 15–40%)."
+      : "Only " + Math.round(v.mtgRate) + "% of interested replies book a call — below the healthy 15–40%.";
+    fix.textContent = "Push for the call inside the first reply, and answer faster.";
+  } else if (stage === "interest") {
+    head.textContent = "Biggest leak — interest";
+    body.textContent = v.pos === 0
+      ? "None of the " + fmtN(v.rep) + " replies in this window was a real yes — the wrong people are answering (healthy is 5–15%)."
+      : "Only " + (Math.round(v.posRate * 10) / 10) + "% of replies is a real yes — below the healthy 5–15%; the wrong people are answering.";
+    fix.textContent = "Audit the lead lists — biggest campaigns first.";
+  } else if (stage === "sent") {
+    // both conversions healthy (or no replies yet) → the lever is volume
+    head.textContent = v.rep === 0 ? "Biggest fix — get replies" : "Biggest fix — send more";
+    body.textContent = v.rep === 0
+      ? "No replies in this window yet — the message or the list needs work, or there isn't enough sending to read."
+      : "Your reply→interested (" + (Math.round(v.posRate * 10) / 10) + "%) and interested→meeting (" +
+        Math.round(v.mtgRate) + "%) are both healthy — the way to more meetings is more emails sent.";
+    fix.textContent = v.rep === 0 ? "Refresh the weakest campaigns below." : "Add sending capacity — more volume means more leads in the pipeline.";
+  } else {
+    bar.style.display = "none"; return;
+  }
+  bar.style.display = "";
+}
+function renderTags(v) {
+  $("tag-leads").textContent = fmtN(v.leadsLeft);
+  $("tag-sent").textContent = fmtN(v.sent);
+  $("tag-replies").textContent = fmtN(v.rep);
+  $("tag-int").textContent = fmtN(v.pos);
+  // say which book the Interested number came out of, on hover
+  var ti = $("tag-int").parentNode;
+  if (ti) ti.title = v.posFromSmartlead
+    ? "Smartlead 'Interested' leads in the window"
+    : "Counted from our own reply archive — Smartlead's Interested stat was unavailable for this view";
+  $("tag-meet").textContent = fmtN(v.mtg);
+}
+function decisionRows() {
+  var out = [];
+  if (!INS || !INS.insights) return out;
+  INS.insights.forEach(function (r) {
+    if (r.scope === "book" || !r.payload || r.payload.tag !== "decision") return;
+    if (state.client !== "All") {
+      var cl = HUB && HUB.campaign_clients && HUB.campaign_clients[r.scope];
+      if (cl && cl !== state.client) return;
+      if (!cl && SCORE && SCORE.campaigns && SCORE.campaigns[r.scope] &&
+          campClient(r.scope, SCORE.campaigns[r.scope]) !== state.client) return;
+    }
+    out.push(r);
+  });
+  return out;
+}
+
+/* ── lane 2: runway + signals + new campaigns ── */
+function weekdayAvgSent(daysBack) {
+  if (!TRENDS || !TRENDS.series) return null;
+  var d = TRENDS.series.days, s = TRENDS.series.sent, tot = 0, n = 0;
+  for (var i = Math.max(0, d.length - daysBack); i < d.length; i++) {
+    var dow = new Date(d[i] + "T12:00:00Z").getUTCDay();
+    if (dow === 0 || dow === 6) continue;
+    tot += s[i] || 0; n++;
+  }
+  return n ? tot / n : null;
+}
+function renderRunway(v) {
+  // The lane-1 FUEL card was removed (duplicated this lane) — this now drives
+  // only lane 2's runway (run-*).
+  setStamp("run-stamp", CW && CW.asof, 6);
+  // Per-client daily send rate (Bjion 2026-07-28: "works for all clients but
+  // not individual"). Fleet keeps its tested weekday average; a client's rate
+  // comes from ITS window sent ÷ the weekdays in the window — the sweep has
+  // per-client window sent for every client, so days-left now works per client.
+  // NEW-lead headroom = daily sending capacity minus the follow-up load already
+  // owed to leads in flight. Follow-ups don't burn NEW leads (they go to people
+  // already started) and eat a fixed slice of capacity, so the rate we can START
+  // fresh leads is capacity - follow-ups. Days of leads = leads-not-yet-worked /
+  // that headroom. Replaces the old sent/completed emails-per-lead burn, which
+  // ballooned for mid-sequence clients and overstated the runway ~2-4x (Bjion
+  // 2026-08-21). Falls back to no day-count when the split hasn't built yet.
+  var cap = capacityNow();
+  var fup = followupPerDay();
+  var ftr = firstTouchPerDay();                          // measured new-lead rate, the floor
+  var capHR = (cap != null && fup != null) ? cap - fup : null;
+  var headroom = (capHR != null || ftr != null)
+    ? Math.max(1, capHR != null ? capHR : 0, ftr != null ? ftr : 0)
+    : null;
+  var days = headroom ? Math.floor(v.leadsLeft / headroom) : null;
+  var outDate = days != null ? new Date(Date.now() + days * 864e5) : null;
+  var outTxt = outDate ? MONTHS[outDate.getMonth()] + " " + outDate.getDate() : null;
+  // Leads-still-to-work comes from the campaign scorecard. When that read fails
+  // the sum is 0, and the card used to announce "0 · No leads queued — add a
+  // list", which is a different claim from "we don't know". Say we don't know.
+  if (!SCORE) {
+    $("run-kick").textContent = "Leads still to work";
+    $("run-big").innerHTML = "—";
+    $("run-big").className = "bignum num";
+    $("run-sub").textContent = "runway unavailable — campaign data could not be loaded";
+    $("run-svg").style.display = "none";
+    $("run-take").textContent = "";
+    $("tag-leads").textContent = "—";
+    return;
+  }
+  if (days != null) {
+    $("run-kick").textContent = "Days of leads left";
+    $("run-big").innerHTML = fmtN(days) + "<small> days</small>";
+    $("run-big").className = "bignum num" + (days <= 21 ? " warn" : "");
+    $("run-sub").textContent = fmtN(v.leadsLeft) + " leads still to work · about " + fmtN(headroom) + " new leads started a day";
+    $("run-svg").style.display = "";
+    var x = 12 + Math.min(1, days / 45) * 318;
+    $("run-poly").setAttribute("points", "12,20 " + x.toFixed(0) + ",96 12,96");
+    $("run-line").setAttribute("x2", x.toFixed(0));
+    $("run-dot").setAttribute("cx", x.toFixed(0));
+    $("run-t0").textContent = "today · " + fmtN(v.leadsLeft) + " left";
+    $("run-t1").textContent = outTxt + " · 0 left";
+    $("run-t1").setAttribute("x", Math.min(330, Math.max(60, x)).toFixed(0));
+    $("run-take").textContent = days <= 30 ? "Add a fresh list before " + outTxt + "." : "Lead supply is healthy.";
+    $("run-svg").setAttribute("aria-label", "Your leads run out around " + outTxt);
+  } else {
+    $("run-kick").textContent = "Leads still to work";
+    $("run-big").innerHTML = fmtN(v.leadsLeft);
+    $("run-big").className = "bignum num";
+    $("run-sub").textContent = "in " + state.client + "'s running campaigns";
+    $("run-svg").style.display = "none";
+    $("run-take").textContent = v.leadsLeft > 0 ? "Plenty queued for " + state.client + "." : "No leads queued — add a list.";
+  }
+}
+function renderSignals() {
+  if (!SIG || !SIG.all) { $("sig-big").textContent = "–"; return; }
+  // Follows the page's client chips (2026-08-03): a client view reads the
+  // server's per-client day-by-day breakdown (source -> owning campaign ->
+  // scorecard client label). Fleet view keeps the original top-series path.
+  // A payload without `clients` (pre-deploy cache) falls back to the honest
+  // fleet view rather than dressing fleet numbers up as the client's.
+  var ce = state.client !== "All" && SIG.clients ? (SIG.clients[state.client] || { all: [], mech: {} }) : null;
+  $("sig-kick").textContent = "New people found · " + rangeLabel();
+  $("sig-scope").textContent = ce ? "· " + state.client : "· whole fleet";
+  setStamp("sig-stamp", SIG && SIG.asof, 6);
+  var total = slice(ce ? ce.all : SIG.all).reduce(function (a, b) { return a + (b || 0); }, 0);
+  $("sig-big").textContent = fmtN(total);
+  var mech = {};
+  if (ce) {
+    Object.keys(ce.mech || {}).forEach(function (m) {
+      mech[m] = slice(ce.mech[m] || []).reduce(function (a, b) { return a + (b || 0); }, 0);
+    });
+  } else if (SRC) {
+    // fleet view: the mechanism of each signal source comes from /api/sources.
+    var srcMech = {};
+    var srcArr = Array.isArray(SRC) ? SRC : (SRC.sources || []);
+    srcArr.forEach(function (s) { srcMech[s.id] = s.mechanism || "other"; });
+    (SIG.series || []).forEach(function (se) {
+      var m = srcMech[se.id] || "other";
+      var n = slice(se.counts || []).reduce(function (a, b) { return a + (b || 0); }, 0);
+      mech[m] = (mech[m] || 0) + n;
+    });
+  }
+  // /api/sources failed: without it every source's mechanism is unknown, and the
+  // old code silently filed all of them under "Other" — a made-up breakdown of a
+  // real total. Show the total and say the split is missing.
+  if (!ce && !SRC) {
+    $("sig-rows").innerHTML = '<div class="subline">Where these came from is unavailable right now — the lead-source list could not be loaded.</div>';
+    $("sig-take").textContent = "";
+    return;
+  }
+  var label = { hiring: "Hiring", engagement: "Engagement", followers: "Followers", lookalike: "Lookalikes", news: "News", recontact: "Recontact", other: "Other" };
+  var rows = Object.keys(mech).map(function (m) { return [label[m] || m, mech[m]]; })
+    .filter(function (r) { return r[1] > 0; })
+    .sort(function (a, b) { return b[1] - a[1]; }).slice(0, 4);
+  var max = rows.length ? rows[0][1] : 1;
+  $("sig-rows").innerHTML = rows.map(function (r) {
+    return '<div class="brow"><span class="lbl">' + escq(r[0]) + '</span><div class="fill" style="width:' +
+      Math.max(4, Math.round(r[1] / max * 100)) + '%"></div><span class="val num">' + fmtN(r[1]) + "</span></div>";
+  }).join("");
+  $("sig-take").textContent = total > 0 ? "New people keep arriving — turn them into campaigns."
+    : ce ? "No new signals for " + state.client + " in the " + rangeLabel() + "."
+    : "No new signals in the " + rangeLabel() + ".";
+}
+function renderNC() {
+  if (!UNI || !UNI.rows) { $("nc-big").textContent = "–"; return; }
+  $("nc-kick").textContent = "New campaigns · " + rangeLabel();
+  setStamp("nc-stamp", UNI && UNI.asof, 6);
+  var cut = Date.now() - state.range * 864e5;
+  var added = 0, live = 0, latest = null;
+  UNI.rows.forEach(function (r) {
+    // auto-created follow-up campaigns (Interested Reply / Meeting Request
+    // subsequences) are plumbing, not new outreach — keep them out of counts
+    if (/^(interested reply|meeting request)/i.test(r.name || "")) return;
+    var cl = clientOfName(r.name, r.workspace);
+    if (state.client !== "All" && cl !== state.client) return;
+    if (String(r.status || "").toUpperCase() === "ACTIVE") live++;
+    var t = r.created_at ? Date.parse(r.created_at) : null;
+    if (t && t >= cut) {
+      added++;
+      if (!latest || t > latest.t) latest = { t: t, name: r.name };
+    }
+  });
+  $("nc-big").innerHTML = fmtN(added) + "<small> added</small>";
+  $("nc-live").textContent = fmtN(live) + " live right now";
+  $("nc-latest").textContent = latest ? "Latest: “" + latest.name + "”" : "";
+  $("nc-take").textContent = added > 0 ? "Fresh campaigns keep the pipeline fed — keep them coming." : "Nothing new in the " + rangeLabel() + " — launch one.";
+}
+
+/* ── lane 3: landing + weekday ── */
+// Fleet reply rate, day by day. A quiet day is not a rate — below the gate the
+// day is a gap in the line, not a zero.
+//
+// The gate is RELATIVE to the window on screen, not a fixed number of sends.
+// A flat 200 was a tiny fraction of a normal 34k weekday, so a 234-send Sunday
+// cleared it and plotted a rate computed on 0.7% of a day's volume — which then
+// set the chart's scale and buried the weekday line the reader came for. 15% of
+// the window's typical (median non-zero) day keeps a genuinely quiet weekday
+// readable while a weekend or an outage day drops out, at any client scale.
+// The floor of 50 stops a near-dead window from gating nothing at all.
+function wkMinSent(sends) {
+  var v = sends.filter(function (x) { return x > 0; }).sort(function (a, b) { return a - b; });
+  if (!v.length) return 50;
+  var m = v.length >> 1;
+  var med = v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2;
+  return Math.max(50, 0.15 * med);
+}
+function weekSeries(n) {
+  // Per-client daily rate when a true series exists (All / Meridian / Halden via
+  // client-windows); the fleet trends line is the fallback — renderWeek says
+  // which one is on screen so a client view never silently reads fleet-wide.
+  var out = { days: [], rate: [], sent: [], scope: "fleet" };
+  var cs = cwTrusted(state.client === "All" ? "__all" : state.client);
+  var from0, i, ax;
+  // Both source axes are trimmed to end YESTERDAY: today's partial day is not a
+  // reply rate, and a cached blob built before the 2026-09-02 ruling still runs
+  // to today. Same helper the day-by-day chart uses.
+  ax = axisEndingYesterday((CW && CW.days) || []);
+  if (cs && ax.length) {
+    from0 = Math.max(0, ax.length - n);
+    for (i = from0; i < ax.length; i++) { out.days.push(ax[i]); out.sent.push(cs.sent[i] || 0); }
+    var minC = wkMinSent(out.sent);
+    out.sent.forEach(function (sj, k) {
+      out.rate.push(sj < minC ? null : Math.round((cs.replied[from0 + k] || 0) * 10000 / sj) / 100);
+    });
+    out.scope = state.client === "All" ? "all" : state.client;
+    return out;
+  }
+  var s = TRENDS && TRENDS.series;
+  if (!s || !s.days || !s.days.length) return out;
+  ax = axisEndingYesterday(s.days);
+  from0 = Math.max(0, ax.length - n);
+  for (i = from0; i < ax.length; i++) { out.days.push(ax[i]); out.sent.push(s.sent[i] || 0); }
+  var minF = wkMinSent(out.sent);
+  out.sent.forEach(function (sent, k) {
+    var rp = s.reply_pct[from0 + k];
+    out.rate.push(rp == null || sent < minF ? null : rp);
+  });
+  return out;
+}
+var WK = null;
+function weekMove(ev) {
+  if (!WK) return;
+  var svg = $("week-svg"), r = svg.getBoundingClientRect();
+  if (!r.width) return;
+  var vbx = (ev.clientX - r.left) * 620 / r.width;
+  var best = null, bd = Infinity;
+  WK.pts.forEach(function (i2) { var x = WK.L + i2 / WK.den * WK.pw; var dd = Math.abs(x - vbx); if (dd < bd) { bd = dd; best = i2; } });
+  if (best == null) return;
+  var X = WK.L + best / WK.den * WK.pw;
+  var Yv = WK.T + (1 - (WK.rate[best] - WK.lo) / (WK.hi - WK.lo)) * WK.ph;
+  var html = '<line x1="' + X.toFixed(1) + '" y1="' + WK.T + '" x2="' + X.toFixed(1) + '" y2="' + (WK.T + WK.ph) + '" stroke="var(--line-2)" stroke-width="1"/>' +
+    '<circle cx="' + X.toFixed(1) + '" cy="' + Yv.toFixed(1) + '" r="3.5" fill="' + COL.rate + '" stroke="#fff" stroke-width="1.5"/>';
+  var old = document.getElementById("wk-hov"); if (old) old.parentNode.removeChild(old);
+  svg.insertAdjacentHTML("beforeend", '<g id="wk-hov">' + html + "</g>");
+  var tip = $("week-tip");
+  tip.innerHTML = "<b>" + dfull(WK.days[best]) + "</b>" +
+    '<div class="row"><i style="background:' + COL.rate + '"></i>Reply rate<span class="v num">' + WK.rate[best].toFixed(1) + "%</span></div>" +
+    '<div class="row"><i style="background:' + COL.sent + '"></i>Sent<span class="v num">' + fmtN(WK.sent[best] || 0) + "</span></div>";
+  tip.hidden = false;
+  var wrap = svg.parentNode, ww = wrap.offsetWidth, px = X * r.width / 620;
+  var left = px + 14; if (left + tip.offsetWidth > ww - 4) left = px - 14 - tip.offsetWidth; if (left < 4) left = 4;
+  var top = (ev.clientY - r.top) - tip.offsetHeight / 2; if (top < 0) top = 0;
+  var maxTop = r.height - tip.offsetHeight; if (maxTop > 0 && top > maxTop) top = maxTop;
+  tip.style.left = left.toFixed(0) + "px"; tip.style.top = top.toFixed(0) + "px";
+}
+function weekHide() { var g = document.getElementById("wk-hov"); if (g) g.parentNode.removeChild(g); var t = $("week-tip"); if (t) t.hidden = true; }
+function renderWeek() {
+  var d = weekSeries(state.range);
+  $("week-kick").textContent = "Reply rate over time · " + rangeLabel();
+  setStamp("week-stamp", d.scope === "fleet" ? (TRENDS && TRENDS.asof) : (CW && CW.asof), 6);
+  var pts = [];
+  for (var i = 0; i < d.rate.length; i++) if (d.rate[i] != null) pts.push(i);
+  if (pts.length < 2) {
+    $("week-svg").innerHTML = "";
+    WK = null;
+    $("week-take").textContent = "Not enough sending in this window to read a rate.";
+    return;
+  }
+
+  var vals = pts.map(function (i2) { return d.rate[i2]; });
+  var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
+  var pad = Math.max((hi - lo) * 0.25, 0.15);
+  lo = Math.max(0, lo - pad); hi = hi + pad;
+
+  // Height tracks the wrapper's real pixel aspect so the graph fills the
+  // leftover card space; viewBox width stays 620 (hover maths depends on it).
+  var wrap = $("week-svg").parentNode;
+  var wpx = wrap.clientWidth || 620, hpx = wrap.clientHeight || 170;
+  var L = 44, R = 52, T = 16, B = 30, W = 620;
+  var H = Math.max(150, Math.round(W * hpx / Math.max(1, wpx)));
+  $("week-svg").setAttribute("viewBox", "0 0 " + W + " " + H);
+  var pw = W - L - R, ph = H - T - B, den = (d.days.length - 1) || 1;
+  var X = function (i2) { return L + i2 / den * pw; };
+  var Y = function (v) { return T + (1 - (v - lo) / (hi - lo)) * ph; };
+
+  // window-weighted average, drawn as the baseline the line is judged against
+  var S = 0, Rp = 0;
+  pts.forEach(function (i2) { S += d.sent[i2]; Rp += d.sent[i2] * d.rate[i2] / 100; });
+  var avg = S > 0 ? Rp / S * 100 : null;
+
+  var s = "";
+  [hi, lo].forEach(function (v) {
+    s += '<line x1="' + L + '" y1="' + Y(v).toFixed(1) + '" x2="' + (L + pw) + '" y2="' + Y(v).toFixed(1) +
+      '" stroke="var(--line)" stroke-width="1"/>' +
+      '<text x="' + (L - 8) + '" y="' + (Y(v) + 4).toFixed(1) + '" font-size="10" fill="var(--ink-3)" ' +
+      'text-anchor="end" class="num">' + v.toFixed(1) + "%</text>";
+  });
+  if (avg != null && avg > lo && avg < hi) {
+    s += '<line x1="' + L + '" y1="' + Y(avg).toFixed(1) + '" x2="' + (L + pw) + '" y2="' + Y(avg).toFixed(1) +
+      '" stroke="var(--brown-300)" stroke-width="1" stroke-dasharray="3 3"/>';
+  }
+
+  s += '<path d="' + pts.map(function (i2, j) {
+    return (j ? "L" : "M") + X(i2).toFixed(1) + " " + Y(d.rate[i2]).toFixed(1);
+  }).join(" ") + '" fill="none" stroke="' + COL.rate + '" stroke-width="2.25" ' +
+    'stroke-linejoin="round" stroke-linecap="round"/>';
+
+  var last = pts[pts.length - 1];
+  s += '<circle cx="' + X(last).toFixed(1) + '" cy="' + Y(d.rate[last]).toFixed(1) + '" r="3.5" fill="' + COL.rate + '"/>' +
+    '<text x="' + (X(last) + 8).toFixed(1) + '" y="' + (Y(d.rate[last]) + 4).toFixed(1) + '" font-size="12" ' +
+    'font-weight="600" fill="' + COL.rate + '" class="num">' + d.rate[last].toFixed(1) + "%</text>";
+
+  s += '<text x="' + L + '" y="' + (H - 8) + '" font-size="10" fill="var(--ink-3)">' + dlabel(d.days[0]) + "</text>" +
+    '<text x="' + (L + pw) + '" y="' + (H - 8) + '" font-size="10" fill="var(--ink-3)" text-anchor="end">' +
+    dlabel(d.days[d.days.length - 1]) + "</text>";
+
+  $("week-svg").innerHTML = s;
+  // geometry + data for the hover tooltip
+  WK = { days: d.days, rate: d.rate, sent: d.sent, pts: pts, L: L, pw: pw, den: den, lo: lo, hi: hi, T: T, ph: ph };
+  $("week-svg").setAttribute("aria-label",
+    "Reply rate over the " + rangeLabel() + ", now " + d.rate[last].toFixed(1) + "%");
+
+  // first half vs second half of the window — the direction that matters
+  var half = Math.ceil(pts.length / 2);
+  var mean = function (arr) { return arr.reduce(function (a, b) { return a + b; }, 0) / (arr.length || 1); };
+  var a0 = mean(vals.slice(0, half)), a1 = mean(vals.slice(half));
+  // never praise the messaging while this very section's bounce card is over
+  // the 2% limit — "keep going" above a breach read as a contradiction
+  var cwB = cwFor(state.client);
+  var overLimit = cwB && cwB.sent > 0 && (cwB.bounced / cwB.sent * 100) >= BNC_LIMIT;
+  $("week-take").textContent = overLimit
+    ? "Replies aside — bounces are over the 2% limit. Fix the landing problem on the right first."
+    : (repliesShown() < 10
+      ? "Not enough replies in this window to call a trend."
+      : (a1 >= a0 * 1.15
+        ? "Reply rate is climbing — keep the current messaging running."
+        : (a1 <= a0 * 0.85
+          ? "Reply rate is sliding — refresh the copy on your biggest senders."
+          : "Reply rate is holding steady — nothing to fix on the messaging.")));
+}
+
+/* ── lane 4: ranking + dying + the offer ── */
+// Cost-to-buy-one for a campaign, like the offer table: emails per positive
+// and per meeting. Lifetime basis (positives/meetings are only tracked
+// cumulatively per campaign), so it's a campaign efficiency property — same
+// shape as the offer table. "If no meetings, default to positive" → the
+// per-meeting cell shows "–" and the per-positive column carries the signal.
+// (Meeting = "Call booked" once the scorecard's meeting definition is
+// call-booked-only — see the meetings-definition change.)
+function campCost(id) {
+  var sc = SCORE && SCORE.campaigns && SCORE.campaigns[id];
+  if (!sc) return { perPos: null, perMtg: null };
+  var sent = sc.sent || 0, pos = sc.positives || 0, mtg = sc.meetings || 0;
+  return { perPos: pos > 0 ? Math.round(sent / pos) : null,
+           perMtg: mtg > 0 ? Math.round(sent / mtg) : null };
+}
+function renderRank() {
+  // Window rows (client-windows sweep): which campaigns are winning over the
+  // SELECTED range — reply rate on window sends. Positives/meetings ride the
+  // sweep rows too now (r.pos/r.mtg, replies-archive windows, same defs as the
+  // hub RPC); lifetime scorecard values are only the fallback for a blob built
+  // before the windowed fields existed — the scope tag says which is on screen.
+  var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
+  var minSent = Math.max(100, state.range * 15);
+  setStamp("rank-stamp", win && win.length ? (CW && CW.asof) : (SCORE && SCORE.asof), 6);
+  if (win && win.length) {
+    var winPM = false;   // set from the rows this VIEW shows
+    var rows = win.filter(function (r) {
+      return r.sent >= minSent && (state.client === "All" || r.client === state.client);
+    }).map(function (r) {
+      var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
+      if (r.pos != null) winPM = true;
+      return { id: r.id, client: r.client, name: campaignName(r.id, r.name),
+               sent: r.sent, replied: r.replied,
+               pos: r.pos != null ? r.pos : ((sc && sc.positives) || 0),
+               mtg: r.mtg != null ? r.mtg : ((sc && sc.meetings) || 0),
+               active: !!(sc && String(sc.status || "").toUpperCase() === "ACTIVE") };
+    });
+    // rank by cost-to-buy now (Bjion 2026-08-23): cheapest emails-per-meeting
+    // first, then cheapest emails-per-positive. Campaigns with no meeting (or no
+    // positive) sort to the bottom of their key via +Infinity.
+    rows.forEach(function (c) {
+      c.cost = winPM
+        ? { perPos: c.pos > 0 ? Math.round(c.sent / c.pos) : null,
+            perMtg: c.mtg > 0 ? Math.round(c.sent / c.mtg) : null }
+        : campCost(c.id);
+    });
+    rows.sort(function (a, b) {
+      var am = a.cost.perMtg == null ? Infinity : a.cost.perMtg,
+          bm = b.cost.perMtg == null ? Infinity : b.cost.perMtg,
+          ap = a.cost.perPos == null ? Infinity : a.cost.perPos,
+          bp = b.cost.perPos == null ? Infinity : b.cost.perPos;
+      return (am - bm) || (ap - bp) || ((b.replied / b.sent) - (a.replied / a.sent));
+    });
+    var top = rows.slice(0, 8);
+    $("rank-scope").textContent = winPM ? "· " + rangeLabel()
+                                        : "· " + rangeLabel() + " · positives & meetings all-time";
+    var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Emails sent</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+    top.forEach(function (c, i) {
+      var scLT = SCORE && SCORE.campaigns && SCORE.campaigns[c.id];
+      var noYes = scLT && (scLT.sent || 0) >= 2000 && !(scLT.positives || 0);
+      // costs follow the same window as the counts: window sent ÷ window
+      // pos/mtg. Lifetime campCost only when the blob predates windowed fields.
+      var cost = c.cost;
+      s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
+        '<div><div class="rname"><a class="nm" href="campaigns.html#/c/' + encodeURIComponent(c.id) + '" title="' + escq(c.name) + '">' + escq(c.name) + "</a>" +
+        (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
+        (noYes ? '<span class="apill mute" title="Lots of replies, but none has been a real yes yet">replies, no yes yet</span>' : "") +
+        (!c.active ? '<span class="apill mute">finished</span>' : "") +
+        '</div><div class="rsub">' + escq(c.client) + " · " + rangeLabel() + "</div></div>" +
+        '<span class="rint">' + fmtN(c.pos) + '</span><span class="rmtg">' + fmtN(c.mtg) + "</span>" +
+        '<span class="rmtg">' + fmtN(c.sent) + "</span>" +
+        '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
+        '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
+    });
+    $("rank-rows").innerHTML = top.length ? s
+      : '<div class="subline">No campaign sent ' + fmtN(minSent) + "+ emails in the " + rangeLabel() + " for this view.</div>";
+    // never crown a campaign the page itself is telling you to pause or
+    // retire — the "launch more like X" / "pause X" clash killed tester trust
+    var deadIds = {};
+    decisionRows().forEach(function (r) { deadIds[r.scope] = 1; });
+    var bad = {};
+    win.forEach(function (r) { if (r.sent >= 300 && r.bounced / r.sent >= 0.02) bad[r.id] = 1; });
+    var pick = top.filter(function (c) {
+      return !deadIds[c.id] && !bad[c.id] && (c.mtg > 0 || c.pos > 0);
+    })[0];
+    $("rank-take").textContent = pick ? "Launch more campaigns like “" + shortName(pick.name) + "”."
+      : (top.length ? "No clear winner in this window — see the flags above." : "");
+    renderDying();
+    return;
+  }
+  // lifetime fallback (sweep still building)
+  var rowsLT = scoreRows().filter(function (c) { return (c.sent || 0) >= 500 && c.status === "ACTIVE"; });
+  if (!rowsLT.length) rowsLT = scoreRows().filter(function (c) { return (c.sent || 0) >= 500; });
+  // rank by cost-to-buy now (Bjion 2026-08-23): cheapest emails-per-meeting
+  // first, then cheapest emails-per-positive; no-meeting/no-positive sink via +∞.
+  rowsLT.sort(function (a, b) {
+    var ca = campCost(a.id), cb = campCost(b.id);
+    var am = ca.perMtg == null ? Infinity : ca.perMtg,
+        bm = cb.perMtg == null ? Infinity : cb.perMtg,
+        ap = ca.perPos == null ? Infinity : ca.perPos,
+        bp = cb.perPos == null ? Infinity : cb.perPos;
+    return (am - bm) || (ap - bp) || ((b.replied / b.sent) - (a.replied / a.sent));
+  });
+  var topLT = rowsLT.slice(0, 8);
+  $("rank-scope").textContent = "· all time — the " + rangeLabel() + " view is warming up";
+  if (SCORE && !SCORE.asof) { var _rs = $("rank-stamp"); _rs.textContent = "freshness unknown"; _rs.classList.add("stale"); }
+  var sLT = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Emails sent</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+  topLT.forEach(function (c, i) {
+    var cost = campCost(c.id);
+    sLT += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
+      '<div><div class="rname"><a class="nm" href="campaigns.html#/c/' + encodeURIComponent(c.id) + '" title="' + escq(c.name) + '">' + escq(c.name) + "</a>" +
+      (i === 0 && (c.meetings || 0) > 0 ? '<span class="apill green">Best</span>' : "") +
+      (c.status !== "ACTIVE" ? '<span class="apill mute">finished</span>' : "") +
+      '</div><div class="rsub">' + escq(clientDisplay(campClient(c.id, c))) + " · all time</div></div>" +
+      '<span class="rint">' + fmtN(c.positives || 0) + '</span><span class="rmtg">' + fmtN(c.meetings || 0) + "</span>" +
+      '<span class="rmtg">' + fmtN(c.sent || 0) + "</span>" +
+      '<span class="rcost' + (cost.perPos == null ? " mute" : "") + '">' + (cost.perPos == null ? "–" : fmtN(cost.perPos)) + "</span>" +
+      '<span class="rcost' + (cost.perMtg == null ? " mute" : "") + '">' + (cost.perMtg == null ? "–" : fmtN(cost.perMtg)) + "</span></div>";
+  });
+  $("rank-rows").innerHTML = topLT.length ? sLT : '<div class="subline">No campaigns with 500+ sends yet.</div>';
+  var deadLT = {};
+  decisionRows().forEach(function (r) { deadLT[r.scope] = 1; });
+  var pickLT = topLT.filter(function (c) { return !deadLT[c.id]; })[0];
+  $("rank-take").textContent = pickLT ? "Launch more campaigns like “" + shortName(pickLT.name) + "”." : "";
+  renderDying();
+}
+// 64, not 44: two different "Reconnect 2.0: Brightcart - …" campaigns truncated
+// to the same string, so a kill-order and a praise line looked like the same
+// campaign (2026-07-28 testers)
+function shortName(n) { n = String(n || ""); return n.length > 64 ? n.slice(0, 62) + "…" : n; }
+// A campaign's display name from whatever source has it, never a bare id.
+function campaignName(id, preferred) {
+  if (preferred) return preferred;
+  var sc = SCORE && SCORE.campaigns && SCORE.campaigns[id];
+  if (sc && sc.name) return sc.name;
+  var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
+  var hit = (win || []).filter(function (r) { return String(r.id) === String(id) && r.name; })[0];
+  if (hit) return hit.name;
+  return "Campaign " + id + " (name not synced)";
+}
+function renderDying() {
+  var rows = decisionRows();
+  if (!rows.length) { $("dying").style.display = "none"; return; }
+  rows.sort(function (a, b) {
+    var sa = (a.payload.stats && a.payload.stats.sent) || 0, sb2 = (b.payload.stats && b.payload.stats.sent) || 0;
+    return sb2 - sa;
+  });
+  var r = rows[0], p = r.payload;
+  // r.scope is a raw campaign id. Falling back to it printed "3477409" as if it
+  // were the campaign's name — resolve it against the scorecard / hub first, and
+  // say plainly when the name simply hasn't synced.
+  $("dying-txt").textContent = "“" + shortName(campaignName(r.scope, p.campaign_name)) + "” — " + (p.bold || "");
+  $("dying-fix").textContent = p.act || "This campaign stopped working.";
+  $("dying-link").href = "campaigns.html#/c/" + encodeURIComponent(r.scope);
+  $("dying").style.display = "";
+}
+// What is the offer — book-scope "offer" insight (the cron reads the ask off
+// each campaign's live sequence copy). Rate per offer group, best first.
+function renderOffer() {
+  var p = bookRow("offer");
+  setStamp("offer-stamp", bookRowTs("offer"), 24);
+  var box = $("offer-rows");
+  // Show ONLY the selected client's offers — never the whole-book table under
+  // a client chip (that mislabelled the fleet's numbers as Halden's, Bjion
+  // 2026-07-29). "All" uses the whole-book table; a client uses its own or,
+  // if it has none, an honest "not enough for this client".
+  var perClient = state.client !== "All";
+  var baseList = perClient
+    ? (p && p.by_client && p.by_client[state.client])
+    : (p && p.stats && p.stats.offers);
+  // Re-price each offer over the SELECTED window whenever both sides carry the
+  // goods: the insight rows ship member-campaign ids (o[8]) and the sweep rows
+  // carry windowed sent/pos/mtg — the same engine as the rank card, so the two
+  // cards read the same reality for the same window. Lifetime numbers survive
+  // only as the labelled fallback (pre-ids payload or a still-building sweep).
+  var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
+  var byId = {};
+  (win || []).forEach(function (r) { if (r.pos != null) byId[String(r.id)] = r; });
+  var windowable = !!(baseList && baseList.length &&
+                      baseList.some(function (o) { return o[8] && o[8].length; }) &&
+                      Object.keys(byId).length);
+  var offerList = baseList, windowed = false;
+  if (windowable) {
+    var minSentO = Math.max(500, Math.round(2000 * state.range / 30));
+    var rows2 = [];
+    baseList.forEach(function (o) {
+      var ids = o[8] || [];
+      var sent = 0, pos = 0, mtg = 0, camps2 = 0;
+      ids.forEach(function (id) {
+        var r = byId[String(id)];
+        if (!r) return;
+        sent += r.sent || 0; pos += r.pos || 0; mtg += r.mtg || 0; camps2++;
+      });
+      if (sent < minSentO) return;
+      rows2.push([o[0], sent ? Math.round(pos / sent * 1000) / 10 : null, sent, camps2,
+                  pos > 0 ? Math.round(sent / pos) : null,
+                  mtg > 0 ? Math.round(sent / mtg) : null, pos, mtg]);
+    });
+    rows2.sort(function (a, b) { return ((a[4] == null) - (b[4] == null)) || ((a[4] || 0) - (b[4] || 0)); });
+    // committed: a thin window shows its honest empty state below — never the
+    // lifetime table silently dressed up as the window's
+    offerList = rows2; windowed = true;
+  }
+  var scopeTxt = (perClient ? "· " + state.client : "· whole book") + " · " + (windowed ? rangeLabel() : "all-time");
+  if (!p || !offerList || offerList.length < 2) {
+    box.innerHTML = '<div class="subline">Not enough sending behind any one offer' +
+      (perClient ? " for " + escq(state.client) : "") +
+      (windowed ? " in the " + rangeLabel() : "") + " yet.</div>";
+    // was blank, which read as a broken card for every client with no
+    // offer-level rows (Vellum, Northwind, Fieldstone, Skylark, Ascent Capital,
+    // Meridian) — say what is actually true instead.
+    $("offer-sub").textContent = perClient
+      ? "No offer-level data for " + state.client + " yet."
+      : "No offer-level data for the whole book yet.";
+    $("offer-take-row").style.display = "none";
+    if ($("offer-scope")) $("offer-scope").textContent = scopeTxt;
+    return;
+  }
+  var offers = offerList.slice(0, 5);
+  if ($("offer-scope")) $("offer-scope").textContent = scopeTxt;
+  // Two costs per offer: emails to buy one positive reply, emails to buy one
+  // meeting. Lower is better, so the winner is the SMALLEST number — the
+  // opposite reading to every rate on this page, hence the column headers.
+  var s = '<div class="ocol ohead"><span></span><span>Per positive</span><span>Per meeting</span></div>';
+  s += offers.map(function (o, i) {
+    var pos = o[4], mt = o[5];
+    return '<div class="ocol"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(o[0]) + "</span>" +
+      '<span class="val num' + (i === 0 ? " win" : "") + '">' + (pos ? fmtN(pos) : "–") + "</span>" +
+      '<span class="val num' + (i === 0 && mt ? " win" : "") + '">' + (mt ? fmtN(mt) : "–") + "</span></div>";
+  }).join("");
+  box.innerHTML = s;
+  var sends = offers.reduce(function (a, o) { return a + (o[2] || 0); }, 0);
+  var camps = offers.reduce(function (a, o) { return a + (o[3] || 0); }, 0);
+  var nomeet = offers.filter(function (o) { return !o[5]; }).length;
+  $("offer-sub").textContent = (perClient ? state.client + " — " : "Whole book, every campaign — ") +
+    "emails it costs to buy one" + (windowed ? " · " + rangeLabel() : "") +
+    ". Across " + fmtN(camps) + " campaigns and " + fmtN(sends) + " emails." +
+    (nomeet ? " “–” means no meetings booked off that offer yet." : "");
+  // take-line: a windowed view derives the winner from THIS window; the cron's
+  // lifetime recommendation shows only on the lifetime fallback (mixing the
+  // two could contradict the table it sits under)
+  if (windowed && offers.length && offers[0][4] != null) {
+    $("offer-take").textContent = "Make " + String(offers[0][0]).toLowerCase() +
+      " the ask — cheapest positive in the " + rangeLabel() + ".";
+    $("offer-take-row").style.display = "";
+  } else if (!windowed && !perClient && p.act) {
+    $("offer-take").textContent = p.act; $("offer-take-row").style.display = "";
+  } else $("offer-take-row").style.display = "none";
+}
+/* ── lane 5: who replies + waiting ── */
+// live per-client × range payload from /api/who-replies (see ensureWho)
+var WHO = null, WHO_KEY = null;
+var WHO_INFLIGHT = null;
+// The filter key whose fetch FAILED. Without it a rejected /api/who-replies
+// left both cards on this row at a literal "…" forever, indistinguishable from
+// a slow load, with nothing to click (seen on All·7, All·14, Brightcart·30,
+// Halden·30). Cleared the moment a retry starts.
+var WHO_ERR = null;
+function ensureWho(force) {
+  var kk = state.client + "|" + state.range;
+  if (WHO_KEY === kk && !force) { renderWho(); return; }
+  if (force) { WHO_KEY = null; WHO_INFLIGHT = null; }
+  WHO_ERR = null;
+  renderWho();   // paint a loading/previous state immediately
+  if (WHO_INFLIGHT === kk) return;   // boot renders re-enter per payload arrival
+  WHO_INFLIGHT = kk;
+  function failed() {
+    if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null;
+    // only report the failure if the user is still looking at that filter —
+    // the out-of-order race guard cuts both ways
+    if (kk === state.client + "|" + state.range) { WHO_ERR = kk; renderWho(); }
+  }
+  j("/api/who-replies?client=" + encodeURIComponent(state.client) + "&days=" + state.range)
+    .then(function (d) {
+      if (WHO_INFLIGHT === kk) WHO_INFLIGHT = null;
+      // a slow response for a filter the user already left must not clobber
+      // the current view (out-of-order race stranded the cards at Loading…)
+      if (kk !== state.client + "|" + state.range) return;
+      if (d && !d.error) { WHO = d; WHO_KEY = kk; renderWho(); }
+      else failed();
+    }, failed);
+}
+// One shared "we could not load this" state + Retry for the two cards fed by
+// /api/who-replies, so neither can sit on a silent ellipsis.
+function whoRetryLink() {
+  return '<a href="#" class="who-retry">Retry</a>';
+}
+document.addEventListener("click", function (e) {
+  var a = e.target && e.target.closest && e.target.closest("a.who-retry");
+  if (!a) return;
+  e.preventDefault();
+  ensureWho(true);
+});
+// ── who's-replying heatmap: pivots p.combos (title × company-size cross-tab)
+// into the winning-combination grid. Returns false when the cross-tab is too
+// sparse to draw, so renderWho falls back to the role-mix bars. ──
+function whmTint(v, max) {
+  if (!v) return { bg: "#F7F7F6", fg: "#B7ADA2" };
+  var t = v / (max || 1);
+  if (t >= 0.85) return { bg: "#FF4D00", fg: "#fff" };
+  if (t >= 0.60) return { bg: "#FF6B30", fg: "#fff" };
+  if (t >= 0.40) return { bg: "#FF9463", fg: "#fff" };
+  if (t >= 0.22) return { bg: "#FFB187", fg: "#A83100" };
+  if (t >= 0.10) return { bg: "#FFCEB4", fg: "#A83100" };
+  return { bg: "#FFE7DA", fg: "#A83100" };
+}
+function renderWhoHeatmap(p, b, scope) {
+  var combos = (p && p.combos) || [];
+  if (combos.length < 3) return false;                     // too few pockets for a grid
+  var order = (p.size_order && p.size_order.length) ? p.size_order
+            : ["1–10", "11–50", "51–200", "201–1,000", "1,000+"];
+  var cellV = {}, cover = 0, maxV = 0, win = "";
+  combos.forEach(function (c) {
+    var k = c[0] + "||" + c[1], v = c[2] || 0;
+    cellV[k] = v; cover += v;
+    if (v > maxV) { maxV = v; win = k; }
+  });
+  if (cover < 6) return false;                             // not enough both-known yeses to be worth a grid
+  var titles = b.map(function (x) { return x[0]; }).filter(function (t) {
+    return combos.some(function (c) { return c[0] === t; });
+  });
+  var cols = order.filter(function (s) {
+    return combos.some(function (c) { return c[1] === s; });
+  });
+  if (titles.length < 1 || cols.length < 2) return false;
+  var h = '<div class="whm" style="grid-template-columns:96px repeat(' + cols.length + ',1fr)"><div></div>';
+  cols.forEach(function (s) { h += '<div class="whm-ch">' + escq(s) + "</div>"; });
+  titles.forEach(function (t) {
+    h += '<div class="whm-rl">' + escq(t) + "</div>";
+    cols.forEach(function (s) {
+      var k = t + "||" + s, v = cellV[k] || 0, tn = whmTint(v, maxV);
+      h += '<div class="whm-cell' + (k === win ? " win" : "") + '" style="background:' + tn.bg + ";color:" + tn.fg + '">' + fmtN(v) + "</div>";
+    });
+  });
+  h += "</div>";
+  $("who-rows").innerHTML = h;
+  var total = (p.named || 0);
+  $("who-size").innerHTML = '<span style="color:var(--ink-3)">From the <b style="color:var(--ink-2)">' + fmtN(cover) +
+    "</b> yeses where we know both title and company size" + (total ? " (of " + fmtN(total) + ")" : "") + ".</span>";
+  if (win) {
+    var wp = win.split("||");
+    $("who-take").textContent = "Build more lists of " + wp[0].toLowerCase() + " at " + wp[1] + " companies — your hot spot.";
+  }
+  return true;
+}
+function renderWho() {
+  var p = (WHO_KEY === state.client + "|" + state.range) ? WHO : null;
+  var scope = state.client === "All" ? "whole book" : state.client;
+  // the header scope was static "whole book" — it must follow the chips + range
+  if ($("who-scope")) $("who-scope").textContent = scope + " · " + rangeLabel();
+  setStamp("who-stamp", p && p.asof, 6);
+  setStamp("wait-stamp", p && p.asof, 6);
+  setStamp("subseq-stamp", p && p.asof, 6);
+  // ── left box: who's replying (role mix + company size), per client+range ──
+  var named = (p && p.named) || 0;
+  var roleRows = (p && p.buckets) || [];
+  var failed = WHO_ERR === state.client + "|" + state.range;
+  if (!p && failed) {
+    $("who-n").textContent = "–";
+    $("who-rows").innerHTML = '<div class="subline">Not available right now. ' + whoRetryLink() + "</div>";
+    $("who-size").textContent = ""; $("who-take-row").style.display = "none";
+  } else if (!p) {
+    $("who-n").textContent = "…"; $("who-rows").innerHTML = '<div class="subline">Loading…</div>';
+    $("who-size").textContent = ""; $("who-take-row").style.display = "none";
+  } else if (named >= 3 && roleRows.length) {
+    var b = roleRows.slice(0, 6);
+    $("who-n").textContent = fmtN(named);
+    if (!renderWhoHeatmap(p, b, scope)) {
+      // fallback (cross-tab too sparse): role-mix bars + company-size line
+      var max = Math.max.apply(null, b.map(function (x) { return x[1]; }).concat([1]));
+      $("who-rows").innerHTML = b.map(function (x, i) {
+        return '<div class="brow"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(x[0]) + "</span>" +
+          '<div class="fill' + (i === 0 ? " orange" : "") + '" style="width:' + Math.max(4, Math.round(x[1] / max * 100)) + '%"></div>' +
+          '<span class="val num">' + fmtN(x[1]) + "</span></div>";
+      }).join("");
+      var sizes = p.sizes || [];
+      if (sizes.length) {
+        var stot = sizes.reduce(function (a, x) { return a + x[1]; }, 0);
+        $("who-size").innerHTML = "<b>Company size</b> (" + fmtN(stot) + " known): " +
+          sizes.map(function (x) { return escq(x[0]) + " " + fmtN(x[1]); }).join(" · ");
+      } else $("who-size").textContent = "Company size: not enough on file yet.";
+      $("who-take").textContent = "Aim new lists at " + b[0][0].toLowerCase() + " — most of " + scope + "'s real yeses.";
+    }
+    $("who-take-row").style.display = "";
+  } else {
+    $("who-n").textContent = fmtN((p && p.n) || 0);
+    $("who-rows").innerHTML = '<div class="subline">Not enough job-title data yet for ' + escq(scope) + " — enrich the lead lists.</div>";
+    $("who-size").textContent = "";
+    $("who-take").textContent = "Enrich lead lists with job titles so this panel can name your buyers.";
+    $("who-take-row").style.display = "";
+  }
+  // ── right box: how fast we answer interested replies (benchmark 15 min) ──
+  var sp = p && p.speed;
+  if ($("wait-scope")) $("wait-scope").textContent = "· " + scope + " · benchmark 15 min";
+  if (!p && failed) {
+    $("wait-big").textContent = "–"; $("wait-big").className = "bignum num";
+    $("wait-sub").innerHTML = "Not available right now. " + whoRetryLink();
+    $("wait-take").textContent = "";
+    renderWaitChart(null);
+  } else if (!p) {
+    $("wait-big").textContent = "…"; $("wait-big").className = "bignum num";
+    $("wait-sub").textContent = "Loading…"; $("wait-take").textContent = "";
+  } else if (sp && sp.n > 0) {
+    var med = sp.median_mins, pct = Math.round((sp.under15_share || 0) * 100);
+    $("wait-big").textContent = fmtMins(med);
+    $("wait-big").className = "bignum num" + (med > 15 ? " warn" : "");
+    $("wait-sub").textContent = "median answer time · " + pct + " in 100 answered under 15 min · " + fmtN(sp.n) + " answered";
+    renderWaitChart(sp.buckets);
+    $("wait-take").textContent = med <= 15
+      ? "Under the 15-minute benchmark — keep it up."
+      : "Over the 15-minute benchmark — answer faster to book more.";
+  } else {
+    $("wait-big").textContent = "–"; $("wait-big").className = "bignum num";
+    $("wait-sub").textContent = "No answered replies to time in this window."; $("wait-take").textContent = "";
+    renderWaitChart(null);
+  }
+  // ── third box: how effective are our automated follow-ups (subsequences) ──
+  try { renderSubseq(p && p.subseq); } catch (e) { /* never break the two siblings above */ }
+}
+
+// Bars under the answer-time number: booked-call rate per answer-speed bucket,
+// fastest on the left. Bar height = book rate; the best-converting bucket is
+// inked. Hidden entirely when no one answered in the window has an outcome yet.
+function renderWaitChart(buckets) {
+  var wrap = $("wait-chart"), bars = $("wait-bars");
+  if (!wrap || !bars) return;
+  buckets = (buckets || []).filter(function (b) { return b && typeof b.n === "number"; });
+  var answered = buckets.reduce(function (a, b) { return a + b.n; }, 0);
+  if (!answered) { wrap.style.display = "none"; bars.innerHTML = ""; return; }
+  var maxRate = Math.max.apply(null, buckets.map(function (b) { return b.rate || 0; }).concat([1]));
+  var bestIdx = -1, best = -1;
+  buckets.forEach(function (b, i) { if (b.n > 0 && (b.rate || 0) > best) { best = b.rate || 0; bestIdx = i; } });
+  bars.innerHTML = buckets.map(function (b, i) {
+    var rate = b.n > 0 ? (b.rate || 0) : null;
+    var h = rate === null ? 3 : Math.max(3, Math.round(rate / maxRate * 64));
+    return '<div class="wcol' + (i === bestIdx && best > 0 ? " best" : "") + '">' +
+      '<span class="wv">' + (rate === null ? "–" : rate + "%") + "</span>" +
+      '<div class="wbar" style="height:' + h + 'px"></div>' +
+      '<span class="wl">' + escq(b.label) + "</span>" +
+      '<span class="wn">' + fmtN(b.booked || 0) + " of " + fmtN(b.n) + "</span></div>";
+  }).join("");
+  wrap.style.display = "";
+}
+
+// Third card. SENT-basis: positive-reply rate = positives/sent, book-call rate =
+// booked/sent; benchmarks 12.5% and 5%. Colour = severity, plain-word chips.
+function renderSubseq(s) {
+  var scope = $("subseq-scope"), body = $("subseq-body"),
+      takeRow = $("subseq-take-row"), take = $("subseq-take");
+  if (!scope || !body) return;
+  // stamp = the stats' own sweep/seed age (not the page's), so numbers seeded
+  // from before a restart read "updated N h ago" instead of passing as fresh
+  setStamp("subseq-stamp", (s && s.asof) || null, 2);
+  if (!s || !s.sent) {
+    if (s && s.windowed) {
+      // windowed stats exist and the answer is a real zero — say so instead
+      // of the "still syncing" line (a quiet week is data, not a data gap)
+      scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups";
+      body.innerHTML = '<div class="subline">No follow-up sends in the ' + rangeLabel() + ".</div>";
+    } else {
+      scope.textContent = "· automated subsequences";
+      body.innerHTML = '<div class="subline">Fills in after the next follow-up sync.</div>';
+    }
+    takeRow.style.display = "none";
+    return;
+  }
+  var T_REPLY = 12.5, T_BOOK = 5;
+  var reply = Math.round(1000 * s.positives / s.sent) / 10;
+  var book = Math.round(1000 * s.booked / s.sent) / 10;
+  // windowed payloads (s.windowed, per the page's 7/14/30 toggle) carry the
+  // hourly sync's per-window sent + archive positives/booked; "all-time" only
+  // survives as the label for a payload from before that sync ran
+  scope.textContent = "· " + fmtN(s.enrolled) + " in follow-ups";
+  function tone(v, t) { return v >= t ? "green" : v >= t * 0.75 ? "amber" : "red"; }
+  function chip(tn) {
+    var t = tn === "green" ? "On target" : tn === "amber" ? "Just under" : "Well under";
+    return '<span class="m5-chip c-' + tn + '">' + t + '</span>';
+  }
+  function meter(lab, val, target, axis) {
+    var tn = tone(val, target), w = Math.min(100, val / axis * 100), tl = Math.min(100, target / axis * 100);
+    var gap = val < target ? '<div class="m5-gap" style="left:' + w + '%;width:' + (tl - w) + '%"></div>' : "";
+    return '<div class="m5-meter"><div class="m5-mtop"><span class="m5-mlab">' + lab + '</span>' +
+      '<span class="m5-right"><span class="m5-mval tone-' + tn + '">' + val + '%</span>' + chip(tn) + '</span></div>' +
+      '<div class="m5-track"><div class="m5-fill bg-' + tn + '" style="width:' + w + '%"></div>' + gap +
+      '<div class="m5-tick" style="left:' + tl + '%"></div></div>' +
+      '<div class="m5-axis"><span class="m5-ticklab" style="left:' + tl + '%">target ' + target + '%</span></div></div>';
+  }
+  body.innerHTML = '<div style="margin-top:2px">' +
+    meter("Positive replies", reply, T_REPLY, 20) + meter("Booked calls", book, T_BOOK, 10) + '</div>';
+  var rt = tone(reply, T_REPLY), bt = tone(book, T_BOOK);
+  take.textContent = (rt === "green" && bt === "green") ? "Follow-ups are pulling their weight."
+    : (rt !== "green" && bt !== "green") ? "Both under target — booked calls leak most. Rewrite the follow-up that asks for the call."
+    : (bt !== "green") ? "Booked calls are under — rewrite the follow-up that asks for the call."
+    : "Positive replies are under — the follow-up needs a sharper opener.";
+  takeRow.style.display = "";
+}
+
+/* ── lane 6: meetings ── */
+function renderMeet() {
+  // RANGE-AWARE (like every other section): meetings in the selected window vs
+  // the window before it, from the meetings series — so it can't contradict the
+  // funnel's "MEETINGS · N" under the same range toggle (the calendar-month
+  // card did, seen by three rounds of testers 2026-07-28).
+  var mtg = seriesFor("meetings") || [];
+  setStamp("meet-stamp", HUB && HUB.asof, 6);
+  var R = state.range;
+  var t = halfSum(mtg, R);
+  var havePrior = mtg.length >= R * 2;
+  var pv = havePrior ? (halfSum(mtg, R * 2) - t) : 0;
+  var d = t - pv;
+  $("meet-kick").textContent = "Meetings booked · " + rangeLabel() + (state.client === "All" ? "" : " · " + state.client);
+  $("meet-ml1").textContent = havePrior ? "prior " + R + " days" : "";
+  $("meet-ml2").textContent = "last " + R + " days";
+  $("meet-big").textContent = fmtN(t);
+  var pill = $("meet-pill");
+  if (!havePrior) { pill.textContent = ""; pill.className = "apill num mute"; }
+  else {
+    pill.textContent = d > 0 ? "up " + d + " on the " + R + " before" : d < 0 ? "down " + (-d) + " on the " + R + " before" : "level with the " + R + " before";
+    pill.className = "apill num " + (d > 0 ? "green" : d < 0 ? "amber" : "mute");
+  }
+  $("meet-src").textContent = "";
+  var max = Math.max(t, pv, 1);
+  $("meet-mv1").textContent = havePrior ? fmtN(pv) : "–";
+  $("meet-mb1").style.height = Math.max(6, Math.round(pv / max * 84)) + "px";
+  $("meet-mv2").textContent = fmtN(t);
+  $("meet-mb2").style.height = Math.max(6, Math.round(t / max * 84)) + "px";
+  var lat = HUB && HUB.latency && HUB.latency[ckey()];
+  $("meet-take").textContent = (t === 0)
+    ? "No meetings" + (state.client === "All" ? "" : " for " + state.client) + " in the " + rangeLabel() + " — fix the biggest leak above first."
+    : (d >= 0
+      ? (lat && lat.avg_mins > 60 ? "Answer faster to push it higher." : "Keep doing what works.")
+      : "Down on the previous " + R + " days — check the leak above.");
+}
+
+/* ── header ── */
+function renderHead() {
+  // Header is title-only now (Bjion 2026-07-29) — the verdict line and the
+  // date/updated line were removed, so there's nothing to populate here.
+}
+
+/* ── render-all + wiring ── */
+/* ── bounce card ────────────────────────────────────────────────────────
+   Today's number is the hero: the window average can sit under 2% while every
+   recent day is over it, and providers throttle on today, not on the month.
+   Trend follows the client chips when a trusted daily series exists (fleet
+   trends are the fallback); the campaign list reads the client-windows sweep,
+   so it moves with the 7/14/30 toggle — lifetime scorecard rows are only the
+   still-building fallback and the kick says "all time" when they're up.      */
+var BNC_LIMIT = 2.0;
+var BNC_MIN_SENT = 500;   // below this a list is flagged as a small sample
+
+function bncBand(p) {
+  if (p == null) return "g";
+  return p >= BNC_LIMIT ? "r" : (p >= BNC_LIMIT * 0.75 ? "a" : "g");
+}
+function bncCol(b) {
+  return b === "r" ? "var(--red)" : (b === "a" ? "var(--amber)" : "var(--green)");
+}
+
+// Rows for the card: clients when viewing everything, campaigns when a single
+// client is selected.
+//
+// ACTIVE only. The scorecard holds all 583 campaigns ever run, and the worst
+// lifetime rates belong to campaigns that finished months ago — telling someone
+// to pause a finished campaign is not an instruction they can follow.
+//
+// A list needs BNC_MIN_SENT before it may set a rate. Small lists are still
+// included and flagged, but never headline: 12 bounces on a 43-send INSEAD test
+// is 27.9% of nothing, and it outranks a real 13.5% fire on 1,538 sends.
+function bncCampaigns() {
+  // Window rows (client-windows sweep) when they exist — the list finally
+  // moves with the 7/14/30 range. Lifetime ACTIVE rows are the fallback.
+  var out = [];
+  var win = CW && CW.campaigns && CW.campaigns[String(state.range)];
+  if (win && win.length) {
+    win.forEach(function (r) {
+      if (state.client !== "All" && r.client !== state.client) return;
+      if (!r.sent) return;
+      var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
+      out.push({ id: r.id, client: r.client, name: r.name || (sc && sc.name) || ("Campaign " + r.id),
+                 sent: r.sent, bounced: r.bounced, pct: r.bounced / r.sent * 100,
+                 small: r.sent < Math.min(BNC_MIN_SENT, state.range * 25),
+                 finished: !!(sc && String(sc.status || "").toUpperCase() !== "ACTIVE") });
+    });
+    return out;
+  }
+  if (!SCORE || !SCORE.campaigns) return out;
+  Object.keys(SCORE.campaigns).forEach(function (id) {
+    var c = SCORE.campaigns[id];
+    if (String(c.status || "").toUpperCase() !== "ACTIVE") return;
+    var sent = +c.sent || 0, bounced = +c.bounced || 0;
+    if (!sent) return;
+    var cl = campClient(id, c);
+    if (state.client !== "All" && cl !== state.client) return;
+    out.push({ id: id, client: cl, name: c.name || ("Campaign " + id),
+               sent: sent, bounced: bounced, pct: bounced / sent * 100,
+               small: sent < BNC_MIN_SENT });
+  });
+  return out;
+}
+
+// Always the offending CAMPAIGNS, never the client — a client name is not a
+// thing you can pause. The client rides along so the take-line can still say
+// who to call. Small lists surface only when they are all there is.
+function bncRows() {
+  var bad = bncCampaigns().filter(function (c) { return c.pct >= BNC_LIMIT; });
+  var solid = bad.filter(function (c) { return !c.small; });
+  if (solid.length) bad = solid;
+  // Sort by RATE, not count: a 3.2% campaign burns the domain harder than a
+  // 2.2% one that merely sent more (Priya, 2026-07-28). `active` rides along so
+  // the take-line never tells you to "pause" a finished campaign.
+  return bad.sort(function (a, b) { return b.pct - a.pct; })
+            .map(function (c) {
+              return { id: c.id, label: shortName(c.name), client: c.client,
+                       bounced: c.bounced, pct: c.pct, small: !!c.small,
+                       active: !c.finished, names: [c.name] };
+            });
+}
+
+function renderBounce() {
+  var s = TRENDS && TRENDS.series;
+  setStamp("bnc-stamp", (TRENDS && TRENDS.asof) || (CW && CW.asof), 6);
+  var big = $("bnc-big");
+  // daily bounce % for the selected client when a true series exists
+  var cs = cwTrusted(state.client === "All" ? "__all" : state.client);
+  var days = [], bp = [];
+  if (cs && CW.days && CW.days.length) {
+    days = CW.days.slice(-state.range);
+    bp = cs.sent.map(function (v, i) {
+      return v >= 50 ? Math.round((cs.bounced[i] || 0) * 10000 / v) / 100 : null;
+    }).slice(-state.range);
+  } else if (s && s.days && s.days.length) {
+    days = s.days.slice(-state.range);
+    bp = (s.bounce_pct || []).slice(-state.range);
+  }
+  var cwc = cwFor(state.client);
+  if (!days.length && !cwc) {
+    big.textContent = "–"; big.className = "bnc-hero num";
+    $("bnc-rows").innerHTML = '<div class="subline" style="padding-top:8px">Waiting on live data.</div>';
+    return;
+  }
+
+  // ONE headline basis for every view — the window average — so clients stay
+  // comparable chip to chip (round 1 quietly compared "latest day" against
+  // "window average"). Latest day rides the scope line when a daily line exists.
+  var today = null;
+  for (var i = bp.length - 1; i >= 0; i--) if (bp[i] != null) { today = bp[i]; break; }
+  var avgPct = null;
+  if (cwc && cwc.sent > 0) avgPct = Math.round(cwc.bounced * 10000 / cwc.sent) / 100;
+  else if (s && s.days && s.days.length) {
+    var sl = (TRENDS.series.sent || []).slice(-state.range), S = 0, B = 0;
+    sl.forEach(function (v, ii) { S += v || 0; if (bp[ii] != null) B += (v || 0) * bp[ii] / 100; });
+    if (S > 0) avgPct = Math.round(B * 10000 / S) / 100;
+  }
+  var winMode = !cs && state.client !== "All" && cwc && cwc.sent > 0;
+  if (winMode) { days = []; bp = []; }
+  var b = bncBand(avgPct);
+  big.textContent = avgPct == null ? "–" : avgPct.toFixed(2) + "%";
+  big.className = "bnc-hero num bnc-" + b;
+  // On the All view, name the worst CLIENT on LIVE bounce in one line — two
+  // testers asked "which client is in trouble?" and had to read campaign names.
+  // Aggregate ACTIVE campaigns only: a client whose window average is dragged
+  // up by finished campaigns is not a live problem, and pointing a CRO at it
+  // sends them to the wrong call (Elena caught Meridian-by-finished vs Halden-live,
+  // 2026-07-28). Min-sent gated.
+  var worst = "";
+  if (state.client === "All" && CW && CW.campaigns) {
+    var byClient = {};
+    (CW.campaigns[String(state.range)] || []).forEach(function (r) {
+      var sc = SCORE && SCORE.campaigns && SCORE.campaigns[r.id];
+      if (!(sc && String(sc.status || "").toUpperCase() === "ACTIVE")) return;
+      var b = byClient[r.client] || (byClient[r.client] = { sent: 0, bounced: 0 });
+      b.sent += r.sent; b.bounced += r.bounced;
+    });
+    var best = null;
+    Object.keys(byClient).forEach(function (cl) {
+      var b = byClient[cl];
+      if (b.sent < 2000) return;   // don't crown a tiny list
+      var p = b.bounced / b.sent * 100;
+      if (!best || p > best.p) best = { cl: cl, p: p };
+    });
+    if (best && best.p >= BNC_LIMIT) worst = " · worst live client: " + best.cl + " at " + best.p.toFixed(1) + "%";
+  }
+  // The scope line no longer prints under the number — it rides as a hover
+  // tooltip on the big number, freeing that band for a taller trend chart.
+  $("bnc-big").title = avgPct == null ? "" :
+    (state.client === "All" ? "All clients" : state.client) + " · average over the " + rangeLabel() +
+    (today != null && !winMode ? " · latest day " + today.toFixed(2) + "%" : "") + worst;
+
+  // sparkline: only the trailing run at/over the limit is coloured, so weeks
+  // that were genuinely fine are not retro-painted by today
+  var pts = [];
+  for (var k = 0; k < bp.length; k++) if (bp[k] != null) pts.push(k);
+  var svg = $("bnc-svg");
+  if (pts.length < 2) { svg.innerHTML = ""; $("bnc-limlab").style.display = "none"; }
+  else {
+    $("bnc-limlab").style.display = "";
+    var vals = pts.map(function (i2) { return bp[i2]; });
+    var lo = Math.min(Math.min.apply(null, vals), BNC_LIMIT);
+    var hi = Math.max(Math.max.apply(null, vals), BNC_LIMIT);
+    var pad = Math.max((hi - lo) * 0.20, 0.10);
+    lo = Math.max(0, lo - pad); hi = hi + pad;
+    var den = (days.length - 1) || 1;
+    var X = function (i2) { return i2 / den * 100; };
+    var Y = function (v) { return 100 - (v - lo) / (hi - lo) * 100; };
+    var path = function (arr) {
+      return arr.map(function (i2, j2) {
+        return (j2 ? "L" : "M") + X(i2).toFixed(2) + " " + Y(bp[i2]).toFixed(2);
+      }).join(" ");
+    };
+    var cut = pts.length;
+    while (cut > 0 && bp[pts[cut - 1]] >= BNC_LIMIT) cut--;
+    var over = pts.slice(Math.max(0, cut - 1));
+    svg.setAttribute("viewBox", "0 0 100 100");
+    svg.innerHTML =
+      '<line x1="0" y1="' + Y(BNC_LIMIT).toFixed(2) + '" x2="100" y2="' + Y(BNC_LIMIT).toFixed(2) +
+        '" stroke="var(--brown-300)" stroke-width="1" stroke-dasharray="3 3" vector-effect="non-scaling-stroke"/>' +
+      '<path d="' + path(pts) + '" fill="none" stroke="var(--brown-400)" stroke-width="1.75" ' +
+        'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>' +
+      (cut < pts.length
+        ? '<path d="' + path(over) + '" fill="none" stroke="' + bncCol(b) + '" stroke-width="2.25" ' +
+          'stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>'
+        : "");
+    $("bnc-limlab").style.top = Y(BNC_LIMIT).toFixed(1) + "%";
+  }
+
+  var rows = bncRows();
+  var winRows = !!(CW && CW.campaigns && CW.campaigns[String(state.range)] && CW.campaigns[String(state.range)].length);
+  $("bnc-kick").textContent = "Which campaigns" + (winRows ? " · " + rangeLabel() : " · all time");
+  $("bnc-rows").innerHTML = rows.length
+    ? rows.slice(0, 3).map(function (r) {
+        return '<div class="bnc-row">' +
+          '<span class="bnc-name">' +
+            (r.id != null
+              ? '<a href="campaigns.html#/c/' + encodeURIComponent(r.id) + '" title="' + escq(r.label) + '">' + escq(r.label) + '</a>'
+              : escq(r.label)) +
+            (state.client === "All" && r.client && r.label.indexOf(r.client) < 0
+              ? ' <span class="bnc-small">' + escq(r.client) + '</span>' : '') +
+            (!r.active ? ' <span class="bnc-small">finished</span>' : '') +
+            (r.small ? ' <span class="bnc-small">small list — treat as a hint</span>' : '') + '</span>' +
+          '<span class="bnc-came">' + r.bounced.toLocaleString("en-US") + ' came back</span>' +
+          '<span class="bnc-pct bnc-' + bncBand(r.pct) + '">' + r.pct.toFixed(1) + '%</span>' +
+        '</div>';
+      }).join("")
+    : '<div class="subline" style="padding-top:8px">Every list is under 2%.</div>';
+  // (the "→ Pause X…" take-line was removed from this section per Bjion's
+  // 2026-07-28 changes — the campaign list above already names the offenders)
+}
+
+// ── Double-tap (collision) warning bar ──────────────────────────────────
+// Leads live in 2+ of the SAME client's ACTIVE campaigns. Client-specific:
+// on a client view it shows that client's count; on All it collates every
+// client's count into the fleet total. The numbers come straight from the
+// daily census (collision_ledger via /api/collisions) where per_client sums
+// to the total. Quiet (hidden) whenever the current view has nothing to flag.
+var _dtPrompt = "";
+function renderCollision() {
+  var bar = $("dtwarn");
+  if (!bar) return;
+  var pc = (COLL && COLL.per_client) || null;
+  if (!pc) { bar.classList.remove("on"); return; }
+  var all = state.client === "All";
+  var n = all ? (COLL.total || 0) : (pc[state.client] || 0);
+  if (!n || n <= 0) { bar.classList.remove("on"); return; }   // nothing to flag
+
+  $("dtwarn-n").textContent = fmtN(n);
+  $("dtwarn-lbl").textContent = "double-tap lead" + (n === 1 ? "" : "s");
+
+  var sub;
+  if (all) {
+    var split = Object.keys(pc)
+      .filter(function (k) { return pc[k] > 0; })
+      .sort(function (a, b) { return pc[b] - pc[a]; })
+      .map(function (k) { return k + " " + fmtN(pc[k]); });
+    sub = "Live in 2+ of the same client's active campaigns · " + split.join(" · ");
+  } else {
+    sub = state.client + " leads live in 2+ of " + state.client + "'s own active campaigns.";
+  }
+  var live = COLL.source === "live";
+  var when = "";
+  if (live && COLL.run_at) {
+    try { when = new Date(COLL.run_at).toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }); }
+    catch (e) { when = (COLL.run_at || "").slice(0, 16).replace("T", " "); }
+  } else { when = COLL.run_date || ""; }
+  if (when) sub += "  ·  " + (live ? "confirmed live · " + when : "approx · " + when + " (confirming live)");
+  $("dtwarn-sub").textContent = sub;
+  var collAge = ageH(live ? COLL.run_at : (COLL.run_date || null));
+  $("dtwarn-sub").classList.toggle("stale", collAge != null && collAge > 24);
+
+  _dtPrompt = buildCollPrompt(all, n, pc);
+  bar.classList.add("on");
+}
+// The copy-prompt: a client-scoped brief matching the collision-guard ruling
+// (keep the best-performing campaign, pause the loser; same-client only;
+// pause never delete; plan before acting).
+function buildCollPrompt(all, n, pc) {
+  var head, scope;
+  if (all) {
+    var split = Object.keys(pc).filter(function (k) { return pc[k] > 0; })
+      .sort(function (a, b) { return pc[b] - pc[a]; })
+      .map(function (k) { return k + " " + pc[k]; }).join(", ");
+    head = "Across all clients, " + n + " leads are double-tapped — live in 2+ of the SAME client's active Smartlead campaigns (" + split + ").";
+    scope = "Work each client separately (same-client only — a lead in one client's campaign and a different client's campaign is NOT a collision).";
+  } else {
+    head = "In the " + state.client + " campaigns, " + n + " leads are double-tapped — live in 2+ of " + state.client + "'s own active Smartlead campaigns.";
+    scope = "Scope this to " + state.client + " only.";
+  }
+  return head + " " + scope +
+    " Route the backlog out: for each colliding lead, KEEP it in the best-performing campaign (highest positive replies per 1,000 sent) and PAUSE it in the lower-performing one(s). Never delete a lead — pause only (it is reversible). Build the plan from live Smartlead lead-exports, show me the plan (leads, which campaign wins each tie, total pauses) for approval before pausing anything, then execute paced with a resume file. This is the smartlead-collision-guard Step 3.";
+}
+function renderAll() {
+  renderChips();
+  renderHead();
+  renderTrend();
+  var v = renderFunnel();
+  renderRunway(v);
+  renderSignals();
+  renderNC();
+  renderCollision();
+  renderWeek();
+  renderBounce();
+  renderRank();
+  renderOffer();
+  ensureWho();
+  renderMeet();
+}
+// The client lens follows the client chips (date range doesn't apply to
+// today's mailbox health). A connected client workspace maps
+// 1:1 to a Smartlead account so its rows filter exactly; every other client
+// sends from the shared Navreo fleet, and the note says so instead of
+// pretending to split it. The map is server-supplied (client-windows
+// ws_labels) — the literal below is only the pre-payload fallback.
+function wsClients() { return (CW && CW.ws_labels) || { Meridian: "meridian", Halden: "halden" }; }
+function updateLens() {
+  var c = state.client;
+  var WS_CLIENTS = wsClients();
+  window.DLV_CLIENT_LENS = { client: c, ws: WS_CLIENTS[c] || null };
+  try { window.dispatchEvent(new Event("dlv-client-lens")); } catch (e) { /* listeners just skip the repaint */ }
+}
+$("ah-chips").addEventListener("click", function (e) {
+  var b = e.target.closest(".chip");
+  if (!b) return;
+  var c = b.getAttribute("data-client");
+  if (state.client === c) return;
+  state.client = c;
+  saveFilters();
+  var svg = $("funnel");
+  svg.classList.add("swap");
+  setTimeout(function () { svg.classList.remove("swap"); }, 250);
+  updateLens();
+  renderAll();
+});
+// ONE date range for the whole page — a pure client-side re-slice, no refetch
+$("ah-range").addEventListener("click", function (e) {
+  var b = e.target.closest("button");
+  if (!b) return;
+  var n = parseInt(b.getAttribute("data-range"), 10);
+  if (!n || n === state.range) return;
+  $("ah-range").querySelectorAll("button").forEach(function (x) {
+    x.classList.toggle("on", x === b);
+    x.setAttribute("aria-pressed", x === b ? "true" : "false");
+  });
+  state.range = n;
+  saveFilters();
+  renderAll();
+});
+// reflect a restored range in the seg (30 is the static default)
+(function () {
+  $("ah-range").querySelectorAll("button").forEach(function (x) {
+    var on = parseInt(x.getAttribute("data-range"), 10) === state.range;
+    x.classList.toggle("on", on);
+    x.setAttribute("aria-pressed", on ? "true" : "false");
+  });
+})();
+$("ah-lchips").addEventListener("click", function (e) {
+  var b = e.target.closest(".lchip");
+  if (!b || b.classList.contains("off") || b.classList.contains("tot")) return;
+  var k = b.getAttribute("data-s");
+  state.on[k] = !state.on[k];
+  if (k === "sent") saveFilters();   // sent bars default-on preference is persisted
+  renderTrend();
+});
+// Hide-weekends toggle for the day-by-day chart
+(function () {
+  var wt = $("ah-weekend");
+  function sync() {
+    wt.classList.toggle("on", state.hideWeekends);
+    wt.setAttribute("aria-pressed", state.hideWeekends ? "true" : "false");
+    wt.textContent = state.hideWeekends ? "Show weekends" : "Hide weekends";
+  }
+  wt.addEventListener("click", function () {
+    state.hideWeekends = !state.hideWeekends;
+    saveFilters();
+    sync();
+    renderTrend();
+  });
+  sync();
+})();
+$("trend-svg").addEventListener("mousemove", trendMove);
+$("trend-svg").addEventListener("mouseleave", hideTip);
+$("week-svg").addEventListener("mousemove", weekMove);
+$("week-svg").addEventListener("mouseleave", weekHide);
+// The week graph sizes itself to its wrapper's pixel aspect, so re-fit it when
+// the layout changes width/height (debounced).
+var _weekResizeT = null;
+window.addEventListener("resize", function () {
+  clearTimeout(_weekResizeT);
+  _weekResizeT = setTimeout(function () { try { renderWeek(); } catch (e) { /* pre-data */ } }, 150);
+});
+$("ah-retry").addEventListener("click", boot);
+// Copy-prompt on the double-tap bar → clipboard (with a non-secure-context
+// fallback), then a 1.6s "Copied ✓" confirmation.
+$("dtwarn-copy").addEventListener("click", function () {
+  var btn = this, txt = _dtPrompt || "";
+  function done() {
+    btn.classList.add("copied");
+    btn.textContent = "Copied ✓";
+    setTimeout(function () { btn.classList.remove("copied"); btn.textContent = "Copy prompt"; }, 1600);
+  }
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(txt).then(done, function () { dtFallbackCopy(txt); done(); });
+  } else { dtFallbackCopy(txt); done(); }
+});
+function dtFallbackCopy(t) {
+  try {
+    var ta = document.createElement("textarea");
+    ta.value = t; ta.style.position = "fixed"; ta.style.opacity = "0";
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    document.execCommand("copy"); document.body.removeChild(ta);
+  } catch (e) { console.log(t); }
+}
+
+// /api/client-windows builds in the background on a cold server (~2-4 min of
+// Smartlead calls) — poll until it lands, then re-render with true per-client
+// numbers. Until then the page runs in the lifetime/fleet fallback it always had.
+var _cwPolls = 0;
+function loadCW() {
+  j("/api/client-windows").then(function (d) {
+    if (d && !d.building && d.windows) { CW = d; renderAll(); return; }
+    if (++_cwPolls <= 20) setTimeout(loadCW, 20000);
+  }).catch(function () { if (++_cwPolls <= 20) setTimeout(loadCW, 20000); });
+}
+// the hub RPC can fail once on a cold boot (its cache never stores errors) —
+// retry it instead of leaving the page hub-less until a manual reload
+var _hubPolls = 0;
+function loadHub() {
+  j("/api/analytics-hub?days=30").then(function (d) {
+    if (d && !d.error) { HUB = d; renderAll(); return; }
+    if (++_hubPolls <= 10) setTimeout(loadHub, 15000);
+  }).catch(function () { if (++_hubPolls <= 10) setTimeout(loadHub, 15000); });
+}
+// fleet-capacity: retry on a cold-boot 502 AND until the per-client caps land.
+// The restore sweep that backs client_caps warms ~7-8 min after a cold Render
+// boot; the retry budget below (60 × 15s = 15 min) MUST outlast that, or shared
+// clients (Vellum/Brightcart/Northwind/…) keep faint sent bars with no capacity
+// fill until a manual reload. The old 25-poll (~6 min) budget lost that race —
+// it gave up ~30-90s before the sweep landed, so capacity looked broken.
+var _capPolls = 0;
+function loadCAP() {
+  j("/api/fleet-capacity?days=30").then(function (d) {
+    if (d && !d.error) {
+      CAP = d; renderAll();
+      if (CAP.client_caps && Object.keys(CAP.client_caps).length) return;   // per-client caps landed
+    }
+    if (++_capPolls <= 60) setTimeout(loadCAP, 15000);
+  }).catch(function () { if (++_capPolls <= 60) setTimeout(loadCAP, 15000); });
+}
+// Incremental boot: paint each section the instant its OWN endpoint lands,
+// instead of waiting on the slowest of nine (the analytics-hub RPC and the
+// campaign-scorecard read can each take 30-70s when Supabase is busy, and the
+// old Promise.allSettled held the ENTIRE page hostage to them). The shell and
+// every fast read (trends / campaigns-unified / audit ~0.4s) now paint in well
+// under a second; the heavy sections fill in when they arrive, exactly like the
+// client-windows poller already did. renderAll() is a full re-render from the
+// module globals, so calling it repeatedly is safe and idempotent — a debounce
+// coalesces the burst of near-simultaneous resolutions into one paint.
+var _renderT = 0;
+var _firstPaint = false;   // false until the synchronized first data paint has fired
+function scheduleRender() {
+  if (!_firstPaint) return;   // hold intermediate paints until the fast core group lands together
+  if (_renderT) return;
+  _renderT = setTimeout(function () { _renderT = 0; renderAll(); }, 16);
+}
+function boot() {
+  DEGRADED = {};
+  renderDataBar();
+  function criticalSettled() { markDegraded("Campaign performance", !HUB && !SCORE); }
+  j("/api/analytics-hub?days=30").then(function (d) {
+    HUB = d && !d.error ? d : null;
+    // a restored client that no longer exists must not ghost-filter the page
+    if (HUB && state.client !== "All" && (HUB.clients || []).indexOf(state.client) < 0) {
+      state.client = "All";
+      saveFilters();
+      updateLens();
+    }
+    if (!HUB) setTimeout(loadHub, 15000);
+  }, function () { HUB = null; setTimeout(loadHub, 15000); })
+    .then(function () { criticalSettled(); scheduleRender(); });
+  j("/api/campaign-scorecard").then(function (d) { SCORE = d; }, function () { SCORE = null; })
+    .then(function () { markDegraded("Campaign list (leads still to work)", !SCORE); criticalSettled(); scheduleRender(); });
+  // Synchronized first paint: the fast core reads below all land sub-second and
+  // share the chart (capacity rides in it as the headroom bars). Hold the first
+  // DATA paint until they've ALL settled, then paint once — so capacity appears
+  // in the SAME frame as the rest instead of popping in a beat later (user ruling
+  // 2026-08-22 "everything loads at the same time"). The two genuinely-slow reads
+  // (analytics-hub + scorecard, 30-70s) stay OFF this barrier and fill in via
+  // their own databar treatment, so the page is never held hostage to them.
+  var _coreLeft = 8;
+  function coreSettled() {
+    if (_firstPaint) { scheduleRender(); return; }   // late arrival after the barrier already fired
+    if (--_coreLeft > 0) return;
+    _firstPaint = true; renderAll();
+  }
+  // Safety: never sit on the empty shell — force the unified paint after 12s even
+  // if a core read hangs. Set ABOVE the cold-load latency of /api/fleet-capacity
+  // (~8s the first time the server computes per-day caps, ~0.6s warm) so a cold
+  // load still paints capacity TOGETHER with the rest rather than tripping the
+  // backstop early and letting capacity pop in late. Any straggler past 12s
+  // repaints via scheduleRender once it fires.
+  setTimeout(function () { if (!_firstPaint) { _firstPaint = true; renderAll(); } }, 12000);
+  jShared("/api/deliverability-trends?days=30").then(function (d) { TRENDS = d; coreSettled(); }, function () { coreSettled(); });
+  jShared("/api/fleet-capacity?days=30").then(function (d) { CAP = d && !d.error ? d : null; coreSettled(); if (!CAP || !(CAP.client_caps && Object.keys(CAP.client_caps).length)) setTimeout(loadCAP, 12000); }, function () { coreSettled(); setTimeout(loadCAP, 12000); });
+  jShared("/api/cockpit/insights").then(function (d) { INS = d; coreSettled(); }, function () { coreSettled(); });
+  j("/api/campaigns-unified").then(function (d) { UNI = d; coreSettled(); }, function () { coreSettled(); });
+  jShared("/api/signals/daily").then(function (d) { SIG = d && !d.error ? d : null; coreSettled(); }, function () { coreSettled(); });
+  j("/api/sources?slim=1").then(function (d) { SRC = d; markDegraded("Lead sources", false); coreSettled(); },
+                               function () { SRC = null; markDegraded("Lead sources", true); coreSettled(); });
+  // jShared so any second hub read of /_audit reuses this boot promise
+  // instead of issuing an identical request.
+  jShared("/api/deliverability/_audit").then(function (d) { AUDIT = d; coreSettled(); }, function () { coreSettled(); });
+  j("/api/collisions").then(function (d) { COLL = d && !d.error ? d : null; coreSettled(); }, function () { coreSettled(); });
+  j("/api/client-windows").then(function (d) {
+    if (d && !d.building && d.windows) { CW = d; scheduleRender(); }
+    else setTimeout(loadCW, 20000);
+  }, function () { setTimeout(loadCW, 20000); });
+  // First paint immediately from the fallback globals — never blocked on a fetch.
+  renderAll();
+}
+// sticky filter bar: show a hairline only once it's actually pinned. Works
+// whether the window or an ancestor is the scroll container — we just watch the
+// bar's own viewport top.
+(function () {
+  var bar = $("ah-filterbar");
+  if (!bar) return;
+  var tick = false;
+  function onScroll() {
+    if (tick) return;
+    tick = true;
+    requestAnimationFrame(function () {
+      tick = false;
+      bar.classList.toggle("stuck", bar.getBoundingClientRect().top <= 1);
+    });
+  }
+  window.addEventListener("scroll", onScroll, { passive: true });
+  var m = document.getElementById("main");
+  if (m) m.addEventListener("scroll", onScroll, { passive: true });
+  onScroll();
+})();
+renderChips();
+renderHead();
+updateLens();
+boot();
+})();
+</script>
+<script>
+/* ══ Share with client (client-report-share, 2026-08-16) — mints the token
+   link to /app/report.html. Self-contained: reads the client list from its
+   own /api/client-windows fetch (the window keys ARE the canonical labels,
+   written server-side from the one label authority). ══ */
+(function () {
+  "use strict";
+  var $ = function (id) { return document.getElementById(id); };
+  var open = $("rs-open"), pop = $("rs-pop");
+  if (!open || !pop) return;
+  var loaded = false;
+  function iso(d) { return d.toISOString().slice(0, 10); }
+  function loadClients() {
+    if (loaded) return;
+    loaded = true;
+    fetch("/api/client-windows", { credentials: "same-origin" })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        var names = Object.keys((d && d.windows && d.windows["30"]) || {})
+          .filter(function (k) { return k !== "__all" && k !== "__unassigned"; }).sort();
+        $("rs-client").innerHTML = names.length
+          ? names.map(function (n) { return "<option>" + n.replace(/[&<>"]/g, "") + "</option>"; }).join("")
+          : '<option value="">No clients yet</option>';
+      })
+      .catch(function () { loaded = false; });
+  }
+  open.addEventListener("click", function () {
+    var show = pop.style.display === "none";
+    pop.style.display = show ? "" : "none";
+    if (show) {
+      loadClients();
+      var today = new Date(), from = new Date(today.getTime() - 6 * 864e5);
+      var lo = new Date(today.getTime() - 29 * 864e5);
+      ["rs-start", "rs-end"].forEach(function (id) {
+        $(id).min = iso(lo); $(id).max = iso(today);
+      });
+      if (!$("rs-start").value) $("rs-start").value = iso(from);
+      if (!$("rs-end").value) $("rs-end").value = iso(today);
+    }
+  });
+  document.addEventListener("click", function (ev) {
+    if (pop.style.display !== "none" && !pop.contains(ev.target) && ev.target !== open) {
+      pop.style.display = "none";
+    }
+  });
+  $("rs-create").addEventListener("click", function () {
+    var client = $("rs-client").value;
+    if (!client) { $("rs-msg").textContent = "Pick a client first."; return; }
+    $("rs-msg").textContent = "Creating…";
+    fetch("/api/report/share", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client: client, start: $("rs-start").value, end: $("rs-end").value })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok) { $("rs-msg").textContent = (d && d.message) || "Could not create the link."; return; }
+      var url = location.origin + d.url;
+      $("rs-url").value = url;
+      $("rs-openlink").href = url;
+      $("rs-out").style.display = "";
+      $("rs-msg").textContent = "Link ready — " + d.client + ", " + d.start + " to " + d.end + ". Valid 90 days, no login needed.";
+    }).catch(function () { $("rs-msg").textContent = "Could not create the link."; });
+  });
+  $("rs-copy").addEventListener("click", function () {
+    var inp = $("rs-url");
+    inp.select();
+    var done = function () { $("rs-copy").textContent = "Copied ✓"; setTimeout(function () { $("rs-copy").textContent = "Copy link"; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(inp.value).then(done, done);
+    else { document.execCommand("copy"); done(); }
+  });
+})();
+</script>
+<script src="demo-layer.js"></script></body>
+</html>

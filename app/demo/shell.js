@@ -1,0 +1,1377 @@
+/* Shared shell: rail nav, data loading, small helpers. */
+
+/* ── Headless / embed mode ──────────────────────────────────────────────────
+   Opening any page with ?chrome=none (alias ?headless=1) strips the app sidebar
+   rail AND the floating "Tasks" tab, leaving a bare board that embeds as an
+   "artefact" surface. Used by the daily routines, which keep a no-sidebar board
+   open beside the chat. The flag lives in the QUERY string so it survives
+   hash-routed deep-links, e.g. campaigns.html?chrome=none#/c/123.
+   <main> is a flex:1 sibling of .rail (.app{display:flex} in navreo.css), so
+   removing the rail reclaims the full width with no gutter to patch. */
+function isHeadless() {
+  try {
+    const q = new URLSearchParams(location.search);
+    return q.get("chrome") === "none" || q.get("headless") === "1" || q.has("headless");
+  } catch (_) { return false; }
+}
+
+/* ── Client share-link mode (setter-client-view) ────────────────────────────
+   A ?share=<token> URL is a logged-OUT client viewing exactly one surface
+   (currently the setter inbox). The app rail links to Campaigns / Analytics /
+   Mailboxes / Deliverability - every one of them login-gated and none of them
+   theirs - and the floating "Tasks" panel polls the owner-only /api/jobs.
+   Both are suppressed here.
+   Deliberately NOT isHeadless(): that sets html.headless, which rewrites every
+   external link to copy-to-clipboard and adds the a.lp-qbtn::after glyph. */
+function isClientShare() {
+  try {
+    return new URLSearchParams(location.search).has("share");
+  } catch (_) { return false; }
+}
+
+if (isHeadless()) {
+  document.documentElement.classList.add("headless");
+  const s = document.createElement("style");
+  // renderRail() already returns nothing in headless; this also hides any page
+  // that hardcodes a rail (or the setter-train share-mode rail) and the Tasks tab.
+  s.textContent =
+    ".rail{display:none!important}" +
+    "#nav-jobs-tab,#nav-jobs-panel{display:none!important}";
+  (document.head || document.documentElement).appendChild(s);
+}
+
+/* Icons8 "Windows 10" set, rendered via CSS mask so they inherit color.
+   Pass a bare name for icons/<name>.png, or a full filename (e.g. "settings.svg"). */
+function ic8(name, cls = "") {
+  const file = name.includes(".") ? name : `${name}.png`;
+  return `<span class="ic8 ${cls}" style="--icon:url('../icons/${file}')"></span>`;
+}
+
+const ICONS = {
+  campaigns: ic8("paper-plane.svg", "lg"),
+  lists: ic8("user.svg", "lg"),
+  deliverability: ic8("analytics.svg", "lg"),
+  mbxhub: ic8("mail", "lg"),
+  setter: ic8("reply", "lg"),
+  settings: ic8("settings.svg", "lg"),
+};
+
+// "Lists" moved out of the main rail into the Settings sub-bar (owner ask
+// 2026-08-22): it's an admin/config surface, so it lives beside Workspaces and
+// Email Infrastructure now. lists.html renders the settings section (rail's
+// settings icon active + the sub-bar) rather than a top-level rail tab.
+const NAV = [
+  ["campaigns.html", "campaigns", "Campaigns"],
+  ["deliverability.html", "deliverability", "Analytics"],
+  ["mailboxes-hub.html", "mbxhub", "Mailboxes"],
+  ["setter.html", "setter", "Setter"],
+];
+
+function renderRail(active) {
+  if (isHeadless()) return "";  // headless/embed: no sidebar rail at all
+  if (isClientShare()) return "";  // client share link: no app nav at all
+  const items = NAV.map(([href, key, label]) =>
+    `<a class="nav-i ${key === active ? "on" : ""}" href="${href}" title="${label}">${ICONS[key]}</a>`
+  ).join("");
+  return `<nav class="rail">
+    <a class="logo" href="campaigns.html" title="Navreo">n</a>
+    ${items}
+    <div class="spacer"></div>
+    <a class="nav-i ${active === "settings" ? "on" : ""}" href="settings.html" title="Settings">${ICONS.settings}</a>
+  </nav>`;
+}
+
+async function loadData(...names) {
+  const out = {};
+  await Promise.all(names.map(async (n) => {
+    try {
+      const r = await fetch(`data/${n}.json`, { cache: "no-store" });
+      out[n] = r.ok ? await r.json() : null;
+    } catch { out[n] = null; }
+  }));
+  return out;
+}
+
+/* helpers */
+const fmt = (n) => (n === null || n === undefined || isNaN(n)) ? "–" : Number(n).toLocaleString("en-GB");
+const pct = (num, den, digits = 1) => den > 0 ? (100 * num / den).toFixed(digits) + "%" : "–";
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+/* "when was this last pulled" — a relative phrase the user reads at a glance
+   ("3 days ago"), with the exact local timestamp on hover. Replaces the raw
+   "07-06 15:38" slice, which was year-less, timezone-ambiguous, and made the
+   reader compute staleness themselves. Server writes last_pull/pulled_at in UTC
+   with no zone (datetime.now() on Render), so a zone-less string is tagged Z and
+   localised for display. Returns an HTML <span>; the phrase is already escaped. */
+function pulledAgo(iso) {
+  if (!iso) return "";
+  let s = String(iso).trim().replace(" ", "T");
+  if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";  // tag zone-less UTC
+  const then = new Date(s);
+  if (isNaN(then.getTime())) return esc(String(iso));  // unparseable -> show raw, never crash
+  const secs = Math.max(0, (Date.now() - then.getTime()) / 1000);
+  const plur = (n, w) => `${n} ${w}${n === 1 ? "" : "s"} ago`;
+  let rel;
+  if (secs < 45) rel = "just now";
+  else if (secs < 3600) rel = plur(Math.round(secs / 60) || 1, "min");
+  else if (secs < 86400) rel = plur(Math.floor(secs / 3600), "hour");
+  else if (secs < 86400 * 7) rel = plur(Math.floor(secs / 86400), "day");
+  else {
+    const sameYear = then.getFullYear() === new Date().getFullYear();
+    rel = "on " + then.toLocaleDateString("en-GB",
+      sameYear ? { day: "numeric", month: "short" } : { day: "numeric", month: "short", year: "numeric" });
+  }
+  const full = then.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
+  return `<span title="${esc(full)} (your local time)">${esc(rel)}</span>`;
+}
+/* the proof behind a prospect — job post for hiring, post URL for engagement */
+const sigHref = (p) => p.signal_url || p.job_url || "";
+const sigTitle = (p) => p.hiring_for ? `Hiring: ${p.hiring_for}` : "The signal that surfaced this person";
+
+function statusPill(status) {
+  const map = { ACTIVE: "g", PAUSED: "a", COMPLETED: "n", STOPPED: "n", DRAFTED: "n" };
+  const cls = map[status] || "n";
+  return `<span class="pill ${cls}"><span class="dot"></span>${esc(status || "?")}</span>`;
+}
+
+function freshnessBlock(meta) {
+  if (!meta) return "";
+  const dt = new Date(meta.fetched_at);
+  return `<div class="freshness">Snapshot <b>${dt.toLocaleString("en-GB", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</b> · read-only</div>`;
+}
+
+/* toast note. Pass {sticky:true} for an in-flight message that stays up until the
+   next protoNote replaces it (a plain result toast auto-hides after ~2.6s) — this
+   keeps a "Finding people…" message visible for the whole of a long server call. */
+function protoNote(msg = "Read-only prototype", opts = {}) {
+  let el = document.querySelector(".proto-note");
+  if (!el) {
+    el = document.createElement("div");
+    el.className = "proto-note";
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  requestAnimationFrame(() => el.classList.add("on"));
+  clearTimeout(el._t);
+  if (!opts.sticky) el._t = setTimeout(() => el.classList.remove("on"), opts.ms || 2600);
+}
+
+/* Put a button into a working state: inline spinner + label, disabled so it can't
+   be double-clicked while the action runs. Returns a restore() that puts the button
+   back exactly how it was (safe to call even after a re-render has replaced it).
+   Returns null if the button is ALREADY busy — callers use that to bail out of a
+   duplicate submit, which is the whole point: no more "did my click work?" re-clicks. */
+function busyBtn(btn, label = "Working…") {
+  if (!btn) return () => {};                 // caller had no element (e.g. auto-triggered) — no-op
+  if (btn.dataset.busy === "1") return null; // second click while the first is in flight — ignore it
+  const html = btn.innerHTML, wasDisabled = btn.disabled;
+  btn.dataset.busy = "1";
+  btn.classList.add("busy");
+  btn.setAttribute("aria-busy", "true");
+  btn.disabled = true;
+  btn.innerHTML = `<span class="btnspin"></span>${esc(label)}`;
+  return () => {
+    delete btn.dataset.busy;
+    btn.classList.remove("busy");
+    btn.removeAttribute("aria-busy");
+    btn.disabled = wasDisabled;
+    btn.innerHTML = html;
+  };
+}
+
+/* force-hide the toast now — call on step changes / modal open+close so a stale
+   validation message never lingers across the flow or after a dialog is dismissed */
+function hideNote() {
+  const el = document.querySelector(".proto-note");
+  if (el) { clearTimeout(el._t); el.classList.remove("on"); }
+}
+
+/* tiny dependency-free line chart */
+function lineChart(el, series, opts = {}) {
+  const w = opts.width || el.clientWidth || 800, h = opts.height || 180;
+  const pad = { l: 34, r: 10, t: 12, b: 22 };
+  const all = series.flatMap((s) => s.points.map((p) => p.y));
+  const maxY = Math.max(1, ...all);
+  const n = Math.max(2, series[0]?.points.length || 2);
+  const x = (i) => pad.l + (i / (n - 1)) * (w - pad.l - pad.r);
+  const y = (v) => pad.t + (1 - v / maxY) * (h - pad.t - pad.b);
+  let svg = `<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px;display:block">`;
+  for (let g = 0; g <= 3; g++) {
+    const gy = pad.t + (g / 3) * (h - pad.t - pad.b);
+    svg += `<line x1="${pad.l}" y1="${gy}" x2="${w - pad.r}" y2="${gy}" stroke="#ECE5DC" stroke-width="1"/>`;
+    svg += `<text x="${pad.l - 6}" y="${gy + 3.5}" text-anchor="end" font-size="10" fill="#A89684">${Math.round(maxY * (1 - g / 3))}</text>`;
+  }
+  series.forEach((s) => {
+    const d = s.points.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.y).toFixed(1)}`).join("");
+    svg += `<path d="${d}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`;
+  });
+  const labels = series[0]?.points || [];
+  const step = Math.ceil(labels.length / 6);
+  labels.forEach((p, i) => {
+    if (i % step === 0) svg += `<text x="${x(i)}" y="${h - 6}" text-anchor="middle" font-size="10" fill="#A89684">${esc(p.label || "")}</text>`;
+  });
+  svg += "</svg>";
+  el.innerHTML = chartWrap(svg, {
+    W: w, H: h, padT: pad.t, padB: pad.b, maxV: maxY,
+    xs: labels.map((_, i) => +x(i).toFixed(1)),
+    labels: labels.map((p) => p.label || ""),
+    // `vals` position the hover dot on the drawn line (may be scaled); `disp` is the
+    // true number shown in the tooltip (pass p.raw when the plotted y is scaled).
+    series: series.map((s) => ({
+      name: s.name || "", color: s.color,
+      vals: s.points.map((p) => p.y),
+      disp: s.points.map((p) => (p.raw != null ? p.raw : p.y)),
+    })),
+    suffix: opts.suffix || "",
+  });
+  hydrateCharts(el);
+}
+
+/* Wrap a built <svg> string in a positioned container that carries the chart's
+   data payload, so hydrateCharts() can wire an interactive tooltip after insertion.
+   The JSON is HTML-escaped for the attribute; getAttribute() decodes it back. */
+function chartWrap(svg, cfg) {
+  return `<div class="chartwrap" data-chart="${esc(JSON.stringify(cfg))}">${svg}</div>`;
+}
+
+/* Find every chart container under `root` (inclusive) and attach hover tooltips. */
+function hydrateCharts(root) {
+  if (!root) return;
+  const wraps = [];
+  if (root.matches && root.matches(".chartwrap[data-chart]")) wraps.push(root);
+  if (root.querySelectorAll) root.querySelectorAll(".chartwrap[data-chart]").forEach((w) => wraps.push(w));
+  wraps.forEach(setupChartTooltip);
+}
+
+/* Attach a crosshair + floating tooltip to one .chartwrap. Uses the SVG's own
+   coordinate transform (getScreenCTM) so hit-testing and positioning stay correct
+   under viewBox scaling and preserveAspectRatio letterboxing at any pixel width. */
+function setupChartTooltip(wrap) {
+  if (wrap._ttReady) return;
+  let cfg; try { cfg = JSON.parse(wrap.getAttribute("data-chart")); } catch { return; }
+  const svg = wrap.querySelector("svg");
+  if (!svg || !cfg || !Array.isArray(cfg.xs) || !cfg.xs.length) return;
+  wrap._ttReady = true;
+
+  const { W, H, padT, padB, maxV, xs, labels, series, suffix } = cfg;
+  const NS = "http://www.w3.org/2000/svg";
+  const yOf = (v) => padT + (1 - v / maxV) * (H - padT - padB);
+
+  const guide = document.createElementNS(NS, "line");
+  guide.setAttribute("y1", padT); guide.setAttribute("y2", H - padB);
+  guide.setAttribute("stroke", "var(--ink-3, #6B6055)");
+  guide.setAttribute("stroke-width", "1"); guide.setAttribute("stroke-dasharray", "3 3");
+  guide.setAttribute("pointer-events", "none"); guide.style.opacity = "0";
+  svg.appendChild(guide);
+
+  const dots = series.map((s) => {
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("r", "3.5"); c.setAttribute("fill", "var(--bg, #fff)");
+    c.setAttribute("stroke", s.color); c.setAttribute("stroke-width", "2");
+    c.setAttribute("pointer-events", "none"); c.style.opacity = "0";
+    svg.appendChild(c); return c;
+  });
+
+  const tip = document.createElement("div");
+  tip.className = "charttip"; tip.style.opacity = "0";
+  wrap.appendChild(tip);
+
+  const pt = svg.createSVGPoint();
+  const toLocal = (clientX, clientY) => {
+    const ctm = svg.getScreenCTM(); if (!ctm) return null;
+    pt.x = clientX; pt.y = clientY;
+    return pt.matrixTransform(ctm.inverse());
+  };
+  const nearestIdx = (localX) => {
+    let best = 0, bd = Infinity;
+    for (let i = 0; i < xs.length; i++) { const d = Math.abs(xs[i] - localX); if (d < bd) { bd = d; best = i; } }
+    return best;
+  };
+
+  function show(i) {
+    const gx = xs[i];
+    guide.setAttribute("x1", gx); guide.setAttribute("x2", gx);
+    guide.style.opacity = xs.length > 1 ? "1" : "0";
+    series.forEach((s, si) => {
+      const v = s.vals[i];
+      if (v == null || isNaN(v)) { dots[si].style.opacity = "0"; return; }
+      dots[si].setAttribute("cx", gx); dots[si].setAttribute("cy", +yOf(v).toFixed(1));
+      dots[si].style.opacity = "1";
+    });
+    tip.innerHTML = `<div class="charttip-h">${esc(labels[i] || "")}</div>` +
+      series.map((s, si) => `<div class="charttip-r"><span class="charttip-sw" style="background:${s.color}"></span>` +
+        `${s.name ? `<span class="charttip-nm">${esc(s.name)}</span>` : ""}` +
+        `<b>${fmt((s.disp || s.vals)[i])}${suffix || ""}</b></div>`).join("");
+
+    const ctm = svg.getScreenCTM(); const wr = wrap.getBoundingClientRect();
+    pt.x = gx; pt.y = padT; const sc = pt.matrixTransform(ctm);
+    tip.style.opacity = "1";
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = sc.x - wr.left - tw / 2;
+    left = Math.min(Math.max(left, 4), wrap.clientWidth - tw - 4);
+    let top = sc.y - wr.top - th - 10;
+    if (top < 4) top = sc.y - wr.top + 14;
+    tip.style.left = left + "px"; tip.style.top = top + "px";
+  }
+  function hide() { guide.style.opacity = "0"; dots.forEach((d) => (d.style.opacity = "0")); tip.style.opacity = "0"; }
+
+  const move = (e) => { const l = toLocal(e.clientX, e.clientY); if (l) show(nearestIdx(l.x)); };
+  wrap.style.touchAction = "pan-y";
+  wrap.addEventListener("pointermove", move);
+  wrap.addEventListener("pointerdown", move);
+  wrap.addEventListener("pointerleave", hide);
+}
+
+/* ── Tasks in progress sidebar ─────────────────────────────
+   Self-contained widget: its own DOM, its own <style>, plain fetch only.
+   Deliberately does NOT call any other helper in this file (esc, fmt, pulledAgo,
+   etc.) so it works even on pages that only load a stub of shell.js — this is
+   the one bit of shell.js allowed to be "unshipped" without breaking the page. */
+(function () {
+  const POLL_FAST_MS = 4000;
+  const POLL_SLOW_MS = 45000;
+  const LS_OPEN_KEY = "nav_jobs_panel_open";
+
+  let jobs = [];
+  let havePolledOnce = false;
+  let knownIds = new Set();
+  let userClosedThisView = false;
+  let pollTimer = null;
+  let warnedOnce = false;
+  let backendOk = false;
+
+  let elRoot, elTab, elBadge, elPanel, elList;
+
+  function jEsc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  function jRelTime(iso) {
+    if (!iso) return "";
+    let s = String(iso).trim().replace(" ", "T");
+    if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";
+    const then = new Date(s);
+    if (isNaN(then.getTime())) return "";
+    const secs = Math.max(0, (Date.now() - then.getTime()) / 1000);
+    if (secs < 45) return "just now";
+    if (secs < 3600) { const m = Math.max(1, Math.round(secs / 60)); return `${m}m ago`; }
+    if (secs < 86400) { const h = Math.floor(secs / 3600); return `${h}h ago`; }
+    const d = Math.floor(secs / 86400);
+    return `${d}d ago`;
+  }
+
+  function isOpenSaved() {
+    try { return localStorage.getItem(LS_OPEN_KEY) === "1"; } catch { return false; }
+  }
+  function saveOpen(v) {
+    try { localStorage.setItem(LS_OPEN_KEY, v ? "1" : "0"); } catch { /* ignore */ }
+  }
+
+  function statusLabel(status) {
+    return { queued: "Queued", running: "Running", done: "Done", failed: "Failed", cancelled: "Cancelled", interrupted: "Interrupted" }[status] || jEsc(status || "?");
+  }
+  function statusClass(status) {
+    return { queued: "jq-n", running: "jq-b", done: "jq-g", failed: "jq-r", cancelled: "jq-c", interrupted: "jq-r" }[status] || "jq-n";
+  }
+
+  /* ── Task families + grouping (pure; unit-tested by app/test_jobs_panel_retry.py
+     via the markers below — keep this block DOM-free and side-effect-free) ── */
+  /*__JOBS_GROUP_START__*/
+  // Mirrors server.py JOB_FAMILY_OF. The server stamps `family` on every
+  // /api/jobs row; this map only covers a payload served by an older instance.
+  var JOB_KIND_FAMILY = {
+    variant_action: "traffic", auto_mover: "traffic", auto_mover_move: "traffic",
+    warmup_pause: "mailbox", warmup_resume: "mailbox", bounce_pause: "mailbox",
+    bounce_resume: "mailbox", rest_enforce: "mailbox",
+    verify: "data", remove_bad: "data", pool_pull: "data",
+    recontact_buckets: "launch", recontact_create: "launch",
+    "reconnect-watch": "sync"
+  };
+  var JOB_FAMILIES = {
+    traffic: { name: "Email picks", icon: "sr-i-fam-traffic", cls: "sr-fam-traffic" },
+    mailbox: { name: "Inbox health", icon: "sr-i-fam-mailbox", cls: "sr-fam-mailbox" },
+    data: { name: "Lead work", icon: "sr-i-fam-data", cls: "sr-fam-data" },
+    launch: { name: "New campaigns", icon: "sr-i-fam-launch", cls: "sr-fam-launch" },
+    sync: { name: "Background jobs", icon: "sr-i-fam-sync", cls: "sr-fam-sync" },
+    other: { name: "Other", icon: "sr-i-fam-other", cls: "sr-fam-other" }
+  };
+  function njFamilyOf(job) {
+    var f = job && job.family;
+    if (f && JOB_FAMILIES[f]) return f;
+    return JOB_KIND_FAMILY[String((job && job.kind) || "")] || "other";
+  }
+  // Same summary shape: the two auto-mover kinds are one shape (a run and its
+  // moves are one story), everything else groups per kind.
+  function njShapeKey(job) {
+    var k = String((job && job.kind) || "");
+    if (k === "auto_mover" || k === "auto_mover_move" || k === "variant_action") return "traffic_move";
+    return k;
+  }
+  function njBucket(job) {
+    var t = (job && (job.finished_at || job.started_at || job.created_at)) || "";
+    var s = String(t).trim().replace(" ", "T");
+    if (!s) return 0;
+    if (!/(?:[zZ]|[+-]\d\d:?\d\d)$/.test(s)) s += "Z";
+    var ms = new Date(s).getTime();
+    if (isNaN(ms)) return 0;
+    return Math.floor(ms / 3600000);   // 60-minute bucket
+  }
+  function njNum(v) { var n = Number(v); return isNaN(n) ? 0 : n; }
+  function njCounts(job) {
+    return (job && job.counts && typeof job.counts === "object") ? job.counts : {};
+  }
+  // One sentence for a grouped row. Plain text — the caller escapes it.
+  function njGroupLabel(g) {
+    var jobs = g.jobs, n = jobs.length;
+    var boxes = 0, domains = 0;
+    jobs.forEach(function (j) {
+      var c = njCounts(j);
+      boxes += njNum(c.held_boxes) || njNum(c.boxes)
+        || (njNum(c.resumed) + njNum(c.smartlead_capped)) || njNum(c.paused) || 0;
+      domains += njNum(c.domains) || (Array.isArray(c.domains_list) ? c.domains_list.length : 0);
+    });
+    var dPart = domains > 0 ? (" across " + domains + " domain" + (domains === 1 ? "" : "s")) : "";
+    if (g.shape === "traffic_move") {
+      // An auto-mover move mirrors itself as a variant_action row (same write,
+      // two rows) — count the move jobs, and only fall back to the door rows
+      // when there are no move jobs at all, so one move never counts twice.
+      var mv = jobs.filter(function (j) { return j.kind === "auto_mover_move"; }).length;
+      var moves = mv || jobs.filter(function (j) { return j.kind === "variant_action"; }).length;
+      var parent = jobs.filter(function (j) { return j.kind === "auto_mover"; })[0];
+      var reviewed = null;
+      if (parent) {
+        var m = /(?:reviewing|checking)\s+(\d+)/i.exec(String(parent.label || ""));
+        if (m) reviewed = Number(m[1]);
+      }
+      if (parent && reviewed != null && reviewed >= moves) {
+        return "Looked at " + reviewed + " campaigns and improved " + moves;
+      }
+      return "Sent more of the best email on " + moves + " campaign" + (moves === 1 ? "" : "s");
+    }
+    if (g.shape === "warmup_resume") {
+      return "Woke up " + boxes + " inbox" + (boxes === 1 ? "" : "es")
+        + (dPart || " across " + n + " run" + (n === 1 ? "" : "s"));
+    }
+    if (g.shape === "warmup_pause") {
+      return "Let " + boxes + " inbox" + (boxes === 1 ? "" : "es") + " rest"
+        + (dPart || " across " + n + " run" + (n === 1 ? "" : "s"));
+    }
+    if (g.shape === "rest_enforce") {
+      return "Rested " + boxes + " inbox" + (boxes === 1 ? "" : "es") + " to keep them healthy"
+        + (domains > 0 ? " on " + domains + " domain" + (domains === 1 ? "" : "s") : "");
+    }
+    if (g.shape === "bounce_pause") return "Paused " + boxes + " inboxes that were bouncing";
+    if (g.shape === "bounce_resume") return "Turned " + boxes + " inboxes back on";
+    if (g.shape === "verify") return "Checked emails on " + n + " campaigns";
+    if (g.shape === "remove_bad") return "Took out bad leads on " + n + " campaign" + (n === 1 ? "" : "s");
+    if (g.shape === "pool_pull") return "Found more leads " + n + " time" + (n === 1 ? "" : "s");
+    return (JOB_FAMILIES[g.family] || JOB_FAMILIES.other).name + " — " + n + " updates";
+  }
+  /* Collapse consecutive-in-time jobs of the same family + status + shape that
+     finished inside the same 60-minute bucket. Returns a flat list of items:
+     {group:false, job} or {group:true, family, shape, status, key, jobs, label}. */
+  function njGroupJobs(list) {
+    var out = [], run = [];
+    function flush() {
+      if (!run.length) return;
+      if (run.length === 1) { out.push({ group: false, job: run[0] }); run = []; return; }
+      var g = { group: true, family: njFamilyOf(run[0]), shape: njShapeKey(run[0]),
+                status: run[0].status, key: "g-" + run[0].id, jobs: run.slice() };
+      g.label = njGroupLabel(g);
+      out.push(g);
+      run = [];
+    }
+    (list || []).forEach(function (j) {
+      if (!run.length) { run.push(j); return; }
+      var a = run[run.length - 1];
+      var same = njFamilyOf(a) === njFamilyOf(j) && njShapeKey(a) === njShapeKey(j)
+        && String(a.status) === String(j.status) && njBucket(a) === njBucket(j);
+      if (same) run.push(j); else { flush(); run.push(j); }
+    });
+    flush();
+    return out;
+  }
+  // Cosmetic display rules (owner 2026-09-03):
+  //  - HIDDEN_KINDS never render in the panel (the work + auto-retry still run).
+  //  - a FINISHED row that did zero work (0 moves / 0 inboxes / 0 leads) is
+  //    hidden; running and failed rows always show, even at zero.
+  var HIDDEN_KINDS = { verify: 1 };
+  var NJ_WORK_KEYS = ["moved", "resumed", "smartlead_capped", "held_boxes",
+    "boxes", "paused", "removed", "deleted", "pulled", "checked", "woke"];
+  function njZeroWork(job) {
+    var c = njCounts(job); var seen = false, total = 0;
+    NJ_WORK_KEYS.forEach(function (k) {
+      if (c[k] != null && !isNaN(Number(c[k]))) { seen = true; total += Number(c[k]); }
+    });
+    return seen && total === 0;
+  }
+  function njVisible(job) {
+    if (HIDDEN_KINDS[String(job.kind || "").toLowerCase()]) return false;
+    var done = job.status === "done" || job.status === "cancelled";
+    if (done && njZeroWork(job)) return false;
+    return true;
+  }
+
+  /*__JOBS_GROUP_END__*/
+
+  /* Split Rail: one plain-English sentence per job — verbs + one big number,
+     never raw counts keys. Falls back to the job label for unknown kinds. */
+  function jobSentence(job) {
+    const c = (job.counts && typeof job.counts === "object") ? job.counts : {};
+    const k = String(job.kind || "").toLowerCase();
+    const st = job.status;
+    const live = st === "queued" || st === "running";
+    const num = (n) => `<span class="sr-num">${jEsc(n)}</span>`;
+    // Name the domains, not just their count (owner report 2026-08-23: a
+    // "Warm up domain" click seemed to never reach the Tasks menu — the row
+    // was there, but "Rested 52 inboxes across 1 domain" carries nothing the
+    // clicker can recognise as THEIR domain). counts.domains_list is stamped
+    // at job creation, so queued/running rows name the domain too.
+    const dlist = Array.isArray(c.domains_list) ? c.domains_list.filter(Boolean) : [];
+    const dnames = dlist.length
+      ? (dlist.length <= 2 ? dlist.join(", ") : `${dlist[0]} +${dlist.length - 1} more`) : "";
+    const doms = dnames
+      ? ` <span class="sr-soft">— ${jEsc(dnames)}</span>`
+      : (c.domains != null
+        ? ` <span class="sr-soft">across ${jEsc(c.domains)} domain${c.domains === 1 ? "" : "s"}</span>` : "");
+    if (k === "warmup_pause") {
+      if (st === "interrupted" || st === "failed") return `<b>Rest stopped early</b>${doms}`;
+      const n = c.held_boxes ?? c.paused;
+      if (n != null) return `<b>${live ? "Resting" : "Rested"} ${num(n)} inboxes</b>${doms}`;
+      return `<b>${live ? "Resting inboxes" : "Rested inboxes"}</b>${doms}`;
+    }
+    if (k === "warmup_resume") {
+      if (st === "interrupted" || st === "failed") return `<b>Wake-up stopped early</b>${doms}`;
+      // The real count woken = what the audit service resumed PLUS what the
+      // direct Smartlead true-up re-capped (the audit inventory runs behind the
+      // fleet, so it routinely resumes 0 while the true-up does the actual work —
+      // job 692c39c565 woke 6 boxes but showed "Woke up 0", owner report
+      // 2026-08-24). The two sets are disjoint (the true-up only touches boxes
+      // still at cap 0), so they add.
+      const capped = Number(c.smartlead_capped) || 0;
+      const n = (c.resumed != null || capped) ? (Number(c.resumed) || 0) + capped : null;
+      if (n != null) return `<b>${live ? "Waking up" : "Woke up"} ${num(n)} inboxes</b>${doms}`;
+      return `<b>${live ? "Waking up inboxes" : "Woke up inboxes"}</b>${doms}`;
+    }
+    if (k === "bounce_pause") {
+      if (st === "interrupted" || st === "failed") return `<b>Bounce pause stopped early</b>`;
+      const n = c.paused;
+      if (n != null) return `<b>${live ? "Pausing" : "Paused"} ${num(n)} inboxes</b> <span class="sr-soft">(high bounce)</span>`;
+      return `<b>${live ? "Pausing inboxes" : "Paused inboxes"}</b> <span class="sr-soft">(high bounce)</span>`;
+    }
+    if (k === "bounce_resume") {
+      if (st === "interrupted" || st === "failed") return `<b>Resume stopped early</b>`;
+      const n = c.resumed;
+      if (n != null) return `<b>${live ? "Resuming" : "Resumed"} ${num(n)} inboxes</b>`;
+      return `<b>${live ? "Resuming inboxes" : "Resumed inboxes"}</b>`;
+    }
+    if (k.includes("verify")) {
+      if (st === "interrupted" || st === "failed") return `<b>Email check stopped early</b>`;
+      if (live) return `<b>Checking emails</b>`;
+      const n = c.checked ?? c.total;
+      return n != null ? `<b>Checked ${num(n)} emails</b>` : `<b>Checked emails</b>`;
+    }
+    if (k.includes("remove")) {
+      if (st === "interrupted" || st === "failed") return `<b>Clean-up stopped early</b>`;
+      if (live) return `<b>Removing bad leads</b>`;
+      const n = c.deleted ?? c.removed;
+      return n != null ? `<b>Removed ${num(n)} bad leads</b>` : `<b>Removed bad leads</b>`;
+    }
+    if (c.detail) return `<b>${jEsc(c.detail)}</b>`;
+    return `<b>${jEsc(job.label || job.kind || "Task")}</b>`;
+  }
+
+  function countsLine(job) {
+    const c = job.counts;
+    if (job.status === "interrupted") return jEsc(job.error || "The server restarted mid-run — press Resume to pick it back up.");
+    if (job.error && job.status === "failed") return jEsc(job.error);
+    if (job.status === "cancelled") {
+      const kind = String(job.kind || "").toLowerCase();
+      if (c && typeof c === "object" && (c.deleted != null || c.removed != null) && kind.includes("remove")) {
+        return `${jEsc(c.deleted ?? c.removed)} removed before cancel`;
+      }
+      const done = job.progress && job.progress.done;
+      if (done != null && done > 0) return `${jEsc(done)} checked before cancel`;
+      return "stopped before finishing";
+    }
+    if (!c || typeof c !== "object") return "";
+    // "Nothing to do" jobs carry the reason in counts.detail — show it instead
+    // of a confusing all-zero line.
+    if (c.detail) return jEsc(c.detail);
+    const kind = String(job.kind || "").toLowerCase();
+    if (kind.includes("verify")) {
+      const checked = c.checked ?? c.total ?? "–";
+      const good = c.good ?? "–", ca = c.catch_all ?? c.catchAll ?? "–", unk = c.unknown ?? "–", bad = c.bad ?? "–";
+      let line = `${jEsc(checked)} checked · ${jEsc(good)} good / ${jEsc(ca)} catch-all / ${jEsc(unk)} unknown / ${jEsc(bad)} bad`;
+      if (c.removed != null) line += ` · removed ${jEsc(c.removed)}`;
+      return line;
+    }
+    if (kind.includes("remove")) {
+      // Backend emits {requested, deleted, guarded, failed} for remove jobs.
+      const removed = c.deleted ?? "–";
+      const kept = c.guarded ?? 0;
+      let line = `${jEsc(removed)} removed`;
+      if (kept) line += ` · ${jEsc(kept)} kept (replied)`;
+      if (c.failed) line += ` · ${jEsc(c.failed)} failed`;
+      return line;
+    }
+    // Split Rail: no raw counts dump — the sentence carries the story.
+    return "";
+  }
+
+  function injectStyle() {
+    if (document.getElementById("nav-jobs-style")) return;
+    const style = document.createElement("style");
+    style.id = "nav-jobs-style";
+    style.textContent = `
+#nav-jobs-tab {
+  position: fixed; top: 50%; right: 0; transform: translateY(-50%);
+  z-index: 200; display: none;
+  background: var(--card, #fff); color: var(--ink-2, #3A332C);
+  border: 1px solid var(--line, #ECECEA); border-right: none;
+  border-radius: 10px 0 0 10px;
+  padding: 12px 8px; cursor: pointer;
+  font: 500 12px var(--font-sans, "DM Sans", "Helvetica Neue", system-ui, sans-serif); letter-spacing: -0.01em;
+  display: flex; flex-direction: column; align-items: center; gap: 8px;
+  box-shadow: -2px 2px 10px rgba(20, 17, 14, 0.08);
+}
+#nav-jobs-tab.nj-show { display: flex; }
+#nav-jobs-tab .nj-label {
+  writing-mode: vertical-rl; text-orientation: mixed; transform: rotate(180deg);
+}
+#nav-jobs-tab .nj-badge {
+  min-width: 18px; height: 18px; padding: 0 5px; border-radius: 999px;
+  background: var(--orange, #FF4D00); color: #fff;
+  font-size: 10.5px; font-weight: 600; line-height: 18px; text-align: center;
+  display: none;
+}
+#nav-jobs-tab .nj-badge.nj-on { display: inline-block; }
+#nav-jobs-tab .nj-badge.nj-pulse { animation: nj-pulse 1.2s ease-in-out infinite; }
+#nav-jobs-tab.nj-flash { animation: nj-flash 1.1s ease-in-out; }
+@keyframes nj-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(255, 77, 0, 0.5); }
+  50% { box-shadow: 0 0 0 5px rgba(255, 77, 0, 0); }
+}
+@keyframes nj-flash {
+  0%, 100% { box-shadow: -2px 2px 10px rgba(20, 17, 14, 0.08); }
+  30% { box-shadow: 0 0 0 4px rgba(255, 77, 0, 0.35); }
+}
+#nav-jobs-panel {
+  position: fixed; top: 0; right: 0; height: 100vh; width: 320px; max-width: 90vw;
+  background: var(--bg, #fff); border-left: 1px solid var(--line, #ECECEA);
+  box-shadow: -8px 0 24px rgba(20, 17, 14, 0.12);
+  z-index: 201; display: none; flex-direction: column;
+  /* Self-contained font: the panel is injected on every page, so it carries the
+     full Navreo stack itself and never inherits the host <body> — which falls to
+     the browser-default serif whenever a page's navreo.css font tokens don't load. */
+  font-family: var(--font-sans, "DM Sans", "Helvetica Neue", system-ui, sans-serif);
+  transform: translateX(100%); transition: transform 0.22s ease;
+}
+/* Buttons don't inherit font-family from ancestors by UA rule — pull them back in. */
+#nav-jobs-panel button { font-family: inherit; }
+#nav-jobs-panel.nj-open { display: flex; transform: translateX(0); }
+#nav-jobs-tab.nj-shifted { right: min(320px, 90vw); z-index: 202; }
+#nav-jobs-panel .nj-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 16px 12px; border-bottom: 1px solid var(--line, #ECECEA); flex: none;
+}
+#nav-jobs-panel .nj-title {
+  font-family: var(--font-display, "Acid Grotesk", "DM Sans", "Helvetica Neue", system-ui, sans-serif); font-size: 15px; color: var(--ink, #14110E);
+}
+#nav-jobs-panel .nj-close {
+  border: none; background: none; cursor: pointer; font-size: 18px; line-height: 1;
+  color: var(--ink-3, #6B6055); padding: 4px 6px; border-radius: 6px;
+}
+#nav-jobs-panel .nj-close:hover { background: var(--bg-sunken, #F7F7F6); }
+#nav-jobs-panel .nj-head-actions { display: flex; align-items: center; gap: 6px; }
+#nav-jobs-panel .nj-clear-btn {
+  border: 1px solid var(--line, #ECECEA); background: var(--card, #fff);
+  color: var(--ink-3, #6B6055); font-size: 11px; font-weight: 500;
+  padding: 3px 9px; border-radius: 999px; cursor: pointer; line-height: 1.4;
+}
+#nav-jobs-panel .nj-clear-btn:hover { background: var(--bg-sunken, #F7F7F6); color: var(--ink, #14110E); }
+#nav-jobs-panel .nj-clear-btn:disabled { opacity: 0.5; cursor: default; }
+.nj-dismiss-btn {
+  border: none; background: none; cursor: pointer; font-size: 16px; line-height: 1;
+  color: var(--brown-400, #A89684); padding: 0 2px 0 6px; flex: none; align-self: flex-start;
+}
+.nj-dismiss-btn:hover { color: var(--ink, #14110E); }
+.nj-dismiss-btn:disabled { opacity: 0.4; cursor: default; }
+#nav-jobs-panel .nj-list { flex: 1; overflow-y: auto; padding: 10px 14px 16px; }
+#nav-jobs-panel .nj-empty {
+  text-align: center; color: var(--brown-400, #A89684); font-size: 13px; padding: 40px 0;
+}
+.nj-card {
+  border: 1px solid var(--line, #ECECEA); border-radius: var(--radius, 12px);
+  padding: 12px 13px; margin-bottom: 10px; background: var(--card, #fff);
+}
+.nj-card-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.nj-card-label { font-size: 13px; font-weight: 500; color: var(--ink, #14110E); word-break: break-word; }
+.nj-pill {
+  font-size: 10.5px; font-weight: 500; padding: 2px 8px; border-radius: 999px;
+  display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; flex: none;
+}
+.nj-pill .nj-dot { width: 6px; height: 6px; border-radius: 999px; background: currentColor; flex: none; }
+.nj-pill.jq-n { background: #F2F2F0; color: var(--ink-2, #3A332C); }
+.nj-pill.jq-b { background: var(--orange-100, #FFE4D6); color: var(--orange-700, #A83100); }
+.nj-pill.jq-g { background: var(--green-bg, #E2F1E9); color: #195C3F; }
+.nj-pill.jq-r { background: var(--red-bg, #F7DCD5); color: #861E10; }
+.nj-pill.jq-c { background: #F2F2F0; color: var(--ink-3, #6B6055); }
+.nj-card-progress { font-size: 11.5px; color: var(--ink-3, #6B6055); margin-bottom: 3px; display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.nj-card-time { font-size: 11px; color: var(--brown-400, #A89684); margin-bottom: 4px; }
+.nj-card-counts { font-size: 11.5px; color: var(--ink-2, #3A332C); line-height: 1.4; }
+.nj-card.jf-failed .nj-card-counts { color: var(--red, #C2371F); }
+.nj-cancel-btn {
+  border: 1px solid var(--line, #ECECEA); background: var(--card, #fff);
+  color: var(--ink-3, #6B6055); font-size: 10.5px; font-weight: 500;
+  padding: 2px 8px; border-radius: 999px; cursor: pointer; flex: none;
+  line-height: 1.4;
+}
+.nj-cancel-btn:hover { background: var(--bg-sunken, #F7F7F6); color: var(--ink, #14110E); }
+.nj-cancel-btn:disabled { opacity: 0.5; cursor: default; }
+.nj-card-actions { margin-top: 8px; }
+.nj-resume-btn {
+  border: 1px solid var(--orange, #FF4D00); background: var(--orange, #FF4D00);
+  color: #fff; font-size: 11px; font-weight: 600;
+  padding: 4px 12px; border-radius: 999px; cursor: pointer; flex: none; line-height: 1.4;
+}
+.nj-resume-btn:hover { background: var(--orange-700, #C63B00); border-color: var(--orange-700, #C63B00); }
+.nj-resume-btn:disabled { opacity: 0.6; cursor: default; }
+/* ── Split Rail ── */
+.sr-zone {
+  display: flex; align-items: center; gap: 8px; margin: 18px 2px 6px;
+  font-size: 10.5px; font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase;
+  color: var(--ink-3, #6B6055);
+}
+.sr-zone:first-child { margin-top: 4px; }
+.sr-zone .sr-zn { margin-left: auto; font-family: var(--font-mono, "JetBrains Mono", ui-monospace, "SF Mono", monospace); letter-spacing: 0; }
+.sr-row {
+  display: flex; align-items: center; gap: 11px; padding: 11px 2px;
+  border-bottom: 1px solid var(--line, #ECECEA);
+}
+.sr-row:last-child { border-bottom: none; }
+.sr-mark {
+  width: 30px; height: 30px; border-radius: 9px; flex: none;
+  display: grid; place-items: center; border: 1px solid;
+}
+.sr-mark svg { display: block; }
+.sr-mark.sr-done { background: var(--green-bg, #E2F1E9); border-color: #C4E2D3; color: var(--green, #2E7D5B); }
+.sr-mark.sr-stop { background: var(--red-bg, #F7DCD5); border-color: #EFC7BB; color: var(--red, #C2371F); }
+.sr-mark.sr-live { background: var(--amber-bg, #F8EAC4); border-color: #EBD79E; color: #8F6600; }
+.sr-mark.sr-idle { background: var(--bg-sunken, #F7F7F6); border-color: var(--line-2, #DDDDDA); color: var(--ink-3, #6B6055); }
+/* Family accents: the icon carries the family colour; failed stays red and
+   live stays amber, so state always outranks family. */
+.sr-mark.sr-fam-traffic { background: var(--orange-100, #FFE4D6); border-color: #F6C9B1; color: var(--orange-700, #A83100); }
+.sr-mark.sr-fam-mailbox { background: var(--green-bg, #E2F1E9); border-color: #C4E2D3; color: var(--green, #2E7D5B); }
+.sr-mark.sr-fam-data { background: #E6EDF9; border-color: #C9D8EF; color: #2A4E8C; }
+.sr-mark.sr-fam-launch { background: #EFE7F8; border-color: #DCCCEE; color: #5B3A87; }
+.sr-mark.sr-fam-sync { background: var(--bg-sunken, #F7F7F6); border-color: var(--line-2, #DDDDDA); color: var(--brown-500, #7A6A58); }
+.sr-mark.sr-fam-other { background: var(--bg-sunken, #F7F7F6); border-color: var(--line-2, #DDDDDA); color: var(--ink-3, #6B6055); }
+.sr-retry { color: #8F6600; font-weight: 600; }
+.sr-grow { cursor: pointer; }
+.sr-grow:hover { background: var(--bg-sunken, #F7F7F6); }
+.sr-count { font-size: 10.5px; font-weight: 600; padding: 1px 7px; border-radius: 999px; background: var(--bg-sunken, #F7F7F6); color: var(--ink-3, #6B6055); flex: none; }
+.sr-chev { color: var(--brown-400, #A89684); transition: transform 0.15s ease; flex: none; }
+.sr-chev.sr-open { transform: rotate(90deg); }
+.sr-kids { padding-left: 20px; border-left: 2px solid var(--line, #ECECEA); margin-left: 14px; }
+.sr-kids .sr-row { padding: 9px 2px; }
+.sr-spin { animation: sr-spin 2.4s linear infinite; transform-origin: center; }
+@keyframes sr-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .sr-spin { animation: none; } }
+.sr-txt { flex: 1; min-width: 0; font-size: 13px; line-height: 1.35; color: var(--ink, #14110E); }
+.sr-txt b { font-weight: 600; }
+.sr-num { font-family: var(--font-mono, "JetBrains Mono", ui-monospace, "SF Mono", monospace); font-variant-numeric: tabular-nums; font-weight: 500; }
+.sr-soft { color: var(--ink-3, #6B6055); }
+.sr-when { color: var(--ink-3, #6B6055); font-size: 11px; margin-top: 1px; }
+.sr-detail { color: var(--red, #C2371F); font-size: 11px; margin-top: 1px; }
+.sr-side { display: flex; align-items: center; gap: 4px; flex: none; }
+.sr-idlebox {
+  display: flex; align-items: center; gap: 11px; padding: 12px;
+  border: 1px dashed var(--line-2, #DDDDDA); border-radius: var(--radius, 12px);
+  color: var(--ink-3, #6B6055); font-size: 12.5px; background: var(--bg-sunken, #F7F7F6);
+}
+.sr-more {
+  width: 100%; margin-top: 10px; border: 1px solid var(--line, #ECECEA);
+  background: var(--card, #fff); color: var(--ink-3, #6B6055);
+  font: 600 11.5px var(--font-sans, "DM Sans", "Helvetica Neue", system-ui, sans-serif); padding: 7px; border-radius: 999px; cursor: pointer;
+}
+.sr-more:hover { color: var(--ink, #14110E); border-color: var(--line-2, #DDDDDA); }
+.sr-foot { text-align: center; color: var(--ink-3, #6B6055); font-size: 11.5px; margin-top: 18px; padding-bottom: 6px; }
+    `;
+    document.head.appendChild(style);
+  }
+
+  function buildDom() {
+    elRoot = document.createElement("div");
+
+    // Split Rail state marks — geometry, not emoji.
+    const defs = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    defs.setAttribute("width", "0"); defs.setAttribute("height", "0");
+    defs.style.position = "absolute";
+    defs.innerHTML = `
+      <symbol id="sr-i-check" viewBox="0 0 16 16"><path d="M3 8.5 6.5 12 13 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-loop" viewBox="0 0 16 16"><polyline points="13.5 2.5 13.5 6.5 9.5 6.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M12.4 10a5.5 5.5 0 1 1-1.3-5.7l2.4 2.2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="sr-i-stop" viewBox="0 0 16 16"><path d="M8 3v6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="8" cy="12.4" r="1.3" fill="currentColor"/></symbol>
+      <symbol id="sr-i-fam-traffic" viewBox="0 0 16 16"><path d="M2 5h7l-2-2M14 11H7l2 2" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-mailbox" viewBox="0 0 16 16"><rect x="2" y="3.5" width="12" height="9" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M2.8 5 8 8.8 13.2 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-data" viewBox="0 0 16 16"><path d="M8 2.5v7m0 0 2.8-2.8M8 9.5 5.2 6.7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M2.8 12.2h10.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></symbol>
+      <symbol id="sr-i-fam-launch" viewBox="0 0 16 16"><path d="M14 2 2 7l4.6 1.6L8.4 13z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-sync" viewBox="0 0 16 16"><path d="M13 7A5 5 0 0 0 4 4.4M3 9a5 5 0 0 0 9 2.6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M13 3v4h-4M3 13V9h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-fam-other" viewBox="0 0 16 16"><circle cx="8" cy="8" r="5" fill="none" stroke="currentColor" stroke-width="1.8"/></symbol>
+      <symbol id="sr-i-chev" viewBox="0 0 16 16"><path d="M5.5 3.5 10.5 8l-5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></symbol>
+      <symbol id="sr-i-moon" viewBox="0 0 16 16"><path d="M12.6 9.7A5.4 5.4 0 0 1 6.3 3.4a5.4 5.4 0 1 0 6.3 6.3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></symbol>`;
+    elRoot.appendChild(defs);
+
+    elTab = document.createElement("button");
+    elTab.id = "nav-jobs-tab";
+    elTab.type = "button";
+    elTab.innerHTML = `<span class="nj-badge" id="nav-jobs-badge">0</span><span class="nj-label">Tasks</span>`;
+    elTab.addEventListener("click", () => setOpen(!isOpen(), isOpen()));
+
+    elPanel = document.createElement("div");
+    elPanel.id = "nav-jobs-panel";
+    elPanel.innerHTML = `
+      <div class="nj-head">
+        <div class="nj-title">Tasks in progress</div>
+        <div class="nj-head-actions">
+          <button type="button" class="nj-clear-btn" title="Remove all finished tasks">Clear finished</button>
+          <button type="button" class="nj-close" aria-label="Close">&times;</button>
+        </div>
+      </div>
+      <div class="nj-list" id="nav-jobs-list"></div>
+    `;
+    elPanel.querySelector(".nj-close").addEventListener("click", () => setOpen(false, true));
+    elPanel.querySelector(".nj-clear-btn").addEventListener("click", (e) => {
+      const b = e.currentTarget; b.disabled = true; b.textContent = "Clearing…";
+      // Optimistic: drop finished from the list now.
+      jobs = jobs.filter((j) => j.status === "queued" || j.status === "running");
+      render();
+      fetch("/api/jobs/dismiss-finished", { method: "POST" })
+        .then(() => fetchJobs())
+        .catch(() => { /* next poll reconciles */ })
+        .finally(() => { b.disabled = false; b.textContent = "Clear finished"; });
+    });
+
+    elBadge = elTab.querySelector("#nav-jobs-badge");
+    elList = elPanel.querySelector("#nav-jobs-list");
+    elList.addEventListener("click", onListClick);
+
+    elRoot.appendChild(elTab);
+    elRoot.appendChild(elPanel);
+    document.body.appendChild(elRoot);
+  }
+
+  // Set of job ids with an in-flight cancel POST — guards double-clicks
+  // (the next poll removes the id once the job leaves queued/running).
+  const cancelling = new Set();
+  const resuming = new Set();  // same guard for in-flight Resume POSTs
+  const dismissing = new Set();  // same guard for in-flight Dismiss POSTs
+
+  function onListClick(e) {
+    const dismiss = e.target.closest(".nj-dismiss-btn");
+    if (dismiss) {
+      const jid = dismiss.getAttribute("data-jid");
+      if (!jid || dismissing.has(jid)) return;
+      dismissing.add(jid);
+      dismiss.disabled = true;
+      // Optimistic: drop it from the local list immediately so it feels instant.
+      jobs = jobs.filter((j) => j.id !== jid);
+      render();
+      fetch(`/api/jobs/${encodeURIComponent(jid)}/dismiss`, { method: "POST" })
+        .then(() => fetchJobs())
+        .catch(() => { /* next poll reconciles */ })
+        .finally(() => dismissing.delete(jid));
+      return;
+    }
+    const killGroup = e.target.closest(".nj-dismiss-group");
+    if (killGroup) {
+      const ids = (killGroup.getAttribute("data-jids") || "").split(",").filter(Boolean);
+      if (!ids.length) return;
+      killGroup.disabled = true;
+      const drop = new Set(ids);
+      jobs = jobs.filter((j) => !drop.has(j.id));   // optimistic
+      render();
+      // The per-job endpoint is the only dismiss door; a group is a handful of
+      // rows, so N small POSTs beat a new bulk route.
+      Promise.all(ids.map((jid) =>
+        fetch(`/api/jobs/${encodeURIComponent(jid)}/dismiss`, { method: "POST" }).catch(() => {})))
+        .then(() => fetchJobs()).catch(() => { /* next poll reconciles */ });
+      return;
+    }
+    const grow = e.target.closest(".sr-grow");
+    if (grow) {
+      const k = grow.getAttribute("data-gkey");
+      if (k) { srOpenGroups.has(k) ? srOpenGroups.delete(k) : srOpenGroups.add(k); render(); }
+      return;
+    }
+    const resume = e.target.closest(".nj-resume-btn");
+    if (resume) {
+      const jid = resume.getAttribute("data-jid");
+      if (!jid || resuming.has(jid)) return;
+      resuming.add(jid);
+      resume.disabled = true;
+      resume.textContent = "Resuming…";
+      fetch(`/api/jobs/${encodeURIComponent(jid)}/resume`, { method: "POST" })
+        .then((r) => r.json().catch(() => ({})))
+        .then((j) => {
+          if (j && j.job_id) {
+            // The continuation supersedes this row — drop the old interrupted
+            // job now so it leaves "Needs you" immediately instead of lingering
+            // there beside the new "Happening now" job until the next poll.
+            jobs = jobs.filter((x) => x.id !== jid);
+            render();
+            ping();                                // pull in the new continuation job
+          } else if (resume.isConnected) { resume.disabled = false; resume.textContent = "Resume"; }
+        })
+        .catch(() => { if (resume.isConnected) { resume.disabled = false; resume.textContent = "Resume"; } })
+        .finally(() => resuming.delete(jid));
+      return;
+    }
+    const btn = e.target.closest(".nj-cancel-btn");
+    if (!btn) return;
+    const jid = btn.getAttribute("data-jid");
+    if (!jid || cancelling.has(jid)) return;
+    cancelling.add(jid);
+    btn.disabled = true;
+    btn.textContent = "Cancelling…";
+    fetch(`/api/jobs/${encodeURIComponent(jid)}/cancel`, { method: "POST" })
+      .then(() => fetchJobs())
+      .catch(() => { /* next poll will reconcile state either way */ })
+      .finally(() => cancelling.delete(jid));
+  }
+
+  function setOpen(open, userInitiated) {
+    if (open) {
+      elPanel.classList.add("nj-open");
+      elTab.classList.add("nj-shifted"); // tab rides the panel edge so it stays a toggle
+    } else {
+      elPanel.classList.remove("nj-open");
+      elTab.classList.remove("nj-shifted");
+      if (userInitiated) userClosedThisView = true;
+    }
+    saveOpen(open);
+  }
+
+  function isOpen() {
+    return !!(elPanel && elPanel.classList.contains("nj-open"));
+  }
+
+  function flashTab() {
+    if (!elTab) return;
+    elTab.classList.remove("nj-flash");
+    // force reflow so re-adding the class restarts the animation
+    void elTab.offsetWidth;
+    elTab.classList.add("nj-flash");
+    setTimeout(() => elTab && elTab.classList.remove("nj-flash"), 1300);
+  }
+
+  function renderRow(job, queuePos, campaignBusy) {
+    const status = job.status || "queued";
+    const live = status === "queued" || status === "running";
+    const stopped = status === "failed" || status === "interrupted";
+    // Family accent: done rows wear their family's icon + colour; failed keeps
+    // the red stop state and live keeps the amber spinner (state outranks family).
+    const fam = JOB_FAMILIES[njFamilyOf(job)] || JOB_FAMILIES.other;
+    const markCls = live ? "sr-live" : stopped ? "sr-stop" : fam.cls;
+    const icon = live ? "sr-i-loop" : stopped ? "sr-i-stop" : fam.icon;
+    const spin = status === "running" ? " sr-spin" : "";
+    const mark = `<div class="sr-mark ${markCls}"><svg width="14" height="14" class="ic${spin}"><use href="#${icon}"/></svg></div>`;
+
+    // Secondary line: relative time, plus progress / queue position while live.
+    const bits = [];
+    if (status === "running" && job.progress && typeof job.progress === "object"
+        && job.progress.done != null && job.progress.total > 0) {
+      const pct = Math.round((job.progress.done / job.progress.total) * 100);
+      bits.push(`${jEsc(job.progress.done)} of ${jEsc(job.progress.total)} · ${pct}%`);
+    }
+    if (status === "queued") {
+      bits.push(queuePos == null ? "Waiting…"
+        : queuePos <= 0 ? "Next up"
+        : queuePos === 1 ? "Waiting · 1 ahead"
+        : `Waiting · ${queuePos} ahead`);
+    }
+    // Auto-retry in flight: the continuation carries resume_count from the
+    // failed original, so the row says which attempt the user is watching.
+    const rc = Number(job.resume_count) || 0;
+    if (live && rc > 0 && job.auto_resumed) {
+      bits.push(`<span class="sr-retry">Retrying (${rc}/3)</span>`);
+    }
+    const timeStr = jRelTime(job.started_at || job.finished_at);
+    if (timeStr) bits.push(timeStr);
+    if (status === "cancelled") bits.push(countsLine(job) || "stopped by you");
+    const when = bits.length ? `<div class="sr-when">${bits.join(" · ")}</div>` : "";
+    // Failures keep their reason, in red, under the sentence.
+    let detail = "";
+    if (status === "failed" || status === "interrupted") {
+      const line = countsLine(job);
+      if (line) detail = `<div class="sr-detail">${line}</div>`;
+    }
+
+    // Actions ride the right edge (same classes → same click handlers).
+    const side = [];
+    if (live) side.push(`<button type="button" class="nj-cancel-btn" data-jid="${jEsc(job.id)}">Cancel</button>`);
+    const c0 = (job.counts && typeof job.counts === "object") ? job.counts : {};
+    const verifyResumable = status === "interrupted"
+      && (job.kind === "verify" || job.kind === "remove_bad") && !job.dry_run && !campaignBusy;
+    // Warm-up rest/reactivate can be re-fired straight from here — the backend
+    // rebuilds the request from the durable domain list. Only offer it when that
+    // list survived (older rows with empty counts can't be reconstructed).
+    const warmupResumable = (status === "interrupted" || status === "failed")
+      && (job.kind === "warmup_pause" || job.kind === "warmup_resume")
+      && Array.isArray(c0.domains_list) && c0.domains_list.length > 0;
+    if (verifyResumable || warmupResumable) side.push(`<button type="button" class="nj-resume-btn" data-jid="${jEsc(job.id)}">Resume</button>`);
+    const finished = !live;
+    if (finished) side.push(`<button type="button" class="nj-dismiss-btn" data-jid="${jEsc(job.id)}" title="Remove this task from the list" aria-label="Dismiss">&times;</button>`);
+
+    return `<div class="sr-row">
+      ${mark}
+      <div class="sr-txt">${jobSentence(job)}${when}${detail}</div>
+      <div class="sr-side">${side.join("")}</div>
+    </div>`;
+  }
+
+  const srOpenGroups = new Set();   // grouped rows the user has expanded
+  const SR_SHOW = 5;
+  let srExpanded = false;
+
+  function render() {
+    const jobsV = jobs.filter(njVisible);
+    if (!jobs.length) {
+      elList.innerHTML = `<div class="nj-empty">No tasks yet.</div>`;
+    } else if (!jobsV.length) {
+      elList.innerHTML = `<div class="nj-empty">No tasks yet.</div>`;
+    } else {
+      const running = jobsV.filter((j) => j.status === "running").length;
+      const queuedSeqs = jobsV.filter((j) => j.status === "queued")
+        .map((j) => j.queue_seq).filter((s) => s != null).sort((a, b) => a - b);
+      const posFor = (job) => {
+        if (job.status !== "queued") return null;
+        return running + (job.queue_seq != null
+          ? queuedSeqs.filter((s) => s < job.queue_seq).length : 0);
+      };
+      const busyCampaigns = new Set(jobsV
+        .filter((j) => (j.status === "queued" || j.status === "running") && j.campaign_id != null)
+        .map((j) => String(j.campaign_id)));
+      const row = (j) => renderRow(j, posFor(j), j.campaign_id != null && busyCampaigns.has(String(j.campaign_id)));
+      // Same-family, same-shape, same-hour runs collapse into one row with a
+      // count; click expands to the individual jobs (each keeps its own ✕).
+      const rows = (list) => njGroupJobs(list).map((it) => {
+        if (!it.group) return row(it.job);
+        const open = srOpenGroups.has(it.key);
+        const fam = JOB_FAMILIES[it.family] || JOB_FAMILIES.other;
+        const stopped = it.status === "failed" || it.status === "interrupted";
+        const live = it.status === "queued" || it.status === "running";
+        const markCls = live ? "sr-live" : stopped ? "sr-stop" : fam.cls;
+        const icon = live ? "sr-i-loop" : stopped ? "sr-i-stop" : fam.icon;
+        const when = jRelTime(it.jobs[0].finished_at || it.jobs[0].started_at);
+        const ids = it.jobs.map((j) => j.id).join(",");
+        const kill = (!live)
+          ? `<button type="button" class="nj-dismiss-group" data-jids="${jEsc(ids)}" title="Remove these ${it.jobs.length} tasks" aria-label="Dismiss all">&times;</button>` : "";
+        return `<div class="sr-row sr-grow" data-gkey="${jEsc(it.key)}" role="button" aria-expanded="${open}">
+          <div class="sr-mark ${markCls}"><svg width="14" height="14"><use href="#${icon}"/></svg></div>
+          <div class="sr-txt"><b>${jEsc(it.label)}</b>${when ? `<div class="sr-when">${jEsc(fam.name)} · ${when}</div>` : `<div class="sr-when">${jEsc(fam.name)}</div>`}</div>
+          <div class="sr-side"><span class="sr-count">${it.jobs.length}</span>
+            <svg class="sr-chev${open ? " sr-open" : ""}" width="12" height="12"><use href="#sr-i-chev"/></svg>${kill}</div>
+        </div>` + (open ? `<div class="sr-kids">${it.jobs.map(row).join("")}</div>` : "");
+      }).join("");
+
+      // Split Rail zones: Needs you → Happening now → Just finished.
+      const needs = jobsV.filter((j) => j.status === "failed" || j.status === "interrupted");
+      const now = jobsV.filter((j) => j.status === "queued" || j.status === "running");
+      const fin = jobsV.filter((j) => j.status === "done" || j.status === "cancelled");
+      const two = (n) => String(n).padStart(2, "0");
+      let html = "";
+      if (needs.length) html += `<div class="sr-zone">Needs you <span class="sr-zn">${two(needs.length)}</span></div>${rows(needs)}`;
+      html += `<div class="sr-zone">Happening now <span class="sr-zn">${two(now.length)}</span></div>`;
+      html += now.length ? rows(now)
+        : `<div class="sr-idlebox"><div class="sr-mark sr-idle"><svg width="14" height="14"><use href="#sr-i-moon"/></svg></div>Quiet right now.</div>`;
+      if (fin.length) {
+        html += `<div class="sr-zone">Just finished <span class="sr-zn">${two(fin.length)}</span></div>`;
+        const shown = srExpanded ? fin : fin.slice(0, SR_SHOW);
+        html += rows(shown);
+        if (fin.length > SR_SHOW) {
+          html += `<button type="button" class="sr-more">${srExpanded ? "Show less" : `Show earlier (${fin.length - SR_SHOW} more)`}</button>`;
+        }
+        const boxes = fin.reduce((a, j) => {
+          const c = (j.counts && typeof j.counts === "object") ? j.counts : {};
+          // Same true-up truth as jobSentence: a resume's real tally is
+          // resumed + smartlead_capped (held_boxes covers the pause side).
+          const woke = (Number(c.resumed) || 0) + (Number(c.smartlead_capped) || 0);
+          return a + (Number(c.held_boxes) || woke || 0);
+        }, 0);
+        if (boxes > 0) html += `<div class="sr-foot">The engine handled <span class="sr-num">${boxes.toLocaleString()}</span> inboxes for you.</div>`;
+      }
+      elList.innerHTML = html;
+      const moreBtn = elList.querySelector(".sr-more");
+      if (moreBtn) moreBtn.addEventListener("click", () => { srExpanded = !srExpanded; render(); });
+    }
+    const activeCount = jobs.filter(njVisible).filter((j) => j.status === "queued" || j.status === "running").length;
+    elBadge.textContent = String(activeCount);
+    elBadge.classList.toggle("nj-on", activeCount > 0);
+    elBadge.classList.toggle("nj-pulse", activeCount > 0);
+  }
+
+  function currentInterval() {
+    const anyActive = jobs.some((j) => j.status === "queued" || j.status === "running");
+    return anyActive ? POLL_FAST_MS : POLL_SLOW_MS;
+  }
+
+  // Hidden tabs don't poll (egress audit 2026-09-03: this rail ships on every
+  // page and a forgotten background tab was 80-900 Supabase reads/hour). The
+  // timer is parked while document.hidden and a visibilitychange re-fires
+  // one fetch the moment the tab is looked at again, so nothing is missed.
+  let inFlight = false;
+  function scheduleNext() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = null;
+    if (document.hidden) return;
+    pollTimer = setTimeout(() => fetchJobs(), currentInterval());
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !pollTimer && !inFlight) fetchJobs();
+  });
+
+  function fetchJobs() {
+    if (inFlight) return;
+    inFlight = true;
+    fetch("/api/jobs", { cache: "no-store" })
+      .finally(() => { inFlight = false; })
+      .then((r) => {
+        if (!r.ok) throw new Error("bad status " + r.status);
+        return r.json();
+      })
+      .then((data) => {
+        backendOk = true;
+        const list = (data && Array.isArray(data.jobs)) ? data.jobs : [];
+        processJobs(list);
+        elTab.classList.add("nj-show");
+        scheduleNext();
+      })
+      .catch((err) => {
+        if (!warnedOnce) {
+          warnedOnce = true;
+          console.warn("[nav-jobs] tasks in progress unavailable:", err && err.message ? err.message : err);
+        }
+        backendOk = false;
+        if (elTab) elTab.classList.remove("nj-show");
+        if (elPanel) elPanel.classList.remove("nj-open");
+        scheduleNext();
+      });
+  }
+
+  function processJobs(list) {
+    const prevStatusById = {};
+    jobs.forEach((j) => { prevStatusById[j.id] = j.status; });
+
+    const newIds = [];
+    let anyJustFinished = false;
+    list.forEach((j) => {
+      if (!knownIds.has(j.id)) newIds.push(j.id);
+      const prevStatus = prevStatusById[j.id];
+      if (prevStatus === "running" && (j.status === "done" || j.status === "failed" || j.status === "cancelled" || j.status === "interrupted")) anyJustFinished = true;
+    });
+
+    jobs = list;
+
+    if (!havePolledOnce) {
+      havePolledOnce = true;
+      knownIds = new Set(list.map((j) => j.id));
+      render();
+      return;
+    }
+
+    knownIds = new Set(list.map((j) => j.id));
+    render();
+
+    if (newIds.length && document.visibilityState === "visible" && !userClosedThisView) {
+      setOpen(true);
+    } else if ((newIds.length || anyJustFinished) && !isOpen()) {
+      flashTab();
+    }
+  }
+
+  function ping() {
+    fetchJobs();
+  }
+
+  function init() {
+    if (isHeadless()) return;  // embed mode: no floating "Tasks" chrome
+    // Client share link: no DOM built (so no #nav-jobs-tab) and, crucially,
+    // no fetchJobs() - /api/jobs is owner-only and would 403 on a loop.
+    if (isClientShare()) return;
+    injectStyle();
+    buildDom();
+    if (isOpenSaved()) setOpen(true);
+    render();
+    fetchJobs();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", init);
+  } else {
+    init();
+  }
+
+  window.NavreoJobs = { ping };
+})();
+
+/* ===================================================================
+   NavreoCapacity — the ONE "Capacity used" number, shared by the
+   Analytics tab (deliverability.html) and the Fleet heat map
+   (mailboxes-hub.html). Both read /api/fleet-capacity + /api/client-windows.
+
+   THE FORMULA (owner ruling 2026-09-02, superseding capacity-parity-align):
+   capacity used = WEEKDAY sends ÷ WEEKDAY capacity over the window.
+     • Weekends are ALWAYS dropped. Navreo does not send Sat/Sun, so a weekend
+       in the denominator is capacity nobody ever intended to use — it made a
+       fully-booked fleet read ~71% on a 7-day window. The old `hideWeekends`
+       option is GONE on purpose: no caller may re-enable weekends, and the
+       Analytics "Hide weekends" toggle now only styles the CHART, never this
+       number.
+     • CAP is configuration, so a missing/zero cap day is gap-filled from the
+       neighbouring RECORDED caps (the cron simply didn't write that day).
+     • SENT is measurement, so it is NEVER interpolated or fabricated. A dead
+       weekday (pause, outage, 429) counts as the zero it really was — the old
+       pipeline best-guessed those days up to the window median and quietly
+       erased them from utilisation.
+     • A day that sent MORE than its recorded cap counts its own sends as the
+       denominator for that day, so the percentage can never exceed 100 and the
+       overage is reported separately as `exceeded` instead of being hidden.
+       (Own-workspace pools are high-water-snapped once a day at 04:30, so a
+       recorded cap legitimately sits below that day's sends until the next
+       snapshot — see snapshot_all_capacity in server.py.)
+   Keep this the single definition so the two surfaces can never drift.
+   =================================================================== */
+(function () {
+  function ci(map, name) {                 // case-insensitive object lookup
+    if (!map || name == null) return undefined;
+    if (map[name] != null) return map[name];
+    var lc = String(name).toLowerCase();
+    for (var k in map) if (k.toLowerCase() === lc) return map[k];
+    return undefined;
+  }
+  // Per-day capacity series for one client, on the cap.days axis:
+  //  • own-workspace clients (asteri/krg/grout) and the fleet sum (__all) →
+  //    cap.capacity[wsKey], exact per-day
+  //  • shared navreo-workspace clients → the real per-day series the cap crons
+  //    record (client_caps_daily). Un-recorded days are filled from the
+  //    client's OWN recorded caps only: interpolated between two records,
+  //    carried flat before the first record and after the last. A client's
+  //    capacity is configuration that only changes when someone changes it —
+  //    while its mailboxes warm up before go-live nothing changes, so the
+  //    line must read flat. It used to borrow the navreo POOL's day-by-day
+  //    shape (scaled to the client's cap), so a client that went live on
+  //    Sep 2 showed the pool's 9k→44k swings across its whole warm-up
+  //    (Bjion 2026-09-03: "the way it drops up and down … something isn't
+  //    right"). The pool is now only a level (never a shape): when a client
+  //    has NO daily record at all, its live cap is carried flat across the
+  //    whole window.
+  function capSeries(cap, name, wsKey) {
+    if (!cap || !cap.capacity) return null;
+    var own = wsKey && cap.capacity[wsKey];
+    if (Array.isArray(own)) return own;                    // own-workspace: exact per-day
+    var realRaw = ci(cap.client_caps_daily, name);
+    var real = (Array.isArray(realRaw) && realRaw.some(function (v) { return v != null; })) ? realRaw : null;
+    if (real) return fillCap(real).map(function (v) { return v == null ? null : Math.round(v); });   // own records only, never the pool's shape
+    // No daily record at all (brand-new client, or the cron has not written yet):
+    // carry today's live per-client cap flat across the window. client_caps can be
+    // empty {} while the restore sweep warms; then there is nothing to say and
+    // every day stays null (the 24H view shows "—" rather than a made-up number).
+    var cur = ci(cap.client_caps, name);
+    var axisLen = (cap.days || cap.capacity.navreo || []).length;
+    if (cur == null || !axisLen) return null;
+    var flat = []; for (var i = 0; i < axisLen; i++) flat.push(Math.round(cur));
+    return flat;
+  }
+  // Re-key a (values,srcDays) series onto a target date axis — Analytics' alignCap.
+  function alignTo(vals, srcDays, axis) {
+    if (!vals || !srcDays || !axis) return null;
+    var m = {}; for (var i = 0; i < srcDays.length; i++) m[srcDays[i]] = vals[i];
+    return axis.map(function (d) { return m[d] == null ? null : m[d]; });
+  }
+  // Fill the CAP series' holes (null / 0) by interpolating between the nearest
+  // RECORDED caps either side — capacity is configuration the cron writes daily,
+  // so a hole means "not written", not "no capacity". Never used on sends.
+  function fillCap(arr) {
+    var out = arr.slice(), i, j;
+    function hole(v) { return v == null || v === 0; }
+    if (!arr.some(function (v) { return !hole(v); })) return out;   // nothing recorded at all
+    for (i = 0; i < arr.length; i++) {
+      if (!hole(arr[i])) continue;
+      var lo = null, hi = null;
+      for (j = i - 1; j >= 0; j--) if (!hole(arr[j])) { lo = j; break; }
+      for (j = i + 1; j < arr.length; j++) if (!hole(arr[j])) { hi = j; break; }
+      out[i] = (lo != null && hi != null) ? arr[lo] + (arr[hi] - arr[lo]) * (i - lo) / (hi - lo)
+             : lo != null ? arr[lo] : (hi != null ? arr[hi] : arr[i]);
+    }
+    return out;
+  }
+  function isWeekend(d) { var g = new Date(d + "T12:00:00Z").getUTCDay(); return g === 0 || g === 6; }
+  // UTC, because every axis the server stamps is a UTC date. A LOCAL date compare
+  // is wrong for a viewer ahead of UTC: between their local midnight and UTC
+  // midnight, local "today" is already tomorrow's date, so today's own bucket
+  // stops being trimmed and its near-empty partial day re-enters the figure.
+  function todayISO() { return new Date().toISOString().slice(0, 10); }
+  // How many leading entries of `axis` fall strictly before today. Windows END
+  // YESTERDAY (owner ruling 2026-09-02): today is a partial, still-ramping day,
+  // and counting its near-zero sends against a full day's capacity dropped the
+  // figure by a whole day's worth every morning. Enforced HERE so it holds
+  // whatever axis a caller hands in — the Analytics chart axis still runs to
+  // today because /api/analytics-hub keys its lines to it.
+  function daysBeforeToday(axis) {
+    var today = todayISO(), i;
+    for (i = axis.length - 1; i >= 0; i--) if (String(axis[i] || "").slice(0, 10) < today) return i + 1;
+    return 0;
+  }
+
+  // THE capacity-used figure, with the numbers behind it so callers can label
+  // it honestly instead of re-deriving anything.
+  // opts = {
+  //   sent:[per-day], sentDays:[dates],   // from /api/client-windows series[client]
+  //   cap:{payload}, name, wsKey,          // from /api/fleet-capacity
+  //   days                                 // window length (1/7/14/30)
+  // }
+  // returns { pct, sent, cap, days, exceeded } or null when nothing is countable:
+  //   pct       0..100, or null when no counted day has a capacity
+  //   sent      weekday sends counted   (the "N" in "N of M")
+  //   cap       weekday capacity counted (the "M"), raised to sent on over-cap days
+  //   days      how many weekdays were counted
+  //   exceeded  how many of those days sent more than their recorded cap
+  function usedDetail(opts) {
+    if (!opts || !opts.sent || !opts.sentDays || !opts.cap) return null;
+    var axis = opts.sentDays;
+    var capOnAxis = alignTo(capSeries(opts.cap, opts.name, opts.wsKey), opts.cap.days, axis);
+    if (!capOnAxis) return null;
+    var stop = daysBeforeToday(axis);          // the window ends YESTERDAY
+    if (!stop) return null;
+    var range = opts.days || stop;
+    var start = Math.max(0, stop - range);
+    var wDays = axis.slice(start, stop), wSent = opts.sent.slice(start, stop),
+        wCap = capOnAxis.slice(start, stop);
+    var keep = [];
+    wDays.forEach(function (d, i) { if (!isWeekend(d)) keep.push(i); });   // weekdays only, always
+    var sentBars = keep.map(function (i) { return Math.round(wSent[i] || 0); });
+    var capBars = fillCap(keep.map(function (i) { return wCap[i]; }));
+    var capTot = 0, sTot = 0, nDays = 0, exceeded = 0;
+    capBars.forEach(function (c, i) {
+      if (!c) return;                       // no capacity ever recorded near this day
+      var s = sentBars[i] || 0;
+      nDays++;
+      sTot += s;
+      if (s > c) { capTot += s; exceeded++; }   // never let the ratio exceed 1
+      else capTot += c;
+    });
+    if (capTot <= 0) return { pct: null, sent: sTot, cap: 0, days: nDays, exceeded: exceeded };
+    return { pct: Math.round(100 * sTot / capTot), sent: sTot, cap: Math.round(capTot),
+             days: nDays, exceeded: exceeded };
+  }
+  // Deploy-race shim, not a second formula: a browser holding a CACHED copy of
+  // mailboxes-hub.html / deliverability.html from before this change still calls
+  // usedPct (with the now-ignored hideWeekends flag) against the freshly served
+  // shell.js, and losing the symbol would throw and blank the heat map. It
+  // returns usedDetail().pct and nothing else. Delete it once no released page
+  // references it.
+  function usedPct(opts) { var d = usedDetail(opts); return d ? d.pct : null; }
+
+  window.NavreoCapacity = { usedDetail: usedDetail, usedPct: usedPct, capSeries: capSeries };
+})();

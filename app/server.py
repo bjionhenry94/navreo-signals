@@ -24660,7 +24660,10 @@ _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.
                     "/app/thread-render.js",
                     # brand wordmark — the logged-out client report renders it
                     "/app/navreo-logo.png"}
-_AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/")
+_AUTH_PUBLIC_GET_PREFIX = ("/app/fonts/", "/app/icons/",
+                           # public static sales demo: real pages on recorded, scrubbed
+                           # fixtures; a fetch shim answers every /api/ call locally
+                           "/app/demo/")
 _AUTH_PUBLIC_POST = {"/api/auth/login", "/api/offer/generate", "/api/offer/email",
                      # Onboarding hub autosave (owner ruling 2026-08-31): clients
                      # use the hub logged-out, so the draft upsert must pass the

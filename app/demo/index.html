@@ -1,0 +1,100 @@
+<title>Inside Navreo</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="demo-layer.css">
+<style>
+:root{--page:#fff;--sunk:#F7F7F6;--line:#ECECEA;--line2:#DDDDDA;--ink:#14110E;--ink2:#3A332C;--ink3:#6B6055;--accent:#FF4D00;--accent-soft:#FFE4D6;--good:#2E7D5B;--good-bg:#E2F1E9;--good-line:#C4E2D3;color-scheme:light}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--page);color:var(--ink);font:14px/1.5 "DM Sans",system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:1080px;margin:0 auto;padding:40px 28px 80px}
+h1{font-size:40px;font-weight:500;letter-spacing:-.03em;line-height:1.05;margin:0 0 14px;text-wrap:balance}
+h2{font-size:22px;font-weight:500;letter-spacing:-.02em;margin:0 0 12px}
+h3{font-size:15px;font-weight:600;margin:0 0 6px}
+p{margin:0}
+.lead{font-size:17px;color:var(--ink2);max-width:62ch}
+.label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink3);font-weight:600}
+.muted{color:var(--ink3)}.small{font-size:12px}
+.btn{display:inline-flex;align-items:center;gap:8px;padding:10px 16px;border-radius:9px;border:1px solid var(--line2);font-weight:600;background:#fff;color:var(--ink);text-decoration:none;cursor:pointer;font:inherit;font-weight:600}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.row{display:flex;gap:10px;flex-wrap:wrap;margin-top:22px}
+.sec{margin-top:44px}
+.grid{display:grid;gap:14px;grid-template-columns:repeat(3,1fr)}
+.card{background:#fff;border:1px solid var(--line);border-radius:12px;padding:16px;text-decoration:none;color:inherit;display:block}
+a.card:hover{border-color:var(--line2);background:var(--sunk)}
+.card .n{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--accent);margin-bottom:6px}
+.card ul{margin:8px 0 0 16px;padding:0;color:var(--ink2);font-size:13px}
+.card li{margin:3px 0}
+.pill{display:inline-flex;align-items:center;gap:6px;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid}
+.pill.good{color:var(--good);background:var(--good-bg);border-color:var(--good-line)}
+.pill.acc{color:var(--accent);background:var(--accent-soft);border-color:#FFC7A8}
+.pill.neutral{color:var(--ink2);background:var(--sunk);border-color:var(--line2)}
+.sunk{background:var(--sunk);border-color:transparent}
+.stages{display:grid;grid-template-columns:repeat(6,1fr);gap:8px}
+.stage{padding:12px;border-radius:10px;border:1px solid var(--line);font-size:12px}
+.stage .k{font-family:"JetBrains Mono",monospace;color:var(--ink3);font-size:11px}
+.stage .t{font-weight:600;margin:4px 0}
+.stage.done{background:var(--good-bg);border-color:var(--good-line)}
+.stage.now{border-color:var(--accent);box-shadow:0 0 0 3px rgba(255,77,0,.12)}
+.next{display:flex;align-items:center;gap:16px;padding:18px 20px;border:1px solid #FFC7A8;background:#FFF9F5;border-radius:12px;margin-top:14px}
+.next .t{font-size:17px;font-weight:600}
+.verdict{display:flex;gap:14px;align-items:center;padding:18px 20px;border:1px solid var(--line);border-radius:12px;background:var(--sunk);margin-top:44px}
+.verdict .big{font-size:17px;font-weight:600}
+@media (max-width:860px){.grid{grid-template-columns:1fr 1fr}.stages{grid-template-columns:repeat(3,1fr)}h1{font-size:32px}}
+@media (max-width:560px){.grid{grid-template-columns:1fr}}
+</style>
+<div class="wrap">
+  <div class="label" style="color:var(--accent);margin-bottom:10px">Navreo, from the inside</div>
+  <h1>This is the platform we run your campaigns on.</h1>
+  <p class="lead">Every screen behind the buttons below is the real internal tool our team works in each morning, running on a fixed copy of Navreo's own last 30 days. Client names are swapped for fictional brands; everything else is exactly what we look at.</p>
+  <div class="row">
+    <a class="btn primary" href="deliverability.html?tour=1">Show me around (3 min)</a>
+    <a class="btn" href="deliverability.html" id="browse">Browse on my own</a>
+  </div>
+  <p class="small muted" style="margin-top:10px">Tip: turn on <b>Explain mode</b> in the black bar on any screen for a plain-English note under every widget.</p>
+
+  <div class="sec">
+    <h2>The screens</h2>
+    <div class="grid">
+      <a class="card" href="deliverability.html"><div class="n">01</div><h3>Everything, on one screen</h3><p class="small muted">Sent, replies, interested, meetings, bounces. The funnel that says where to improve next, and who actually replies.</p></a>
+      <a class="card" href="campaigns.html"><div class="n">02</div><h3>Every campaign</h3><p class="small muted">One scorecard per campaign across every workspace, plus the morning queue of suggested actions.</p></a>
+      <a class="card" href="campaigns.html#/c/3859407"><div class="n">03</div><h3>One campaign, in depth</h3><p class="small muted">At a glance, which message is winning, every lead and every change we made.</p></a>
+      <a class="card" href="mailboxes-hub.html"><div class="n">04</div><h3>Mailboxes and deliverability</h3><p class="small muted">The engine underneath: fleet health, warm-up, reconnects, caps per provider.</p></a>
+      <a class="card" href="setter.html?share=demo"><div class="n">05</div><h3>Replies and the AI setter</h3><p class="small muted">The exact view you open from a private link. Approve, edit or regenerate every draft.</p></a>
+      <a class="card" href="report.html?share=demo"><div class="n">06</div><h3>Your weekly report</h3><p class="small muted">Same numbers as the dashboard, pinned to the week, with what won and who replied.</p></a>
+    </div>
+  </div>
+
+  <div class="sec" id="onboarding">
+    <h2>Onboarding: signed to first email in about three weeks</h2>
+    <p class="muted" style="margin-bottom:14px">Your portal always answers three questions: where am I, what is my next thing, when do I launch.</p>
+    <div class="stages">
+      <div class="stage done"><div class="k">01</div><div class="t">Set-up</div><div class="small">Contract, Slack, portal</div></div>
+      <div class="stage done"><div class="k">02</div><div class="t">Kick-off call</div><div class="small">45 min, recorded</div></div>
+      <div class="stage now"><div class="k">03</div><div class="t">Plan</div><div class="small">Targets, offers, domains</div></div>
+      <div class="stage"><div class="k">04</div><div class="t">Emails</div><div class="small">Copy for sign-off</div></div>
+      <div class="stage"><div class="k">05</div><div class="t">Final prep</div><div class="small">Warm-up finishes</div></div>
+      <div class="stage"><div class="k">06</div><div class="t">Live</div><div class="small">First sends</div></div>
+    </div>
+    <div class="next"><div><div class="label">Your next thing</div><div class="t">Approve the 3 offers we drafted from your kick-off call</div><div class="small muted">About 10 minutes. Everything else this week is on us. Only ever one orange button.</div></div><span class="btn primary" style="margin-left:auto">Review offers</span></div>
+    <div class="grid" style="margin-top:14px">
+      <div class="card"><span class="pill good">Done</span><h3 style="margin-top:8px">Target list agreed</h3><p class="small muted">Your ideal customer, sizes, geos and titles, confirmed on the kick-off call.</p></div>
+      <div class="card"><span class="pill acc">You</span><h3 style="margin-top:8px">Approve offers and copy</h3><p class="small muted">Three to four offers, each with a plain pitch and an example email. Nothing sends without your yes.</p></div>
+      <div class="card"><span class="pill neutral">Us</span><h3 style="margin-top:8px">Domains and mailboxes</h3><p class="small muted">Lookalike sending domains, never your main one. Authenticated and warmed for three weeks before a prospect sees one.</p></div>
+    </div>
+  </div>
+
+  <div class="sec" id="access">
+    <h2>What you get access to</h2>
+    <div class="grid">
+      <div class="card"><span class="pill good">Always on</span><h3 style="margin-top:8px">Live dashboard</h3><ul><li>Screens 01 to 04 on your real data</li><li>Change log of everything we did and why</li></ul></div>
+      <div class="card"><span class="pill acc">You decide</span><h3 style="margin-top:8px">Replies and setter</h3><ul><li>Private link, works on your phone</li><li>Approve, edit or regenerate; send from your own mailbox</li></ul></div>
+      <div class="card"><span class="pill neutral">Weekly</span><h3 style="margin-top:8px">Reports</h3><ul><li>Slack every Monday, saved in your portal</li><li>Interactive report for any date range</li></ul></div>
+      <div class="card"><span class="pill neutral">Portal</span><h3 style="margin-top:8px">Client portal</h3><ul><li>Onboarding progress and your next thing</li><li>Contract, invoices, call recordings</li></ul></div>
+      <div class="card"><span class="pill neutral">Slack</span><h3 style="margin-top:8px">Shared channel</h3><ul><li>Interested-reply alert within minutes</li><li>Reply in thread, we act on it</li></ul></div>
+      <div class="card sunk"><span class="pill neutral">Guarantees</span><h3 style="margin-top:8px">What we never do</h3><ul><li>Never send from your main domain</li><li>Never email your clients or past replies</li><li>Never change your copy without your yes</li><li>Never fill a missing number with a fake one</li></ul></div>
+    </div>
+  </div>
+
+  <div class="verdict"><div><div class="big">Want this on your own data?</div><div class="small muted">Onboarding takes about three weeks. First emails go out on a date you can see from day one.</div></div><a class="btn primary" style="margin-left:auto" href="https://navreo.ai">Book a call</a></div>
+</div>
+<script>window.__FX_INDEX={};</script>
+<script src="demo-layer.js"></script>
