@@ -7,7 +7,7 @@
 
   // ---------- tour script (page, selector, title, body) ----------
   var STEPS = [
-    ["deliverability.html", "#ah-databar", "Every number, one place", "Sent, replies, interested, meetings and bounces for the last 30 days, pulled from the sending platform and the inbox every hour. This is Navreo's own outbound, live, not a mock-up."],
+    ["deliverability.html", "#ah-databar", "Every number, one place", "Sent, replies, interested, meetings and bounces for the last 30 days, pulled from the sending platform and the inbox every hour. This is the example client Acme's outbound, on real platform mechanics, not a mock-up."],
     ["deliverability.html", "#ah-filterbar", "One click to scope", "Client chips and 7, 14 or 30 day windows. Our team sees every client side by side. You get the same page scoped to you."],
     ["deliverability.html", "#lane-improve", "Where can we improve the most?", "The funnel finds the single step losing the most people and says what we are doing about it. That becomes this week's optimisation."],
     ["deliverability.html", "#lane-leads", "Lead runway", "How many prospects are queued, how fast they burn, and the date each campaign runs dry. Top-ups happen before that date, not after."],
@@ -168,7 +168,7 @@
     // default the client scope to Navreo so the tab reads as one client's 30 days
     var n = 0; var t = setInterval(function () {
       n++; var chips = document.querySelectorAll("#ah-chips button, #ah-chips .chip, #ah-chips [data-client]");
-      var nav = Array.prototype.find.call(chips, function (c) { return /^\s*Navreo\s*$/.test(c.textContent); });
+      var nav = Array.prototype.find.call(chips, function (c) { return /^\s*Acme\s*$/.test(c.textContent); });
       if (nav) { if (!/on|active|sel/.test(nav.className) && nav.getAttribute("aria-pressed") !== "true") nav.click(); clearInterval(t); }
       if (n > 40) clearInterval(t);
     }, 300);
