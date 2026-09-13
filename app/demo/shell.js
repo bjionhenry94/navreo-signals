@@ -74,7 +74,7 @@ function renderRail(active) {
     `<a class="nav-i ${key === active ? "on" : ""}" href="${href}" title="${label}">${ICONS[key]}</a>`
   ).join("");
   return `<nav class="rail">
-    <a class="logo" href="campaigns.html" title="Navreo">n</a>
+    <a class="logo" href="campaigns.html" title="Demo">n</a>
     ${items}
     <div class="spacer"></div>
     <a class="nav-i ${active === "settings" ? "on" : ""}" href="settings.html" title="Settings">${ICONS.settings}</a>
