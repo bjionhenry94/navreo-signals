@@ -58,7 +58,7 @@
     if (method === "GET") {
       var file = resolve(k);
       if (file) {
-        if (!cache[file]) cache[file] = realFetch(BASE + file, { cache: "force-cache" }).then(function (r) { return r.text(); });
+        if (!cache[file]) cache[file] = realFetch(BASE + file + "?v=" + (window.__FX_VERSION || "2"), { cache: "no-cache" }).then(function (r) { return r.text(); });
         return cache[file].then(function (t) { return jsonResponse(t); });
       }
     }
