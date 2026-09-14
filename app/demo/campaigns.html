@@ -2964,7 +2964,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
       campaigns.push({
         id: scope,
         name: vp.campaign_name || (s && s.name) || ("Campaign " + scope),
-        workspace: (s && s.workspace) || "navreo",
+        workspace: (s && s.workspace) || "acme",
         wsLabel: (s && s.ws_label) || "",
         client: (s && s.client) || "",   // campaign_scorecard.client — the one label authority
         slStatus: (s && s.status) || "",
@@ -3062,7 +3062,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     ["quick funds", "Quick Funds"],
     ["alpine", "Navreo (secondary)"],
     ["property management", "Navreo (secondary)"],
-    ["navreo", "Navreo"]
+    ["acme", "Acme"]
   ];
   var CLIENT_OTHER = "Other";
   function clientOf(c) {
@@ -3073,11 +3073,11 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     if (c.wsLabel) return c.wsLabel;
     /* One-authority parity (panel 2026-08-02): scorecard rows now carry the
        server's client label (same source the analytics page uses). A REAL
-       client label wins; 'Navreo' and '__unassigned' fall through to the finer
+       client label wins; 'Acme' and '__unassigned' fall through to the finer
        name map below, which deliberately splits Navreo's own book into the
        sub-clients campaigns are run FOR (Valsoft, BytePlus, ...) — detail the
        analytics dimension intentionally doesn't have. */
-    if (c.client && c.client !== "Navreo" && c.client !== "__unassigned") return c.client;
+    if (c.client && c.client !== "Acme" && c.client !== "__unassigned") return c.client;
     var n = String(c.name || "").toLowerCase();
     for (var i = 0; i < CLIENT_KEYWORDS.length; i++) {
       if (n.indexOf(CLIENT_KEYWORDS[i][0]) !== -1) return CLIENT_KEYWORDS[i][1];
@@ -3617,7 +3617,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
         ? '<span class="ring tnum" style="--pct:' + ringPct + '" title="' + ringTitle + '"><span class="ring-hole">' + ringPct + "%</span></span>"
         : '<span class="ring ring--unknown tnum" title="no lead count reported"><span class="ring-hole">?</span></span>') +
       '</span>' +
-      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Navreo")) + rowStatusBit(c) + "</span></span>" +
+      '<span class="row-id"><span class="row-name">' + esc(c.name) + '</span><span class="row-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Acme")) + rowStatusBit(c) + "</span></span>" +
       '<span class="stat stat--leads"><span class="stat-num tnum">' + fmtInt(st.leads) + '</span><span class="stat-label">Leads</span></span>' +
       '<span class="stat stat--sent"><span class="stat-num tnum">' + fmtInt(st.sent) + '</span><span class="stat-label">Emails sent</span></span>' +
       '<span class="stat stat--reply"><span class="stat-num tnum">' + (st.replied != null ? fmtInt(st.replied) + (replyPct != null ? " (" + replyPct + "%)" : "") : "-") + '</span><span class="stat-label">Replies</span></span>' +
@@ -4096,14 +4096,14 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     if (slStatus) slStatus = slStatus.charAt(0).toUpperCase() + slStatus.slice(1).toLowerCase();
     h.push('<div class="campaign-header-main">' + dial + '<div>' +
       '<h1 class="campaign-title">' + esc(c.name) + "</h1>" +
-      /* workspace ownership, not a hardcoded "Navreo" (audit #11): a Fieldstone/
+      /* workspace ownership, not a hardcoded "Acme" (audit #11): a Fieldstone/
          Skylark campaign must not read as Navreo's on the page a CSM
          acts from — wsLabel is the workspace's display label, server-fed.
          The STATUS word is deliberately absent: the status control in the
          topbar carries it now (P2, Bjion 1 Aug 2026) — one place to read it,
          the same place you change it. Client-label fallback: a name-gated
          client campaign must not read as Navreo either. */
-      '<p class="campaign-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Navreo")) + " &middot; campaign " + esc(c.id) + "</p></div>" +
+      '<p class="campaign-subtitle">' + esc(c.wsLabel || (c.client && c.client !== "__unassigned" ? c.client : "Acme")) + " &middot; campaign " + esc(c.id) + "</p></div>" +
       "</div>");
     h.push('<nav class="campaign-tabs" aria-label="Campaign sections">' +
       '<a href="#/c/' + esc(c.id) + '" class="campaign-tab' + (tab === "overview" ? " is-active" : "") + '" data-tab="overview">Overview</a>' +
