@@ -227,7 +227,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
 
   /* ---------- representative fallback (only used if an endpoint is empty) ---------- */
   var REP_CLIENTS = [
-    { name: "Navreo", dom: 12, inbox: 88, reply: 4.2, bounce: 1.1, sent: 271000, positives: 41, warm: 8, cap: 91, bl: 0 },
+    { name: "Acme", dom: 12, inbox: 88, reply: 4.2, bounce: 1.1, sent: 271000, positives: 41, warm: 8, cap: 91, bl: 0 },
     { name: "Halden Advisors", dom: 8, inbox: 61, reply: 3.9, bounce: 0.9, sent: 183000, positives: 28, warm: 24, cap: 76, bl: 0 },
     { name: "Meridian", dom: 3, inbox: 24, reply: 4.0, bounce: 1.0, sent: 72000, positives: 14, warm: 6, cap: 88, bl: 0 },
     { name: "Ascent Capital", dom: 5, inbox: 34, reply: 3.1, bounce: 1.8, sent: 96000, positives: 12, warm: 10, cap: 58, bl: 0 },
@@ -984,7 +984,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // from two workspaces, so a doubled domain reads as a fact, not a glitch.
   function domSpread(rows) {
     var byDom = {}, dupes = 0;
-    rows.forEach(function (d) { (byDom[d.domain] = byDom[d.domain] || []).push(d.workspace || "navreo"); });
+    rows.forEach(function (d) { (byDom[d.domain] = byDom[d.domain] || []).push(d.workspace || "acme"); });
     Object.keys(byDom).forEach(function (d) {
       var seen = {}, n = 0;
       byDom[d].forEach(function (w) { if (!seen[w]) { seen[w] = 1; n++; } });
@@ -1118,7 +1118,7 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       var spansAll = Array.isArray(r.cycle_spans_all) && r.cycle_spans_all.length
         ? ' title="' + esc(r.cycle_spans_all.map(function (s) { return s[0] + ' → ' + s[1]; }).join(', ')) + '"' : '';
       return '<tr><td class="mono">' + gradeBadge(r.domain) + esc(r.domain) +
-        (r.workspace && r.workspace !== "navreo" ? ' <span class="pill n">' + esc(r.workspace) + '</span>' : '') + '</td>' +
+        (r.workspace && r.workspace !== "acme" ? ' <span class="pill n">' + esc(r.workspace) + '</span>' : '') + '</td>' +
         '<td class="num" style="font-weight:700"' + spans + '>' + cyc + '×</td>' +
         '<td class="num" style="font-weight:700"' + spansAll + '>' + cycAll + '×</td>' +
         '<td class="num">' + esc(r.last_parked || "—") + '</td>' +

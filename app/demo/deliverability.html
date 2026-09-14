@@ -780,11 +780,11 @@ function saveFilters() {
 
 function ckey() { return state.client === "All" ? "__all" : state.client; }
 function clientOfName(name, ws) {
-  ws = (ws || "navreo").toLowerCase();
+  ws = (ws || "acme").toLowerCase();
   // Every connected client workspace labels as itself — the map comes from the
   // server (client-windows ws_labels, same source as analytics_hub_v1's cmap),
   // so adding a workspace needs no edit here.
-  if (ws !== "navreo") {
+  if (ws !== "acme") {
     var lbls = (CW && CW.ws_labels) || {};
     for (var L in lbls) { if (lbls[L] === ws) return L; }
     return ws.charAt(0).toUpperCase() + ws.slice(1);
@@ -794,7 +794,7 @@ function clientOfName(name, ws) {
   if (n.indexOf("vellum") >= 0) return "Vellum";
   if (n.indexOf("qwintiq") >= 0) return "Qwintiq";
   if (n.indexOf("skylark") >= 0) return "Skylark";   // its own client
-  if (n.indexOf("navreo") >= 0) return "Navreo";             // name-gated like every client
+  if (n.indexOf("acme") >= 0) return "Acme";             // name-gated like every client
   // No keyword → belongs to NO client. Must never fall back to Navreo (that
   // silently inflated Navreo's numbers by every unmatched campaign).
   return "__unassigned";
