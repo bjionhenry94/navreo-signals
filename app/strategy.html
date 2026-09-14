@@ -356,9 +356,11 @@ let sumEdit=null; // Preview tab: {si,vi} while an email is being edited inline 
 let pendingDel=null; // {id,si,vi,ver,timer} version delete, or {kind:'ice',id,ai,angle,timer} opener delete, waiting out its Undo window (Bjion 2026-08-05 / 2026-08-10)
 let SIG=null;   // run.signature {name, role, company, domain} — resolves %signature%
 // House signature format (Bjion rule 2026-08-03): name / role / company / website line.
-function sigHtml(){
-  const s=(SIG&&SIG.name)
-    ?[SIG.name,SIG.role,SIG.company,SIG.domain?('Visit our website at '+SIG.domain):''].filter(Boolean)
+function sigHtml(x){
+  // per-idea signature wins when a run mixes senders (copy-update sessions, 2026-09-14)
+  const S=(x&&x.signature&&x.signature.name)?x.signature:SIG;
+  const s=(S&&S.name)
+    ?[S.name,S.role,S.company,S.domain?('Visit our website at '+S.domain):''].filter(Boolean)
     :['Bjion','Navreo'];
   return '<span class="mvar">'+s.map(esc).join('<br>')+'</span>';
 }
@@ -731,7 +733,7 @@ function resolvedTextHtml(text,x,p){
         const v=(p.vars&&(p.vars[k]??p.vars[key]))??p[key];
         return (typeof v==='string'||typeof v==='number')?_mvar(String(v)):m;
       })
-      .replace(/%signature%/gi,sigHtml())
+      .replace(/%signature%/gi,sigHtml(x))
       .replace(/\n/g,'<br>');
   }
   const parts=[_mvar(opener),esc(x.pain||''),esc(x.offer||'')].filter(s=>s&&s!=='<span class="mvar"></span>');
