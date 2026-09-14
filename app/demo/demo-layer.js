@@ -28,7 +28,9 @@
     ["report.html?share=demo", "#rp-verdict", "The weekly report", "Same numbers as the dashboard, pinned to the week, with a plain verdict at the top. Every client gets this on Monday, in Slack and in their portal."],
     ["report.html?share=demo", "#lane-win", "What won this week", "Winning campaigns and the offer behind them, so the client always knows which message is earning the meetings."],
     ["report.html?share=demo", "#lane-who", "Who replied", "The people who answered, quoted, with a link to each. Not a summary, the actual words."],
-    ["index.html#access", "#access", "What every client gets", "Live dashboard, the replies view, weekly reports, a portal and a shared Slack channel. One private link each, no logins."]
+    ["strategy.html?share=demo#/r/acme-recontact-20260911-r7k2", "#side", "How we share campaign copy", "Every campaign we propose for a client lands on one board: the idea, who it targets, how many people we can reach, and the email itself. Clients open it from a private link, no login."],
+    ["strategy.html?share=demo#/r/acme-recontact-20260911-r7k2", "#work", "Edit in place, then sign off", "The client reads the exact email, edits any line directly, and the copy checks update live: sign-off present, no spam words, opt-out line. Nothing sends until they paste the sign-off line back to us."],
+    ["index.html#access", "#access", "What every client gets", "Live dashboard, the replies view, weekly reports, campaign copy for sign-off, a portal and a shared Slack channel. One private link each, no logins."]
   ];
 
   var EXPLAIN = {
@@ -58,6 +60,11 @@
     setter: {
       "#inboxList": "Every reply on every account, categorised within minutes. <b>Needs review</b> means a draft is waiting for the client. Not-now replies are re-contacted on the date they gave, automatically.",
       "#inboxRight": "The draft is written in the client's voice from their training answers. <b>Approve is locked until a follow-up is picked.</b> Every edit teaches the setter."
+    },
+    strategy: {
+      "#side": "One board per client, one row per campaign idea. <b>The number on each row is real people we can reach</b>, netted against everyone the client has already contacted. Pick a row to read its email.",
+      "#work": "The exact email a prospect would receive, with the variables we fill per person. <b>Click any line to edit it.</b> The checks below update as you type: sign-off, spam words, opt-out line. Your one-line sign-off at the bottom is what puts a campaign into build.",
+      "#lg-phrase": "This line is the client's sign-off. They paste it into Slack or the portal and the campaign goes to build. <b>No campaign sends without it.</b>"
     },
     report: {
       "#rp-verdict": "One sentence first. Same numbers as the dashboard, pinned to the report's exact dates.",
