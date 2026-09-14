@@ -178,9 +178,9 @@ body.solo .wrap{margin:0 auto;}
 .sum-cver{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:var(--orange-600,#c94f00);background:var(--orange-100,#ffe9dd);border-radius:999px;padding:2px 9px;margin-bottom:8px;}
 .copy-sub{font-size:13.5px;color:var(--ink-2);margin:-8px 0 4px;line-height:1.5;max-width:600px;}
 .ver-tabs{display:flex;gap:6px;flex-wrap:wrap;margin:0 0 10px;}
-.ver-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
-.ver-tab:hover{border-color:var(--ink-3);}
-.ver-tab.on{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange);}
+.ver-tab,.pv-tab{font-family:var(--font-sans);font-size:12px;font-weight:600;color:var(--ink-3);background:var(--bg);border:1px solid var(--line-2);border-radius:999px;padding:5px 13px;cursor:pointer;transition:.12s;}
+.ver-tab:hover,.pv-tab:hover{border-color:var(--ink-3);}
+.ver-tab.on,.pv-tab.on{color:var(--orange-600);background:var(--orange-100);border-color:var(--orange);}
 .ver-x{display:inline-block;margin:-8px -8px -8px 3px;padding:8px 9px;color:var(--ink-3);font-weight:700;opacity:.55;border-radius:999px;line-height:1;}
 .ver-x:hover{color:#b3261e;opacity:1;background:rgba(179,38,30,.10);}
 .dismiss-row{margin-top:48px;text-align:left;}
@@ -353,6 +353,7 @@ let IDEAS=[], PEOPLE={}, COLLEAGUES={}, active=0, tab='tgt', sIdx=0, lastFP=null
 let _ownEditAt=0;  // ms of my last own save; suppresses the redundant top-right 'Updated' chip for my own edit's poll echo
 let copyVer={}; // Copy tab: active version index per sequence step (reset per idea)
 let sumEdit=null; // Preview tab: {si,vi} while an email is being edited inline (Bjion 2026-08-05)
+let sumVer={};   // Preview tab: version override per step for the selected prospect (Bjion 2026-09-14); empty = the rotation default
 let pendingDel=null; // {id,si,vi,ver,timer} version delete, or {kind:'ice',id,ai,angle,timer} opener delete, waiting out its Undo window (Bjion 2026-08-05 / 2026-08-10)
 let SIG=null;   // run.signature {name, role, company, domain} — resolves %signature%
 // House signature format (Bjion rule 2026-08-03): name / role / company / website line.
@@ -844,9 +845,13 @@ function panelHTML(x){
         // version (person i → version i mod N), so tapping through the strip shows the
         // real rotation, never version A five times over.
         const vs=step.versions||[];
-        const vi=vs.length?(sIdx%vs.length):0;
+        const rotVi=vs.length?(sIdx%vs.length):0;
+        // Version pills per prospect (Bjion 2026-09-14): like the Copy tab, tap A/B/C to see
+        // what EACH variation looks like resolved for this person; default is the rotation.
+        const vi=(sumVer[si]!=null&&vs.length)?Math.min(sumVer[si],vs.length-1):rotVi;
         const v=vs[vi]||{};
         const vtag=vs.length>1?` · Version ${'ABCDEFGHIJ'[vi]}`:'';
+        const pills=vs.length>1?`<div class="ver-tabs">`+vs.map((_,k)=>`<button class="pv-tab${k===vi?' on':''}" data-si="${si}" data-vi="${k}">Version ${'ABCDEFGHIJ'[k]}${k===rotVi?' · theirs':''}</button>`).join('')+`</div>`:'';
         const head=si===0?`Subject: <span class="ms">${resolvedSubjectHtml(x,pr,v)}</span>`:'Sent a few days later, same thread';
         // Edit in the Preview (Bjion 2026-08-05): the button flips the resolved view to
         // the raw template (tokens visible) and saves through the same copy-edit door
@@ -858,7 +863,7 @@ function panelHTML(x){
         const row=editing
           ?`<div class="mail-editrow"><button class="btn-ink mail-done" data-si="${si}" data-vi="${vi}">Done</button><span class="mail-hint">Saves automatically. Anything in {curly brackets} fills in per person.</span></div>`
           :`<div class="mail-editrow"><button class="mail-editbtn" data-si="${si}" data-vi="${vi}">&#9998; Edit this email</button></div>`;
-        return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}${vtag}</p>`
+        return `<p class="mail-label">${esc(step.name||('Email '+(si+1)))}${vtag}</p>`+pills
           +`<div class="mail"><div class="mh">${head}</div>${body}</div>`+row;
       }).join('')
       +`<p class="sum-note">${esc(pr.first)} gets ${v1n>1?('Version '+'ABCDEFGHIJ'[sIdx%v1n]):'this version'} — their name, their company, their opener. Nothing generic.${v1n>1?' Tap another person to see another version.':''}</p>`;
@@ -905,7 +910,7 @@ function renderSidebar(){
   // reset to Targeting. Every idea has the same tab set (TABS=TABS_ALL), so the
   // active tab is always valid on the next idea. Sub-state (version/sub-index) still
   // resets since it's per-idea.
-  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;sIdx=0;copyVer={};render();});
+  side.querySelectorAll('.im').forEach(c=>c.onclick=()=>{active=+c.dataset.i;sIdx=0;copyVer={};sumVer={};render();});
 }
 function renderWorkspace(){
   const x=IDEAS[active];
@@ -934,7 +939,7 @@ function renderWorkspace(){
   // any edit in the visible email first so it isn't lost (both sides edit now).
   // switch which variation shows — render INSTANTLY, save any edit in the background
   // so the tab never feels like "nothing loaded" while a save is in flight (Bjion 2026-08-05).
-  work.querySelectorAll('.ver-tab').forEach(t=>t.onclick=()=>{
+  work.querySelectorAll('.ver-tab:not(.pv-tab)').forEach(t=>t.onclick=()=>{
     persistVisibleEdits(IDEAS[active]||x);          // fire-and-forget; grabs dirty edits synchronously
     copyVer[+t.dataset.si]=+t.dataset.vi;renderWorkspace();});
   // the cross removes that variant (Bjion 2026-08-04, both sides). Always act on the
@@ -1022,11 +1027,12 @@ function renderWorkspace(){
   const lgc=work.querySelector('#lg-copy');
   if(lgc)lgc.onclick=async()=>{const t=(work.querySelector('#lg-phrase')||{}).textContent||'';
     try{await navigator.clipboard.writeText(t);lgc.textContent='Copied';setTimeout(()=>{lgc.textContent='Copy';},3000);}catch(e){lgc.textContent='Select and copy';}};
-  work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{persistVisibleEdits(IDEAS[active]||x);sumEdit=null;sIdx=+c.dataset.i;renderWorkspace();});
+  work.querySelectorAll('.sum-card').forEach(c=>c.onclick=()=>{persistVisibleEdits(IDEAS[active]||x);sumEdit=null;sumVer={};sIdx=+c.dataset.i;renderWorkspace();});
   // Preview inline edit (Bjion 2026-08-05): edit the version being previewed, right
   // on the Preview tab. Saves via /api/strategy/copy-edit with the Copy tab's exact
   // field grammar (seq:<step>:<version>) — one field changes, nothing else.
   work.querySelectorAll('.mail-editbtn').forEach(b=>b.onclick=()=>{sumEdit={si:+b.dataset.si,vi:+b.dataset.vi};renderWorkspace();});
+  work.querySelectorAll('.pv-tab').forEach(t=>t.onclick=()=>{persistVisibleEdits(IDEAS[active]||x);sumEdit=null;sumVer[+t.dataset.si]=+t.dataset.vi;renderWorkspace();});
   // "Done" just leaves edit mode — the field already auto-saved on input/blur (Bjion
   // 2026-08-20). Flush any last keystroke first so nothing in flight is dropped.
   work.querySelectorAll('.mail-done').forEach(b=>b.onclick=()=>{
