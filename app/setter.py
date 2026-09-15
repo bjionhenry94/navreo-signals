@@ -8829,27 +8829,35 @@ CLIENT_FACING_CHANNELS = (frozenset(POSITIVE_SHARED_CHANNELS.values())
                           | frozenset(CLIENT_ALERT_CHANNELS.values()))
 
 
+def _client_chat_link(email: str, campaign_id, message_id: str = "") -> str:
+    """The setter deep link for a CLIENT-FACING surface (a client's Slack
+    card, a Slack Connect channel): the CLIENT share link (_client_permalink)
+    when `campaign_id` resolves to a client through the SAME map the share
+    scope uses - so a link is only ever minted for a client whose view can
+    actually show the row - else the login-only owner permalink (status quo)
+    rather than guessing. The recipient opens the client view, scoped
+    server-side to their own campaigns, with no login (Bjion 2026-09-15:
+    "anyone with the link can visit it and access it"). Never raises."""
+    try:
+        client = _client_id_for_campaign(campaign_id)
+        if client:
+            link = _client_permalink(email, client, message_id)
+            if link:
+                return link
+    except Exception as e:  # noqa: BLE001 - the link is decoration, never load-bearing
+        print(f"[setter] client share link failed, owner link used: {e}",
+              file=sys.stderr)
+    return _chat_permalink(email, message_id)
+
+
 def _alert_chat_link(row: dict, channel) -> str:
-    """The setter deep link for one Slack alert. Into a client-facing channel it
-    is the CLIENT share link (_client_permalink): the recipient opens the
-    client view, scoped server-side to their own campaigns, no login. Into an
-    internal lane it stays the owner permalink. The client is resolved from
-    the campaign through the SAME map the share scope uses, so a link is only
-    ever minted for a client whose view can actually show the row; when no
-    client resolves the alert keeps the owner link (status quo) rather than
-    guessing. Never raises."""
+    """The setter deep link for one Slack alert. Into a client-facing channel
+    it is the CLIENT share link (see _client_chat_link); into an internal lane
+    it stays the owner permalink. Never raises."""
     email = row.get("email") or ""
     mid = row.get("smartlead_message_id") or ""
     if channel and channel in CLIENT_FACING_CHANNELS:
-        try:
-            client = _client_id_for_campaign(row.get("smartlead_campaign_id"))
-            if client:
-                link = _client_permalink(email, client, mid)
-                if link:
-                    return link
-        except Exception as e:  # noqa: BLE001 - the link is decoration, never load-bearing
-            print(f"[setter] client share link failed, owner link used: {e}",
-                  file=sys.stderr)
+        return _client_chat_link(email, row.get("smartlead_campaign_id"), mid)
     return _chat_permalink(email, mid)
 
 
