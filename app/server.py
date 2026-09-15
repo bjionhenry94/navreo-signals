@@ -17987,7 +17987,7 @@ def deliv_trends_get(days: int = 30) -> tuple[dict, int]:
 _FLEET_CAP = {}  # days -> {"data":…, "ts":…}
 _FLEET_CAP_LOCK = threading.Lock()
 _FLEET_CAP_TTL_S = 3600
-_FLEET_CAP_WS = ("navreo", "asteri", "krg", "grout")
+_FLEET_CAP_WS = ("navreo", "asteri", "krg", "grout", "acquird")
 
 
 def _fleet_capacity_build(days: int) -> dict:
@@ -19021,7 +19021,7 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
         # pooled workspace figure (Bjion 2026-08-21: the Navreo pool is meaningless
         # — capacity is always client-by-client, business-by-business). navreo side
         # = Σ its per-client caps where recorded, else the navreo pool as a history
-        # fallback; asteri/krg/grout each stand for one business.
+        # fallback; asteri/krg/grout/acquird each stand for one business.
         total = [0] * len(days)
         seen = [False] * len(days)
         navarr = cap.get("navreo") or []
@@ -19036,7 +19036,7 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
             if nav:
                 total[i] += nav
                 seen[i] = True
-            for ws in ("asteri", "krg", "grout"):
+            for ws in ("asteri", "krg", "grout", "acquird"):
                 a = cap.get(ws) or []
                 v = a[i] if i < len(a) else None
                 if v:
