@@ -6556,6 +6556,10 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
              file=sys.stderr)
 
 
+_AGENTLESS_NO_AGENT_REASON = ("No agent is assigned to this campaign yet - review and reply "
+                              "manually, or assign an agent.")
+
+
 def _intake_agentless(reply: dict) -> dict:
     """Agentless intake (owner ruling 2026-07-14): "we shouldn't need to
     assign an agent to a campaign to be able to receive the positives - it
@@ -6602,8 +6606,7 @@ def _intake_agentless(reply: dict) -> dict:
             "email_stats_id": None, "classification": None, "guardrails": None,
             "timezone": None, "slots": [], "draft_subject": None, "draft_body": None,
             "decision": "review",
-            "decision_reason": "No agent is assigned to this campaign yet - review and reply "
-                               "manually, or assign an agent.",
+            "decision_reason": _AGENTLESS_NO_AGENT_REASON,
             "status": "needs_review",
             "added_to_subsequence": False, "sent_at": None, "sent_body": None, "error": None,
             "is_test": is_test,
@@ -12639,12 +12642,99 @@ def route_queue_row_get(params):
         return 500, {"error": str(e)[:300]}
 
 
+def _locate_heal_from_archive(email: str, mid: str):
+    """A chat permalink is a PROMISE that this exact reply is in the Setter,
+    but nothing guarantees a queue row exists for it. The gap that stranded
+    the Cieden/Radix-class reports (2026-09-15): a once-positive lead re-replies
+    and the categoriser labels the new reply NON-positive (e.g. an engaged
+    objection mislabelled "Not Interested"). Every intake gate then skips it -
+    handle_inbound's `cat not in CORE_FOUR`, run_poll's CORE_FOUR_CATEGORY_FILTER
+    - so the reply lives only in the `replies` archive, the ever-positive sweep
+    still fires its Slack alert (once-positive-always-notify), and the link's
+    message_id resolves to NO queue row - locate falls back to a stale sibling
+    (or 404s). _absorb_newer_reply was built for the same "category outside the
+    sweep" gap but can only patch an EXISTING open needs_review row; here there
+    is none to patch.
+
+    Heal on demand: find the archived reply by its smartlead_message_id (what
+    the EP-alert permalink carries) and intake it agentless into needs_review so
+    the link opens the REAL reply and it becomes actionable. Scope-checked like
+    every other queue read (a client can only heal their own campaigns' replies).
+    Genuine machine mail (OOO / bounce / bare opt-out) is left alone - there is
+    nothing for a human to answer. Idempotent: _intake_agentless dedups on
+    (message_id | source_message_id), so a second click returns the row already
+    created rather than re-hydrating. Returns an annotated row, or None."""
+    if not _SB or not mid:
+        return None
+    # Campaign scope, without touching the queue-only is_test rider _scope_sql
+    # adds (the `replies` table has no is_test column): owner (None) sees all,
+    # a client share is pinned to its own campaign ids.
+    scope_ids = _share_scope()
+    camp_filter = ""
+    if scope_ids is not None:
+        if not scope_ids:
+            return None
+        camp_filter = ("&smartlead_campaign_id=in.("
+                       + ",".join(quote(str(i), safe="") for i in sorted(scope_ids)) + ")")
+    try:
+        arch = _SB("GET", f"replies?smartlead_message_id=eq.{quote(mid, safe='')}"
+                          f"&email=ilike.{quote(email, safe='')}"
+                          f"&{_list_ws_filter()}{camp_filter}"
+                          f"&select=workspace,smartlead_campaign_id,email,reply_subject,"
+                          f"reply_body,replied_at,category,smartlead_message_id"
+                          f"&order=replied_at.desc&limit=1")
+    except Exception:  # noqa: BLE001 - a heal miss must degrade to the plain fallback, never 500
+        return None
+    a = arch[0] if isinstance(arch, list) and arch else None
+    if not a or not a.get("smartlead_campaign_id"):
+        return None
+    body = a.get("reply_body") or ""
+    if _autoreply_needs_no_human(clean_body(body)):
+        return None
+    reply = {
+        "workspace": a.get("workspace") or WORKSPACE,
+        "campaign_id": a.get("smartlead_campaign_id"),
+        "email": (a.get("email") or email).strip().lower(),
+        "subject": a.get("reply_subject") or "",
+        "body": body,
+        "replied_at": a.get("replied_at"),
+        "message_id": str(a.get("smartlead_message_id") or mid),
+        "category": a.get("category"),
+        "is_test": False,
+    }
+    row = _intake_agentless(reply)
+    if not row or row.get("status") == "error" or row.get("id") is None:
+        return None
+    if not _scope_ok(row):
+        return None
+    # _intake_agentless stamps a "no agent assigned yet" reason on EVERY fresh
+    # agentless row. When this reply was simply routed around the positive queue
+    # (an agent usually IS assigned) that reason misleads - correct it, but only
+    # on a row we just created (never clobber a real, already-processed sibling
+    # that dedup returned) and only when an agent really exists.
+    if row.get("decision_reason") == _AGENTLESS_NO_AGENT_REASON and _agent_for_campaign(reply["campaign_id"]):
+        better = (f"This reply came in outside the positive queue - the categoriser labelled it "
+                  f"'{reply.get('category') or 'uncategorised'}'. Review it, then hit Regenerate "
+                  f"for a draft or reply manually.")
+        try:
+            _apply_patch(row, {"decision_reason": better})
+            row["decision_reason"] = better
+        except Exception:  # noqa: BLE001 - the reason is cosmetic; the row is the job
+            pass
+    out = _annotate_queue_row(row)
+    _attach_campaign_names([out])
+    return out
+
+
 def route_queue_locate_get(params):
     """GET /api/setter/queue/locate?email=X&message_id=Y - resolve a chat
     permalink to its queue row. Keyed on lead_email + message_id because row
     ids don't survive re-intake. message_id is a REFINEMENT, not a gate: its
     time half is format-fluid across intake paths, so a miss falls back to
-    the lead's most recent row rather than a dead link. One indexed select
+    the lead's most recent row rather than a dead link. When the message_id
+    names a reply with NO queue row at all (a re-reply the categoriser routed
+    around the positive-intake gates), _locate_heal_from_archive intakes it on
+    demand rather than silently landing on a stale sibling. One indexed select
     per attempt; workspace-scoped like every other queue read."""
     try:
         email = _qp(params, "email", "").strip().lower()
@@ -12655,16 +12745,32 @@ def route_queue_locate_get(params):
             return 404, {"error": "Conversation not found."}
         row = None
         if mid:
+            # Match the RFC Message-ID first, then the synthetic source id the
+            # EP-alert permalink carries (hydration swaps message_id to the real
+            # RFC id, leaving the claim key only in source_message_id).
             rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=ilike.{quote(email, safe='')}"
                               f"&message_id=eq.{quote(mid, safe='')}"
                               f"&{_list_ws_filter()}{_scope_sql()}&select=*&limit=1")
             row = rows[0] if isinstance(rows, list) and rows else None
-        matched = "message_id" if row else "email"
+            if not row:
+                rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=ilike.{quote(email, safe='')}"
+                                  f"&source_message_id=eq.{quote(mid, safe='')}"
+                                  f"&{_list_ws_filter()}{_scope_sql()}&select=*&limit=1")
+                row = rows[0] if isinstance(rows, list) and rows else None
+        matched = "message_id" if row else None
+        # No queue row for this exact reply: intake it from the `replies` archive
+        # on demand (a re-reply the categoriser routed around the positive-intake
+        # gates) so the link lands on the REAL reply, not a stale sibling.
+        if not row and mid:
+            healed = _locate_heal_from_archive(email, mid)
+            if healed:
+                return 200, {"row": healed, "matched": "archive-heal"}
         if not row:
             rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=ilike.{quote(email, safe='')}"
                               f"&{_list_ws_filter()}{_scope_sql()}&select=*"
                               f"&order=replied_at.desc.nullslast&limit=1")
             row = rows[0] if isinstance(rows, list) and rows else None
+            matched = "email"
         # Any pasted prospect email used to resolve a full row from ANY client
         # here (setter-client-view risk #2). Scoped in the query AND re-checked;
         # 404 either way, so a miss and a wrong-client hit look identical.
