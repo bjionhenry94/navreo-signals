@@ -15894,9 +15894,19 @@ def compose_positive_card_payload(lead: dict, history: list, campaign_id, catego
         "from_email": "",
         "app_url": (f"https://app.smartlead.ai/app/master-inbox?leadMap={lead_map_id}"
                     if lead_map_id else ""),
-        # Internal chat permalink (setter deep link). 8946472 ignores unmapped
-        # fields, so this is inert for client cards until deliberately mapped.
-        "setter_url": setter._chat_permalink(
+        # The card's "Open conversation" link. 8946472 renders `setter_url` on
+        # its per-client cards ONLY (Amplifyy / Arnic / ThunderBird / Grout /
+        # KRG / Altius Reach / TouchPoint, each into that client's own
+        # channel), so it is the CLIENT share link: the client opens their
+        # scoped view with no login (Bjion 2026-09-15 - Kirsty at Altius hit
+        # the login page off the owner permalink this used to carry). Falls
+        # back to the owner permalink when the campaign resolves to no client.
+        # The owner link stays available as `owner_setter_url` for any
+        # internal consumer (8946472 ignores unmapped fields).
+        "setter_url": setter._client_chat_link(
+            lead.get("email") or "", campaign_id,
+            last_reply.get("message_id") or ""),
+        "owner_setter_url": setter._chat_permalink(
             lead.get("email") or "",
             last_reply.get("message_id") or ""),
         "lead_category": {"old_id": None, "old_name": None,

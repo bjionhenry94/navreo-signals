@@ -128,6 +128,24 @@ def test_alert_chat_link():
           and setter.CLIENT_INTERNAL_CHANNEL not in setter.CLIENT_FACING_CHANNELS)
 
 
+def test_client_chat_link():
+    wire()
+    url = setter._client_chat_link("Nik@Example.com", 3879940, "m-1")
+    check("4j client-facing link, no channel gate -> revive share link", share_client(url) == ("revive", False), url)
+    check("4k ...deep link keeps email + message id", url.endswith("#/r/nik%40example.com/m-1"), url)
+    check("4l ...share= sits BEFORE the #/r/ hash", url.index("?share=") < url.index("#/r/"), url)
+    krg = setter._client_chat_link("j@krg-lead.com", "3421811", "")
+    check("4m registry-only client (krg) resolves", share_client(krg) == ("krg", False), krg)
+    own = setter._client_chat_link("nik@example.com", 1, "m-1")
+    check("4n no client resolves -> owner permalink (status quo)", own == setter._chat_permalink("nik@example.com", "m-1"), own)
+    check("4o None campaign -> owner permalink", setter._client_chat_link("nik@example.com", None, "m-1") == own)
+    check("4p empty email -> no link at all", setter._client_chat_link("", 3879940, "m-1") == "")
+    via_alert = setter._alert_chat_link({"email": "Nik@Example.com", "smartlead_message_id": "m-1",
+                                         "smartlead_campaign_id": 3879940}, setter.POSITIVE_SHARED_CHANNELS["revive"])
+    check("4q _alert_chat_link into a client channel == _client_chat_link (same token family)",
+          share_client(via_alert) == share_client(url) and via_alert.split("?share=")[0] == url.split("?share=")[0], via_alert)
+
+
 def test_composers():
     wire()
     row = {"email": "nik@example.com", "smartlead_message_id": "m-9", "smartlead_campaign_id": 3879940,
@@ -174,6 +192,7 @@ if __name__ == "__main__":
     test_client_id_of()
     test_inverse_lookup()
     test_alert_chat_link()
+    test_client_chat_link()
     test_composers()
     test_registry_failure_keeps_drafts()
     failed = [n for n, ok in RESULTS if not ok]
