@@ -4497,38 +4497,50 @@ function autoSendVerdictHtml(row, terse) {
    orange outside) - the clock math done for the caller (SDR panel 2026-08-15)
    so no rep computes "is it dinner time there?" in their head; the dot IS the
    verdict (owner 2026-08-17: no "good time to call" commentary). Shared by the
-   decision facts and the Profile's "Personal Location" row so they never drift. */
+   decision facts and the Profile's "Local time" row so they never drift.
+   Owner ruling 2026-09-15: the clock ALWAYS shows. Its zone comes, in order,
+   from the lead's own profile location (enrichment), else the company's
+   location, else Eastern - and `note` says which, so nobody mistakes an
+   assumed zone for a known one. It never feeds "Personal Location" (a place
+   inferred from a timezone is a guess, and a guessed "New York" for every
+   unplaced lead is worse than a dash). */
+const TZ_FALLBACK_ZONE = "America/New_York";
 function leadTimezoneFact(row) {
   const cls = row.classification || {};
-  const tz = row.timezone || cls.timezone_guess || "";
-  // Confident = the zone came from a real signal, not the zero-signal Eastern
-  // fallback. The flag rides in guardrails.tz_confident (persisted at intake).
-  // Only treat as NOT confident when the backend explicitly says so
-  // (=== false); older rows / paths without the flag keep showing.
-  const confident = (row.guardrails || {}).tz_confident !== false;
-  let shown = tz || "unknown";
-  let tone = "";
-  let place = "";
-  if (tz) {
+  const g = row.guardrails || {};
+  const wc = warmcallFor(row);
+  let tz = "", source = "";
+  if (wc.person_location_tz) {
+    // Enrichment landed after intake: the person's own zone wins at once,
+    // even before the row's stored zone catches up server-side.
+    tz = wc.person_location_tz; source = "person";
+  } else if (row.timezone) {
+    tz = row.timezone;
+    // tz_source is stamped since 2026-09-15. Older rows: a flagged-confident
+    // zone came from a real (company-level) signal; an unflagged Eastern is
+    // most likely the old fallback stamp.
+    source = g.tz_source || (g.tz_confident === true ? "company"
+      : (g.tz_confident === false || tz === TZ_FALLBACK_ZONE) ? "fallback" : "company");
+  } else if (cls.timezone_guess && Number(cls.tz_confidence || 0) >= 0.6) {
+    tz = cls.timezone_guess; source = "company";
+  } else {
+    tz = TZ_FALLBACK_ZONE; source = "fallback";
+  }
+  let shown = "", tone = "";
+  for (const zone of [tz, TZ_FALLBACK_ZONE]) {
     try {
       const now = new Date();
-      const t = new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(now);
-      const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
+      const t = new Intl.DateTimeFormat("en-US", { timeZone: zone, hour: "numeric", minute: "2-digit", hour12: true }).format(now);
+      const h = parseInt(new Intl.DateTimeFormat("en-GB", { timeZone: zone, hour: "2-digit", hourCycle: "h23" }).format(now), 10);
       tone = (h >= 9 && h < 18) ? "good" : "off";
       shown = `${t} for them`;
-      place = tzPlace(tz);
-    } catch { /* bad tz name - keep the raw value */ }
+      if (zone !== tz) { tz = zone; source = "fallback"; }
+      break;
+    } catch { /* unknown zone name - fall through to Eastern */ }
   }
-  return { tz, shown, tone, place, confident };
-}
-/* The city an IANA timezone points at, as a plain place label for the Profile's
-   "Personal Location" row - "Europe/London" -> "London", "America/New_York" ->
-   "New York", "America/Argentina/Buenos_Aires" -> "Buenos Aires" (owner ask
-   2026-08-20: Personal Location shows WHERE they are; the local time is its own
-   row). Falls back to the raw tz string if it has no readable city segment. */
-function tzPlace(tz) {
-  const seg = String(tz || "").split("/").pop() || "";
-  return seg.replace(/_/g, " ").trim() || String(tz || "");
+  if (!shown) shown = "unknown";
+  const note = source === "person" ? "" : (source === "company" ? "company’s time zone" : "assumed Eastern");
+  return { tz, shown, tone, source, note, confident: source !== "fallback" };
 }
 function decisionFacts(row, opts) {
   opts = opts || {};
@@ -4539,7 +4551,7 @@ function decisionFacts(row, opts) {
   const facts = [];
   facts.push({ label: "Intent", value: `${intentLabel(cls.primary_intent)}${cls.confidence != null ? ` (${Math.round(cls.confidence * 100)}% sure)` : ""}` });
   const tzf = leadTimezoneFact(row);
-  facts.push({ label: "Timezone", value: tzf.shown, tone: tzf.tone });
+  facts.push({ label: "Timezone", value: tzf.note ? `${tzf.shown} · ${tzf.note}` : tzf.shown, tone: tzf.tone });
   if (!opts.hideEmpty || lexHits.length) facts.push({ label: "Opt-out hits", value: lexHits.length ? lexHits.join(", ") : "none" });
   if (!opts.hideEmpty || redFlags.length) facts.push({ label: "AI flags", value: redFlags.length ? redFlags.join(", ") : "none" });
   facts.push({ label: "Call slots", value: slotSituationText(row) });
@@ -4975,20 +4987,18 @@ function companySectionHtml(row) {
   const siteUrl = String(row.company_website || "").trim();
   const site = siteUrl.replace(/^https?:\/\//, "");
   const siteHref = siteUrl ? (/^https?:\/\//i.test(siteUrl) ? siteUrl : `https://${siteUrl}`) : "";
-  // The person's timezone drives TWO Profile rows (owner ask 2026-08-20):
-  // "Personal Location" = WHERE the tz points (Europe/London -> London), and a
-  // separate "Local time" row = the clock there now ("3:17 AM for them") with
-  // the working-hours dot. Same tz fact the decision block used, so they can't
-  // drift. (Superseded the 08-20-morning single merged row - a place, not a
-  // time, belongs under "Personal Location".)
+  // Two Profile rows, two different truths (owner ruling 2026-09-15):
+  // "Personal Location" = ONLY the lead's own profile location from
+  // enrichment - never a place inferred from a phone code, email domain,
+  // company HQ or the model, and never a fallback (a fabricated "New York"
+  // is worse than a dash). "Local time" = the clock ALWAYS, in the zone the
+  // setter proposes times in: their profile location, else the company's
+  // location, else Eastern - with a note saying which when it isn't theirs.
+  // Same tz fact the decision block uses, so the two can't drift.
   const tzf = leadTimezoneFact(row);
-  // Owner ruling: don't guess a location. When the zone is just the zero-signal
-  // Eastern fallback (not confident), leave both rows blank instead of showing
-  // a made-up "New York" for every unplaced lead.
-  const personalLoc = (tzf.place && tzf.confident) ? esc(tzf.place) : dash;
-  const localTime = (tzf.tz && tzf.confident)
-    ? `${tzf.tone ? `<span class="lp-tz-dot ${esc(tzf.tone)}"></span>` : ""}${esc(tzf.shown)}`
-    : dash;
+  const personalLoc = String(wc.person_location || "").trim() ? esc(String(wc.person_location).trim()) : dash;
+  const localTime = `${tzf.tone ? `<span class="lp-tz-dot ${esc(tzf.tone)}"></span>` : ""}${esc(tzf.shown)}`
+    + (tzf.note ? ` <span class="muted small">· ${esc(tzf.note)}</span>` : "");
   const desc = c.description ? String(c.description) : "";
   // Full description, no truncation (owner ask 2026-08-20) - the details fold
   // already keeps it out of the way until opened.
@@ -5199,6 +5209,10 @@ async function hydrateLeadContact(row) {
     // one-tap call dropdown in the warm-call bar. Empty/one-long = single button.
     phones: Array.isArray(res.data.phones) ? res.data.phones.filter((p) => p && p.number) : [],
     person_title: String((res.data.person || {}).title || ""),
+    // The lead's OWN profile location (+ its zone) - the Profile's Personal
+    // Location row and the Local time clock (owner ruling 2026-09-15).
+    person_location: String((res.data.person || {}).location || ""),
+    person_location_tz: String((res.data.person || {}).location_tz || ""),
     company: res.data.company || {},
     // Smartlead's own company_name, kept as a name fallback so the Profile's
     // Company row still fills when the deeper company enrichment is empty
