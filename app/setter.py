@@ -11903,6 +11903,49 @@ _THREAD_REFRESH_LAST: dict = {}    # row id -> last background-hydrate kick
 _THREAD_REFRESH_MIN_S = 90.0
 
 
+def _thread_msg_key(m: dict) -> str:
+    """Stable identity for one thread entry, used to hide it durably.
+
+    hydrate_lead rebuilds `thread` from Smartlead on every open (norm[-50:]),
+    so a hidden exchange can't be identified by list position or by editing the
+    stored blob — the next re-hydrate would bring it back. We key off the
+    message's OWN identifiers, which survive every re-hydrate: message_id first,
+    then stats_id, then the send time as a last resort. The FE computes the
+    same key so a hide click and the server filter agree. Empty for a malformed
+    entry (never hidable, which is correct — nothing to pin it to)."""
+    if not isinstance(m, dict):
+        return ""
+    mid = m.get("message_id")
+    if mid not in (None, ""):
+        return "m:" + str(mid)
+    sid = m.get("stats_id")
+    if sid not in (None, ""):
+        return "s:" + str(sid)
+    t = m.get("time")
+    return "t:" + str(t) if t not in (None, "") else ""
+
+
+def _hidden_keys(row: dict) -> set:
+    """The set of thread-message keys the owner has manually hidden on this row.
+    Persisted in the guardrails jsonb (setter_queue is schema-frozen — see the
+    schema-freeze gotcha — so this rides an existing column, exactly like
+    tz_confident)."""
+    g = row.get("guardrails") if isinstance(row.get("guardrails"), dict) else {}
+    ids = g.get("hidden_message_ids")
+    return set(str(x) for x in ids) if isinstance(ids, list) else set()
+
+
+def _filter_hidden_thread(thread, row):
+    """Drop the entries the owner hid on this row. Never mutates the stored
+    thread (the raw snapshot stays intact in Supabase and in Smartlead) — it
+    only shapes what the conversation view is handed, so a hide is reversible
+    and re-hydrate-proof."""
+    hidden = _hidden_keys(row)
+    if not hidden or not isinstance(thread, list):
+        return thread
+    return [m for m in thread if _thread_msg_key(m) not in hidden]
+
+
 def route_thread_get(params):
     """Thread for one queue row - CACHE-FIRST (perf ruling 2026-07-30).
 
@@ -11934,18 +11977,21 @@ def route_thread_get(params):
         if not row or not _scope_ok(row):
             return 404, {"error": "Queue row not found."}
         if row.get("is_test"):
-            return 200, {"thread": row.get("thread") or [], "refreshed": False, "cached": True}
+            return 200, {"thread": _filter_hidden_thread(row.get("thread") or [], row),
+                         "refreshed": False, "cached": True}
         stored = row.get("thread") or []
         want_live = _qp(params, "live", "") == "1"
         if stored and not want_live:
             _kick_thread_rehydrate(row)
-            return 200, {"thread": stored, "refreshed": False, "cached": True, "stale": True}
+            return 200, {"thread": _filter_hidden_thread(stored, row),
+                         "refreshed": False, "cached": True, "stale": True}
         # No stored snapshot (legacy row) or an explicit live ask: hydrate inline.
         mid = row.get("message_id") or row.get("source_message_id") or ""
         ok, hyd, herr = hydrate_lead(row.get("smartlead_campaign_id"), row.get("lead_email"), mid)
         if not ok:
             # Stale beats broken: hand back the stored snapshot with the why.
-            return 200, {"thread": stored, "refreshed": False, "cached": True, "detail": herr}
+            return 200, {"thread": _filter_hidden_thread(stored, row),
+                         "refreshed": False, "cached": True, "detail": herr}
         thread = hyd.get("thread") or []
         try:
             _apply_patch(row, {"thread": thread})
@@ -11955,7 +12001,9 @@ def route_thread_get(params):
                              daemon=True, name="setter-absorb").start()
         except Exception:  # noqa: BLE001 - persisting is best-effort; the response is what matters
             pass
-        return 200, {"thread": thread, "refreshed": True}
+        # Persist the full thread (above), but hand the UI the filtered view —
+        # the hide is a display suppression, never a data deletion.
+        return 200, {"thread": _filter_hidden_thread(thread, row), "refreshed": True}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -11986,7 +12034,7 @@ def route_thread_batch_get(params):
                 stored = r.get("thread") or []
                 if not stored:
                     continue   # not warmed here; opens via the single-row endpoint
-                out[str(r.get("id"))] = stored
+                out[str(r.get("id"))] = _filter_hidden_thread(stored, r)
                 if not r.get("is_test"):
                     try:
                         _kick_thread_rehydrate(r)   # same background refresh as the single path
@@ -12931,6 +12979,43 @@ def route_lead_note_post(payload):
         for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
             _LEAD_CONTACT_CACHE.pop(k, None)
         return 200, {"ok": True, "notes_at": now_iso if notes else ""}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_thread_hide_post(payload):
+    """POST /api/setter/thread/hide {id, key, hidden} - manually hide (or
+    un-hide) ONE exchange in a conversation. Owner-only (not in
+    _AUTH_PUBLIC_POST / CLIENT_SHARE_POST, so the login gate covers it).
+
+    `key` is the value _thread_msg_key() produces for the exchange the owner
+    clicked (the FE computes it the same way). We store the set of hidden keys
+    in the guardrails jsonb (schema-freeze: no new column) and every thread-
+    serving path filters against it, so the hide survives Smartlead re-hydrate
+    and reloads. Nothing is deleted from the stored thread or from Smartlead —
+    hidden:false simply drops the key again."""
+    try:
+        qid = str((payload or {}).get("id") or "").strip()
+        key = str((payload or {}).get("key") or "").strip()
+        hidden = bool((payload or {}).get("hidden", True))
+        if not qid or not key:
+            return 400, {"error": "id and key are required"}
+        if not _SB:
+            return 503, {"error": "storage unavailable"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(qid, safe='')}"
+                          f"&{_list_ws_filter()}{_scope_sql()}&select=*")
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row or not _scope_ok(row):
+            return 404, {"error": "Queue row not found."}
+        cur = _hidden_keys(row)
+        if hidden:
+            cur.add(key)
+        else:
+            cur.discard(key)
+        g = dict(row.get("guardrails") or {})
+        g["hidden_message_ids"] = sorted(cur)
+        _apply_patch(row, {"guardrails": g})
+        return 200, {"ok": True, "hidden_message_ids": g["hidden_message_ids"]}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -19284,6 +19369,7 @@ POST_ROUTES = {
     "/api/setter/test/inject": route_test_inject,
     "/api/setter/edit-lesson/undo": route_edit_lesson_undo,
     "/api/setter/lead-note": route_lead_note_post,
+    "/api/setter/thread/hide": route_thread_hide_post,
 }
 
 
