@@ -1200,14 +1200,54 @@ COUNTRY_TZ = {
     "ZA": "Africa/Johannesburg", "SOUTH AFRICA": "Africa/Johannesburg",
     "MX": "America/Mexico_City", "MEXICO": "America/Mexico_City",
     "NZ": "Pacific/Auckland", "NEW ZEALAND": "Pacific/Auckland",
+    # Added 2026-09-15 (owner ruling: a known company HQ must resolve, never
+    # silently fall to Eastern because its country was missing here).
+    "UNITED ARAB EMIRATES": "Asia/Dubai", "SA": "Asia/Riyadh", "SAUDI ARABIA": "Asia/Riyadh",
+    "QA": "Asia/Qatar", "QATAR": "Asia/Qatar", "KW": "Asia/Kuwait", "KUWAIT": "Asia/Kuwait",
+    "BH": "Asia/Bahrain", "BAHRAIN": "Asia/Bahrain", "OM": "Asia/Muscat", "OMAN": "Asia/Muscat",
+    "JO": "Asia/Amman", "JORDAN": "Asia/Amman", "LB": "Asia/Beirut", "LEBANON": "Asia/Beirut",
+    "IL": "Asia/Jerusalem", "ISRAEL": "Asia/Jerusalem", "TR": "Europe/Istanbul", "TURKEY": "Europe/Istanbul",
+    "EG": "Africa/Cairo", "EGYPT": "Africa/Cairo", "MA": "Africa/Casablanca", "MOROCCO": "Africa/Casablanca",
+    "KE": "Africa/Nairobi", "KENYA": "Africa/Nairobi", "NG": "Africa/Lagos", "NIGERIA": "Africa/Lagos",
+    "GH": "Africa/Accra", "GHANA": "Africa/Accra", "UG": "Africa/Kampala", "UGANDA": "Africa/Kampala",
+    "TZ": "Africa/Dar_es_Salaam", "TANZANIA": "Africa/Dar_es_Salaam", "RW": "Africa/Kigali", "RWANDA": "Africa/Kigali",
+    "ET": "Africa/Addis_Ababa", "ETHIOPIA": "Africa/Addis_Ababa",
+    "PK": "Asia/Karachi", "PAKISTAN": "Asia/Karachi", "BD": "Asia/Dhaka", "BANGLADESH": "Asia/Dhaka",
+    "LK": "Asia/Colombo", "SRI LANKA": "Asia/Colombo", "NP": "Asia/Kathmandu", "NEPAL": "Asia/Kathmandu",
+    "PH": "Asia/Manila", "PHILIPPINES": "Asia/Manila", "MY": "Asia/Kuala_Lumpur", "MALAYSIA": "Asia/Kuala_Lumpur",
+    "ID": "Asia/Jakarta", "INDONESIA": "Asia/Jakarta", "TH": "Asia/Bangkok", "THAILAND": "Asia/Bangkok",
+    "VN": "Asia/Ho_Chi_Minh", "VIETNAM": "Asia/Ho_Chi_Minh", "KR": "Asia/Seoul", "SOUTH KOREA": "Asia/Seoul",
+    "CN": "Asia/Shanghai", "CHINA": "Asia/Shanghai", "TW": "Asia/Taipei", "TAIWAN": "Asia/Taipei",
+    "AR": "America/Argentina/Buenos_Aires", "ARGENTINA": "America/Argentina/Buenos_Aires",
+    "CL": "America/Santiago", "CHILE": "America/Santiago", "CO": "America/Bogota", "COLOMBIA": "America/Bogota",
+    "PE": "America/Lima", "PERU": "America/Lima",
+    "CZ": "Europe/Prague", "CZECH REPUBLIC": "Europe/Prague", "CZECHIA": "Europe/Prague",
+    "GR": "Europe/Athens", "GREECE": "Europe/Athens", "RO": "Europe/Bucharest", "ROMANIA": "Europe/Bucharest",
+    "HU": "Europe/Budapest", "HUNGARY": "Europe/Budapest", "UA": "Europe/Kyiv", "UKRAINE": "Europe/Kyiv",
+    "BG": "Europe/Sofia", "BULGARIA": "Europe/Sofia", "HR": "Europe/Zagreb", "CROATIA": "Europe/Zagreb",
+    "RS": "Europe/Belgrade", "SERBIA": "Europe/Belgrade", "SK": "Europe/Bratislava", "SLOVAKIA": "Europe/Bratislava",
+    "SI": "Europe/Ljubljana", "SLOVENIA": "Europe/Ljubljana", "EE": "Europe/Tallinn", "ESTONIA": "Europe/Tallinn",
+    "LV": "Europe/Riga", "LATVIA": "Europe/Riga", "LT": "Europe/Vilnius", "LITHUANIA": "Europe/Vilnius",
+    "LU": "Europe/Luxembourg", "LUXEMBOURG": "Europe/Luxembourg", "IS": "Atlantic/Reykjavik", "ICELAND": "Atlantic/Reykjavik",
+    "MT": "Europe/Malta", "MALTA": "Europe/Malta", "CY": "Asia/Nicosia", "CYPRUS": "Asia/Nicosia",
 }
 
 US_STATE_TZ = {
+    # All 50 + DC (2026-09-15), dominant zone per state - a known HQ state must
+    # resolve, never fall to the country default.
     "CA": "America/Los_Angeles", "WA": "America/Los_Angeles", "OR": "America/Los_Angeles", "NV": "America/Los_Angeles",
     "NY": "America/New_York", "NJ": "America/New_York", "MA": "America/New_York", "FL": "America/New_York",
     "GA": "America/New_York", "VA": "America/New_York", "PA": "America/New_York", "NC": "America/New_York",
+    "CT": "America/New_York", "DE": "America/New_York", "DC": "America/New_York", "IN": "America/New_York",
+    "KY": "America/New_York", "ME": "America/New_York", "MD": "America/New_York", "MI": "America/New_York",
+    "NH": "America/New_York", "OH": "America/New_York", "RI": "America/New_York", "SC": "America/New_York",
+    "VT": "America/New_York", "WV": "America/New_York",
     "IL": "America/Chicago", "TX": "America/Chicago", "MN": "America/Chicago", "MO": "America/Chicago",
-    "CO": "America/Denver", "UT": "America/Denver", "AZ": "America/Phoenix",
+    "AL": "America/Chicago", "AR": "America/Chicago", "IA": "America/Chicago", "KS": "America/Chicago",
+    "LA": "America/Chicago", "MS": "America/Chicago", "NE": "America/Chicago", "ND": "America/Chicago",
+    "OK": "America/Chicago", "SD": "America/Chicago", "TN": "America/Chicago", "WI": "America/Chicago",
+    "CO": "America/Denver", "UT": "America/Denver", "ID": "America/Denver", "MT": "America/Denver",
+    "NM": "America/Denver", "WY": "America/Denver", "AZ": "America/Phoenix",
     "HI": "Pacific/Honolulu", "AK": "America/Anchorage",
 }
 US_CITY_TZ = {
@@ -1262,6 +1302,29 @@ _PHONE_CC = [
 ]
 
 
+# Full state / province names -> the abbreviations the tables above key on.
+# Prospeo profile locations and the companies table carry "New Jersey" /
+# "British Columbia" / "New South Wales", not "NJ" / "BC" / "NSW".
+_STATE_ABBR = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR", "california": "CA",
+    "colorado": "CO", "connecticut": "CT", "delaware": "DE", "florida": "FL", "georgia": "GA",
+    "hawaii": "HI", "idaho": "ID", "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD", "massachusetts": "MA",
+    "michigan": "MI", "minnesota": "MN", "mississippi": "MS", "missouri": "MO", "montana": "MT",
+    "nebraska": "NE", "nevada": "NV", "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM",
+    "new york": "NY", "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT", "vermont": "VT",
+    "virginia": "VA", "washington": "WA", "west virginia": "WV", "wisconsin": "WI", "wyoming": "WY",
+    "district of columbia": "DC",
+    "ontario": "ON", "quebec": "QC", "québec": "QC", "british columbia": "BC", "alberta": "AB",
+    "manitoba": "MB", "saskatchewan": "SK", "nova scotia": "NS", "new brunswick": "NB",
+    "new south wales": "NSW", "victoria": "VIC", "queensland": "QLD", "western australia": "WA",
+    "south australia": "SA", "tasmania": "TAS", "northern territory": "NT",
+    "australian capital territory": "ACT",
+}
+
+
 def _big_country(cc: str, state: str, city: str):
     if cc in ("US", "USA", "UNITED STATES", "UNITED STATES OF AMERICA"):
         if state and state in US_STATE_TZ:
@@ -1292,12 +1355,17 @@ def _big_country(cc: str, state: str, city: str):
     return None
 
 
-def guess_timezone(hints: dict):
+def guess_timezone(hints: dict, scan_body_tld: bool = True):
     """Deterministic country/state/city/TLD/phone -> IANA tz guess.
-    hints: {country, state, city, phone, tld, body}. Returns (tz|None, confidence)."""
+    hints: {country, state, city, phone, tld, body}. Returns (tz|None, confidence).
+    scan_body_tld=False skips the "a ccTLD website mentioned in the body" sweep
+    (a company-level signal) so a person-only pass stays person-only."""
     hints = hints or {}
     country = (hints.get("country") or "").strip()
     state = (hints.get("state") or "").strip().upper()
+    if len(state) > 3:
+        # "New Jersey" / "British Columbia" -> the abbreviation the tables key on.
+        state = _STATE_ABBR.get(state.lower(), state)
     city = (hints.get("city") or "").strip().lower()
     phone = (hints.get("phone") or "").strip()
     tld = (hints.get("tld") or "").strip().lower().lstrip(".")
@@ -1319,7 +1387,7 @@ def guess_timezone(hints: dict):
         if tz:
             return tz, 0.75
 
-    if not tld:
+    if not tld and scan_body_tld:
         m = re.search(
             r"[\w-]+\.(com\.br|com\.au|com\.mx|co\.uk|de|fr|es|it|nl|ie|ca|au|br|in|sg|hk|jp|ae|za|nz|mx|pt|"
             r"se|no|dk|fi|pl|ch|at|be)\b", body, re.IGNORECASE)
@@ -1340,28 +1408,163 @@ def guess_timezone(hints: dict):
     return None, 0.0
 
 
-def resolve_timezone(hints: dict, classification: dict):
-    """Best-effort IANA timezone plus whether it is CONFIDENT. A deterministic
-    hit (company country/state/city, phone country code, ccTLD) is always
-    confident. Otherwise the model's educated guess (inferred from the
-    company/domain/signature, like a person glancing at LinkedIn) is used even
-    when weak. Owner ruling 2026-08-15: this NEVER returns None any more -
-    with zero signal of any kind we assume Eastern Time (America/New_York),
-    because most leads are US and a concrete proposed time (labelled ET by
-    _slot_label) beats a bare availability ask every time. tz_unknown is dead
-    as an outcome. Returns (tz, confident)."""
-    tz, _ = guess_timezone(hints or {})
-    if tz:
-        return tz, True
+TZ_FALLBACK = "America/New_York"
+# Where a zone came from (owner ruling 2026-09-15). "person" = the lead's OWN
+# location (Prospeo profile location, or a phone country code / city in their
+# signature); "company" = the company's location (companies-table HQ, the email
+# domain's ccTLD, or a strong model inference about the company); "fallback" =
+# nothing known, Eastern assumed. Persisted as guardrails.tz_source so the
+# Profile panel can say which - and never shows an inferred place as personal.
+TZ_SOURCE_PERSON, TZ_SOURCE_COMPANY, TZ_SOURCE_FALLBACK = "person", "company", "fallback"
+
+
+def _valid_tz(name) -> str:
+    """The IANA zone name when it exists (Prospeo's time_zone and the model's
+    guess both arrive as free text), else ''."""
+    s = str(name or "").strip()
+    if not s or "/" not in s:
+        return ""
+    try:
+        ZoneInfo(s)
+    except Exception:  # noqa: BLE001
+        return ""
+    return s
+
+
+def resolve_timezone_fact(hints: dict, classification: dict, person_loc: dict = None) -> dict:
+    """The zone the setter uses for the lead's local time and proposed call
+    times, plus WHERE it came from. Owner ruling 2026-09-15 ("there should
+    never be a fallback for personal location; when the system needs a
+    location for the timings use the company's location, and if we don't have
+    that, EDT"), resolved in a fixed order:
+      1. person   - the lead's OWN location: their Prospeo profile location
+                    (`person_loc`, incl. its time_zone), else a phone country
+                    code or a city in their signature.
+      2. company  - the company's location: companies-table HQ, else the email
+                    domain's ccTLD, else the model's inference about the
+                    company when it is a strong one (tz_confidence >= 0.6, the
+                    prompt's "clearly-regional company" band - a weak lean is
+                    NOT a location we have).
+      3. fallback - America/New_York, flagged so the UI says "assumed".
+    Returns {tz, confident, source, basis}. confident is False only for the
+    fallback (keeps the older tz_confident flag meaningful); basis is the
+    one-line why the Profile panel shows next to Local time. Never None."""
+    hints = hints or {}
+    pl = person_loc or {}
+    if pl:
+        tzp = _valid_tz(pl.get("time_zone"))
+        if not tzp:
+            tzp, _ = guess_timezone({"country": pl.get("country_code") or pl.get("country"),
+                                     "state": pl.get("state"), "city": pl.get("city")})
+        if tzp:
+            return {"tz": tzp, "confident": True, "source": TZ_SOURCE_PERSON, "basis": "profile location"}
+    # Signature signals. The company's state/city only REFINE a phone-derived
+    # country (a +1 lead at an Austin-HQ company is most likely Central); the
+    # company's own country is deliberately NOT passed on this person pass.
+    tzs, _ = guess_timezone({"phone": hints.get("phone"), "body": hints.get("body"),
+                             "state": hints.get("state"), "city": hints.get("city")}, scan_body_tld=False)
+    if tzs:
+        return {"tz": tzs, "confident": True, "source": TZ_SOURCE_PERSON, "basis": "their signature"}
+    tzc, _ = guess_timezone({"country": hints.get("country"), "state": hints.get("state"),
+                             "city": hints.get("city")})
+    if tzc:
+        return {"tz": tzc, "confident": True, "source": TZ_SOURCE_COMPANY, "basis": "company HQ"}
+    tzd, _ = guess_timezone({"tld": hints.get("tld"), "body": hints.get("body")})
+    if tzd:
+        return {"tz": tzd, "confident": True, "source": TZ_SOURCE_COMPANY, "basis": "email domain"}
     classification = classification or {}
-    guess = classification.get("timezone_guess")
+    raw_guess = str(classification.get("timezone_guess") or "").strip()
+    # The model sometimes invents a zone name ("Africa/Kenya"): salvage it via
+    # the country table on the last segment before giving up on it.
+    guess = _valid_tz(raw_guess) or COUNTRY_TZ.get(raw_guess.split("/")[-1].replace("_", " ").upper(), "")
     try:
         gc = float(classification.get("tz_confidence") or 0)
     except (TypeError, ValueError):
         gc = 0.0
-    if guess:
-        return guess, gc >= 0.7
-    return "America/New_York", False
+    if guess and gc >= 0.6:
+        return {"tz": guess, "confident": True, "source": TZ_SOURCE_COMPANY, "basis": "company region"}
+    return {"tz": TZ_FALLBACK, "confident": False, "source": TZ_SOURCE_FALLBACK, "basis": "assumed Eastern"}
+
+
+def resolve_timezone(hints: dict, classification: dict, person_loc: dict = None):
+    """(tz, confident) view of resolve_timezone_fact for callers that only
+    pick slots. Never returns None (owner ruling 2026-08-15: with zero signal
+    assume Eastern; _slot_label stamps the zone on every proposed time)."""
+    fact = resolve_timezone_fact(hints, classification, person_loc)
+    return fact["tz"], fact["confident"]
+
+
+def _tz_guardrails(fact: dict) -> dict:
+    """The three guardrails-jsonb keys that persist a zone fact (the
+    setter_queue schema is frozen, so they ride in the jsonb, never as
+    top-level columns): tz_confident (False only for the Eastern fallback),
+    tz_source (person|company|fallback) and tz_basis (the one-line why)."""
+    fact = fact or {}
+    return {"tz_confident": bool(fact.get("confident")),
+            "tz_source": fact.get("source") or TZ_SOURCE_FALLBACK,
+            "tz_basis": fact.get("basis") or ""}
+
+
+def _person_location_of(enr) -> dict:
+    """Prospeo's person.location from a cached enrichment row - the lead's OWN
+    profile location, never the company's - as {city, state, country,
+    country_code, time_zone} (empty strings for unknowns), or {} when the lead
+    was never enriched, NO_MATCHed, or the payload carries no location."""
+    try:
+        payload = enr.get("payload") if isinstance(enr, dict) else None
+        person = payload.get("person") if isinstance(payload, dict) and isinstance(payload.get("person"), dict) else {}
+        loc = person.get("location")
+        if isinstance(loc, str):
+            loc = {"city": loc}
+        if not isinstance(loc, dict):
+            return {}
+        out = {k: str(loc.get(k) or "").strip() for k in ("city", "state", "country", "country_code", "time_zone")}
+        return out if any(out.values()) else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def _person_place_label(person_loc: dict) -> str:
+    """'Evergreen, Colorado, United States' - the Profile's Personal Location
+    text, built ONLY from the lead's own profile location (owner ruling
+    2026-09-15: never a place inferred from a phone code, domain, company HQ
+    or the model). '' when unknown, and the row shows a dash."""
+    parts = []
+    for k in ("city", "state", "country"):
+        v = str((person_loc or {}).get(k) or "").strip()
+        if v and v.lower() not in [p.lower() for p in parts]:
+            parts.append(v)
+    return ", ".join(parts)
+
+
+def _stored_tz_fact(row: dict):
+    """The zone fact a queue row already carries, when it came from a real
+    signal - None when the row has no zone, was stamped with the Eastern
+    fallback, or predates tz_source and was never marked confident. Callers
+    re-resolve on None. Pre-2026-09-15 confident rows never held the lead's
+    own profile location, so they read as company-level."""
+    g = (row or {}).get("guardrails") or {}
+    tz = _valid_tz((row or {}).get("timezone"))
+    if not tz:
+        return None
+    src = g.get("tz_source")
+    if src in (TZ_SOURCE_PERSON, TZ_SOURCE_COMPANY):
+        return {"tz": tz, "confident": True, "source": src, "basis": g.get("tz_basis") or ""}
+    if src is None and g.get("tz_confident") is True:
+        return {"tz": tz, "confident": True, "source": TZ_SOURCE_COMPANY, "basis": ""}
+    return None
+
+
+def _row_tz_fact(row: dict, hints: dict, classification: dict) -> dict:
+    """The zone fact for an EXISTING row: what it already carries when that
+    came from a real signal - unless the lead's own profile location has
+    arrived since (enrichment runs after intake), in which case the person
+    wins. Otherwise a fresh resolve, exactly like intake."""
+    person_loc = _person_location_of(_enrichment_row((row or {}).get("lead_email") or ""))
+    stored = _stored_tz_fact(row)
+    if stored and (stored["source"] == TZ_SOURCE_PERSON or not person_loc):
+        return stored
+    return resolve_timezone_fact(hints, classification, person_loc)
 
 
 # ── slot picking + labelling ─────────────────────────────────────────────────
@@ -5997,7 +6200,11 @@ def _company_hints(domain: str) -> dict:
     if not domain or not _SB:
         return {}
     domain = domain.strip().lower()
-    if not domain:
+    # A freemail domain is the PERSON's mailbox, not a company - the companies
+    # table holds junk rows for gmail.com and friends ("The AI Journal",
+    # London) that would place every Gmail lead in London (found 2026-09-15
+    # while backfilling the zone facts).
+    if not domain or _is_freemail(domain):
         return {}
     # Multiple replies in one tick (and tick-after-tick) frequently share a
     # domain; cache the geo lookup so we hit companies once per domain per TTL
@@ -6459,9 +6666,16 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                                                "email_domain": domain, "company_location": company_location},
                                               snapshot, owner_hints=mem_hints)
                     now = _dt.datetime.now(_dt.timezone.utc)
-                    # Owner ruling 2026-08-15: a stranded row with no stored
-                    # timezone assumes Eastern - times are always proposed.
-                    tz = row.get("timezone") or "America/New_York"
+                    # Owner ruling 2026-09-15: a stranded row resolves its zone
+                    # like intake (person -> company HQ -> Eastern) instead of
+                    # stamping Eastern on every row that arrived without one -
+                    # that stamp is how a Dubai lead came to show "New York".
+                    tzf = _row_tz_fact(row, {
+                        "country": comp_hints.get("country"), "state": comp_hints.get("state"),
+                        "city": comp_hints.get("city"), "phone": _extract_phone(body_text),
+                        "tld": ".".join(domain.split(".")[-2:]) if domain else "", "body": body_text,
+                    }, classification)
+                    tz = tzf["tz"]
                     slots, slot_status, serr = [], "not_configured", ""
                     eff_settings = dict(_load_settings())
                     eff_settings["_agent"] = snapshot
@@ -6488,9 +6702,9 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                              "draft_subject": d.get("subject"), "draft_body": draft_html,
                              "original_draft_body": draft_html, "slots": slots,
                              "guardrails": {**(row.get("guardrails") or {}),
-                                            **slot_situation(slot_status, tz, slots, serr)}}
-                    if tz:
-                        patch["timezone"] = tz
+                                            **slot_situation(slot_status, tz, slots, serr),
+                                            **_tz_guardrails(tzf)},
+                             "timezone": tz}
                     _apply_patch(row, patch)
                     adopted += 1
                 except Exception as e:  # noqa: BLE001 - one bad stranded row must never stop the rest
@@ -7015,20 +7229,21 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
     classification = normalize_call_intent(classification)
     row["classification"] = classification
 
-    tz, tz_confident = resolve_timezone(hints, classification)
+    # Owner ruling 2026-09-15: person (their own profile location, when an
+    # earlier reply already got them enriched) -> company HQ -> Eastern.
+    tzf = resolve_timezone_fact(hints, classification, _person_location_of(_enrichment_row(email)))
+    tz, tz_confident = tzf["tz"], tzf["confident"]
     row["timezone"] = tz
 
-    # tz_confident rides in the guardrails jsonb (a real, persisted, frontend-read
-    # column) rather than a bare top-level key - the setter_queue schema is frozen
-    # and an unknown top-level column dies silently on PATCH
-    # (reference_setter_queue_schema_freeze_gotcha). It records whether the zone
-    # came from a REAL signal (deterministic hint or strong model inference) vs.
-    # the zero-signal Eastern fallback. The Profile panel reads it to decide
-    # whether to SHOW Personal Location / Local time or leave them blank - owner
-    # ruling: don't guess a location, leave it blank. Slot proposal still uses the
-    # Eastern fallback (that path is unchanged); only the display honours this.
+    # The zone fact rides in the guardrails jsonb (a real, persisted,
+    # frontend-read column) rather than bare top-level keys - the setter_queue
+    # schema is frozen and an unknown top-level column dies silently on PATCH
+    # (reference_setter_queue_schema_freeze_gotcha). tz_source/tz_basis say
+    # where the zone came from; the Profile panel shows the clock ALWAYS and
+    # names the source when it isn't the person's own, and never derives
+    # "Personal Location" from it (that row is fed by enrichment only).
     row["guardrails"] = {"lexicon_hits": lex_hits, "llm_red_flags": classification.get("red_flags") or [],
-                         "tz_confident": tz_confident}
+                         **_tz_guardrails(tzf)}
 
     category = reply.get("category")
     first_touch = True
@@ -13228,6 +13443,30 @@ def route_thread_batch_get(params):
 _ENRICH_INFLIGHT: set = set()     # emails currently enriching (thread guard)
 
 
+def _propagate_person_tz(email: str, person_loc: dict) -> None:
+    """Re-stamp every queue row for `email` with the zone of the lead's own
+    profile location (Prospeo) once enrichment has delivered it. Rows already
+    on that person-level zone are skipped; nothing else about a row changes
+    (a sent draft keeps the times it proposed). Never raises."""
+    try:
+        if not (email and person_loc and _SB):
+            return
+        fact = resolve_timezone_fact({}, {}, person_loc)
+        if fact["source"] != TZ_SOURCE_PERSON:
+            return
+        rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=eq.{quote(email.lower(), safe='')}"
+                          "&select=id,timezone,guardrails&limit=50")
+        for r in (rows if isinstance(rows, list) else []):
+            g = r.get("guardrails") if isinstance(r.get("guardrails"), dict) else {}
+            if g.get("tz_source") == TZ_SOURCE_PERSON and r.get("timezone") == fact["tz"]:
+                continue
+            _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{r.get('id')}",
+                {"timezone": fact["tz"], "guardrails": {**g, **_tz_guardrails(fact)}},
+                prefer="return=minimal")
+    except Exception:  # noqa: BLE001 - a display/timing upgrade, never a failure
+        pass
+
+
 def _enrichment_row(email: str):
     """The lead's cached enrichment row, or None. A row EXISTing (even with
     an empty phone) means we already tried - never re-spend on that lead."""
@@ -13555,8 +13794,10 @@ def _prospeo_enrich(email: str, linkedin: str = "") -> dict:
         phone = str(mob).strip()
     # Live shape (verified 2026-08-15): company.location is an OBJECT, the
     # richest description is description > description_ai > description_seo,
-    # and the person carries their own location - used as the fallback so the
-    # Location line still answers "where would I be calling?".
+    # and the person carries their OWN location (city/state/country/time_zone)
+    # - returned separately as person_location (owner ruling 2026-09-15: it IS
+    # the Profile's Personal Location and outranks the company HQ for timing,
+    # but it never back-fills the company's own location any more).
     loc = comp.get("location") if isinstance(comp.get("location"), dict) else {}
     ploc = person.get("location") if isinstance(person.get("location"), dict) else {}
     if isinstance(comp.get("location"), str) and comp["location"].strip():
@@ -13569,14 +13810,18 @@ def _prospeo_enrich(email: str, linkedin: str = "") -> dict:
                        or comp.get("description_seo") or "",
         "employee_count": comp.get("employee_count") or comp.get("employee_count_on_prospeo") or None,
         "employee_range": comp.get("employee_range") or "",
-        "city": loc.get("city") or loc.get("locality") or ploc.get("city") or "",
-        "state": loc.get("state") or loc.get("region") or ploc.get("state") or ploc.get("region") or "",
-        "country": loc.get("country") or ploc.get("country") or "",
+        "city": loc.get("city") or loc.get("locality") or "",
+        "state": loc.get("state") or loc.get("region") or "",
+        "country": loc.get("country") or "",
         "industry": comp.get("industry") or "",
         "linkedin_url": comp.get("linkedin_url") or comp.get("linkedin") or "",
     }
+    person_location = {k: str(ploc.get(k) or ploc.get({"state": "region"}.get(k, k)) or "").strip()
+                       for k in ("city", "state", "country", "country_code", "time_zone")}
     return {"phone": phone, "phone_source": "prospeo" if phone else "",
-            "company": company, "payload": body}
+            "company": company,
+            "person_location": person_location if any(person_location.values()) else {},
+            "payload": body}
 
 
 def _getleads_enrich(first: str, last: str, company: str = "", domain: str = "") -> str:
@@ -13844,6 +14089,10 @@ def _enrich_on_reply(email: str, domain: str, workspace: str, campaign_id=None) 
                 }, prefer="resolution=merge-duplicates,return=minimal")
             for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
                 _LEAD_CONTACT_CACHE.pop(k, None)
+            # Owner ruling 2026-09-15: the lead's OWN profile location, now
+            # known, outranks the company HQ / Eastern their queue rows were
+            # drafted on - re-point every row for this lead at it.
+            _propagate_person_tz(email, res.get("person_location") or {})
             # SLOW supplement: Better Contact is an async job (polls up to ~90s),
             # so it runs AFTER the fast numbers are banked and appends its number
             # with a SECOND write - the mobile still lands in seconds. Union mode
@@ -14236,12 +14485,26 @@ def route_lead_contact_get(params):
                 ptitle = str(pp.get("current_job_title") or pp.get("headline") or "").strip()
                 if ptitle:
                     out["person"] = {"title": ptitle[:120]}
+            # The lead's OWN profile location (Prospeo) - the only thing the
+            # Profile's Personal Location row may show (owner ruling
+            # 2026-09-15: never a place inferred from a phone code, domain,
+            # company HQ or the model) - plus its zone, so the Local time
+            # clock switches to it the moment enrichment lands.
+            _pl = _person_location_of(enr)
+            if _pl:
+                _pfact = resolve_timezone_fact({}, {}, _pl)
+                out["person"] = {**(out.get("person") or {}),
+                                 "location": _person_place_label(_pl)[:160],
+                                 "location_tz": _pfact["tz"] if _pfact["source"] == TZ_SOURCE_PERSON else ""}
             if enr is None:
                 threading.Thread(target=_enrich_on_reply,
                                  args=(email, domain or (out.get("website") or ""), workspace,
                                        campaign_id),
                                  daemon=True).start()
-            comp = _company_row(domain or (out.get("website") or ""))
+            # Same freemail guard as _company_hints: a gmail.com lead has no
+            # company row worth showing (the table's "gmail.com" entry is junk).
+            _cdom = domain or (out.get("website") or "")
+            comp = _company_row(_cdom) if _cdom and not _is_freemail(_cdom) else {}
             if comp:
                 out["company"] = {
                     "name": comp.get("name") or out.get("company_name") or "",
@@ -14976,26 +15239,22 @@ def _redraft_sync(payload):
         anchor_healed = classification and _anchor_affirmation(
             classification, clean_body(row.get("reply_body") or ""), anchor_last_outbound,
             row.get("lead_first_name") or "", row.get("lead_last_name") or "")
-        tz = row.get("timezone")
-        # A stored timezone was already vetted at intake; only a fresh
-        # resolve below can downgrade confidence.
-        tz_confident = bool(tz)
-        if not tz and classification:
-            # Some intakes stored a classification but never stamped the row's
-            # timezone, and this route only re-resolved when the classification
-            # was missing too - so every Regenerate re-read the empty field,
-            # skipped the Calendly lookup, and fell back to the availability
-            # ask while real slots existed (owner report 2026-08-04, row 1435:
-            # classification carried America/New_York at 0.9 the whole time).
-            # Resolve exactly like intake - deterministic hints first, then the
-            # stored guess - and persist below so one Regenerate heals the row.
-            body_text = clean_body(row.get("reply_body") or "")
-            domain = (row.get("company_domain") or "").lower()
-            comp_hints = _company_hints(domain)
-            hints = {"country": comp_hints.get("country"), "state": comp_hints.get("state"),
-                     "city": comp_hints.get("city"), "phone": _extract_phone(body_text),
-                     "tld": ".".join(domain.split(".")[-2:]) if domain else "", "body": body_text}
-            tz, tz_confident = resolve_timezone(hints, classification)
+        # Zone: what the row carries when that came from a real signal, else
+        # (or once the lead's own profile location has arrived) a fresh resolve
+        # like intake - person -> company HQ -> Eastern (owner ruling
+        # 2026-09-15). A row stamped with the Eastern fallback therefore heals
+        # on its first Regenerate instead of re-reading the stamp as vetted
+        # (the pre-2026-09-15 `tz_confident = bool(tz)` flipped exactly those
+        # rows to "New York" in the Profile). Also covers the 2026-08-04 case
+        # (stored classification, empty timezone) - resolve runs every time.
+        _tz_body = clean_body(row.get("reply_body") or "")
+        _tz_domain = (row.get("company_domain") or "").lower()
+        _tz_comp = _company_hints(_tz_domain)
+        _tz_hints = {"country": _tz_comp.get("country"), "state": _tz_comp.get("state"),
+                     "city": _tz_comp.get("city"), "phone": _extract_phone(_tz_body),
+                     "tld": ".".join(_tz_domain.split(".")[-2:]) if _tz_domain else "", "body": _tz_body}
+        tzf = _row_tz_fact(row, _tz_hints, classification or {})
+        tz, tz_confident = tzf["tz"], tzf["confident"]
         fresh_classification = None
         # Adopted/agentless rows reach Regenerate with NO stored classification
         # (their intake deliberately skips the brain) - a redraft used to run
@@ -15033,11 +15292,11 @@ def _redraft_sync(payload):
                                            "email_domain": domain, "company_location": company_location},
                                           agent, owner_hints=mem_hints)
                 fresh_classification = classification
-                if not tz:
-                    hints = {"country": comp_hints.get("country"), "state": comp_hints.get("state"),
-                             "city": comp_hints.get("city"), "phone": _extract_phone(body_text),
-                             "tld": ".".join(domain.split(".")[-2:]) if domain else "", "body": body_text}
-                    tz, tz_confident = resolve_timezone(hints, classification)
+                if tzf["source"] == TZ_SOURCE_FALLBACK:
+                    # Nothing deterministic placed this lead; the fresh
+                    # classification may carry a strong company inference.
+                    tzf = _row_tz_fact(row, _tz_hints, classification)
+                    tz, tz_confident = tzf["tz"], tzf["confident"]
             except Exception:  # noqa: BLE001 - classify outage: the draft still runs, just without intent routing
                 classification = {}
             _stage("classify", _t)
@@ -15209,7 +15468,7 @@ def _redraft_sync(payload):
                  "original_draft_body": draft_html, "slots": slots,
                  "guardrails": {**(row.get("guardrails") or {}),
                                 **slot_situation(slot_status, tz, slots, serr),
-                                "tz_confident": tz_confident}}
+                                **_tz_guardrails(tzf)}}
         if fresh_classification is not None:
             # Persist what the redraft-classify learned so the UI's Intent
             # line updates and the next Regenerate doesn't re-classify.
@@ -15219,10 +15478,9 @@ def _redraft_sync(payload):
             # The affirmation guard rewrote the stored verdict - persist it so
             # the Intent line and any later Regenerate see the healed intent.
             patch["classification"] = classification
-        if tz and not row.get("timezone"):
-            # Also covers the heal above (stored classification, empty
-            # timezone) - without this stamp the next Regenerate re-resolves
-            # from scratch every time.
+        if tz and tz != row.get("timezone"):
+            # A healed fallback stamp / a newly-known profile location: persist
+            # it so the next Regenerate and the Profile clock read the same zone.
             patch["timezone"] = tz
         # Re-run the SAME lint + decision gate the live pipeline applies, so
         # the row's verdict (and the inbox pill, which reads decision_reason)
@@ -15925,7 +16183,7 @@ _SHARE_STRIP_KEYS = frozenset({
     "held_only_by_master_switch", "would_auto_send",
     "qualified", "client", "instructions", "settings", "agent",
 })
-_SHARE_GUARDRAIL_KEEP = ("tz_confident", "slot_status", "slot_reason")
+_SHARE_GUARDRAIL_KEEP = ("tz_confident", "tz_source", "tz_basis", "slot_status", "slot_reason")
 
 
 def _share_scrub(obj):
