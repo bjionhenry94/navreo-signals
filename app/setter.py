@@ -1179,6 +1179,50 @@ _AR_AUTOACK = re.compile(
     re.IGNORECASE)
 
 
+# English-only training scenarios (owner ruling 2026-09-16): a trainer rates
+# English drafts, so a Russian / Spanish / French reply is never drawn as a
+# scenario. Two cheap tests on the lead's own unquoted text: (1) any run of
+# non-Latin script (Cyrillic, Greek, Arabic, Hebrew, CJK, Thai) => not
+# English; (2) function-word vote between English and the Latin-script
+# languages we actually see in the corpus. Short bare replies with no
+# foreign function words ("ok", "sure") count as English.
+_NON_LATIN_RE = re.compile(r"[\u0370-\u03ff\u0400-\u04ff\u0530-\u058f\u0590-\u05ff\u0600-\u06ff"
+                           r"\u0e00-\u0e7f\u3040-\u30ff\u4e00-\u9fff\uac00-\ud7af]{2,}")
+_EN_WORDS = frozenset("the and you your for with this that are is we our can would will have not "
+                      "please thanks thank from more about what how when call time yes sure ok okay "
+                      "interested send let know it be to of in on at a an".split())
+_FOREIGN_WORDS = frozenset(
+    # es
+    "hola gracias por favor estoy somos nuestra nuestro para con que una las los del este esta "
+    "podemos interesa interesado llamada más muy sí "
+    # fr
+    "bonjour merci pour nous vous votre notre avec est sont une des les sur pas très oui "
+    "intéressé appel "
+    # de
+    "hallo danke für wir sie ihre unsere mit ist sind eine nicht sehr gerne bitte auch "
+    # it
+    "ciao grazie per noi siamo nostra vostro con che una gli delle sul molto sì interessati "
+    # pt
+    "olá obrigado obrigada para nós somos nossa vosso com que uma das dos sim muito "
+    # nl
+    "hallo bedankt voor wij zijn onze met dat een niet graag".split())
+_WORD_RE = re.compile(r"[a-zà-ÿ']+", re.IGNORECASE)
+
+
+def _is_english_reply(body) -> bool:
+    lead = clean_body(body or "")
+    if not lead.strip():
+        return False
+    if _NON_LATIN_RE.search(lead):
+        return False
+    words = [w.lower() for w in _WORD_RE.findall(lead[:1200])]
+    en = sum(1 for w in words if w in _EN_WORDS)
+    foreign = sum(1 for w in words if w in _FOREIGN_WORDS)
+    if foreign == 0:
+        return True
+    return en > foreign
+
+
 def _is_automated_ack(body) -> bool:
     """True iff the lead's own new message reads as an automated
     acknowledgement / ticket receipt / survey (see _AR_AUTOACK). Head-only,
@@ -17350,6 +17394,9 @@ def _fetch_training_candidates(category: str, exclude_ids: list, want: int,
             # the categoriser filed them as.
             body = r.get("reply_body")
             if _autoreply_category(body) is not None or _is_automated_ack(body):
+                continue
+            # English-only scenarios (owner ruling 2026-09-16).
+            if not _is_english_reply(body):
                 continue
             out.append(r)
         return out
