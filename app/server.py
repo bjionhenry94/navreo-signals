@@ -23143,16 +23143,19 @@ CAP_EXCLUDED_WORKSPACES = {"asteri"}
 CAP_PROFILES = {
     "GOOGLE": {"account_type": "GMAIL", "tiers": GOOGLE_CAP_TIERS,
                "pause": GOOGLE_CAP_PAUSE, "min_sends": GOOGLE_CAP_MIN_SENDS,
-               "park_min_sends": GOOGLE_CAP_PARK_MIN_SENDS, "reduced_cap": 10},
+               "park_min_sends": GOOGLE_CAP_PARK_MIN_SENDS, "reduced_cap": 10,
+               "floor_up_min_sends": 200},
     "OUTLOOK": {"account_type": "OUTLOOK", "tiers": OUTLOOK_CAP_TIERS,
                 "pause": OUTLOOK_CAP_PAUSE, "min_sends": OUTLOOK_CAP_MIN_SENDS,
-                "park_min_sends": OUTLOOK_CAP_PARK_MIN_SENDS, "reduced_cap": 1},
+                "park_min_sends": OUTLOOK_CAP_PARK_MIN_SENDS, "reduced_cap": 1,
+                "floor_up_min_sends": 60},
     # Maildoso (owner ruling 2026-08-30): single flat tier 15 down to 0.4%,
     # park below 0.4%. No 20/day bump. Shares the engine's floors + park gate.
     "MAILDOSO": {"account_type": "SMTP", "tiers": MAILDOSO_CAP_TIERS,
                  "pause": MAILDOSO_CAP_PAUSE, "min_sends": MAILDOSO_CAP_MIN_SENDS,
                  "park_min_sends": MAILDOSO_CAP_PARK_MIN_SENDS,
-                 "host_contains": MAILDOSO_HOST_CONTAINS, "reduced_cap": 10},
+                 "host_contains": MAILDOSO_HOST_CONTAINS, "reduced_cap": 10,
+                 "floor_up_min_sends": 200},
 }
 
 # ── Confidence grade (owner ruling 2026-09-04, Mailbox Confidence Grade Step 2)
@@ -23350,10 +23353,36 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
         if dom in resting:
             skipped.append({**row, "reason": "resting"})
             continue
+        _floor_up = None
         if e["sent"] < prof["min_sends"]:
-            skipped.append({**row, "reason": f"under {prof['min_sends']}-send floor"})
-            continue
-        cap = _cap_for(rate, prof)
+            # Grade-aware send floor (owner ruling 2026-09-16, "REViVE needs to
+            # be adjusting"). The floor exists so we never tier a domain on a
+            # thin sample. But REViVE's 38 domains sat at 264–295 sends (3 boxes
+            # × ~93), every one healthy, every one skipped for good at the
+            # default 20/day. A domain under the floor may now tier UP — never
+            # down — when the confidence grade says we are >= 90% sure its true
+            # rate is at/above the floor (prior included) AND it has at least
+            # floor_up_min_sends real sends, so a week-old inbox cannot jump to
+            # 30/day on a lucky handful. Only when CAP_GRADE_V1 is armed.
+            _fu_min = prof.get("floor_up_min_sends")
+            if _grade_on and _fu_min and e["sent"] >= _fu_min:
+                _prior = _ws_prior.get(ws) or _global_prior
+                _letter_b, _P_below = _cap_grade(e["sent"], e["replies"], _floor_frac, _prior)
+                _p_healthy = 1.0 - _P_below
+                if _p_healthy >= CAP_GRADE_A:
+                    _tier = _cap_for(rate, prof)
+                    _cur = min((b.get("message_per_day") or 0) for b in e["boxes"]) if e["boxes"] else 0
+                    if _tier and _tier > _cur:
+                        _floor_up = _tier
+                        row["floor_up"] = _tier
+                        row["grade_p_healthy"] = round(_p_healthy, 3)
+                        row["reason_grade"] = (f"under {prof['min_sends']}-send floor but "
+                                               f"{_p_healthy:.0%} likely healthy on {e['sent']} sends "
+                                               f"— tiered UP to {_tier}, never down")
+            if _floor_up is None:
+                skipped.append({**row, "reason": f"under {prof['min_sends']}-send floor"})
+                continue
+        cap = _floor_up if _floor_up is not None else _cap_for(rate, prof)
         if cap is None:
             # No verdict at this rate under this profile (Outlook below 0.7%):
             # report it and leave the domain exactly as it is.
@@ -23418,6 +23447,8 @@ def provider_reply_caps(provider: str = "GOOGLE", mode: str = "preview") -> dict
         row["pause"] = cap == 0
         plan.append(row)
         for b in e["boxes"]:
+            if _floor_up is not None and (b.get("message_per_day") or 0) >= cap:
+                continue  # floor-up only RAISES boxes below the tier; never lowers one
             if (b.get("message_per_day") or 0) != cap:
                 changes.append({"smartlead_id": b["smartlead_id"], "email": b["email"],
                                 "workspace": ws, "domain": dom,
