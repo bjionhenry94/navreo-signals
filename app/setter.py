@@ -8963,12 +8963,20 @@ CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
 # modules 33/51/9029/9031/9033 name chain, which /client-channel-routing-proof
 # patches and proves). Own-workspace clients (Grout, KRG) live in
 # CLIENT_ALERT_CHANNELS instead.
+#   label          the display label everywhere a client is shown (Mailboxes
+#                  chips, Analytics, per-client capacity, restore attribution).
+#                  server.py DERIVES _SHARED_WS_CLIENTS / _RESTORE_CLIENT_KEYWORDS
+#                  from this row, so onboarding a hosted client is this ONE row
+#                  and capacity adjusting tracks them from day one (Bjion
+#                  2026-09-16: "automatically start adjusting whenever we
+#                  onboard a new client"). test_client_registry_capacity.py
+#                  fails if a hosted client is ever hand-listed in server.py.
 NAVREO_HOSTED_CLIENTS = (
-    {"token": "touchpoint",  "client_id": "touchpoint",   "shared": "C0BKE0RT7DJ", "fresh_lane": "make"},   # #touchpoint-navreo
-    {"token": "thunderbird", "client_id": "thunderbird",  "shared": "C0BFDEF6388", "fresh_lane": "make"},   # #thunderbirdleadership-navreo
-    {"token": "altius",      "client_id": "altius reach", "shared": "C0BKF872NUV", "fresh_lane": "make"},   # #altiusreach-navreo
-    {"token": "revive",      "client_id": "revive",       "shared": "C0BP9A6D28H", "fresh_lane": "app"},    # #revive-navreo
-    {"token": "greenshift",  "client_id": "greenshift",   "shared": "C0BQ954RBAL", "fresh_lane": "app"},    # #greenshift-navreo
+    {"token": "touchpoint",  "client_id": "touchpoint",   "label": "TouchPoint",   "shared": "C0BKE0RT7DJ", "fresh_lane": "make"},   # #touchpoint-navreo
+    {"token": "thunderbird", "client_id": "thunderbird",  "label": "ThunderBird",  "shared": "C0BFDEF6388", "fresh_lane": "make"},   # #thunderbirdleadership-navreo
+    {"token": "altius",      "client_id": "altius reach", "label": "Altius Reach", "shared": "C0BKF872NUV", "fresh_lane": "make"},   # #altiusreach-navreo
+    {"token": "revive",      "client_id": "revive",       "label": "REViVE",       "shared": "C0BP9A6D28H", "fresh_lane": "app"},    # #revive-navreo
+    {"token": "greenshift",  "client_id": "greenshift",   "label": "Greenshift",   "shared": "C0BQ954RBAL", "fresh_lane": "app"},    # #greenshift-navreo
 )
 
 # Campaign-name markers that mean "a client, not Navreo-own" (internal lane

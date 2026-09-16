@@ -19180,17 +19180,20 @@ _CLIENT_WIN_WINDOWS = (30, 14, 7)
 # workspace campaign matching NONE of these is UNASSIGNED — it belongs to no
 # client and must not inflate anyone's totals (previously everything unmatched
 # was silently dumped into "Navreo", over-counting Navreo 30d sent by ~34%).
-_SHARED_WS_CLIENTS = (
-    ("amplif", "Amplifyy"),
-    ("arnic", "Arnic"),
-    ("qwintiq", "Qwintiq"),
-    ("thunderbird", "ThunderBird"),   # ThunderBird is its own client (Bjion 2026-07-28)
-    ("revive", "REViVE"),             # in-workspace client (Bjion 2026-09-02)
-    ("greenshift", "Greenshift"),     # in-workspace client (Bjion 2026-09-02)
-    ("altius", "Altius Reach"),       # in-workspace client (Bjion 2026-08-11)
-    ("touchpoint", "TouchPoint"),     # in-workspace client (Bjion 2026-08-11)
-    ("acme", "Acme"),                 # DEMO client (Bjion 2026-07-29) — see _DEMO_CLIENT_LABELS
-    ("navreo", "Navreo"),             # Navreo is now name-gated like every other client
+# Campaign-name marker -> display label for every client hosted in the navreo
+# Smartlead workspace. DERIVED from setter.NAVREO_HOSTED_CLIENTS (owner ruling
+# 2026-09-16: "automatically start adjusting whenever we onboard a new
+# client") — the ONE registry row onboarding writes now also wires Mailboxes /
+# Analytics attribution and the per-client capacity split, so a new hosted
+# client is tracked and cap-adjusted per client with no edit here. The three
+# Smartlead clients with a real client_id stay as a name fallback; Acme is the
+# demo client (see _DEMO_CLIENT_LABELS); Navreo is deliberately LAST because
+# shared batch names carry it. Own-workspace clients label off the workspaces
+# table (see _client_win_label) and never appear here.
+_SHARED_WS_CLIENTS = tuple(
+    [("amplif", "Amplifyy"), ("arnic", "Arnic"), ("qwintiq", "Qwintiq")]
+    + [(c["token"], c["label"]) for c in setter.NAVREO_HOSTED_CLIENTS]
+    + [("acme", "Acme"), ("navreo", "Navreo")]
 )
 _CLIENT_UNASSIGNED = "__unassigned"
 
@@ -23029,14 +23032,16 @@ def _safe_domains(doms):
     return [d for d in doms if isinstance(d, str) and len(d) < 254 and _DOMAIN_RE.match(d)]
 _RESTORE_FORECAST_DAYS = 14
 
-_RESTORE_CLIENT_KEYWORDS = (  # order matters — navreo LAST (shared batch tags carry it)
-    ("amplif", "Amplifyy"), ("arnic", "Arnic"), ("qwintiq", "Qwintiq"),
-    ("thunderbird", "ThunderBird"), ("revive", "REViVE"), ("greenshift", "Greenshift"),
-    ("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
-    ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang"),
-    ("altius", "Altius Reach"), ("touchpoint", "TouchPoint"),
-    ("acme", "Acme"),  # DEMO client — kept in sync with _SHARED_WS_CLIENTS
-    ("navreo", "Navreo"),
+# Restore/reconcile attribution by domain or batch tag. Hosted clients are
+# DERIVED from setter.NAVREO_HOSTED_CLIENTS (same registry as
+# _SHARED_WS_CLIENTS — one row onboards a client everywhere); the legacy and
+# own-workspace keywords follow; navreo LAST (shared batch tags carry it).
+_RESTORE_CLIENT_KEYWORDS = tuple(
+    [("amplif", "Amplifyy"), ("arnic", "Arnic"), ("qwintiq", "Qwintiq")]
+    + [(c["token"], c["label"]) for c in setter.NAVREO_HOSTED_CLIENTS]
+    + [("heygrand", "HeyGrand"), ("wordbank", "WordBank"), ("asteri", "Asteri"),
+       ("grout", "Grout"), ("insurance", "Insurance"), ("boomerang", "Boomerang")]
+    + [("acme", "Acme"), ("navreo", "Navreo")]
 )
 
 
