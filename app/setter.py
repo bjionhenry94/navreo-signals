@@ -8012,6 +8012,300 @@ def run_client_reply_sync() -> dict:
     return summary
 
 
+# ── client-workspace category fill (KRG / david.wilkins miss, 2026-09-16) ───
+# The client-channel positive card (run_client_positive_alerts, further down)
+# is CATEGORY-driven, and on a client workspace the category comes from that
+# client's OWN categoriser — for KRG the Make reply-router, for the others
+# their Make categoriser or Smartlead's native labelling. When that categoriser
+# is down (the KRG router has been deactivated since 2026-09-08 with its hook
+# queue parked) the backstop reply-sync above still archives every reply — with
+# NO category — and the poll's deterministic pass only ever labels machine mail
+# (_autoreply_category returns None on anything with a buying signal, by
+# design). A positive therefore sat uncategorised until a human picked
+# "Meeting Request" in the Setter, and only THEN did the client card fire
+# (david.wilkins@northernpowergrid.com: replied 13:40Z, archived 13:42Z, hand-
+# categorised 15:18Z, carded 15:22Z — 1h41m late, and only because someone
+# happened to triage it).
+#
+# This sweep rides the same 3-min reply-sync tick, right BEFORE the positive
+# sweep, and fills the category of every still-uncategorised client reply once
+# the workspace's own categoriser has had a fair go (CLIENT_CAT_FILL_GRACE_MIN):
+#   1) rules     — _autoreply_category (free; the poll's pass may not have run)
+#   2) Smartlead — the workspace's OWN current label (the router / native AI /
+#                  a human labelled after our archive; the 6h reconcile would
+#                  otherwise leave the archive stale for hours)
+#   3) model     — the house 8-category categoriser prompt (the one the client
+#                  routers run), gated on confidence: below the bar the reply
+#                  stays uncategorised and surfaced for a human, never
+#                  mislabelled into a client-facing card.
+# A filled positive is carded by run_client_positive_alerts in the SAME tick,
+# and the Setter's auto-resolve pass converts the queued uncategorised row
+# through the normal pipeline. The label is written to the client's Smartlead
+# only for a SENDABLE workspace (the gate route_queue_recategorise applies: a
+# monitor-only client's Smartlead is never written); the archive is always
+# stamped, because the archive is what every card and count reads.
+CLIENT_CAT_FILL_GRACE_MIN = 10      # the workspace's own categoriser gets first go
+CLIENT_CAT_FILL_LOOKBACK_H = 72     # same window the positive sweep scans
+CLIENT_CAT_FILL_MODEL_CAP = 8       # model calls per workspace per tick
+CLIENT_CAT_FILL_MIN_CONF = 0.6      # below this the reply stays with a human
+CLIENT_CAT_FILL_RETRY_MIN = 60      # a reply the model left alone is not re-asked sooner
+CLIENT_CAT_FILL_FAIL_RETRY_MIN = 15  # ...and a model failure retries after this
+CLIENT_CATEGORISE_CATEGORIES = ("Interested", "Meeting Request", "Call Booked",
+                                "Information Request", "Out Of Office",
+                                "Wrong Person", "Not Interested", "Do Not Contact")
+# The house categoriser prompt — the same brief the per-client Make routers
+# give GPT (KRG router 9580455 module 5), so an in-tool verdict matches what
+# the client's own categoriser would have said.
+CLIENT_CATEGORISE_SYSTEM = """You are a reply categoriser for B2B cold email. Read the prospect's reply and assign exactly ONE category from the 8-category list below.
+
+Valid categories (use these exact strings):
+
+1. "Interested" — Positive engagement, prospect open to learning more, but hasn't booked or asked for an asset. Door is open; next move is ours.
+   Examples: "happy to hear more", "yes that's a real pain", "tell me more", "sounds interesting — bad timing, circle back in Q3".
+
+2. "Meeting Request" — Prospect explicitly invites scheduling but hasn't yet booked.
+   Examples: "send me a time", "I'm free Tuesday or Thursday after 2pm", "drop me your calendar link", "happy to set something up, when were you thinking?".
+
+3. "Call Booked" — Prospect explicitly states the call IS booked (not just willing to book).
+   Examples: "just booked a slot on your Calendly", "put time in your calendar for Monday 3pm".
+
+4. "Information Request" — Prospect asks for an asset (deck, case studies, pricing, ROI, samples) BEFORE deciding to engage further. They want material, not a meeting.
+   Examples: "send me the deck and pricing first", "what does this typically cost?", "share the case studies".
+
+5. "Out Of Office" — Auto-responder. Vacation, sick, parental leave, "back on X date", "I will reply on my return", a non-working day. No human intent in the message.
+
+6. "Wrong Person" — Prospect (or an auto-reply) says they're not the right contact, has left the company, or redirects to someone else. Redirect, not rejection.
+   Examples: "I don't handle this — try Sarah", "for these matters email X", "this isn't my area".
+
+7. "Not Interested" — Explicit polite decline OR cold/confused responses that indicate no engagement intent.
+   Examples: "not for us, thanks", "we're sorted on this side", "not a fit", "who is this? how did you get my email?".
+
+8. "Do Not Contact" — Defensive fallback for anything that doesn't cleanly fit the 7 above: removal / unsubscribe demands, hostile language, legal threats, GDPR / CAN-SPAM references, postmaster / delivery-failure notices, single-character or nonsense replies, non-English replies that can't be confidently interpreted.
+
+Calendar invite responses: "Accepted" → "Call Booked"; "Tentatively Accepted" / "Maybe" → "Meeting Request"; "Declined" with no message → "Not Interested"; "Declined" plus a proposed new time → "Meeting Request".
+
+Decision rules (first match wins, top to bottom):
+1. Out Of Office (auto-responder language wins over everything).
+2. Wrong Person (a redirect isn't a yes — beats Interested).
+3. Not Interested (explicit decline OR cold/confused).
+4. Call Booked (booking already happened — beats Meeting Request).
+5. Meeting Request.
+6. Information Request.
+7. Interested.
+8. Otherwise → "Do Not Contact".
+
+Tiebreaker: if a reply contains BOTH positive and negative signals ("interested but bad timing"), prefer the more forward-leaning tag (Interested wins over Not Interested).
+
+Judge only the prospect's own new text: ignore signature blocks, footers and quoted earlier messages. Output JSON only: {"category": "<one of the 8 strings>", "confidence": <0.0-1.0, how sure you are>}."""
+# replies.id -> (monotonic time, retry minutes) for a reply the model was asked
+# about and left alone (low confidence / unavailable), so the same reply is not
+# re-asked every 3-min tick. Process-local: a redeploy re-asks once, at most.
+_CAT_FILL_TRIED = {}
+_CAT_FILL_TRIED_CAP = 2000
+
+
+def _client_lead_category(api_key: str, cid, email: str):
+    """(global Smartlead lead id, this campaign's lead_category_id) read with
+    the WORKSPACE's own key — (None, None) on a miss. Best-effort, never
+    raises: the caller falls through to the model."""
+    try:
+        got = _HTTP("GET", f"{SMARTLEAD_BASE}/leads/?"
+                           f"{urlencode({'email': email, 'api_key': api_key})}", {}, timeout=15)
+        if not isinstance(got, dict) or got.get("id") is None:
+            return None, None
+        for lc in got.get("lead_campaign_data") or []:
+            if isinstance(lc, dict) and str(lc.get("campaign_id")) == str(cid):
+                try:
+                    return got.get("id"), int(lc.get("lead_category_id"))
+                except (TypeError, ValueError):
+                    return got.get("id"), None
+        return got.get("id"), None
+    except Exception:  # noqa: BLE001 - a Smartlead miss just means the model judges
+        return None, None
+
+
+def _category_id_for_name(catmap: dict, name: str):
+    """This workspace's Smartlead category id for a category NAME (its own
+    /leads/fetch-categories map, case-insensitive), or None when it has no
+    such category — then only the archive is stamped."""
+    want = (name or "").strip().lower()
+    if not want:
+        return None
+    for cid, nm in (catmap or {}).items():
+        if (nm or "").strip().lower() == want:
+            return cid
+    return None
+
+
+def _classify_client_reply(body: str):
+    """(category, confidence) for one client reply from the house categoriser
+    prompt, or None when the model is unavailable, times out or answers
+    off-list. Never raises — the caller decides between retry and leaving the
+    reply with a human."""
+    try:
+        key = _KEYS.get("OPENAI_API_KEY")
+        text = clean_body(body or "")[:3000].strip()
+        if not key or not text:
+            return None
+        user = ("PROSPECT'S LATEST REPLY:\n\n" + text +
+                "\n\n---\n\nCategorise this reply. Return JSON only.")
+        r = _openai({"model": OPENAI_MODEL,
+                     "messages": [{"role": "system", "content": CLIENT_CATEGORISE_SYSTEM},
+                                  {"role": "user", "content": user}],
+                     "response_format": {"type": "json_schema", "json_schema": {
+                         "name": "reply_category", "strict": True, "schema": {
+                             "type": "object", "additionalProperties": False,
+                             "required": ["category", "confidence"],
+                             "properties": {
+                                 "category": {"type": "string",
+                                              "enum": list(CLIENT_CATEGORISE_CATEGORIES)},
+                                 "confidence": {"type": "number"}}}}}},
+                    key, timeout=30, retries=1)
+        content = (((r or {}).get("choices") or [{}])[0].get("message") or {}).get("content")
+        data = json.loads(content) if isinstance(content, str) else (content or {})
+        cat = data.get("category") if isinstance(data, dict) else None
+        if cat not in CLIENT_CATEGORISE_CATEGORIES:
+            return None
+        try:
+            conf = float(data.get("confidence"))
+        except (TypeError, ValueError):
+            conf = 0.0
+        return cat, max(0.0, min(1.0, conf))
+    except Exception as e:  # noqa: BLE001 — never load-bearing
+        print(f"[setter] client categorise failed: {type(e).__name__}: {str(e)[:120]}",
+              file=sys.stderr)
+        return None
+
+
+def run_client_category_fill() -> dict:
+    """Fill the category of still-uncategorised client-workspace replies past
+    the grace window — rules, then the workspace's own Smartlead label, then
+    the house categoriser model (confidence-gated) — so the positive sweep
+    that follows on the same tick can card them. Never raises; ok=False on a
+    model failure (loud, retried) — a per-tick cap or a low-confidence hold
+    is not a failure, just leftovers for a later tick."""
+    summary = {"ok": True, "skipped": False, "workspaces": {}, "checked": 0,
+               "filled": 0, "from_rules": 0, "from_smartlead": 0, "from_model": 0,
+               "left": 0, "model_calls": 0, "errors": 0}
+    if not _SB:
+        summary["skipped"] = True
+        return summary
+    try:
+        rows = _SB("GET", "workspaces?select=id,api_key,status&order=added_at")
+    except Exception as e:  # noqa: BLE001 - no workspace list, nothing to fill
+        summary.update(ok=False, errors=1, error=f"{type(e).__name__}: {str(e)[:200]}")
+        return summary
+    targets = [(r.get("id"), r.get("api_key")) for r in (rows if isinstance(rows, list) else [])
+               if isinstance(r, dict) and r.get("id") and r.get("id") != "navreo"
+               and r.get("id") not in _WS_MONITOR_SKIP
+               and (r.get("status") or "enabled") == "enabled" and r.get("api_key")]
+    now = _dt.datetime.now(_dt.timezone.utc)
+    since = (now - _dt.timedelta(hours=CLIENT_CAT_FILL_LOOKBACK_H)).isoformat()
+    until = (now - _dt.timedelta(minutes=CLIENT_CAT_FILL_GRACE_MIN)).isoformat()
+    mono = _time.time()
+    for ws, api_key in targets:
+        s = {"ok": True, "checked": 0, "filled": 0, "from_rules": 0, "from_smartlead": 0,
+             "from_model": 0, "left": 0, "model_calls": 0, "capped": False, "errors": 0}
+        summary["workspaces"][ws] = s
+        try:
+            seen, cands = set(), []
+            for filt in ("is.null", "eq.", "eq." + quote(UNCATEGORISED_LEGACY, safe="")):
+                got = _SB("GET", f"replies?workspace=eq.{ws}&category={filt}"
+                                 f"&replied_at=gte.{quote(since, safe='')}"
+                                 f"&replied_at=lte.{quote(until, safe='')}"
+                                 f"&order=replied_at.asc&limit=100"
+                                 f"&select=id,smartlead_campaign_id,email,replied_at,"
+                                 f"reply_body,smartlead_message_id,category")
+                for r in (got if isinstance(got, list) else []):
+                    if isinstance(r, dict) and r.get("id") and r["id"] not in seen \
+                            and _is_uncategorised_value(r.get("category")):
+                        seen.add(r["id"])
+                        cands.append(r)
+            catmap = None                       # fetched lazily, once per workspace
+            for r in cands:
+                rid = r.get("id")
+                cid = r.get("smartlead_campaign_id")
+                email = (r.get("email") or "").strip()
+                if not cid or not email:
+                    continue
+                s["checked"] += 1
+                body = r.get("reply_body") or ""
+                # 1) rules — plainly automated / clear non-positive mail
+                cat, source, lead_id = _autoreply_category(body), "rules", None
+                # 2) the workspace's OWN Smartlead label, if one landed since
+                if not cat:
+                    lead_id, sl_cat = _client_lead_category(api_key, cid, email)
+                    if sl_cat is not None:
+                        if catmap is None:
+                            catmap = _ws_category_names(api_key)
+                        name = _canon_client_category(sl_cat, catmap.get(sl_cat) or "")
+                        if name and not _is_uncategorised_value(name):
+                            cat, source = name, "smartlead"
+                # 3) the house categoriser model, confidence-gated
+                if not cat:
+                    if not clean_body(body).strip():
+                        s["left"] += 1          # nothing to judge yet (body still in flight)
+                        continue
+                    tried = _CAT_FILL_TRIED.get(rid)
+                    if tried and (mono - tried[0]) < tried[1] * 60:
+                        s["left"] += 1
+                        continue
+                    if s["model_calls"] >= CLIENT_CAT_FILL_MODEL_CAP:
+                        s["capped"] = True
+                        s["left"] += 1
+                        continue
+                    s["model_calls"] += 1
+                    verdict = _classify_client_reply(body)
+                    if not verdict:
+                        _CAT_FILL_TRIED[rid] = (mono, CLIENT_CAT_FILL_FAIL_RETRY_MIN)
+                        s["errors"] += 1
+                        s["ok"] = False
+                        s["left"] += 1
+                        continue
+                    cat, conf = verdict
+                    if conf < CLIENT_CAT_FILL_MIN_CONF:
+                        _CAT_FILL_TRIED[rid] = (mono, CLIENT_CAT_FILL_RETRY_MIN)
+                        s["left"] += 1
+                        continue
+                    source = "model"
+                # The client's Smartlead is written for a SENDABLE workspace only
+                # (route_queue_recategorise's gate); the archive is always stamped.
+                if source != "smartlead" and not _is_monitor_ws(ws):
+                    try:
+                        if catmap is None:
+                            catmap = _ws_category_names(api_key)
+                        cat_id = _category_id_for_name(catmap, cat)
+                        if lead_id is None:
+                            lead_id, _ = _client_lead_category(api_key, cid, email)
+                        if cat_id is not None and lead_id:
+                            _HTTP("POST", f"{SMARTLEAD_BASE}/campaigns/{cid}/leads/{lead_id}"
+                                          f"/category?api_key={api_key}", {},
+                                  {"category_id": int(cat_id)})
+                            s["smartlead_written"] = s.get("smartlead_written", 0) + 1
+                    except Exception as e:  # noqa: BLE001 - the label is what the card reads
+                        s["smartlead_write_failed"] = s.get("smartlead_write_failed", 0) + 1
+                        print(f"[setter] category fill: Smartlead write failed {ws}/{cid}/"
+                              f"{email}: {type(e).__name__}: {str(e)[:120]}", file=sys.stderr)
+                _SB("PATCH", f"replies?id=eq.{rid}", {"category": cat}, prefer="return=minimal")
+                _CAT_FILL_TRIED.pop(rid, None)
+                s["filled"] += 1
+                s[f"from_{source}"] += 1
+        except Exception as e:  # noqa: BLE001 - one workspace must never sink the rest
+            s["ok"] = False
+            s["errors"] += 1
+            s["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+        for k in ("checked", "filled", "from_rules", "from_smartlead", "from_model",
+                  "left", "model_calls", "errors"):
+            summary[k] += s[k]
+        if not s["ok"]:
+            summary["ok"] = False
+    if len(_CAT_FILL_TRIED) > _CAT_FILL_TRIED_CAP:
+        for k in sorted(_CAT_FILL_TRIED, key=lambda x: _CAT_FILL_TRIED[x][0])[
+                :len(_CAT_FILL_TRIED) - _CAT_FILL_TRIED_CAP]:
+            _CAT_FILL_TRIED.pop(k, None)
+    return summary
+
+
 # ── client-workspace archive reconcile (analytics-accuracy 2026-08-10) ──────
 # run_client_reply_sync above only moves FORWARD from a first-run watermark
 # seeded now-minus-2h, so every reply that predates a workspace's first sync
