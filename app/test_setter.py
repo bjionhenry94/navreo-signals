@@ -888,6 +888,80 @@ def test_ensure_video_where_clause_skips_query_string_question_mark():
           "9:00 AM EDT where I could share some of the other ideas I had for you?</div>"
           in setter.ensure_video_where_clause(plain))
 
+def test_instruction_authorised_slots_when_calendly_cannot_resolve():
+    """Owner report 2026-09-15 (TouchPoint agent-d21af5cd, rows 3840/3790):
+    the agent's Calendly event lives on the client's account, so every draft
+    fell to the no-slots ladder and closed "You can see my availability here
+    and book in directly" - while the brain orders the drafter to propose two
+    specific times itself. Instruction-authorised times are picked in code."""
+    import datetime as _d
+    auth = {"id": "agent-touch", "instructions": (
+        "Propose two specific times yourself, later this week, never today, never a weekend, "
+        "on two different days, one in the morning and one in the afternoon.\n"
+        "Would you be open to a call on [first specific time] or [second specific time] where ...?\n"
+        "If those times aren't suitable, feel free to suggest some times, or book in direct.")}
+    plain = {"id": "agent-plain", "instructions": "Resource: Guide - https://x.example/guide"}
+    now = _d.datetime(2026, 9, 16, 9, 0, tzinfo=_d.timezone.utc)   # a Wednesday
+    check("self-times: authorisation detected", setter.instructions_authorise_self_times(auth))
+    check("self-times: no authorisation without the phrase", not setter.instructions_authorise_self_times(plain))
+    slots = setter.instruction_authorised_slots(auth, "Europe/London", now)
+    check("self-times: exactly two", len(slots) == 2, slots)
+    check("self-times: two different working days, morning then afternoon",
+          [s["label"] for s in slots] == ["Thursday, 17th September at 10:00 AM BST",
+                                          "Friday, 18th September at 1:00 PM BST"], slots)
+    check("self-times: plain text (no per-slot link) and tagged with their source",
+          all(s["link"] == "" and s["source"] == "instructions" for s in slots), slots)
+    fri = setter.instruction_authorised_slots(auth, "Europe/London", _d.datetime(2026, 9, 18, 15, 30, tzinfo=_d.timezone.utc))
+    check("self-times: never a weekend - Friday afternoon skips to Monday/Tuesday",
+          [s["label"][:7] for s in fri] == ["Monday,", "Tuesday"], fri)
+    late = setter.instruction_authorised_slots(auth, "Europe/London", _d.datetime(2026, 9, 16, 15, 30, tzinfo=_d.timezone.utc))
+    check("self-times: a late draft offers tomorrow's afternoon first (20h floor), then the next morning",
+          [s["label"] for s in late] == ["Thursday, 17th September at 1:00 PM BST",
+                                         "Friday, 18th September at 10:00 AM BST"], late)
+    check("self-times: none for an unauthorised brain", setter.instruction_authorised_slots(plain, "Europe/London", now) == [])
+    live = [{"label": "L", "link": "https://cal.example/b/1"}]
+    check("backfill: live slots untouched", setter.backfill_instruction_slots(auth, live, "ok", "Europe/London", now) == (live, "ok"))
+    bs, bst = setter.backfill_instruction_slots(auth, [], "error", "Europe/London", now)
+    check("backfill: Calendly error -> instruction slots, status ok", bst == "ok" and len(bs) == 2, (bs, bst))
+    check("backfill: unauthorised brain keeps the fallback", setter.backfill_instruction_slots(plain, [], "error", "Europe/London", now) == ([], "error"))
+    sit = setter.slot_situation("ok", "Europe/London", bs)
+    check("slot_situation: names the instructions as the source", "agent's own instructions" in sit["slot_reason"], sit)
+    sb, http = fresh_setter()
+    seen = {}
+    http.draft_fn = lambda b: (seen.__setitem__("payload", json.loads(b["messages"][1]["content"])),
+                              {"subject": "Re: hi", "html": "<div>a</div><br><div>b</div><br><div>c</div>"})[1]
+    setter.draft_reply({"first_name": "Joe", "subject": "hi", "first_outbound": "Hi Joe,", "body": "Sure"},
+                       {**auth, "booking_link": "https://calendly.com/x/intro"}, {"primary_intent": "send_resource"},
+                       bs, "ok", "William")
+    d = seen["payload"].get("instruction_times_directive") or ""
+    check("directive: present for instruction slots", bool(d), seen["payload"].keys())
+    check("directive: plain text, no [BOOKING LINK], instructions' fallback outranks 'see my availability here'",
+          "PLAIN TEXT" in d and "[BOOKING LINK]" in d and "see my availability" in d, d)
+    check("directive: no-slots directive stays off", "no_live_slots_directive" not in seen["payload"])
+    seen.clear()
+    setter.draft_reply({"first_name": "Joe", "subject": "hi", "first_outbound": "Hi Joe,", "body": "Sure"},
+                       auth, {"primary_intent": "send_resource"}, live, "ok", "William")
+    check("directive: absent for real Calendly slots", "instruction_times_directive" not in seen["payload"])
+
+
+def test_currency_mojibake_and_quote_runs_repaired():
+    """Owner report 2026-09-15 (TouchPoint row 3840): "£3,000" from the
+    instructions shipped as "'A33,000" ('A3 = cp1252 pound sign) and a run of
+    quote-mapped control chars came out as five apostrophes glued to
+    [NEED YOUR INPUT]."""
+    fix = lambda t: setter.repair_rtf_escapes(setter._scrub_control_chars(t))
+    check("mojibake: 'A3 -> £", fix("from around 'A33,000 a month") == "from around £3,000 a month")
+    check("mojibake: backslash-'a3 -> £", fix("budget \\'a35,000") == "budget £5,000")
+    check("mojibake: decades untouched", fix("the '90s were fun") == "the '90s were fun")
+    check("mojibake: ordinary 'ab / 'b1 untouched", fix("'ab and 'b1 stay") == "'ab and 'b1 stay")
+    check("mojibake: contractions untouched", fix("I'd say it's fine") == "I'd say it's fine")
+    check("quote run: stripped before [NEED YOUR INPUT]",
+          fix("Pricing is " + "'" * 5 + "[NEED YOUR INPUT] per month") == "Pricing is [NEED YOUR INPUT] per month")
+    check("quote run: control-char wall before a figure dropped",
+          fix("costs " + "\x19" * 5 + "5,000") == "costs 5,000")
+    check("quote run: a single mapped apostrophe still restores the contraction", fix("Here\x19s it") == "Here's it")
+
+
 
 def test_video_backstop_enforces_template():
     # 2026-09-03: six live redraft rounds - the gpt-mini drafter broke rules
@@ -12487,6 +12561,8 @@ if __name__ == "__main__":
     test_route_training_get_exposes_fastloop_fields()
     test_ensure_video_where_clause_skips_query_string_question_mark()
     test_video_backstop_enforces_template()
+    test_instruction_authorised_slots_when_calendly_cannot_resolve()
+    test_currency_mojibake_and_quote_runs_repaired()
 
     failed = run_report()
     sys.exit(1 if failed else 0)

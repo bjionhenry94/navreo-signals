@@ -1580,7 +1580,10 @@ def slot_situation(slot_status: str, tz, slots, error: str = "") -> dict:
     empty, disconnected, or broken (owner report 2026-08-09)."""
     status = slot_status or "not_configured"
     n = len(slots or [])
-    if status == "ok" and n:
+    if status == "ok" and n and slots_from_instructions(slots):
+        reason = (f"{n} call time{'' if n == 1 else 's'} proposed in {tz} from the agent's own "
+                  "instructions (no live Calendly slots; the instructions authorise self-proposed times).")
+    elif status == "ok" and n:
         reason = f"{n} call time{'' if n == 1 else 's'} proposed in {tz}."
     elif status == "none_available":
         reason = (f"Timezone known ({tz}), but Calendly had no bookable slots inside the "
@@ -1636,6 +1639,112 @@ def _parse_iso(s):
         text = text[:-1] + "+00:00"
     d = _dt.datetime.fromisoformat(text)
     return d if d.tzinfo else d.replace(tzinfo=_dt.timezone.utc)
+
+# Instruction-authorised call times (owner report 2026-09-15, TouchPoint
+# agent-d21af5cd, rows 3840/3790). The agent's Calendly event lives on the
+# CLIENT's Calendly account, so get_calendly_availability can never resolve it
+# (slot_status "error" / "not_configured") and every draft fell to the
+# no-live-slots ladder: "You can see my availability here and book in
+# directly." - while the agent's instructions explicitly order the drafter to
+# "propose two specific times yourself ... never today, never a weekend, on
+# two different days, one in the morning and one in the afternoon" and to
+# close with the house two-times question. DRAFT_SYSTEM's never-invent-a-time
+# law is right for agents that never said such a thing, but an owner who has
+# written that authorisation into the brain must win (owner ruling, and
+# [[setter-agent-instructions-outrank-draft-system]]). Behaviour that must
+# hold gets enforced in CODE, not prose: when the instructions carry that
+# authorisation and no live slot exists, two plain-text times are picked here
+# deterministically (next two working days from tomorrow, 10:00 AM and
+# 1:00 PM lead-local - inside UK hours and William's 10am-2pm Eastern window
+# alike) and handed to the drafter as ordinary slots, with a directive that
+# names their origin. They carry no per-slot link (there is no bookable
+# calendar behind them), so the times render as plain text and the agent's
+# own fallback line + booking link follow.
+_INSTRUCTION_SELF_TIMES_RE = re.compile(
+    r"\b(?:propose|pick|choose|suggest|offer|name)\s+two\s+(?:specific\s+|concrete\s+|real\s+)?"
+    r"(?:call\s+)?times\s+yourself\b", re.I)
+_INSTRUCTION_SLOT_MORNING_HOUR = 10
+_INSTRUCTION_SLOT_AFTERNOON_HOUR = 13
+
+
+def instructions_authorise_self_times(agent: dict) -> bool:
+    """True when the agent's brain explicitly tells the drafter to propose two
+    call times of its own ("Propose two specific times yourself ...")."""
+    try:
+        return bool(_INSTRUCTION_SELF_TIMES_RE.search(_agent_instructions(agent)))
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def instruction_authorised_slots(agent: dict, tz: str, now_utc, settings: dict = None) -> list:
+    """Two deterministic plain-text call times for an agent whose instructions
+    authorise self-proposed times: the next two working days strictly after
+    today (lead-local, and at least 20h out like pick_slots), the first at
+    10:00 AM and the second at 1:00 PM. Same [{iso, label, link}] shape as
+    pick_slots, link "" (no bookable calendar), plus source="instructions" so
+    draft_reply and slot_situation can say where they came from. Empty list
+    when the instructions carry no such authorisation. Never raises."""
+    try:
+        if not instructions_authorise_self_times(agent):
+            return []
+        settings = settings or {}
+        try:
+            zi = ZoneInfo(tz or "Europe/London")
+        except Exception:  # noqa: BLE001
+            zi = ZoneInfo("Europe/London")
+        now_utc = _parse_iso(now_utc) if not isinstance(now_utc, _dt.datetime) else (
+            now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
+        floor_utc = now_utc + _dt.timedelta(hours=20)
+        local_now = now_utc.astimezone(zi)
+        try:
+            work_start = int(settings.get("work_start", 9))
+            work_end = int(settings.get("work_end", 17))
+        except (TypeError, ValueError):
+            work_start, work_end = 9, 17
+        morning = min(max(_INSTRUCTION_SLOT_MORNING_HOUR, work_start), max(work_end - 1, work_start))
+        afternoon = min(max(_INSTRUCTION_SLOT_AFTERNOON_HOUR, work_start), max(work_end - 1, work_start))
+        out = []
+        d = local_now.date()
+        # One morning and one afternoon on two different days. The first day
+        # tries the morning, then its afternoon (a late-afternoon draft can
+        # still offer tomorrow 1:00 PM); the second day takes the other hour.
+        remaining = [morning, afternoon]
+        guard = 0
+        while len(out) < 2 and guard < 30:
+            guard += 1
+            d = d + _dt.timedelta(days=1)
+            if d.weekday() >= 5:
+                continue
+            for h in list(remaining):
+                local = _dt.datetime(d.year, d.month, d.day, h, 0, tzinfo=zi)
+                if local.astimezone(_dt.timezone.utc) < floor_utc:
+                    continue
+                out.append({"iso": local.isoformat(), "label": _slot_label(local), "link": "",
+                            "source": "instructions"})
+                remaining.remove(h)
+                break
+        return out if len(out) == 2 else []
+    except Exception:  # noqa: BLE001 - a fallback helper must never break drafting
+        return []
+
+
+def backfill_instruction_slots(agent: dict, slots: list, slot_status: str, tz: str, now_utc,
+                               settings: dict = None):
+    """(slots, slot_status) after the Calendly pick: unchanged when live slots
+    exist; otherwise, for an agent whose instructions authorise self-proposed
+    times, the two instruction-authorised slots with status "ok" so the
+    drafter takes the normal two-times path instead of the no-slots ladder."""
+    if slot_status == "ok" and slots:
+        return slots, slot_status
+    synth = instruction_authorised_slots(agent, tz, now_utc, settings)
+    if synth:
+        return synth, "ok"
+    return slots, slot_status
+
+
+def slots_from_instructions(slots: list) -> bool:
+    """True when the slots in hand were synthesised from the instructions."""
+    return bool(slots) and all(isinstance(s, dict) and s.get("source") == "instructions" for s in slots)
 
 
 def pick_slots(avail_iso: list, tz: str, settings: dict, now_utc,
@@ -3093,6 +3202,27 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
             "template's \"if those times aren't suitable\" style fallback line (there are no times "
             "for it to refer to) " + _step2_fallback
         )
+    # Instruction-authorised times (owner report 2026-09-15): the slots were
+    # synthesised by instruction_authorised_slots because this agent's brain
+    # orders the drafter to propose two times itself and no live calendar
+    # exists. Sits in the user message beside the instructions (same mechanics
+    # as the directives above) so DRAFT_SYSTEM's empty-link "[BOOKING LINK]"
+    # follow-up and its "see my availability here" fallback lose to the
+    # agent's own two-times template and fallback line.
+    if slots_from_instructions(slots):
+        payload["instruction_times_directive"] = (
+            "The two call times in `slots` are AUTHORISED TIMES: this agent's instructions explicitly "
+            "tell you to propose two specific times yourself, and these two were picked to satisfy "
+            "those instructions (two different working days, one morning and one afternoon, in the "
+            "lead's local time). Treat them exactly like live slots: propose BOTH, in the two-times "
+            "question shape the instructions mandate (\"Would you be open to a call on {time 1} or "
+            "{time 2} where {value-led clause}?\"), using each slot's `label` verbatim as PLAIN TEXT. "
+            "They carry no per-slot link, so wrap them in no anchor and never write [BOOKING LINK] "
+            "anywhere. Directly after that question write the fallback line and the booking link "
+            "exactly as the instructions specify (their wording outranks the \"see my availability "
+            "here and book in directly\" fallback, which must not appear), then the sign-off. Propose "
+            "no other time."
+        )
     # No standalone backup booking link (booking_link empty): the slots-ok
     # fallback line must ask the lead to suggest times in plain text instead of
     # the "book a call here" booking-link paragraph. Sits in the user message,
@@ -3845,7 +3975,12 @@ def normalize_greeting(html: str, sender_first: str = "") -> str:
         return html or ""
 
 
-_RTF_ESC_RE = re.compile(r"\\?'([cdefCDEF][0-9a-fA-F])")
+# Accented range 0xC0-0xFF plus the handful of cp1252 symbols a drafter has
+# leaked as bare hex (owner report 2026-09-15, TouchPoint row 3840: "£3,000"
+# from the instructions shipped as "'A33,000" - 'A3 is the cp1252 pound
+# sign): a3 £, a9 ©, ae ®, b0 °, bd ½. Never 0x80-0x9f (decades like "'90s")
+# and never other 0xA0-0xBF codes ("'ab", "'b1" can be real text).
+_RTF_ESC_RE = re.compile(r"\\?'([cdefCDEF][0-9a-fA-F]|[aA]3|[aA]9|[aA][eE]|[bB]0|[bB][dD])")
 
 
 def repair_rtf_escapes(html: str) -> str:
@@ -3990,6 +4125,14 @@ def _scrub_control_chars(html: str) -> str:
     s = re.sub(r"([A-Za-z])[\x7f\x80-\x9f]\s?(s|t|ll|ve|re|d|m)\b", r"\1'\2", s)
     s = re.sub(r"[\x7f\x80-\x90\x95-\x9f]", "", s)
     s = s.translate(_CTRL_TABLE)
+    # Owner report 2026-09-15 (TouchPoint row 3840): a run of control chars the
+    # table maps to quotes came out as a wall of apostrophes (five apostrophes
+    # glued to "[NEED YOUR INPUT]", "$5,000" -> a row of quote marks). No real
+    # sentence carries three or more consecutive quote marks, so collapse the
+    # run; before a [NEED YOUR INPUT] flag or a figure, drop it entirely.
+    s = re.sub(r"['\"]{2,}\s*(?=\[NEED YOUR INPUT\]|[£$€]?\d)", "", s)
+    s = re.sub(r"'{3,}", "'", s)
+    s = re.sub(r"\"{3,}", '"', s)
     # reader audit 2026-09-07 loop 4: the model wrote "we9d", "Here9s" (a digit
     # where the apostrophe goes) and "arent" (apostrophe dropped). Restore the
     # common contractions; whole words only, so "Plan 9" and "arena" are safe.
@@ -6687,6 +6830,7 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                         slots = pick_slots(avail, tz, eff_settings, now)
                         if not slots:
                             slot_status = "none_available"
+                    slots, slot_status = backfill_instruction_slots(snapshot, slots, slot_status, tz, now, eff_settings)
                     thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
                     d = draft_reply(
                         {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
@@ -7309,6 +7453,7 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
                 slots = pick_slots(avail, tz, eff_settings, now)
             if not slots:
                 slot_status = "none_available"
+        slots, slot_status = backfill_instruction_slots(agent, slots, slot_status, tz, now, eff_settings)
         if serr and not row.get("error"):
             row["error"] = serr
     row["slots"] = slots
@@ -15440,6 +15585,7 @@ def _redraft_sync(payload):
                 slots = pick_slots(avail, tz, eff_settings, now)
             if not slots:
                 slot_status = "none_available"
+        slots, slot_status = backfill_instruction_slots(agent, slots, slot_status, tz, now, eff_settings)
         thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
         # Standing memory always applies first, then this specific redraft's
         # feedback on top of it - same order Feature 1's spec sets for every
@@ -17311,6 +17457,7 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
                                                 lead_text=body)
             if not slots:
                 slot_status = "none_available"
+        slots, slot_status = backfill_instruction_slots(agent, slots, slot_status, tz, now, eff_settings)
 
     # Calendly fallback (owner ruling 2026-07-14) - see decide() gate 7
     # and lint_draft().
@@ -19120,6 +19267,7 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                                                     lead_text=body)
                 if not slots:
                     slot_status = "none_available"
+            slots, slot_status = backfill_instruction_slots(agent_snapshot, slots, slot_status, tz, now, eff_settings)
 
         slots_fallback = slot_status != "ok"
         needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
@@ -19277,6 +19425,7 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                                                     lead_text=body)
                 if not slots:
                     slot_status = "none_available"
+            slots, slot_status = backfill_instruction_slots(agent_snapshot, slots, slot_status, tz, now, eff_settings)
 
         slots_fallback = slot_status != "ok"
         needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
