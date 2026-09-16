@@ -366,6 +366,7 @@ html,body{overflow-x:hidden;background:var(--bg)}
         </table>
       </div>
       <div class="scrollhint" aria-hidden="true">scroll &rarr;</div>
+      <div class="subline" id="m-nomtg" style="margin-top:10px;display:none"></div>
       <div class="empty" id="m-empty" style="display:none"></div>
     </div>
   </section>
@@ -1257,6 +1258,15 @@ function renderMonths() {
   $("m-guard").textContent = "Reply rate is only shown once a month has " + MIN_SENT + "+ emails sent.";
   $("m-sub").textContent = "Your first campaign launched in " + mFull(ms[0].month) +
     ", so the table starts there. Tap or hover any month for its full numbers.";
+  /* a column of zeroes reads as a broken number unless we say what it means —
+     shown only when nothing anywhere has booked yet (months AND running). */
+  var noMtg = ms.every(function (r) { return !(r.meetings || 0); }) &&
+              (D.campaigns_running || []).every(function (r) { return !(r.meetings || 0); });
+  var nm = $("m-nomtg");
+  if (noMtg) {
+    nm.textContent = "No meetings booked yet \u2014 they appear here the moment one is booked.";
+    nm.style.display = "";
+  } else nm.style.display = "none";
   $("m-svg").addEventListener("mousemove", mMove);
   $("m-svg").addEventListener("mouseleave", mHide);
   if (typeof syncScrollHints === "function") syncScrollHints();
