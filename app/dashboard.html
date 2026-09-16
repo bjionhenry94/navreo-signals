@@ -259,6 +259,45 @@ html,body{overflow-x:hidden;background:var(--bg)}
 .ah .spill.live{background:var(--green-bg);color:var(--green)}
 .ah .spill.hold{background:var(--bg-sunken);color:var(--ink-3)}
 .ah .spill .dot{width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
+/* min-volume guard — a campaign too small to compare says so, and its reply
+   rate is rendered muted so nobody reads a 1-of-7 spike as a winner */
+.ah .spill.early{background:var(--bg-sunken);color:var(--ink-3);font-weight:600}
+.ah table.dt td.muted{color:var(--ink-3)}
+/* desktop scroll affordance — a fade + a hint, only when there IS overflow */
+.ah .tblwrap{position:relative}
+.ah .tblwrap.ovf::after{content:"";position:absolute;top:0;right:0;bottom:0;width:46px;
+  pointer-events:none;background:linear-gradient(90deg,transparent,var(--card) 82%)}
+.ah .scrollhint{display:none;font-size:11px;font-weight:600;color:var(--ink-3);
+  letter-spacing:.02em;margin:6px 0 0;text-align:right}
+.ah .tblwrap.ovf + .scrollhint{display:block}
+/* mobile — the campaign table becomes stacked cards so the metrics are never
+   off-screen, and the month table drops to Month / Sent / Reply rate / Meetings */
+.ah .ccards{display:none}
+.ah .ccard{border-top:1px solid var(--line);padding:12px 0}
+.ah .ccard:first-child{border-top:0}
+.ah .ccard .top{display:flex;align-items:flex-start;gap:8px;justify-content:space-between}
+.ah .ccard .cname{font-weight:600;color:var(--ink);font-size:13.5px;line-height:1.35}
+.ah .ccard .big{font-size:26px;font-weight:700;color:var(--ink);letter-spacing:-.02em;
+  font-variant-numeric:tabular-nums;margin:8px 0 0;line-height:1.1}
+.ah .ccard .big.muted{color:var(--ink-3)}
+.ah .ccard .biglab{font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
+.ah .ccard .mrow{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:8px;font-size:12px;color:var(--ink-2)}
+.ah .ccard .mrow b{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+.ah .ccard .started{font-size:11px;color:var(--ink-3);margin-top:7px}
+.ah .ccard.best{background:var(--orange-100);margin:0 -12px;padding:12px;border-radius:10px;border-top:0}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .ah .ccard.best{background:#3A2011}}
+:root[data-theme="dark"] .ah .ccard.best{background:#3A2011}
+@media (max-width:640px){
+  .ah #c-tbl{display:none}
+  .ah #sec-camps .tblwrap{overflow:visible;margin:0;padding:0}
+  .ah #sec-camps .tblwrap.ovf::after{display:none}
+  .ah #sec-camps .scrollhint{display:none}
+  .ah .ccards{display:block}
+  .ah #m-tbl{min-width:0}
+  .ah #m-tbl .mo-x{display:none}
+  .ah #sec-months .tblwrap.ovf::after{display:none}
+  .ah #sec-months .scrollhint{display:none}
+}
 .ah .empty{font-size:13.5px;color:var(--ink-2);line-height:1.6;padding:6px 0 4px;max-width:620px}
 .ah svg.mchart{display:block;width:100%;height:auto;cursor:crosshair}
 
@@ -309,12 +348,13 @@ html,body{overflow-x:hidden;background:var(--bg)}
       <div class="tblwrap" style="margin-top:14px">
         <table class="dt" id="m-tbl">
           <thead><tr>
-            <th>Month</th><th class="num">Sent</th><th class="num">Replies</th><th class="num">Reply rate</th>
-            <th class="num">Interested</th><th class="num">Meetings</th><th class="num">Bounce rate</th>
+            <th>Month</th><th class="num">Sent</th><th class="num mo-x">Replies</th><th class="num">Reply rate</th>
+            <th class="num mo-x">Interested</th><th class="num">Meetings</th><th class="num mo-x">Bounce rate</th>
           </tr></thead>
           <tbody id="m-body"></tbody>
         </table>
       </div>
+      <div class="scrollhint" aria-hidden="true">scroll &rarr;</div>
       <div class="empty" id="m-empty" style="display:none"></div>
     </div>
   </section>
@@ -332,6 +372,8 @@ html,body{overflow-x:hidden;background:var(--bg)}
           <tbody id="c-body"></tbody>
         </table>
       </div>
+      <div class="scrollhint" aria-hidden="true">scroll &rarr;</div>
+      <div class="ccards" id="c-cards"></div>
       <div class="empty" id="c-empty" style="display:none"></div>
     </div>
   </section>
@@ -460,7 +502,7 @@ function dlabel(iso) { var d = new Date(iso + "T12:00:00Z"); return MONTHS[d.get
 function dfull(iso)  { var d = new Date(iso + "T12:00:00Z"); return DAYS3[d.getUTCDay()] + " " + MONTHS[d.getUTCMonth()] + " " + d.getUTCDate(); }
 
 var COL = { sent: "#1971C2", replies: "#7048E8", interested: "#2F9E44", meetings: "#E8590C", bounces: "#E03131", rate: "#0B7285" };
-var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounce-Rate", rate: "Reply rate" };
+var NAME = { sent: "Sent", replies: "Replies", interested: "Interested", meetings: "Meetings", bounces: "Bounce rate", rate: "Reply rate" };
 var ORDER = ["sent", "replies", "interested", "meetings", "bounces", "rate"];
 var RAXIS = { rate: 1, bounces: 1 };
 var GEO = { ymax: 60, rmax: 1, n: 0, sentMax: 1 };
@@ -739,7 +781,7 @@ function renderRank() {
   var top = rows.slice(0, 8);
   $("rank-scope").textContent = windowed ? "· " + winLabel() : "· all time";
   if (!top.length) return false;   // empty widgets never render (Bjion 2026-08-16)
-  var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Positives</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per positive</span><span style="text-align:right">Per meeting</span></div>';
+  var s = '<div class="rrow rhead"><span></span><span>Campaign</span><span style="text-align:right">Interested</span><span style="text-align:right">Meetings</span><span style="text-align:right">Per interested</span><span style="text-align:right">Per meeting</span></div>';
   top.forEach(function (c, i) {
     var perPos = (c.pos > 0 && c.sent != null) ? Math.round(c.sent / c.pos) : null;
     var perMtg = (c.mtg > 0 && c.sent != null) ? Math.round(c.sent / c.mtg) : null;
@@ -801,7 +843,7 @@ function renderOffer() {
   var offers = offerList.slice(0, 5);
   // a table of nothing but "–" says nothing — that counts as empty too
   if (!offers.some(function (o) { return o[4] != null || o[5] != null; })) return false;
-  var s = '<div class="ocol ohead"><span></span><span>Per positive</span><span>Per meeting</span></div>';
+  var s = '<div class="ocol ohead"><span></span><span>Per interested</span><span>Per meeting</span></div>';
   s += offers.map(function (o, i) {
     var pos = o[4], mt = o[5];
     return '<div class="ocol"><span class="lbl' + (i === 0 ? " strong" : "") + '">' + escq(o[0]) + "</span>" +
@@ -811,7 +853,7 @@ function renderOffer() {
   box.innerHTML = s;
   if (windowed && offers.length && offers[0][4] != null) {
     $("offer-take").textContent = "The " + String(offers[0][0]).toLowerCase() +
-      " ask was the cheapest way to a positive reply over this range.";
+      " ask was the cheapest way to an interested reply over this range.";
     $("offer-take-row").style.display = "";
   } else $("offer-take-row").style.display = "none";
   return true;
@@ -1179,17 +1221,18 @@ function renderMonths() {
   $("m-body").innerHTML = ms.slice().reverse().map(function (r) {
     return "<tr><td>" + escq(mLabel(r.month, true)) + "</td>" +
       '<td class="num">' + fmtN(r.sent) + "</td>" +
-      '<td class="num">' + fmtN(r.replied) + "</td>" +
+      '<td class="num mo-x">' + fmtN(r.replied) + "</td>" +
       '<td class="num">' + pct(r.reply_rate) + "</td>" +
-      '<td class="num">' + fmtN(r.positive) + "</td>" +
+      '<td class="num mo-x">' + fmtN(r.positive) + "</td>" +
       '<td class="num">' + fmtN(r.meetings) + "</td>" +
-      '<td class="num">' + pct(r.bounce_rate) + "</td></tr>";
+      '<td class="num mo-x">' + pct(r.bounce_rate) + "</td></tr>";
   }).join("");
   $("m-note").textContent = "Newest month first · " + ms.length + " month" + (ms.length === 1 ? "" : "s");
   $("m-sub").textContent = "Your first campaign launched in " + mFull(ms[0].month) +
     ", so the table starts there. Hover any month for its full numbers.";
   $("m-svg").addEventListener("mousemove", mMove);
   $("m-svg").addEventListener("mouseleave", mHide);
+  if (typeof syncScrollHints === "function") syncScrollHints();
 }
 
 /* ── campaign comparison — sortable, reply rate desc by default ── */
@@ -1205,16 +1248,40 @@ var CCOLS = [
   { k: "status",      t: "Status", txt: 1 }
 ];
 var CSORT = { k: "reply_rate", dir: -1 };
+
+/* ── minimum-volume guard ───────────────────────────────────────────────────
+   A reply rate off 7 sends is noise, not a result — the client panel's head of
+   sales picked a 7-send campaign as "best" because it sat at the top of a
+   reply-rate sort. A campaign is only READABLE once it has sent enough to
+   carry a rate: 200+ emails AND 5+ replies. Readable rows sort by reply rate;
+   everything else falls below in sent order, labelled "Too early to read",
+   with its rate rendered muted. Only a readable row can be the best row. ── */
+var MIN_SENT = 200, MIN_REPLIES = 5;
+function readable(r) { return (r.sent || 0) >= MIN_SENT && (r.replied || 0) >= MIN_REPLIES; }
+
 function startedLabel(iso) {
-  if (!iso) return "–";
+  if (!iso) return "\u2013";
   var d = new Date(String(iso).slice(0, 10) + "T12:00:00Z");
-  if (isNaN(d)) return "–";
+  if (isNaN(d)) return "\u2013";
   return MONTHS[d.getUTCMonth()] + " " + d.getUTCDate() + " " + d.getUTCFullYear();
 }
+
+/* right-edge fade + "scroll →" hint, only while a table really does overflow */
+function syncScrollHints() {
+  var ws = document.querySelectorAll(".ah .tblwrap");
+  for (var i = 0; i < ws.length; i++) {
+    var w = ws[i];
+    if (w.scrollWidth > w.clientWidth + 1) w.classList.add("ovf");
+    else w.classList.remove("ovf");
+  }
+}
+window.addEventListener("resize", syncScrollHints);
+
 function renderCampaigns() {
   var rows = (D.campaigns_running || []).slice();
   if (!rows.length) {
     $("c-tbl").parentNode.style.display = "none";
+    $("c-cards").style.display = "none";
     $("c-empty").style.display = "";
     $("c-empty").textContent = "No campaigns are running right now. When the next one starts sending it appears here, " +
       "side by side with the rest.";
@@ -1222,9 +1289,12 @@ function renderCampaigns() {
     return;
   }
   $("c-note").textContent = rows.length + " campaign" + (rows.length === 1 ? "" : "s") +
-    " · tap a column heading to re-sort";
+    " · Reply rate is only compared once a campaign has sent " + MIN_SENT +
+    "+ emails · tap a column heading to re-sort";
   var bestRate = -1, bestId = null;
-  rows.forEach(function (r) { if ((r.reply_rate || 0) > bestRate) { bestRate = r.reply_rate || 0; bestId = r.id; } });
+  rows.forEach(function (r) {
+    if (readable(r) && (r.reply_rate || 0) > bestRate) { bestRate = r.reply_rate || 0; bestId = r.id; }
+  });
   $("c-head").innerHTML = CCOLS.map(function (c) {
     var on = CSORT.k === c.k;
     return '<th class="sortable' + (on ? " on" : "") + (c.txt ? "" : " num") + '" data-k="' + c.k +
@@ -1233,25 +1303,54 @@ function renderCampaigns() {
       '<span class="car">' + (on ? (CSORT.dir < 0 ? "▾" : "▴") : "▾") + "</span></th>";
   }).join("");
   var col = CCOLS.filter(function (c) { return c.k === CSORT.k; })[0] || CCOLS[4];
-  rows.sort(function (a, b) {
+  function cmp(a, b) {
     var av = a[CSORT.k], bv = b[CSORT.k];
     if (col.txt) return String(av || "").localeCompare(String(bv || "")) * CSORT.dir * -1;
     return (((bv == null ? -1 : bv) - (av == null ? -1 : av)) * (CSORT.dir < 0 ? 1 : -1));
-  });
+  }
+  /* readable rows always sit above the too-early ones, whichever column the
+     client sorts by; the too-early block is ordered by sent, biggest first. */
+  var ready = rows.filter(readable).sort(cmp);
+  var early = rows.filter(function (r) { return !readable(r); })
+                  .sort(function (a, b) { return (b.sent || 0) - (a.sent || 0); });
+  rows = ready.concat(early);
+
   $("c-body").innerHTML = rows.map(function (r) {
     var live = String(r.status || "").toUpperCase() === "ACTIVE";
+    var ok = readable(r);
     return '<tr' + (r.id === bestId ? ' class="best"' : "") + ">" +
-      '<td><span class="nm" title="' + escq(r.name) + '">' + escq(r.name) + "</span></td>" +
+      '<td><span class="nm" title="' + escq(r.name) + '">' + escq(r.name) + "</span>" +
+      (ok ? "" : ' <span class="spill early">Too early to read</span>') + "</td>" +
       "<td>" + escq(startedLabel(r.started)) + "</td>" +
       '<td class="num">' + fmtN(r.sent) + "</td>" +
       '<td class="num">' + fmtN(r.replied) + "</td>" +
-      '<td class="num">' + pct(r.reply_rate) + "</td>" +
+      '<td class="num' + (ok ? "" : " muted") + '">' + pct(r.reply_rate) + "</td>" +
       '<td class="num">' + fmtN(r.positive) + "</td>" +
       '<td class="num">' + fmtN(r.meetings) + "</td>" +
       '<td class="num">' + pct(r.bounce_rate) + "</td>" +
       '<td><span class="spill ' + (live ? "live" : "hold") + '"><i class="dot"></i>' +
       (live ? "Sending" : "Paused") + "</span></td></tr>";
   }).join("");
+
+  /* ≤640 px: stacked cards, so reply rate is the first thing read and the
+     supporting counts sit on one compact line instead of off-screen. */
+  $("c-cards").innerHTML = rows.map(function (r) {
+    var live = String(r.status || "").toUpperCase() === "ACTIVE";
+    var ok = readable(r);
+    return '<div class="ccard' + (r.id === bestId ? " best" : "") + '">' +
+      '<div class="top"><div class="cname">' + escq(r.name) + "</div>" +
+      '<span class="spill ' + (live ? "live" : "hold") + '"><i class="dot"></i>' +
+      (live ? "Sending" : "Paused") + "</span></div>" +
+      '<div class="big' + (ok ? "" : " muted") + '">' + pct(r.reply_rate) +
+      ' <span class="biglab">reply rate</span></div>' +
+      (ok ? "" : '<div style="margin-top:6px"><span class="spill early">Too early to read</span></div>') +
+      '<div class="mrow"><span>Sent <b>' + fmtN(r.sent) + "</b></span>" +
+      "<span>Replies <b>" + fmtN(r.replied) + "</b></span>" +
+      "<span>Interested <b>" + fmtN(r.positive) + "</b></span>" +
+      "<span>Meetings <b>" + fmtN(r.meetings) + "</b></span></div>" +
+      '<div class="started">Started ' + escq(startedLabel(r.started)) + "</div></div>";
+  }).join("");
+  syncScrollHints();
 }
 function cSortClick(k) {
   if (CSORT.k === k) CSORT.dir = -CSORT.dir;
