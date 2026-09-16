@@ -758,6 +758,8 @@ _AR_AUTOACK = re.compile(
     r"|(this |the |our )?(inbox|mailbox|e-?mail) is (checked|monitored|reviewed) "
     r"|please allow (up to )?\d+\s*(-\s*\d+\s*)?(hours|hrs|business days|working days|days)"
     r"|we (have|'ve) received your (message|e-?mail|enquiry|inquiry|request|submission)"
+    r"|(you can|you may|please) expect (to hear|a (reply|response)) (back )?(from us )?within"
+    r"|we appreciate you (reaching out|contacting us)[^.!\n]{0,80}(hear back|get back|respond|reply)"
     r"|this is an automated (message|response|reply|acknowledg\w+|e-?mail)"
     r"|automated (message|response|reply)\b"
     r"|do not reply to this (e-?mail|message)"
