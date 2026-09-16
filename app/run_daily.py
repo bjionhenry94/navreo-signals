@@ -241,6 +241,32 @@ def main():
     except Exception as e:  # noqa: BLE001 — observability must never kill the run
         print(f"capacity check · FAILED: {str(e)[:200]}")
 
+    # Client month-by-month stats (client_monthly_stats) — the table every
+    # client's Campaign Dashboard reads. Written HERE, after the capacity
+    # write, for the same reason client-windows is: it is a multi-minute
+    # Smartlead + Supabase sweep that must never run on the 512MB web box.
+    # Idempotent (upsert on client+month), once a day, and a failure just
+    # leaves yesterday's rows standing until the next tick.
+    try:
+        now = datetime.utcnow()
+        seen = server.sb("GET", "app_activity_log?select=ts&action=eq.monthly-stats"
+                                "&order=ts.desc&limit=1")
+        ran_today = bool(seen) and str(seen[0].get("ts", ""))[:10] == now.date().isoformat()
+        if ran_today:
+            print("monthly stats · already ran today")
+        else:
+            import monthly_stats  # noqa: E402
+            r = monthly_stats.write_client_monthly_stats()
+            print(f"monthly stats · {r.get('rows')} rows / {r.get('clients')} clients "
+                  f"in {r.get('secs')}s")
+            server.sb("POST", "app_activity_log",
+                      {"actor": "cron", "endpoint": "run_daily",
+                       "action": "monthly-stats", "entity": "client_monthly_stats",
+                       "payload": {"rows": r.get("rows"), "clients": r.get("clients"),
+                                   "secs": r.get("secs")}})
+    except Exception as e:  # noqa: BLE001 — the writer must never kill the run
+        print(f"monthly stats · FAILED: {str(e)[:200]}")
+
     # Booked-lead pause backstop (Bjion 2026-08-26: the tool is the point of
     # truth — Call Booked -> paused in every live campaign, no Notion). The
     # instant categoriser hook (/api/notify/positive-card) does the real-time
