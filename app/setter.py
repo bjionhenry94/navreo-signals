@@ -13688,8 +13688,12 @@ _ENRICH_INFLIGHT: set = set()     # emails currently enriching (thread guard)
 def _propagate_person_tz(email: str, person_loc: dict) -> None:
     """Re-stamp every queue row for `email` with the zone of the lead's own
     profile location (Prospeo) once enrichment has delivered it. Rows already
-    on that person-level zone are skipped; nothing else about a row changes
-    (a sent draft keeps the times it proposed). Never raises."""
+    on that person-level zone are skipped. A SENT draft keeps the times it
+    proposed, but a still-pending needs_review draft that proposed call times
+    in the OLD zone is auto-redrafted so its slot labels re-render in the
+    healed zone (the frozen-draft/EDT-fallback gap, 2026-09-16): without this
+    the Profile heals to the lead's real zone while the draft the reviewer
+    sees keeps the assumed-Eastern times it was born with. Never raises."""
     try:
         if not (email and person_loc and _SB):
             return
@@ -13697,14 +13701,28 @@ def _propagate_person_tz(email: str, person_loc: dict) -> None:
         if fact["source"] != TZ_SOURCE_PERSON:
             return
         rows = _SB("GET", f"{QUEUE_TABLE}?lead_email=eq.{quote(email.lower(), safe='')}"
-                          "&select=id,timezone,guardrails&limit=50")
+                          "&select=id,timezone,guardrails,status,slots&limit=50")
         for r in (rows if isinstance(rows, list) else []):
             g = r.get("guardrails") if isinstance(r.get("guardrails"), dict) else {}
             if g.get("tz_source") == TZ_SOURCE_PERSON and r.get("timezone") == fact["tz"]:
                 continue
+            zone_changed = r.get("timezone") != fact["tz"]
             _SB("PATCH", f"{QUEUE_TABLE}?id=eq.{r.get('id')}",
                 {"timezone": fact["tz"], "guardrails": {**g, **_tz_guardrails(fact)}},
                 prefer="return=minimal")
+            # Only a pending draft that actually proposed times in the old zone
+            # needs re-rendering; sent rows and no-times drafts are left alone.
+            if (zone_changed and r.get("status") == "needs_review"
+                    and r.get("slots")):
+                _rid = r.get("id")
+
+                def _reredraft(rid=_rid):
+                    try:
+                        _redraft_sync({"id": rid})
+                    except Exception:  # noqa: BLE001 - best-effort heal
+                        pass
+                threading.Thread(target=_reredraft, daemon=True,
+                                 name="setter-tz-heal-redraft").start()
     except Exception:  # noqa: BLE001 - a display/timing upgrade, never a failure
         pass
 

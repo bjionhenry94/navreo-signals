@@ -3003,6 +3003,53 @@ def test_redraft_async_job_returns_immediately_and_reports_its_result():
         setter._redraft_sync = real
 
 
+def test_propagate_person_tz_reredrafts_pending_timed_draft():
+    """Frozen-draft/EDT gap (2026-09-16): when a lead's real zone lands after
+    the draft was composed on the Eastern fallback, a still-pending draft that
+    proposed call times must be re-rendered in the healed zone. A SENT row and
+    a no-times draft are left untouched."""
+    dubai = {"tz": "Asia/Dubai", "source": setter.TZ_SOURCE_PERSON,
+             "confident": True, "basis": "profile: Dubai"}
+    rows = [
+        {"id": 1, "timezone": "America/New_York", "guardrails": {"tz_source": "fallback"},
+         "status": "needs_review", "slots": ["2026-09-17T09:00:00-04:00"]},   # heals + redrafts
+        {"id": 2, "timezone": "America/New_York", "guardrails": {"tz_source": "fallback"},
+         "status": "sent", "slots": ["2026-09-17T09:00:00-04:00"]},           # sent: no redraft
+        {"id": 3, "timezone": "America/New_York", "guardrails": {"tz_source": "fallback"},
+         "status": "needs_review", "slots": []},                              # no times: no redraft
+    ]
+    patched, redrafted = [], []
+
+    def fake_sb(method, path, body=None, **kw):
+        if method == "GET":
+            return rows
+        if method == "PATCH":
+            patched.append(path)
+        return None
+
+    def fake_sync(payload):
+        redrafted.append(payload.get("id"))
+        return 200, {"row": {"id": payload.get("id")}}
+
+    real = (setter._SB, setter._redraft_sync, setter.resolve_timezone_fact)
+    setter._SB = fake_sb
+    setter._redraft_sync = fake_sync
+    setter.resolve_timezone_fact = lambda *a, **k: dubai
+    try:
+        setter._propagate_person_tz("mridul@whitecarrot.io", {"country": "United Arab Emirates"})
+        import time as _t
+        for _ in range(40):
+            if redrafted:
+                break
+            _t.sleep(0.02)
+        check("tz-heal: all three rows re-stamped to the person zone",
+             len(patched) == 3, patched)
+        check("tz-heal: only the pending, timed draft is re-rendered",
+             redrafted == [1], redrafted)
+    finally:
+        setter._SB, setter._redraft_sync, setter.resolve_timezone_fact = real
+
+
 def test_subsequence_dismiss_is_idempotent():
     """#6: dismissing an already-dismissed row is success, not an error. The
     error banner plus the full tray repaint was the reported 'restart'."""
