@@ -1264,29 +1264,59 @@ function cSortClick(k) {
 var qs = new URLSearchParams(location.search);
 var tok = qs.get("share") || "";
 var isLocal = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
-var url = (isLocal && qs.get("fixture") === "1")
-  ? "../scripts/dashboard_fixture_acme.json"
+var isFixture = isLocal && qs.get("fixture") === "1";
+var url = isFixture
+  ? "/app/demo/dashboard_fixture_acme.json"
   : "/api/dashboard/data?share=" + encodeURIComponent(tok);
 
-fetch(url, { credentials: "same-origin" })
-  .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
+function loadJSON(u) {
+  return fetch(u, { credentials: "same-origin" })
+    .then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); });
+}
+/* The demo fixture lives under the public /app/demo/ prefix; fall back to the
+   repo copy when running from a checkout that has not copied it across. */
+loadJSON(url)
+  .catch(function (e) {
+    if (!isFixture) throw e;
+    return loadJSON("../scripts/dashboard_fixture_acme.json");
+  })
   .then(function (d) {
-    if (!d || d.error || !d.week || !d.week.days || !d.week.days.length) throw new Error("bad payload");
+    if (!d || d.error) throw new Error("bad payload");
     D = d;
-    R = d.week;
-    I0 = R.days.indexOf(R.start);
-    I1 = R.days.lastIndexOf(R.end);
-    if (I0 < 0) { I0 = 0; for (var i = 0; i < R.days.length; i++) { if (R.days[i] >= R.start) { I0 = i; break; } } }
-    if (I1 < 0) { I1 = R.days.length - 1; for (var j = R.days.length - 1; j >= 0; j--) { if (R.days[j] <= R.end) { I1 = j; break; } } }
-    if (I1 < I0) I1 = I0;
+    /* The weekly report is optional: months + campaigns must still render when
+       this week's numbers have not been built yet. */
+    var hasWeek = !!(d.week && d.week.days && d.week.days.length);
+    if (hasWeek) {
+      R = d.week;
+      I0 = R.days.indexOf(R.start);
+      I1 = R.days.lastIndexOf(R.end);
+      if (I0 < 0) { I0 = 0; for (var i = 0; i < R.days.length; i++) { if (R.days[i] >= R.start) { I0 = i; break; } } }
+      if (I1 < 0) { I1 = R.days.length - 1; for (var j = R.days.length - 1; j >= 0; j--) { if (R.days[j] <= R.end) { I1 = j; break; } } }
+      if (I1 < I0) I1 = I0;
+    }
     $("page").style.display = "";
     renderMonths();
     renderCampaigns();
-    renderAll();
-    var label = d.client_label || R.client || "Your campaigns";
+    if (hasWeek) renderAll();
+    var label = d.client_label || (hasWeek && R.client) || "Your campaigns";
     $("rp-title").textContent = label + " · campaign dashboard";
     $("rp-verdict").textContent = "Everything your outbound has done, in one place.";
-    $("w-note").textContent = dfull(R.start) + " – " + dfull(R.end);
+    if (hasWeek) {
+      $("w-note").textContent = dfull(R.start) + " – " + dfull(R.end);
+    } else {
+      $("w-note").textContent = "";
+      var wmsg = document.createElement("div");
+      wmsg.className = "empty";
+      wmsg.id = "w-empty";
+      wmsg.textContent = "This week's report isn't available yet. The month-by-month and " +
+        "campaign-by-campaign numbers above are up to date; this week's day-by-day view " +
+        "appears here once it has been built.";
+      $("sec-week").appendChild(wmsg);
+      var heroEl = document.querySelector("section.hero");
+      if (heroEl) heroEl.style.display = "none";
+      var lanesEl = document.querySelector(".lanes");
+      if (lanesEl) lanesEl.style.display = "none";
+    }
     $("c-tbl").addEventListener("click", function (ev) {
       var th = ev.target.closest("th.sortable");
       if (th) cSortClick(th.dataset.k);
@@ -1295,6 +1325,7 @@ fetch(url, { credentials: "same-origin" })
       var th = ev.target.closest("th.sortable");
       if (th && (ev.key === "Enter" || ev.key === " ")) { ev.preventDefault(); cSortClick(th.dataset.k); }
     });
+    if (hasWeek) {
     $("trend-svg").addEventListener("mousemove", trendMove);
     $("trend-svg").addEventListener("mouseleave", hideTip);
     $("rp-lchips").addEventListener("click", function (ev) {
@@ -1309,6 +1340,7 @@ fetch(url, { credentials: "same-origin" })
       this.setAttribute("aria-pressed", String(state.hideWeekends));
       renderTrend();
     });
+    }
     window.addEventListener("resize", function () { mHide(); hideTip(); });
   })
   .catch(function () { $("gone").style.display = ""; });
