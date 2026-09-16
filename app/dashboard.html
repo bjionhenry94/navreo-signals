@@ -56,6 +56,7 @@
 .ah .charttip .row{display:flex;align-items:center;gap:6px}
 .ah .charttip .row i{width:8px;height:8px;border-radius:2px;flex-shrink:0}
 .ah .charttip .row .v{margin-left:auto;font-weight:600;color:var(--ink);padding-left:12px;font-variant-numeric:tabular-nums}
+.ah .charttip .row .v.mute{color:var(--ink-3);font-weight:500}
 
 .ah .lanes{position:relative;margin-top:34px;display:flex;flex-direction:column;gap:36px}
 .ah .lane{position:relative;padding-left:58px;scroll-margin-top:24px}
@@ -342,6 +343,7 @@ html,body{overflow-x:hidden;background:var(--bg)}
       <h2 id="mh">Month by month since your first campaign</h2>
       <span class="note" id="m-note"></span>
     </div>
+    <div class="subline" id="m-guard" style="margin:-8px 0 12px">Reply rate is only shown once a month has 200+ emails sent.</div>
     <div class="panel">
       <div class="lgd">
         <span><i style="background:#1971C2;opacity:.45"></i>Emails sent</span>
@@ -1107,6 +1109,11 @@ function pct(v) { return (v == null || isNaN(v)) ? "–" : Number(v).toFixed(1) 
      the line on the single labelled axis. Legend + direct labels, so identity
      is never colour alone. ── */
 var MGEO = null;
+/* ── minimum-volume guard, shared by the month table, the month chart and the
+   campaign table: a reply rate off a handful of sends is noise, not a result.
+   A row is only READABLE at 200+ sent AND 5+ replies. ── */
+var MIN_SENT = 200, MIN_REPLIES = 5;
+function readable(r) { return (r.sent || 0) >= MIN_SENT && (r.replied || 0) >= MIN_REPLIES; }
 function renderMonthChart() {
   var ms = D.months || [];
   var svg = $("m-svg");
@@ -1116,7 +1123,7 @@ function renderMonthChart() {
   var sentMax = 1, rMax = 0;
   ms.forEach(function (r) {
     if ((r.sent || 0) > sentMax) sentMax = r.sent;
-    if ((r.reply_rate || 0) > rMax) rMax = r.reply_rate;
+    if (readable(r) && (r.reply_rate || 0) > rMax) rMax = r.reply_rate;
   });
   var rl = [1, 2, 3, 4, 5, 6, 8, 10, 15, 20, 30], rmax = rl[rl.length - 1];
   for (var q = 0; q < rl.length; q++) { if (rl[q] >= rMax) { rmax = rl[q]; break; } }
@@ -1144,21 +1151,28 @@ function renderMonthChart() {
   });
   s += '<text x="' + (L + 2) + '" y="' + (T + 10) + '" font-size="10.5" fill="' + MCOL.sent +
        '" opacity="0.9">bars: emails sent per month · peak ' + fmtN(sentMax) + '</text>';
-  /* reply-rate line */
-  var pts = "", lastY = null;
+  /* reply-rate line — a month too thin to read is a GAP, never a point: the
+     line breaks into segments rather than dipping through unreadable months. */
+  var segs = [], cur = [], lastY = null, lastI = null;
   ms.forEach(function (r, i) {
+    if (!readable(r)) { if (cur.length) { segs.push(cur); cur = []; } return; }
     var y = YR(r.reply_rate || 0);
-    lastY = y;
-    pts += (i ? " " : "") + X(i).toFixed(1) + "," + y.toFixed(1);
+    lastY = y; lastI = i;
+    cur.push(X(i).toFixed(1) + "," + y.toFixed(1));
   });
-  s += '<polyline points="' + pts + '" fill="none" stroke="' + MCOL.rate +
-       '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+  if (cur.length) segs.push(cur);
+  segs.forEach(function (seg) {
+    if (seg.length === 1) return;   // a lone readable month renders as its dot
+    s += '<polyline points="' + seg.join(" ") + '" fill="none" stroke="' + MCOL.rate +
+         '" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>';
+  });
   ms.forEach(function (r, i) {
+    if (!readable(r)) return;
     s += '<circle cx="' + X(i).toFixed(1) + '" cy="' + YR(r.reply_rate || 0).toFixed(1) +
          '" r="3" fill="' + MCOL.rate + '" stroke="var(--card)" stroke-width="2"/>';
   });
   if (lastY != null) {
-    s += '<text x="' + (X(n - 1) + 9).toFixed(1) + '" y="' + (lastY + 3.5).toFixed(1) +
+    s += '<text x="' + (X(lastI) + 9).toFixed(1) + '" y="' + (lastY + 3.5).toFixed(1) +
          '" font-size="10.5" font-weight="600" fill="' + MCOL.rate + '">Reply rate</text>';
   }
   var everyN = n <= 12 ? 1 : Math.ceil(n / 9);
@@ -1187,15 +1201,16 @@ function mMove(ev) {
   var yr = G.T + (1 - (row.reply_rate || 0) / G.rmax) * G.ph;
   var html = '<line x1="' + X.toFixed(1) + '" y1="' + G.T + '" x2="' + X.toFixed(1) + '" y2="' +
     (G.T + G.ph) + '" stroke="var(--line-2)" stroke-width="1"/>' +
-    '<circle cx="' + X.toFixed(1) + '" cy="' + yr.toFixed(1) + '" r="4" fill="' + MCOL.rate +
-    '" stroke="var(--card)" stroke-width="2"/>';
+    (readable(row) ? '<circle cx="' + X.toFixed(1) + '" cy="' + yr.toFixed(1) + '" r="4" fill="' +
+      MCOL.rate + '" stroke="var(--card)" stroke-width="2"/>' : "");
   var old = document.getElementById("m-hov");
   if (old) old.parentNode.removeChild(old);
   svg.insertAdjacentHTML("beforeend", '<g id="m-hov">' + html + "</g>");
   var tip = $("m-tip");
   tip.innerHTML = "<b>" + mFull(row.month) + "</b>" +
     '<div class="row"><i style="background:' + MCOL.sent + '"></i>Sent<span class="v num">' + fmtN(row.sent) + "</span></div>" +
-    '<div class="row"><i style="background:' + MCOL.rate + '"></i>Reply rate<span class="v num">' + pct(row.reply_rate) + "</span></div>" +
+    '<div class="row"><i style="background:' + MCOL.rate + '"></i>Reply rate<span class="v num' +
+      (readable(row) ? "" : " mute") + '">' + (readable(row) ? pct(row.reply_rate) : "too early to read") + "</span></div>" +
     '<div class="row"><i style="background:var(--ink-3)"></i>Replies<span class="v num">' + fmtN(row.replied) + "</span></div>" +
     '<div class="row"><i style="background:var(--ink-3)"></i>Interested<span class="v num">' + fmtN(row.positive) + "</span></div>" +
     '<div class="row"><i style="background:var(--ink-3)"></i>Meetings<span class="v num">' + fmtN(row.meetings) + "</span></div>" +
@@ -1219,6 +1234,7 @@ function renderMonths() {
     $("m-svg").parentNode.style.display = "none";
     $("m-tbl").parentNode.style.display = "none";
     $("m-sub").style.display = "none";
+    $("m-guard").style.display = "none";
     $("m-empty").style.display = "";
     $("m-empty").textContent = "There are no full months to show yet. As soon as your first campaign has been " +
       "sending for a month, this chart fills in.";
@@ -1226,15 +1242,18 @@ function renderMonths() {
   }
   renderMonthChart();
   $("m-body").innerHTML = ms.slice().reverse().map(function (r) {
-    return "<tr><td>" + escq(mLabel(r.month, true)) + "</td>" +
+    var mok = readable(r);
+    return "<tr><td>" + escq(mLabel(r.month, true)) +
+      (mok ? "" : ' <span class="spill early">Too early to read</span>') + "</td>" +
       '<td class="num">' + fmtN(r.sent) + "</td>" +
       '<td class="num mo-x">' + fmtN(r.replied) + "</td>" +
-      '<td class="num">' + pct(r.reply_rate) + "</td>" +
+      '<td class="num' + (mok ? "" : " muted") + '">' + pct(r.reply_rate) + "</td>" +
       '<td class="num mo-x">' + fmtN(r.positive) + "</td>" +
       '<td class="num">' + fmtN(r.meetings) + "</td>" +
       '<td class="num mo-x">' + pct(r.bounce_rate) + "</td></tr>";
   }).join("");
   $("m-note").textContent = "Newest month first · " + ms.length + " month" + (ms.length === 1 ? "" : "s");
+  $("m-guard").textContent = "Reply rate is only shown once a month has " + MIN_SENT + "+ emails sent.";
   $("m-sub").textContent = "Your first campaign launched in " + mFull(ms[0].month) +
     ", so the table starts there. Hover any month for its full numbers.";
   $("m-svg").addEventListener("mousemove", mMove);
@@ -1263,9 +1282,6 @@ var CSORT = { k: "reply_rate", dir: -1 };
    carry a rate: 200+ emails AND 5+ replies. Readable rows sort by reply rate;
    everything else falls below in sent order, labelled "Too early to read",
    with its rate rendered muted. Only a readable row can be the best row. ── */
-var MIN_SENT = 200, MIN_REPLIES = 5;
-function readable(r) { return (r.sent || 0) >= MIN_SENT && (r.replied || 0) >= MIN_REPLIES; }
-
 function startedLabel(iso) {
   if (!iso) return "\u2013";
   var d = new Date(String(iso).slice(0, 10) + "T12:00:00Z");
