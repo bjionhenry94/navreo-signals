@@ -106,8 +106,9 @@
 .ah .rcost.mute{color:var(--ink-3)}
 .ah .rrow.rhead{border-top:0;padding:0 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3)}
 .ah .rrow .idx{font-size:11px;color:var(--ink-3);font-variant-numeric:tabular-nums}
-.ah .rname{font-weight:600;line-height:1.3;display:flex;align-items:center;gap:8px;min-width:0}
-.ah .rname .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ah .rname{font-weight:600;line-height:1.3;display:flex;align-items:flex-start;gap:8px;min-width:0;flex-wrap:wrap}
+.ah .rname .nm{white-space:normal;overflow-wrap:anywhere;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ah .rsub{font-size:11px;color:var(--ink-3);font-weight:400;margin-top:1px}
 .ah .rint,.ah .rmtg{text-align:right;font-weight:600;font-variant-numeric:tabular-nums;color:var(--ink-2)}
 
@@ -244,7 +245,8 @@ html,body{overflow-x:hidden;background:var(--bg)}
   letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);position:sticky;top:0;background:var(--card)}
 .ah table.dt tbody tr:hover{background:var(--bg-sunken)}
 .ah table.dt td.num,.ah table.dt th.num{font-variant-numeric:tabular-nums}
-.ah table.dt .nm{font-weight:600;color:var(--ink);max-width:260px;overflow:hidden;text-overflow:ellipsis;display:block}
+.ah table.dt .nm{font-weight:600;color:var(--ink);max-width:260px;display:block;white-space:normal;
+  overflow-wrap:anywhere;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .ah table.dt tr.best td{background:var(--orange-100)}
 .ah table.dt tr.best .nm{color:var(--ink)}
 @media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .ah table.dt tr.best td{background:#3A2011}}
@@ -262,6 +264,11 @@ html,body{overflow-x:hidden;background:var(--bg)}
 /* min-volume guard — a campaign too small to compare says so, and its reply
    rate is rendered muted so nobody reads a 1-of-7 spike as a winner */
 .ah .spill.early{background:var(--bg-sunken);color:var(--ink-3);font-weight:600}
+/* ONE best answer: the tinted row says so out loud, and names its criterion,
+   so it can never be confused with the weekly "most interested" badge. */
+.ah .spill.bestnow{background:var(--orange-100);color:var(--orange-700);font-weight:700}
+.ah .bestwhy{display:block;margin-top:3px;font-size:10.5px;font-weight:500;color:var(--ink-3);white-space:normal}
+.ah .ccard .bestwhy{margin-top:2px}
 .ah table.dt td.muted{color:var(--ink-3)}
 /* desktop scroll affordance — a fade + a hint, only when there IS overflow */
 .ah .tblwrap{position:relative}
@@ -787,7 +794,7 @@ function renderRank() {
     var perMtg = (c.mtg > 0 && c.sent != null) ? Math.round(c.sent / c.mtg) : null;
     s += '<div class="rrow"><span class="idx">' + (i + 1) + "</span>" +
       '<div><div class="rname"><span class="nm" title="' + escq(c.name) + '">' + escq(c.name) + "</span>" +
-      (i === 0 && c.mtg > 0 ? '<span class="apill green">Best</span>' : "") +
+      (i === 0 && c.mtg > 0 ? '<span class="apill green">Most interested this week</span>' : "") +
       (!c.active ? '<span class="apill mute">finished</span>' : "") +
       '</div><div class="rsub">' + (windowed ? winLabel() : "all time") + "</div></div>" +
       '<span class="rint">' + fmtN(c.pos) + '</span><span class="rmtg">' + fmtN(c.mtg) + "</span>" +
@@ -796,7 +803,7 @@ function renderRank() {
   });
   $("rank-rows").innerHTML = s;
   var pick = top.filter(function (c) { return c.mtg > 0 || c.pos > 0; })[0];
-  $("rank-take").textContent = pick ? "“" + escq(pick.name.length > 64 ? pick.name.slice(0, 62) + "…" : pick.name) + "” worked best over this range." : "";
+  $("rank-take").textContent = pick ? "“" + escq(pick.name.length > 64 ? pick.name.slice(0, 62) + "…" : pick.name) + "” drew the most interested replies over this range." : "";
   return true;
 }
 
@@ -1320,6 +1327,8 @@ function renderCampaigns() {
     var ok = readable(r);
     return '<tr' + (r.id === bestId ? ' class="best"' : "") + ">" +
       '<td><span class="nm" title="' + escq(r.name) + '">' + escq(r.name) + "</span>" +
+      (r.id === bestId ? '<span class="spill bestnow">Best right now</span>' +
+        '<span class="bestwhy">highest reply rate · 200+ sent</span>' : "") +
       (ok ? "" : ' <span class="spill early">Too early to read</span>') + "</td>" +
       "<td>" + escq(startedLabel(r.started)) + "</td>" +
       '<td class="num">' + fmtN(r.sent) + "</td>" +
@@ -1343,6 +1352,8 @@ function renderCampaigns() {
       (live ? "Sending" : "Paused") + "</span></div>" +
       '<div class="big' + (ok ? "" : " muted") + '">' + pct(r.reply_rate) +
       ' <span class="biglab">reply rate</span></div>' +
+      (r.id === bestId ? '<div style="margin-top:6px"><span class="spill bestnow">Best right now</span>' +
+        '<span class="bestwhy">highest reply rate · 200+ sent</span></div>' : "") +
       (ok ? "" : '<div style="margin-top:6px"><span class="spill early">Too early to read</span></div>') +
       '<div class="mrow"><span>Sent <b>' + fmtN(r.sent) + "</b></span>" +
       "<span>Replies <b>" + fmtN(r.replied) + "</b></span>" +
