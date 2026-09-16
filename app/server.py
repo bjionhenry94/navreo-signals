@@ -25918,6 +25918,37 @@ def offer_email(p: dict, ip: str):
     return 502, {"ok": False, "message": "Couldn't write that email just now. Please try again in a moment."}
 
 
+
+# ── Lilly (the client vault) under app.navreo.ai/lilly ──────────────────────
+# Lilly is a separate service (its own database, no Navreo keys, its own OAuth wall).
+# This server only carries the bytes for /lilly/* and the two path-aware OAuth discovery
+# documents, so members connect to https://app.navreo.ai/lilly/mcp instead of an onrender
+# host (links-always-app-navreo-ai). Every method, path, query, header (minus hop-by-hop)
+# and body is forwarded unchanged; redirects and status codes come back untouched; the
+# vault sees the public host and scheme via X-Forwarded-*. No auth gate here: the vault
+# enforces its own on every call. Nothing about this server's session or data is involved.
+LILLY_VAULT_ORIGIN = os.environ.get("LILLY_VAULT_ORIGIN", "https://lilly-vault.onrender.com").rstrip("/")
+_LILLY_PATHS = ("/lilly", "/.well-known/oauth-protected-resource/lilly",
+                "/.well-known/oauth-authorization-server/lilly")
+_LILLY_HOP = {"host", "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te",
+              "trailer", "transfer-encoding", "upgrade", "content-length", "accept-encoding"}
+
+
+class _LillyNoRedirect(urllib.request.HTTPRedirectHandler):
+    """Hand the vault's 302s back to the browser instead of following them server-side."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_LILLY_OPENER = urllib.request.build_opener(_LillyNoRedirect, urllib.request.HTTPSHandler(context=SSL_CTX))
+
+
+def _is_lilly_path(path: str) -> bool:
+    return path == "/lilly" or path.startswith("/lilly/") or path.startswith(_LILLY_PATHS[1]) \
+        or path.startswith(_LILLY_PATHS[2])
+
+
 class Handler(SimpleHTTPRequestHandler):
     # S3: HTTP/1.1 keep-alive. Safe only because every response-writing path in
     # this handler goes through one of: self._json() (always sets Content-Length,
@@ -26272,8 +26303,52 @@ class Handler(SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+
+    def _lilly_proxy(self):
+        """Forward this request to the Lilly vault and relay the reply. See LILLY_VAULT_ORIGIN."""
+        length = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(length) if length else None
+        headers = {k: v for k, v in self.headers.items() if k.lower() not in _LILLY_HOP}
+        headers["X-Forwarded-Host"] = self.headers.get("Host", "app.navreo.ai")
+        # Render always sets X-Forwarded-Proto; a local run has none and is plain http.
+        headers["X-Forwarded-Proto"] = (self.headers.get("X-Forwarded-Proto") or "http").split(",")[0].strip()
+        xff = self.headers.get("X-Forwarded-For", "")
+        headers["X-Forwarded-For"] = (xff + ", " if xff else "") + (self.client_address[0] if self.client_address else "")
+        if body is not None:
+            headers["Content-Length"] = str(len(body))
+        req = urllib.request.Request(LILLY_VAULT_ORIGIN + self.path, data=body, method=self.command, headers=headers)
+        try:
+            resp = _LILLY_OPENER.open(req, timeout=300)
+        except urllib.error.HTTPError as e:
+            resp = e  # 3xx/4xx/5xx from the vault: relay as-is
+        except Exception as e:  # noqa: BLE001
+            print(f"LILLY proxy unreachable: {type(e).__name__}: {str(e)[:120]}")
+            return self._json({"error": "Lilly is not reachable right now. Try again in a minute."}, 503)
+        data = resp.read()
+        self.send_response(resp.status)
+        for k, v in resp.headers.items():
+            if k.lower() in _LILLY_HOP:
+                continue
+            self.send_header(k, v)
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
+    def do_DELETE(self):
+        if _is_lilly_path(self.path.split("?")[0]):
+            return self._lilly_proxy()
+        self.send_error(501)
+
+    def do_OPTIONS(self):
+        if _is_lilly_path(self.path.split("?")[0]):
+            return self._lilly_proxy()
+        self.send_error(501)
+
     def do_HEAD(self):
         path = self.path.split("?")[0]
+        if _is_lilly_path(path):
+            return self._lilly_proxy()
         if path in ("/", "", "/index.html"):
             self.send_response(302)
             self.send_header("Location", "/app/campaigns.html")
@@ -26431,6 +26506,8 @@ class Handler(SimpleHTTPRequestHandler):
 
     def do_GET(self):
         path = self.path.split("?")[0]
+        if _is_lilly_path(path):
+            return self._lilly_proxy()
         if path == "/healthz":  # liveness only — NO DB call, so the health check can't flap
             return self._json({"ok": True})
         if path in ("/", "", "/index.html"):
@@ -27378,6 +27455,8 @@ class Handler(SimpleHTTPRequestHandler):
         # `finally` costs a lock + ts=0 per cache and restores the "next read
         # converges" contract.
         _p = self.path.split("?")[0]
+        if _is_lilly_path(_p):
+            return self._lilly_proxy()
         try:
             return self._do_post_dispatch()
         finally:
