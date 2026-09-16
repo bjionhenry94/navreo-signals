@@ -15817,6 +15817,20 @@ def _reply_sync_bg():
         # not even that). This fires one internal #interested-replies alert per
         # new client positive so nothing archives to the setter silently again
         # (the grout/sagar@eazybe.com miss, 2026-08-05). Rides the same tick.
+        # Client-workspace category fill (2026-09-16, KRG / david.wilkins): the
+        # positive backstop below is CATEGORY-driven, so a client reply the
+        # workspace's own categoriser never labelled (the KRG Make router has
+        # been deactivated since 09-08) could only be carded once a human
+        # picked a category in the Setter. Fill it here — rules, then the
+        # workspace's own Smartlead label, then the house categoriser model —
+        # so the card fires in THIS tick. See setter.run_client_category_fill.
+        res_f = setter.run_client_category_fill()
+        if not res_f.get("skipped") and (res_f.get("filled") or not res_f.get("ok")):
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+                "action": ("client_category_fill_done" if res_f.get("ok")
+                           else "client_category_fill_failed"),
+                "entity": "replies", "payload": res_f})
         res4 = setter.run_client_positive_alerts()
         if not res4.get("skipped") and (res4.get("checked") or not res4.get("ok")):
             sb("POST", "app_activity_log",
