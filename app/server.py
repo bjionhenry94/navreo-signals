@@ -22561,6 +22561,60 @@ def _dashboard_campaign_positives(ids: list) -> tuple:
     return pos_by, mtg_by
 
 
+def _dashboard_month_positives(ids: list, month_start: str) -> tuple:
+    """(positives, meetings) for the client's campaigns inside ONE calendar
+    month, read LIVE from the replies archive.
+
+    Why this exists: client_monthly_stats is written nightly, while
+    campaigns_running and the weekly widgets read live. A meeting booked today
+    therefore showed in two places on the page and not in the month table — a
+    visible contradiction the client panel flagged. The current month's
+    `positive` / `meetings` are overlaid from here; sent / replied / bounced
+    stay from the table (they are Smartlead day-wise work, not cheap).
+
+    Same dedupe as monthly_stats._positives_by_month, so the overlaid number is
+    the one tonight's cron will write: a positive counts once per (campaign,
+    email) in the month; a calendly booking counts once per booking DAY; a
+    legacy Call Booked lead once per campaign and never on top of a calendly
+    booking for the same lead."""
+    ids = [str(c) for c in ids if str(c).isdigit()]
+    if not ids:
+        return 0, 0
+    try:
+        cats = urllib.parse.quote(",".join(_AH_POSITIVE_CATS))
+        rows = sb_get_all(
+            "replies?select=smartlead_campaign_id,email,category,replied_at,"
+            f"src:raw->>source&category=in.({cats})"
+            f"&smartlead_campaign_id=in.({','.join(ids)})"
+            f"&replied_at=gte.{month_start}&order=id") or []
+    except Exception as e:  # noqa: BLE001 - additive; the table value stands
+        print(f"[dashboard] month positives read failed: {e}", file=sys.stderr)
+        return None, None
+    id_set = set(ids)
+    seen: set = set()
+    cal_events: set = set()
+    cal_emails: set = set()
+    legacy: set = set()
+    month = month_start[:7]
+    for r in rows:
+        cid = str(r.get("smartlead_campaign_id"))
+        if cid not in id_set:
+            continue
+        when = str(r.get("replied_at") or "")
+        if when[:7] != month:
+            continue
+        em = (r.get("email") or "").strip().lower()
+        seen.add((cid, em))
+        if r.get("category") == "Call Booked":
+            if r.get("src") == "calendly":
+                cal_emails.add(em)
+                cal_events.add((cid, em, when[:10]))
+            else:
+                legacy.add((cid, em))
+    meetings = len(cal_events) + len([1 for (_c, em) in legacy if em not in cal_emails])
+    return len(seen), meetings
+
+
 def _dash_rate(numer, denom):
     if not denom:
         return None
@@ -22617,6 +22671,26 @@ def dashboard_data_get(client: str) -> tuple:
             "meetings": int(r.get("meetings") or 0),
             "campaigns_active": int(r.get("campaigns_active") or 0)})
 
+    # Current month LIVE overlay - the month table must not contradict the
+    # campaign table / weekly widgets, which read live. sent/replied/bounced
+    # stay from the nightly table; interested + meetings come from the replies
+    # archive under the same Call Booked / Calendly dedupe the writer uses.
+    _cur = _date.today().replace(day=1).isoformat()
+    _live_pos, _live_mtg = _dashboard_month_positives(
+        [cid for cid, _c in mine], _cur)
+    if _live_pos is not None:
+        _cm = _cur[:7]
+        _row = next((m for m in months if m["month"] == _cm), None)
+        if _row is not None:
+            _row["positive"] = _live_pos
+            _row["meetings"] = _live_mtg
+            _row["live"] = True
+        elif _live_pos or _live_mtg:
+            months.append({"month": _cm, "sent": 0, "replied": 0,
+                           "reply_rate": None, "bounced": 0, "bounce_rate": None,
+                           "positive": _live_pos, "meetings": _live_mtg,
+                           "campaigns_active": 0, "live": True})
+
     # "running now" = ACTIVE, or contacted someone in the last 7 days
     cutoff = (_date.today() - _td(days=_DASHBOARD_RUNNING_DAYS)).isoformat()
     recent = _dashboard_recent_campaigns(
@@ -22624,6 +22698,27 @@ def dashboard_data_get(client: str) -> tuple:
     running_ids = [cid for cid, c in mine
                    if str(c.get("status") or "").upper() == "ACTIVE" or cid in recent]
     started = _dashboard_first_contacts(running_ids)
+    # No running campaign should show a dash for "Started". contact_history only
+    # knows the leads THIS system uploaded, so a campaign launched before us (or
+    # uploaded straight in Smartlead) comes back with nothing. Fall back to the
+    # campaign's Smartlead created_at - one /campaigns call for the client's
+    # workspace, and only when something is actually missing.
+    if running_ids and any(not started.get(cid) for cid in running_ids):
+        try:
+            _wss = {(camps_all[cid].get("workspace") or "navreo") for cid in running_ids}
+            for _ws in _wss:
+                if not any(not started.get(cid) for cid in running_ids
+                           if (camps_all[cid].get("workspace") or "navreo") == _ws):
+                    continue
+                _k = ws_key(_ws)
+                if not _k:
+                    continue
+                for _c in (_sl_campaigns_for_ws(_k) or []):
+                    _cid = str(_c.get("id") or "")
+                    if _cid in started and not started.get(_cid):
+                        started[_cid] = _c.get("created_at")
+        except Exception as e:  # noqa: BLE001 - additive; the cell falls back to "-"
+            print(f"[dashboard] started fallback failed: {e}", file=sys.stderr)
     pos_by, mtg_by = _dashboard_campaign_positives(running_ids)
     running = []
     for cid in running_ids:
