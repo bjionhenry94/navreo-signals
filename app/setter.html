@@ -2294,11 +2294,6 @@ const MUTATION_SHIELD_MS = 130000;
 let LAST_SERVER_COUNTS = {};   // raw counts from the last payload, pre-merge
 const COUNT_DELTAS = {};       // counts key -> {d, base}
 let COUNT_DELTAS_AT = 0;
-// Frozen review-only workspaces, from the server (setter.py _MONITOR_ONLY_WS).
-// Empty by default since 2026-09-16: every federated client workspace SENDS
-// from here to its own Smartlead, so "not navreo" no longer means monitor-only.
-let MONITOR_ONLY_WS = new Set();
-function isMonitorWs(row) { return MONITOR_ONLY_WS.has(((row && row.workspace) || "navreo").toLowerCase()); }
 function bumpCounts(row, from, to) {
   // Server counts are navreo-only and exclude test rows — mirror that, or a
   // client/test row's action double-moves the folded badge. In CLIENT_MODE the
@@ -2405,7 +2400,6 @@ async function _loadQueueInner(prefetch) {
     }
     LAST_SERVER_COUNTS = rawCounts;
     LAST_CHECKED = res.data.last_checked || LAST_CHECKED;
-    if (Array.isArray(res.data.monitor_only_ws)) MONITOR_ONLY_WS = new Set(res.data.monitor_only_ws.map((w) => String(w).toLowerCase()));
     renderLastChecked();
     // Only clear a banner THIS loader owns — wiping someone else's error
     // (e.g. "Couldn't load setter agents") hid real failures.
@@ -4863,7 +4857,6 @@ function categoryControlInner(row, compact) {
         <div class="lp-cat-now">${catPill}</div>
       </div>
       ${CLIENT_MODE ? "" : (() => {
-        const monitor = isMonitorWs(row);
         // Segmented tiles (owner ask 2026-08-22): the two file-and-clear labels
         // (NQ, OOO) now sit beside a POSITIVE Call-booked tile as three equal
         // one-tap targets, and the "Change category…" dropdown is demoted below.
@@ -4873,9 +4866,7 @@ function categoryControlInner(row, compact) {
         const tile = (catName, cls, label, tone, icon, positive) =>
           curCat.toLowerCase() === catName.toLowerCase() ? "" :
           `<button type="button" class="lp-cat-tile ${tone} ${cls}" title="${sent
-            ? `Relabels this sent lead as '${esc(catName)}'${monitor ? " in the tool" : " in Smartlead"} - the sent reply is untouched${positive ? " and it stays in the follow-up flow" : ", and a non-positive label removes it from the follow-up reminder"}.`
-            : monitor
-            ? `Files this lead as '${esc(catName)}' in the tool${positive ? " and keeps it in the normal flow" : " and clears it from the queue"} - monitor workspaces are never written to the client's Smartlead.`
+            ? `Relabels this sent lead as '${esc(catName)}' in Smartlead - the sent reply is untouched${positive ? " and it stays in the follow-up flow" : ", and a non-positive label removes it from the follow-up reminder"}.`
             : `Files this lead as '${esc(catName)}' in Smartlead${positive ? " and keeps it in the normal follow-up flow" : " and clears it from the queue"} - one click, no dropdown.`}" aria-label="${esc(label)}">
             <span class="lp-tile-ico">${icon}</span>
             <span class="lp-tile-lab">${label}</span>
@@ -4905,25 +4896,15 @@ function leadPanelHtml(row) {
   // with this campaign's id in hand (see wireAssignAgentPrompt). The Campaign
   // name section itself was dropped (owner ask 2026-08-11), so this prompt is
   // the only thing that still renders a campaign-scoped section.
-  // Monitor-only truth (identification fix 2026-08-12, re-scoped 2026-09-16):
-  // ONLY a workspace the server has explicitly frozen (monitor_only_ws on the
-  // queue response) is review-only; for it, sending is 403-gated server-side
-  // so the assign prompt would be a dead end — state the real situation
-  // instead. Every other client workspace (Grout, Asteri, KRG, …) sends from
-  // here and gets the normal assign-an-agent prompt.
-  const wsMon = isMonitorWs(row);
-  // Agent plumbing, and the monitor branch names the client workspace
-  // (spec §2 row b).
-  const noAgentHtml = (CLIENT_MODE || row.agent_id) ? "" : (wsMon ? `
-    <div class="lp-section">
-      <div class="lp-line muted lp-noagent">${esc(clientForRow(row))} is frozen to review-only — replies surface here for review and are answered in Smartlead directly, so no agent drafts for this campaign.</div>
-    </div>` : `
+  // Every workspace (navreo and each federated client) sends from here, so
+  // every agentless row gets the same assign-an-agent prompt (2026-09-16).
+  const noAgentHtml = (CLIENT_MODE || row.agent_id) ? "" : `
     <div class="lp-section">
       <div class="lp-line muted lp-noagent">No agent is assigned to this campaign, so nothing is drafted for it automatically.</div>
       <button class="btn sm lp-assign-agent" type="button"
         data-campaign-id="${esc(row.smartlead_campaign_id || "")}"
         data-campaign-name="${esc(campaignNameFor(row))}">Assign an agent</button>
-    </div>`);
+    </div>`;
 
   // Lead category: the shared control (tone pill + live Smartlead dropdown),
   // wrapped here in the sidebar's sunken card section.
@@ -5477,9 +5458,6 @@ async function applyCategory(block, override) {
     // re-query the fresh one before writing the confirmation.
     const freshHint = document.querySelector("#leadPanel .lp-cat-hint") || hint;
     if (freshHint) {
-      // The server's detail is load-bearing for monitor workspaces ("Labelled
-      // in the tool only — never written to the client's Smartlead") — a bare
-      // "Category updated." implied a write that deliberately didn't happen.
       freshHint.textContent = (res.data && res.data.detail)
         || ((act === "relabelled_sent" && res.data && res.data.removed_from_followup)
           ? "Category updated - removed from the follow-up reminder."

@@ -81,17 +81,15 @@ OPENAI_MODEL = "gpt-5-mini"
 # Amplifyy / Arnic) were the only clients that ever appeared. Every OTHER
 # client (asteri, krg, grout, …) is its own federated workspace whose replies
 # the Setter never read. This gate widens the LIST + intake to every enabled
-# workspace so any client can be MANAGED here. Federated workspaces were
-# monitor-only (review, never send) while federation was proven; since
-# 2026-09-16 (owner ruling: "we should be able to send/respond to workspaces
-# outside of ours, that's why they've been added") every enabled workspace is
-# SENDABLE by default — Approve / follow-up / subsequence / category writes
-# reach the CLIENT's own Smartlead because /campaigns/<id>/... resolves that
-# workspace's api_key via _sl_key_for. A workspace can still be frozen to
-# review-only explicitly (_MONITOR_ONLY_WS below). navreo behaviour AND
-# navreo KPIs stay byte-for-byte unchanged (the pill/KPI queries remain
-# navreo-scoped; the KPI fold re-filters to navreo even off the federated
-# light scan).
+# workspace so any client can be MANAGED here — fully: every enabled
+# workspace SENDS (owner ruling 2026-09-16: "we should be able to send/respond
+# to workspaces outside of ours, that's why they've been added"; a review-only
+# tier was never an intended use-case and was removed the same day). Approve /
+# follow-up / subsequence / category writes reach the CLIENT's own Smartlead
+# because /campaigns/<id>/... resolves that workspace's api_key via
+# _sl_key_for. navreo behaviour AND navreo KPIs stay byte-for-byte unchanged
+# (the pill/KPI queries remain navreo-scoped; the KPI fold re-filters to
+# navreo even off the federated light scan).
 #
 # ONE reversal switch: SETTER_MONITOR_ALL_WS=0 restores navreo-only scoping.
 # Default ON.
@@ -100,18 +98,6 @@ SETTER_MONITOR_ALL_WS = os.environ.get("SETTER_MONITOR_ALL_WS", "1") not in ("0"
 # Never a real Setter reply source even if present in the table.
 _WS_MONITOR_SKIP = ("heyreach", "opan-test")
 
-# MONITOR-ONLY (frozen) federated workspaces — the explicit, deliberate
-# carve-out. A workspace listed here surfaces for review but can NEVER send
-# (enforced three ways: _is_monitor_ws, the _send_reply dry-force, and the
-# send-action refusal) and never writes to the client's Smartlead. Everything
-# NOT listed is a fully-managed client that sends from the Setter exactly like
-# navreo does. Comma-separated env override; default EMPTY (owner ruling
-# 2026-09-16 — before that the default was the inverse: only `krg` sendable).
-# Adding an id here re-freezes it to review-only, no other change.
-_MONITOR_ONLY_WS = frozenset(
-    w.strip().lower() for w in
-    os.environ.get("SETTER_MONITOR_ONLY_WS", "").split(",") if w.strip()
-)
 _WS_IDS_CACHE = {"at": 0.0, "ids": None}
 
 
@@ -161,17 +147,6 @@ def _list_ws_filter() -> str:
         return f"workspace=eq.{WORKSPACE}"
     return "workspace=in.(" + ",".join(ids) + ")"
 
-
-def _is_monitor_ws(ws) -> bool:
-    """True for a workspace whose Setter rows are review-only and must NEVER
-    send. Since 2026-09-16 that is ONLY a workspace explicitly frozen via
-    _MONITOR_ONLY_WS (SETTER_MONITOR_ONLY_WS); every other enabled workspace
-    sends to its own client Smartlead like navreo does. navreo is never
-    monitor-only. Gate OFF (navreo-only scoping) → nothing is monitor-only."""
-    w = (ws or "navreo")
-    if w == "navreo" or not SETTER_MONITOR_ALL_WS:
-        return False
-    return w.lower() in _MONITOR_ONLY_WS
 
 # ── one OpenAI round trip, with a deadline and a retry ──────────────────────
 # Every model call used to be a bare _HTTP on http_json's 60s default with
@@ -6740,11 +6715,7 @@ def _send_reply(row: dict, agent: dict, subject: str, html_body: str, is_test: b
                 "error": None, "draft_subject": subject, "draft_body": html_body,
                 "thread": thread}
 
-    # Monitor-only backstop: a non-navreo (federation-monitor) row can NEVER
-    # hit Smartlead, by any caller (manual, auto, async). The send-action
-    # handler already refuses these up front; this is defence-in-depth so no
-    # code path can ever slip a monitor-workspace send out.
-    dry = bool(is_test) or _dry_run() or _is_monitor_ws(row.get("workspace"))
+    dry = bool(is_test) or _dry_run()
     if dry:
         patch = _success_patch()
         _apply_patch(row, patch)
@@ -8431,9 +8402,9 @@ def run_client_category_fill() -> dict:
                         s["left"] += 1
                         continue
                     source = "model"
-                # The client's Smartlead is written for a SENDABLE workspace only
-                # (route_queue_recategorise's gate); the archive is always stamped.
-                if source != "smartlead" and not _is_monitor_ws(ws):
+                # The client's Smartlead is written too (mirrors
+                # route_queue_recategorise); the archive is always stamped.
+                if source != "smartlead":
                     try:
                         if catmap is None:
                             catmap = _ws_category_names(api_key)
@@ -9946,10 +9917,7 @@ def _convert_uncat_row(row: dict, category: str, source: str, settings: dict = N
             # original row still exists.
             "_redrive_id": row.get("id"),
         }
-        # A monitor-workspace reply is never given an agent brain — its
-        # campaign ids can collide with a navreo agent's list, and an agented
-        # convert could dry-"send" on a client row (panel fix 2026-08-01).
-        agent = None if _is_monitor_ws(row.get("workspace")) else _agent_for_campaign(cid)
+        agent = _agent_for_campaign(cid)
         if agent:
             new_row = process_reply(reply, agent, settings or _load_settings())
         else:
@@ -10379,8 +10347,7 @@ def _poll_monitor_workspaces(since: str, summary: dict) -> None:
       • ALWAYS agentless — never look up / run an agent, so nothing is ever
         drafted, classified or auto-sent for a client. Pure surface-for-review.
     Rows land is_test=False (so they RENDER and hydrate; is_test rows are
-    hidden by the UI), and CANNOT send: _is_monitor_ws forces every send path
-    dry and the send action refuses them. Best-effort; never raises. Poll/cron
+    hidden by the UI). Best-effort; never raises. Poll/cron
     path only — never a web request (512MB box)."""
     if not SETTER_MONITOR_ALL_WS or not _SB:
         return
@@ -10663,10 +10630,10 @@ def run_poll() -> dict:
         # BEFORE the monitor sweep so freshly-categorised replies don't
         # re-surface. Never sends.
         _sweep_client_uncategorised(since, summary)
-        # Federation MONITOR sweep: pull every non-navreo enabled workspace's
-        # recent replies into the queue as review-only rows (see the function
-        # docstring). Last, so the navreo positive sweep always spends its cap
-        # first. Never sends — _is_monitor_ws forces these dry everywhere.
+        # Federation sweep: pull every non-navreo enabled workspace's recent
+        # replies into the queue (see the function docstring). Last, so the
+        # navreo positive sweep always spends its cap first. Intake only —
+        # sending happens from the reviewed row like any navreo row.
         _poll_monitor_workspaces(since, summary)
         _LAST_SWEEP_DONE["t"] = _time.time()  # completed sweeps only — a crash must retry next call
     except Exception as e:  # noqa: BLE001 - run_poll itself must never raise
@@ -10901,7 +10868,7 @@ def route_queue_recategorise(payload):
         # the disposition below, it is no longer a gate.
         was_uncat = _is_uncategorised_value(row.get("category"))
         row_ws = row.get("workspace") or WORKSPACE
-        if not row.get("is_test") and not _is_monitor_ws(row_ws):
+        if not row.get("is_test"):
             lead_id = row.get("smartlead_lead_id") or _sl_lead_id_by_email(
                 row.get("lead_email") or "", campaign_id=row.get("smartlead_campaign_id"))
             if not lead_id:
@@ -10913,10 +10880,6 @@ def route_queue_recategorise(payload):
             except Exception as e:  # noqa: BLE001 - Smartlead write failed: change nothing locally
                 return 502, {"error": f"Smartlead rejected the category write: {str(e)[:200]}. "
                                       f"Nothing was changed."}
-        # Monitor-only workspaces skip the Smartlead write entirely (their
-        # category ids belong to a different account, and monitor-only means we
-        # never write to a client's Smartlead) - the label still lands in
-        # `replies` + the queue row below, which is what every tool surface reads.
         if not row.get("is_test"):
             mid = str(row.get("source_message_id") or row.get("message_id") or "")
             if mid:
@@ -10934,19 +10897,7 @@ def route_queue_recategorise(payload):
                      action="recategorise", entity="setter_queue", entity_id=qid)
         except Exception:  # noqa: BLE001 - logging must never break the route
             pass
-        # A monitor-workspace label lands only in the tool (replies + queue
-        # row) — say so honestly instead of implying the client's Smartlead
-        # changed (panel fix 2026-08-01). The next external categoriser run
-        # for that workspace may overwrite the replies label; the queue row's
-        # manual verdict stays authoritative tool-side.
-        monitor_note = ("Labelled in the tool only — monitor workspaces are never "
-                        "written to the client's Smartlead.") if _is_monitor_ws(row_ws) else None
-        # A failed queue-row write after the Smartlead/replies writes landed
-        # must NOT read as success — the reload would show the old label
-        # under a success hint, which is the do-it-twice trap.
-        # Wording is workspace-honest: monitor/test rows never touched
-        # Smartlead, so the message must not claim they did.
-        wrote_sl = not row.get("is_test") and not _is_monitor_ws(row_ws)
+        wrote_sl = not row.get("is_test")
         _persist_fail = (502, {"error": (("The category was written to Smartlead but the queue row "
                                           "didn't update") if wrote_sl else
                                          "The category change didn't save") +
@@ -10962,7 +10913,7 @@ def route_queue_recategorise(payload):
                 return _persist_fail
             return 200, {"ok": True, "action": "relabelled_sent", "category": cat_name,
                          "removed_from_followup": "subsequence_decision" in patch,
-                         **({"detail": monitor_note} if monitor_note else {})}
+                         }
         if cat_name in CORE_FOUR:
             # Convert (re-run intake so it gets a draft) only when there is
             # nothing to preserve - the row was uncategorised, or it had been
@@ -10978,18 +10929,18 @@ def route_queue_recategorise(payload):
                                           "the queue; try Apply again."}
                 return 200, {"ok": True, "action": "converted", "category": cat_name,
                              "new_id": (new_row or {}).get("id"), "status": (new_row or {}).get("status"),
-                             **({"detail": monitor_note} if monitor_note else {})}
+                             }
             if not _apply_patch(row, {"category": cat_name, "category_source": "manual"}):
                 return _persist_fail
             return 200, {"ok": True, "action": "relabelled", "category": cat_name,
-                         **({"detail": monitor_note} if monitor_note else {})}
+                         }
         if not _apply_patch(row, {"category": cat_name, "category_source": "manual", "status": "dismissed",
                                   "decision": "review",
                                   "decision_reason": f"Recategorised manually as '{cat_name}' - removed "
                                                      f"from the Setter."}):
             return _persist_fail
         return 200, {"ok": True, "action": "discarded", "category": cat_name,
-                     **({"detail": monitor_note} if monitor_note else {})}
+                     }
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -13216,10 +13167,7 @@ def route_queue_get(params):
             # ?before= page above deliberately carries none: the head fetch
             # owns the counts, an older page only extends the list.
             return 200, {"rows": rows, "kpis": {"counts": _share_counts()}}
-        return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at(),
-                     # Frozen review-only workspaces (usually none): the UI derives
-                     # its monitor-only wording from THIS, never from "not navreo".
-                     "monitor_only_ws": sorted(_MONITOR_ONLY_WS) if SETTER_MONITOR_ALL_WS else []}
+        return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -15668,9 +15616,6 @@ def route_queue_action(payload):
                 pass
 
         if action == "subsequence":
-            if _is_monitor_ws(row.get("workspace")):
-                return 403, {"error": "This workspace is monitor-only — subsequence pushes write "
-                                      "to the client's Smartlead and are disabled here."}
             checked = bool(payload.get("checked"))
             if not checked:
                 # Smartlead's API has no documented "remove from subsequence"
@@ -15757,9 +15702,6 @@ def route_queue_action(payload):
                 return 409, {"error": "This reply was already sent."}
             if row.get("status") == "sending":
                 return 409, {"error": "This reply is already being sent — wait for it to finish."}
-            if _is_monitor_ws(row.get("workspace")):
-                return 403, {"error": "This workspace is frozen to review-only — "
-                                      "sending is disabled here. Reply in Smartlead directly."}
             # No recency pre-check here: _send_reply verifies AFTER taking the
             # claim (atomic, one GET per send) and returns "blocked".
             agent = _load_agent(row.get("agent_id")) or {}
@@ -15815,9 +15757,6 @@ def route_queue_action(payload):
             # reply and its already-sent 409 protection stays intact.
             if row.get("status") not in ("sent", "auto_sent"):
                 return 409, {"error": "This thread's reply hasn't been sent yet - use Approve for the first send."}
-            if _is_monitor_ws(row.get("workspace")):
-                return 403, {"error": "This workspace is frozen to review-only — "
-                                      "sending is disabled here. Reply in Smartlead directly."}
             body_html = payload.get("body") or ""
             if not _TAG_RE.sub(" ", body_html).strip():
                 return 400, {"error": "body is required"}
