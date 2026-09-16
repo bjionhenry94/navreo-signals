@@ -879,6 +879,15 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 }
 .thread-msg { margin-bottom: 10px; padding: 8px 11px; border-radius: 8px; background: var(--bg-sunken); }
 .thread-msg:last-child { margin-bottom: 0; }
+.tm-head { position: relative; }
+.tm-hide {
+  float: right; margin-left: 8px; padding: 0 6px; height: 16px; line-height: 15px;
+  font-size: 10.5px; font-weight: 600; color: var(--ink-3);
+  background: transparent; border: 1px solid var(--line); border-radius: 4px;
+  cursor: pointer; opacity: 0; transition: opacity .12s ease;
+}
+.thread-msg:hover .tm-hide, .tm-hide:focus-visible { opacity: 1; }
+.tm-hide:hover { color: var(--ink); border-color: var(--ink-3); }
 /* Every INBOUND message (the lead speaking) is amber, ours stay grey, so a
    glance tells who said what; the current reply keeps its border on top. */
 .thread-msg.them { background: var(--amber-bg); }
@@ -3930,6 +3939,42 @@ async function applyRecategorise() {
 document.addEventListener("click", (e) => {
   if (e.target && e.target.id === "uncatApplyBtn") applyRecategorise();
 });
+
+// Manual per-exchange hide (owner ask 2026-09-15). Delegated so it survives
+// every convo repaint. Optimistically drops the exchange from the open thread
+// and repaints, then persists to guardrails.hidden_message_ids server-side so
+// it stays hidden across reloads and Smartlead re-hydrate.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest && e.target.closest(".tm-hide");
+  if (btn) { e.preventDefault(); hideExchange(btn); }
+});
+async function hideExchange(btn) {
+  const key = btn.getAttribute("data-hide-key");
+  const rowId = btn.getAttribute("data-hide-row");
+  if (!key || !rowId) return;
+  // Resolve every in-memory copy of this row so a background thread refresh
+  // can't briefly re-show the hidden exchange before the next (filtered) fetch.
+  const live = currentDetailRowObj();
+  const targets = [];
+  [live, ...(QUEUE_ROWS || []), ...(ALL_ROWS || [])].forEach((r) => {
+    if (r && String(r.id) === String(rowId) && !targets.includes(r)) targets.push(r);
+  });
+  const backups = targets.map((r) => r.thread);
+  targets.forEach((r) => {
+    if (Array.isArray(r.thread)) r.thread = r.thread.filter((m) => threadMsgKey(m) !== key);
+  });
+  const paintRow = (live && String(live.id) === String(rowId)) ? live : targets[0];
+  if (paintRow) renderDetail(paintRow);
+  const res = await fetchJson("/api/setter/thread/hide", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id: rowId, key, hidden: true }),
+  });
+  if (!res.ok) {
+    targets.forEach((r, i) => { r.thread = backups[i]; });
+    if (paintRow) renderDetail(paintRow);
+    alert((res.data && res.data.error) || "Couldn't hide that exchange. Try again.");
+  }
+}
 document.addEventListener("change", (e) => {
   if (e.target && e.target.id === "uncatCatSel") {
     const b = document.getElementById("uncatApplyBtn");
@@ -5550,7 +5595,17 @@ function _safeHref(u) {
 function _linkTag(href, label) {
   return `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${esc(label || href)}</a>`;
 }
-function convoMsgHtml(who, when, body, emphasize, inbound) {
+/* Stable identity for a thread entry — MUST match the server's
+   _thread_msg_key (setter.py) so a hide click and the server-side filter agree
+   on which exchange was hidden. */
+function threadMsgKey(m) {
+  if (!m) return "";
+  if (m.message_id != null && m.message_id !== "") return "m:" + String(m.message_id);
+  if (m.stats_id != null && m.stats_id !== "") return "s:" + String(m.stats_id);
+  if (m.time != null && m.time !== "") return "t:" + String(m.time);
+  return "";
+}
+function convoMsgHtml(who, when, body, emphasize, inbound, opts) {
   const links = [];
   const park = (href, label) => {
     links.push({ href, label });
@@ -5577,8 +5632,17 @@ function convoMsgHtml(who, when, body, emphasize, inbound) {
       return l ? _linkTag(l.href, l.label) : "";
     })
     .replace(/\n/g, "<br>");
+  // Hide affordance (owner ask 2026-09-15): a manual per-exchange hide. Shown
+  // only when the caller passes a hideKey + rowId (thread-derived bubbles); the
+  // click is handled by delegation below. The hide is a display suppression
+  // persisted server-side — never a deletion — so it survives re-hydrate.
+  const canHide = opts && opts.hideKey && opts.rowId != null;
+  const hideBtn = canHide
+    ? `<button class="tm-hide" type="button" title="Hide this exchange from the conversation"
+         data-hide-key="${esc(opts.hideKey)}" data-hide-row="${esc(String(opts.rowId))}">Hide</button>`
+    : "";
   return `<div class="thread-msg${inbound ? " them" : ""}${emphasize ? " current" : ""}">
-    <div class="tm-head">${esc(who)} &middot; ${pulledAgo(when)}</div>
+    <div class="tm-head">${esc(who)} &middot; ${pulledAgo(when)}${hideBtn}</div>
     <div class="tm-body">${html || "<i>No content.</i>"}</div>
   </div>`;
 }
@@ -5638,7 +5702,8 @@ function convoHtml(row) {
     const body = m && m._test
       ? `<div class="small" style="margin-bottom:6px;font-weight:600;color:#b45309">TEST — added to thread, not actually sent</div>${m.body || ""}`
       : m.body;
-    return { time: m.time, html: convoMsgHtml(who, m.time, body, false, m.type !== "SENT") };
+    return { time: m.time, html: convoMsgHtml(who, m.time, body, false, m.type !== "SENT",
+      CLIENT_MODE ? null : { hideKey: threadMsgKey(m), rowId: row.id }) };
   });
   items.push({ time: row.replied_at, html: convoMsgHtml("Their reply", row.replied_at, row.reply_body, true, true) });
   items.sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));

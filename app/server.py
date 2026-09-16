@@ -27331,7 +27331,7 @@ class Handler(SimpleHTTPRequestHandler):
         # load — pure CPU burn on the 0.5-CPU box at the worst moment
         # (efficiency fix 2026-08-01).
         "/api/setter/queue/action", "/api/setter/queue/redraft",
-        "/api/setter/queue/recategorise",
+        "/api/setter/queue/recategorise", "/api/setter/thread/hide",
     }
 
     def do_POST(self):

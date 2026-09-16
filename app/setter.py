@@ -1147,6 +1147,43 @@ def _autoreply_category(body):
     return None
 
 
+# Automated acknowledgements that are NOT out-of-office: "thanks for your
+# email, we'll get back to you", "this inbox is checked once a day", support
+# ticket receipts, CSAT surveys. Owner ruling 2026-09-16 (Amplifyy training
+# review): a training scenario is never built from an automated message, so
+# _fetch_training_candidates drops these even when the categoriser filed
+# them as positive. Judged on the head of the lead's own unquoted text.
+_AR_AUTOACK = re.compile(
+    r"(thank(s| you) for (your (e-?mail|message|enquiry|inquiry|note)|contacting|"
+    r"reaching out|getting in touch|writing)[^.!\n]{0,120}"
+    r"\b(we|i|someone|our team|a member of (our|the) team)('ll| will| shall| aim to)?\s*"
+    r"(get back|be in touch|respond|reply|review|contact you|follow up)"
+    r"|(this |the |our )?(inbox|mailbox|e-?mail) is (checked|monitored|reviewed) "
+    r"|please allow (up to )?\d+\s*(-\s*\d+\s*)?(hours|hrs|business days|working days|days)"
+    r"|we (have|'ve) received your (message|e-?mail|enquiry|inquiry|request|submission)"
+    r"|(you can|you may|please) expect (to hear|a (reply|response)) (back )?(from us )?within"
+    r"|we appreciate you (reaching out|contacting us)[^.!\n]{0,80}(hear back|get back|respond|reply)"
+    r"|this is an automated (message|response|reply|acknowledg\w+|e-?mail)"
+    r"|automated (message|response|reply)\b"
+    r"|do not reply to this (e-?mail|message)"
+    r"|(ticket|case|request) (number|no\.?|#|id)\s*[:#]?\s*\w*\d"
+    r"|(has been|was) (received|logged|created) and (a |our )?(team|agent|member)"
+    r"|how would you rate (the|your|our) (support|service|experience)"
+    r"|rate (the|your) (support|service) you received)",
+    re.IGNORECASE)
+
+
+def _is_automated_ack(body) -> bool:
+    """True iff the lead's own new message reads as an automated
+    acknowledgement / ticket receipt / survey (see _AR_AUTOACK). Head-only,
+    no positive veto: this is used to keep such mail OUT of training
+    scenarios, never to categorise or dismiss a live reply."""
+    lead = clean_body(body or "")
+    if not lead:
+        return False
+    return bool(_AR_AUTOACK.search(lead[:600]))
+
+
 def _autoreply_needs_no_human(body) -> bool:
     """True iff a still-uncategorised client reply is plainly automated / a clear
     non-positive that needs no human (out-of-office, left-company / wrong person,
@@ -13951,6 +13988,49 @@ _THREAD_REFRESH_LAST: dict = {}    # row id -> last background-hydrate kick
 _THREAD_REFRESH_MIN_S = 90.0
 
 
+def _thread_msg_key(m: dict) -> str:
+    """Stable identity for one thread entry, used to hide it durably.
+
+    hydrate_lead rebuilds `thread` from Smartlead on every open (norm[-50:]),
+    so a hidden exchange can't be identified by list position or by editing the
+    stored blob — the next re-hydrate would bring it back. We key off the
+    message's OWN identifiers, which survive every re-hydrate: message_id first,
+    then stats_id, then the send time as a last resort. The FE computes the
+    same key so a hide click and the server filter agree. Empty for a malformed
+    entry (never hidable, which is correct — nothing to pin it to)."""
+    if not isinstance(m, dict):
+        return ""
+    mid = m.get("message_id")
+    if mid not in (None, ""):
+        return "m:" + str(mid)
+    sid = m.get("stats_id")
+    if sid not in (None, ""):
+        return "s:" + str(sid)
+    t = m.get("time")
+    return "t:" + str(t) if t not in (None, "") else ""
+
+
+def _hidden_keys(row: dict) -> set:
+    """The set of thread-message keys the owner has manually hidden on this row.
+    Persisted in the guardrails jsonb (setter_queue is schema-frozen — see the
+    schema-freeze gotcha — so this rides an existing column, exactly like
+    tz_confident)."""
+    g = row.get("guardrails") if isinstance(row.get("guardrails"), dict) else {}
+    ids = g.get("hidden_message_ids")
+    return set(str(x) for x in ids) if isinstance(ids, list) else set()
+
+
+def _filter_hidden_thread(thread, row):
+    """Drop the entries the owner hid on this row. Never mutates the stored
+    thread (the raw snapshot stays intact in Supabase and in Smartlead) — it
+    only shapes what the conversation view is handed, so a hide is reversible
+    and re-hydrate-proof."""
+    hidden = _hidden_keys(row)
+    if not hidden or not isinstance(thread, list):
+        return thread
+    return [m for m in thread if _thread_msg_key(m) not in hidden]
+
+
 def route_thread_get(params):
     """Thread for one queue row - CACHE-FIRST (perf ruling 2026-07-30).
 
@@ -13982,18 +14062,21 @@ def route_thread_get(params):
         if not row or not _scope_ok(row):
             return 404, {"error": "Queue row not found."}
         if row.get("is_test"):
-            return 200, {"thread": row.get("thread") or [], "refreshed": False, "cached": True}
+            return 200, {"thread": _filter_hidden_thread(row.get("thread") or [], row),
+                         "refreshed": False, "cached": True}
         stored = row.get("thread") or []
         want_live = _qp(params, "live", "") == "1"
         if stored and not want_live:
             _kick_thread_rehydrate(row)
-            return 200, {"thread": stored, "refreshed": False, "cached": True, "stale": True}
+            return 200, {"thread": _filter_hidden_thread(stored, row),
+                         "refreshed": False, "cached": True, "stale": True}
         # No stored snapshot (legacy row) or an explicit live ask: hydrate inline.
         mid = row.get("message_id") or row.get("source_message_id") or ""
         ok, hyd, herr = hydrate_lead(row.get("smartlead_campaign_id"), row.get("lead_email"), mid)
         if not ok:
             # Stale beats broken: hand back the stored snapshot with the why.
-            return 200, {"thread": stored, "refreshed": False, "cached": True, "detail": herr}
+            return 200, {"thread": _filter_hidden_thread(stored, row),
+                         "refreshed": False, "cached": True, "detail": herr}
         thread = hyd.get("thread") or []
         try:
             _apply_patch(row, {"thread": thread})
@@ -14003,7 +14086,9 @@ def route_thread_get(params):
                              daemon=True, name="setter-absorb").start()
         except Exception:  # noqa: BLE001 - persisting is best-effort; the response is what matters
             pass
-        return 200, {"thread": thread, "refreshed": True}
+        # Persist the full thread (above), but hand the UI the filtered view —
+        # the hide is a display suppression, never a data deletion.
+        return 200, {"thread": _filter_hidden_thread(thread, row), "refreshed": True}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -14034,7 +14119,7 @@ def route_thread_batch_get(params):
                 stored = r.get("thread") or []
                 if not stored:
                     continue   # not warmed here; opens via the single-row endpoint
-                out[str(r.get("id"))] = stored
+                out[str(r.get("id"))] = _filter_hidden_thread(stored, r)
                 if not r.get("is_test"):
                     try:
                         _kick_thread_rehydrate(r)   # same background refresh as the single path
@@ -15202,6 +15287,43 @@ def route_lead_note_post(payload):
         for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
             _LEAD_CONTACT_CACHE.pop(k, None)
         return 200, {"ok": True, "notes_at": now_iso if notes else ""}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_thread_hide_post(payload):
+    """POST /api/setter/thread/hide {id, key, hidden} - manually hide (or
+    un-hide) ONE exchange in a conversation. Owner-only (not in
+    _AUTH_PUBLIC_POST / CLIENT_SHARE_POST, so the login gate covers it).
+
+    `key` is the value _thread_msg_key() produces for the exchange the owner
+    clicked (the FE computes it the same way). We store the set of hidden keys
+    in the guardrails jsonb (schema-freeze: no new column) and every thread-
+    serving path filters against it, so the hide survives Smartlead re-hydrate
+    and reloads. Nothing is deleted from the stored thread or from Smartlead —
+    hidden:false simply drops the key again."""
+    try:
+        qid = str((payload or {}).get("id") or "").strip()
+        key = str((payload or {}).get("key") or "").strip()
+        hidden = bool((payload or {}).get("hidden", True))
+        if not qid or not key:
+            return 400, {"error": "id and key are required"}
+        if not _SB:
+            return 503, {"error": "storage unavailable"}
+        rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{quote(qid, safe='')}"
+                          f"&{_list_ws_filter()}{_scope_sql()}&select=*")
+        row = rows[0] if isinstance(rows, list) and rows else None
+        if not row or not _scope_ok(row):
+            return 404, {"error": "Queue row not found."}
+        cur = _hidden_keys(row)
+        if hidden:
+            cur.add(key)
+        else:
+            cur.discard(key)
+        g = dict(row.get("guardrails") or {})
+        g["hidden_message_ids"] = sorted(cur)
+        _apply_patch(row, {"guardrails": g})
+        return 200, {"ok": True, "hidden_message_ids": g["hidden_message_ids"]}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -17212,6 +17334,13 @@ def _fetch_training_candidates(category: str, exclude_ids: list, want: int,
             if str(r.get("id")) in exclude_set:
                 continue
             if len(str(r.get("reply_body") or "").strip()) < 10:
+                continue
+            # Never build a scenario from an automated message (owner ruling
+            # 2026-09-16): out-of-office, auto-acknowledgements, ticket
+            # receipts, surveys, bounces, wrong-person redirects - whatever
+            # the categoriser filed them as.
+            body = r.get("reply_body")
+            if _autoreply_category(body) is not None or _is_automated_ack(body):
                 continue
             out.append(r)
         return out
@@ -21867,6 +21996,7 @@ POST_ROUTES = {
     "/api/setter/test/inject": route_test_inject,
     "/api/setter/edit-lesson/undo": route_edit_lesson_undo,
     "/api/setter/lead-note": route_lead_note_post,
+    "/api/setter/thread/hide": route_thread_hide_post,
 }
 
 
