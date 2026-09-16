@@ -12047,6 +12047,41 @@ def test_is_automated_ack_and_training_candidates_skip_it():
     check("training candidates drop the auto-ack and the OOO, keep the real reply", ids == ["r3"], ids)
 
 
+def test_is_english_reply_and_training_candidates_english_only():
+    """Owner ruling 2026-09-16: training scenarios only ever show English
+    questions. Non-Latin script and Latin-script foreign-language replies are
+    dropped by _fetch_training_candidates; bare/short English stays."""
+    en = setter._is_english_reply
+    for b in ("Доброго времени суток! Хорошо, я посмотрю!",
+              "Hola, gracias por escribir. Estoy interesada, ¿podemos hablar por teléfono?",
+              "Bonjour, merci pour votre message. Nous sommes intéressés par un appel.",
+              "Hallo, vielen Dank für Ihre Nachricht. Wir sind interessiert.",
+              "Olá, obrigado. Somos uma marca de cosméticos, sim, com interesse.",
+              "你好，我们有兴趣了解更多。"):
+        check(f"non-English dropped: {b[:30]!r}", en(b) is False, en(b))
+    for b in ("Sure, send it over.", "ok", "Yes please, what is your fee?",
+              "Hi Kevin, we are on Amazon already. Which marketplace do you mean? Thanks, Mónica",
+              "Thanks for reaching out, we'd love to see the case study for Eve Lom."):
+        check(f"English kept: {b[:30]!r}", en(b) is True, en(b))
+    rows = [
+        {"id": "e1", "smartlead_campaign_id": "1", "email": "a@x.com", "replied_at": "2026-09-07",
+         "category": "Interested", "reply_subject": "Re", "reply_body": "Sure, send me the breakdown."},
+        {"id": "e2", "smartlead_campaign_id": "1", "email": "b@x.com", "replied_at": "2026-09-07",
+         "category": "Interested", "reply_subject": "Re", "reply_body": "Хорошо, я посмотрю!"},
+        {"id": "e3", "smartlead_campaign_id": "1", "email": "c@x.com", "replied_at": "2026-09-07",
+         "category": "Interested", "reply_subject": "Re",
+         "reply_body": "Hola, gracias por su propuesta, estamos interesados en una llamada."},
+    ]
+    orig = setter._SB
+    setter._SB = lambda *a, **k: rows
+    try:
+        got = setter._fetch_training_candidates("Interested", [], 3, None)
+    finally:
+        setter._SB = orig
+    ids = [r["id"] for r in got]
+    check("training candidates keep only the English reply", ids == ["e1"], ids)
+
+
 def test_sweep_client_uncategorised_categorises_and_resolves():
     """Grout durable fix 2026-08-19: a client campaign missing its categoriser
     webhook lands every reply uncategorised. The client sweep deterministically
@@ -12697,6 +12732,7 @@ if __name__ == "__main__":
     test_monitor_surface_skips_uncategorised_autoreplies()
     test_autoreply_category_labels_and_signature_veto()
     test_is_automated_ack_and_training_candidates_skip_it()
+    test_is_english_reply_and_training_candidates_english_only()
     test_sweep_client_uncategorised_categorises_and_resolves()
     test_attach_campaign_names()
     test_training_answer_edit_teaches_via_lesson_from_edit()
