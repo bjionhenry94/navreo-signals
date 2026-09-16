@@ -1660,11 +1660,67 @@ def _parse_iso(s):
 # names their origin. They carry no per-slot link (there is no bookable
 # calendar behind them), so the times render as plain text and the agent's
 # own fallback line + booking link follow.
+# The authorisation wording an owner writes into a brain. Seen live:
+# "Propose two specific times yourself" (TouchPoint v1), "you MUST propose
+# two specific call times" + "Times: pick two later in the week, never today"
+# (TouchPoint v2, 2026-09-16). A bare house-rule line about the FORMAT of a
+# two-times ask ("when you offer two call times, use exactly this format")
+# is not an authorisation and must not match.
 _INSTRUCTION_SELF_TIMES_RE = re.compile(
-    r"\b(?:propose|pick|choose|suggest|offer|name)\s+two\s+(?:specific\s+|concrete\s+|real\s+)?"
-    r"(?:call\s+)?times\s+yourself\b", re.I)
+    r"\b(?:(?:propose|pick|choose|suggest|offer|name)\s+two\s+(?:specific\s+|concrete\s+|real\s+)?"
+    r"(?:call\s+)?times\s+yourself\b"
+    r"|must\s+(?:proactively\s+)?(?:propose|pick|choose|suggest|offer|name)\s+two\s+(?:specific\s+|concrete\s+|real\s+)?"
+    r"(?:call\s+)?times\b"
+    r"|pick\s+two\s+(?:times\s+)?(?:later\s+)?(?:this|in\s+the)\s+week\b)", re.I)
 _INSTRUCTION_SLOT_MORNING_HOUR = 10
 _INSTRUCTION_SLOT_AFTERNOON_HOUR = 13
+# A per-country window the brain states for its own times, e.g. "UK leads get
+# afternoon slots between 2:30pm and 6pm UK time. US leads get slots between
+# 10am and 2pm Eastern". One sentence at a time; the sentence's own words say
+# which leads it is for.
+_INSTRUCTION_WINDOW_RE = re.compile(
+    r"between\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)\s+(?:and|to|-)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)", re.I)
+_US_ZONE_HINT_RE = re.compile(r"\b(?:US|USA|American|Eastern|Central|Pacific|Mountain|ET|EST|EDT)\b")
+_UK_ZONE_HINT_RE = re.compile(r"\b(?:UK|British|London|GMT|BST)\b")
+
+
+def _instruction_time_window(instructions: str, tz: str):
+    """(start_minutes, end_minutes) the brain states for the lead's country,
+    else None. A US zone (America/*) takes a sentence hinting US/Eastern; any
+    other zone takes a UK-hinted sentence; a sentence with no country hint
+    serves both. Never raises."""
+    try:
+        is_us = str(tz or "").startswith("America/")
+        best = None
+        for sent in re.split(r"(?<=[.\n])\s+", instructions or ""):
+            m = _INSTRUCTION_WINDOW_RE.search(sent)
+            if not m:
+                continue
+            us_hint, uk_hint = bool(_US_ZONE_HINT_RE.search(sent)), bool(_UK_ZONE_HINT_RE.search(sent))
+            if us_hint and not uk_hint and not is_us:
+                continue
+            if uk_hint and not us_hint and is_us:
+                continue
+            # A sentence naming BOTH countries can carry two windows: take
+            # the one whose nearest preceding hint matches the lead.
+            if us_hint and uk_hint:
+                for mm in _INSTRUCTION_WINDOW_RE.finditer(sent):
+                    head = sent[:mm.start()]
+                    last_us = max([h.end() for h in _US_ZONE_HINT_RE.finditer(head)] or [-1])
+                    last_uk = max([h.end() for h in _UK_ZONE_HINT_RE.finditer(head)] or [-1])
+                    if (last_us > last_uk) == is_us:
+                        m = mm
+                        break
+            def _mins(h, mi, ap):
+                h = int(h) % 12 + (12 if ap.lower() == "pm" else 0)
+                return h * 60 + int(mi or 0)
+            start, end = _mins(m.group(1), m.group(2), m.group(3)), _mins(m.group(4), m.group(5), m.group(6))
+            if end - start >= 60:
+                best = (start, end)
+                break
+        return best
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def instructions_authorise_self_times(agent: dict) -> bool:
@@ -1696,32 +1752,44 @@ def instruction_authorised_slots(agent: dict, tz: str, now_utc, settings: dict =
             now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
         floor_utc = now_utc + _dt.timedelta(hours=20)
         local_now = now_utc.astimezone(zi)
-        try:
-            work_start = int(settings.get("work_start", 9))
-            work_end = int(settings.get("work_end", 17))
-        except (TypeError, ValueError):
-            work_start, work_end = 9, 17
-        morning = min(max(_INSTRUCTION_SLOT_MORNING_HOUR, work_start), max(work_end - 1, work_start))
-        afternoon = min(max(_INSTRUCTION_SLOT_AFTERNOON_HOUR, work_start), max(work_end - 1, work_start))
+        window = _instruction_time_window(_agent_instructions(agent), tz)
+        if window:
+            # Two times inside the brain's own window: its start, and a
+            # later one (about 2h on, kept at least 30 min before the end).
+            w0, w1 = window
+            first = w0
+            second = min(w0 + 120, w1 - 30)
+            if second <= first:
+                second = first
+            times = [(first // 60, first % 60), (second // 60, second % 60)]
+        else:
+            try:
+                work_start = int(settings.get("work_start", 9))
+                work_end = int(settings.get("work_end", 17))
+            except (TypeError, ValueError):
+                work_start, work_end = 9, 17
+            morning = min(max(_INSTRUCTION_SLOT_MORNING_HOUR, work_start), max(work_end - 1, work_start))
+            afternoon = min(max(_INSTRUCTION_SLOT_AFTERNOON_HOUR, work_start), max(work_end - 1, work_start))
+            times = [(morning, 0), (afternoon, 0)]
         out = []
         d = local_now.date()
-        # One morning and one afternoon on two different days. The first day
-        # tries the morning, then its afternoon (a late-afternoon draft can
-        # still offer tomorrow 1:00 PM); the second day takes the other hour.
-        remaining = [morning, afternoon]
+        # Two different working days. The first day tries the earlier time,
+        # then the later one (a late-afternoon draft can still offer tomorrow's
+        # later slot); the second day takes whichever is left.
+        remaining = list(times)
         guard = 0
         while len(out) < 2 and guard < 30:
             guard += 1
             d = d + _dt.timedelta(days=1)
             if d.weekday() >= 5:
                 continue
-            for h in list(remaining):
-                local = _dt.datetime(d.year, d.month, d.day, h, 0, tzinfo=zi)
+            for h, mi in list(remaining):
+                local = _dt.datetime(d.year, d.month, d.day, h, mi, tzinfo=zi)
                 if local.astimezone(_dt.timezone.utc) < floor_utc:
                     continue
                 out.append({"iso": local.isoformat(), "label": _slot_label(local), "link": "",
                             "source": "instructions"})
-                remaining.remove(h)
+                remaining.remove((h, mi))
                 break
         return out if len(out) == 2 else []
     except Exception:  # noqa: BLE001 - a fallback helper must never break drafting
