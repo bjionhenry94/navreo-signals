@@ -8942,7 +8942,38 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 # modules 33/51) applies the same rule via campaign-name markers; this is
 # the sweep-side half.
 CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
-CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greenshift")
+# ONE registry for every client HOSTED IN the navreo Smartlead workspace
+# (Bjion 2026-09-16: "whenever we onboard any client, they're also onboarded to
+# this" — ThunderBird's Komal Vaish re-reply reached #client-interested-replies
+# but never #thunderbirdleadership-navreo because ThunderBird was in some maps
+# and not others). Every routing map below is DERIVED from this tuple, so a
+# client is either fully wired or fully absent; test_client_routing_registry.py
+# fails the build on a half-wired client. Fields:
+#   token          campaign-name marker (lowercased substring; first match wins)
+#   client_id      the id a CLIENT SHARE token scopes to (card link = share link)
+#   shared         the client's Slack Connect channel (#<token>-navreo)
+#   fresh_lane     who posts a FRESH positive to `shared`:
+#                    "make" — Make 8946472's per-client route already cards it
+#                             (ThunderBird 220 / Altius 420 / TouchPoint 430);
+#                             the app lane then posts ONLY re-replies + flips
+#                             there, so nothing double-posts.
+#                    "app"  — no Make route; the app lane posts fresh positives
+#                             too (REViVE / Greenshift, Bjion 2026-09-02/10).
+# Onboarding a navreo-hosted client = add ONE row here (plus the Make 9251436
+# modules 33/51/9029/9031/9033 name chain, which /client-channel-routing-proof
+# patches and proves). Own-workspace clients (Grout, KRG) live in
+# CLIENT_ALERT_CHANNELS instead.
+NAVREO_HOSTED_CLIENTS = (
+    {"token": "touchpoint",  "client_id": "touchpoint",   "shared": "C0BKE0RT7DJ", "fresh_lane": "make"},   # #touchpoint-navreo
+    {"token": "thunderbird", "client_id": "thunderbird",  "shared": "C0BFDEF6388", "fresh_lane": "make"},   # #thunderbirdleadership-navreo
+    {"token": "altius",      "client_id": "altius reach", "shared": "C0BKF872NUV", "fresh_lane": "make"},   # #altiusreach-navreo
+    {"token": "revive",      "client_id": "revive",       "shared": "C0BP9A6D28H", "fresh_lane": "app"},    # #revive-navreo
+    {"token": "greenshift",  "client_id": "greenshift",   "shared": "C0BQ954RBAL", "fresh_lane": "app"},    # #greenshift-navreo
+)
+
+# Campaign-name markers that mean "a client, not Navreo-own" (internal lane
+# override → #client-interested-replies). Derived from the registry.
+CLIENT_NAME_MARKERS = tuple(c["token"] for c in NAVREO_HOSTED_CLIENTS)
 
 # Campaign-name marker -> the client_id a CLIENT SHARE token scopes to. The same
 # "name contains X" law server.py's _SHARED_WS_CLIENTS applies to Analytics /
@@ -8951,42 +8982,28 @@ CLIENT_NAME_MARKERS = ("touchpoint", "thunderbird", "altius", "revive", "greensh
 # seven), so the name is the only thing that says whose they are. First match
 # wins; an explicit non-navreo client_id always beats the name (see
 # _client_id_of). Navreo itself is deliberately absent: a Navreo-own campaign
-# never belongs to a client link.
+# never belongs to a client link. Amplifyy / Arnic / Qwintiq are Smartlead
+# clients with a real client_id, listed here only for the name fallback.
 CLIENT_NAME_CLIENT_IDS = (
     ("amplif", "amplifyy"),
     ("arnic", "arnic"),
     ("qwintiq", "qwintiq"),
-    ("thunderbird", "thunderbird"),
-    ("revive", "revive"),
-    ("greenshift", "greenshift"),
-    ("altius", "altius reach"),
-    ("touchpoint", "touchpoint"),
-)
+) + tuple((c["token"], c["client_id"]) for c in NAVREO_HOSTED_CLIENTS)
 
-# A once-positive→negative FLIP (all this sweep ever alerts on — fresh
-# positives are excluded above and owned by the Make categoriser) routes to the
-# client's own dedicated channel. Keyed by campaign-name marker; checked BEFORE
-# the generic client-internal fallback so the client's own channel wins. REViVE
-# → #revive-navreo, the same client-shared channel as its fresh positives
-# (Bjion 2026-09-02: "post notifs to the shared one" — all REViVE alerts land
-# in one place).
-FLIP_NAME_CHANNELS = {
-    "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared)
-    "greenshift": "C0BQ954RBAL",   # #greenshift-navreo (client-shared)
-}
+# A once-positive→negative FLIP routes to the client's own shared channel.
+# Keyed by campaign-name marker; checked BEFORE the generic client-internal
+# fallback so the client's own channel wins (Bjion 2026-09-02: "post notifs to
+# the shared one" — all of a client's alerts land in one place).
+FLIP_NAME_CHANNELS = {c["token"]: c["shared"] for c in NAVREO_HOSTED_CLIENTS}
 
-# A FRESH positive on a navreo-hosted client campaign has no path to that
-# client's OWN shared channel: the Make categoriser announces positives only to
-# the internal #interested-replies, and run_client_positive_alerts covers
-# non-navreo workspaces. This map gives navreo-hosted clients that shared
-# delivery — a positive whose campaign name matches is posted ONCE to the shared
-# channel from the positive branch of run_ever_positive_alerts (the internal
-# Make post is unchanged, so nothing double-posts to the same channel). REViVE →
-# #revive-navreo (Bjion 2026-09-02, "positives -> shared channel").
-POSITIVE_SHARED_CHANNELS = {
-    "revive": "C0BP9A6D28H",   # #revive-navreo (client-shared, Slack Connect)
-    "greenshift": "C0BQ954RBAL",   # #greenshift-navreo (client-shared; Bjion 2026-09-10)
-}
+# Marker -> the client's shared channel for the positive branch of
+# run_ever_positive_alerts. Whether a FRESH positive is posted from here depends
+# on fresh_lane (see POSITIVE_FRESH_MAKE_OWNED); a positive RE-REPLY is always
+# delivered from here, because routeB labels it "positive-re-reply" and never
+# calls the card hook, so no Make route ever sees it (the 2026-09-16 gap).
+POSITIVE_SHARED_CHANNELS = {c["token"]: c["shared"] for c in NAVREO_HOSTED_CLIENTS}
+POSITIVE_FRESH_MAKE_OWNED = frozenset(
+    c["token"] for c in NAVREO_HOSTED_CLIENTS if c["fresh_lane"] == "make")
 
 # A "positive-re-reply" row is routeB's label for "an already-positive lead
 # replied again" — routeB is alert-only and never reads the new reply, so the
@@ -9083,9 +9100,9 @@ def _ep_display_prior(workspace, email: str, prior):
     return prior
 
 
-def _ep_name_channel(mapping, workspace, campaign_id):
-    """Return mapping[marker] when this navreo-hosted campaign's name carries a
-    marker (first match wins). None otherwise. Fails open; never raises."""
+def _ep_name_marker(mapping, workspace, campaign_id):
+    """Return the first key of `mapping` that this navreo-hosted campaign's
+    name carries (first match wins). None otherwise. Fails open; never raises."""
     if not campaign_id or (workspace or "").lower() != "navreo":
         return None
     try:
@@ -9094,12 +9111,18 @@ def _ep_name_channel(mapping, workspace, campaign_id):
                           f"&select=name&limit=1")
         if isinstance(rows, list) and rows and isinstance(rows[0], dict):
             name = (rows[0].get("name") or "").lower()
-            for marker, chan in mapping.items():
+            for marker in mapping:
                 if marker in name:
-                    return chan
+                    return marker
     except Exception:  # noqa: BLE001 — routing decoration, never load-bearing
         pass
     return None
+
+
+def _ep_name_channel(mapping, workspace, campaign_id):
+    """mapping[marker] for the campaign's first matching marker; None otherwise."""
+    marker = _ep_name_marker(mapping, workspace, campaign_id)
+    return mapping.get(marker) if marker else None
 
 
 # --- the ONE positive-alert card shape -------------------------------------
@@ -9478,8 +9501,14 @@ def run_ever_positive_alerts() -> dict:
                 # A navreo-hosted client with its OWN shared channel (REViVE)
                 # has no other path to it — deliver the positive there once,
                 # then stamp. Fail-closed: an unstamped row retries next tick.
-                shared = _ep_name_channel(POSITIVE_SHARED_CHANNELS, ws,
-                                          row.get("smartlead_campaign_id"))
+                marker = _ep_name_marker(POSITIVE_SHARED_CHANNELS, ws,
+                                         row.get("smartlead_campaign_id"))
+                shared = POSITIVE_SHARED_CHANNELS.get(marker) if marker else None
+                if shared and cat != _RE_REPLY_LABEL \
+                        and marker in POSITIVE_FRESH_MAKE_OWNED:
+                    # Fresh positive on a client whose card Make 8946472
+                    # already posts to `shared` — never double-card it.
+                    shared = None
                 if shared:
                     header = None
                     kind = "positive-shared"
