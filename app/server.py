@@ -22353,6 +22353,271 @@ def verify_report_share(token: str):
         return None
 
 
+# ── Client Campaign Dashboard (client-campaign-dashboard, Step 2) ───────────
+# One permanent, client-scoped link. The TOKEN IS THE ONLY SCOPE SOURCE: no
+# query param can widen or change what a share request sees. Same JSON-payload
+# HMAC shape as mint_report_share, but long-lived (12 months) and NOT
+# range-pinned — the dashboard always shows the client's whole history.
+_DASHBOARD_CACHE: dict = {}
+_DASHBOARD_LOCK = threading.Lock()
+_DASHBOARD_TTL_S = 600          # 10 min per client (512 MB web instance)
+_DASHBOARD_EDGE_CAP = 80        # campaigns probed for first/last contact
+_DASHBOARD_RUNNING_DAYS = 7     # "running now" = ACTIVE or sent in last 7 days
+
+
+def mint_client_dashboard_share(client: str, days: int = 365) -> str:
+    """Permanent client dashboard token. JSON payload (labels may hold any
+    character) signed with the app auth secret, url-safe b64. Re-mintable: a
+    fresh mint for the same client is just a new, equally valid token."""
+    import base64
+    import hashlib
+    import hmac
+    exp = int(time.time()) + max(1, int(days or 365)) * 86400
+    payload = json.dumps({"t": "dashboard", "c": str(client), "x": exp},
+                         separators=(",", ":")).encode()
+    sig = hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(payload).decode().rstrip("=") + "." + sig
+
+
+def verify_client_dashboard_share(token: str):
+    """{'client'} the token is valid for, or None. Never raises - a
+    malformed / tampered / expired token is just 'not valid'."""
+    import base64
+    import hashlib
+    import hmac
+    try:
+        token = str(token or "")
+        if not token or "." not in token:
+            return None
+        b64, _sep, sig = token.rpartition(".")
+        payload = base64.urlsafe_b64decode(b64 + "=" * (-len(b64) % 4))
+        expect = hmac.new(_auth_secret(), payload, hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(expect, sig):
+            return None
+        p = json.loads(payload.decode(errors="replace"))
+        if p.get("t") != "dashboard" or not p.get("c"):
+            return None
+        if int(p.get("x") or 0) < time.time():
+            return None
+        return {"client": str(p["c"])}
+    except Exception:  # noqa: BLE001 - a bad token is just "not valid"
+        return None
+
+
+def _dashboard_display_label(client: str) -> str:
+    """workspaces.display_label for an own-workspace client; the client label
+    itself for a shared-workspace client (that label IS the client's name).
+    Never a workspace key or any other internal handle."""
+    c = str(client or "")
+    try:
+        for w in ws_all():
+            if c in (w.get("id"), w.get("name"), w.get("display_label")):
+                return w.get("display_label") or w.get("name") or c
+    except Exception:  # noqa: BLE001 - registry read is best-effort
+        pass
+    return c
+
+
+def _dashboard_recent_campaigns(ids: list, cutoff: str) -> set:
+    """The subset of `ids` that contacted somebody on/after `cutoff`, found by
+    walking the campaign-id cursor: each read asks for the FIRST id greater
+    than the last one seen that has a recent contact row, so the number of
+    queries is (recently-active campaigns + 1) — never one per campaign, and
+    never a capped in.() sweep that a single heavy campaign's rows could
+    monopolise. Degrades to an empty set (status ACTIVE still shows a campaign
+    as running), never to a wrong client's ids."""
+    out: set = set()
+    ids = [str(c) for c in ids if str(c).isdigit()]
+    if not ids:
+        return out
+    last = "0"
+    for _ in range(_DASHBOARD_EDGE_CAP):
+        try:
+            r = sb("GET", "contact_history?select=smartlead_campaign_id"
+                          f"&smartlead_campaign_id=in.({','.join(ids)})"
+                          f"&smartlead_campaign_id=gt.{last}"
+                          f"&first_contacted_at=gte.{cutoff}"
+                          "&order=smartlead_campaign_id.asc&limit=1")
+        except Exception as e:  # noqa: BLE001 - ACTIVE status still carries the list
+            print(f"[dashboard] recency walk failed: {e}", file=sys.stderr)
+            break
+        if not isinstance(r, list) or not r:
+            break
+        last = str(r[0].get("smartlead_campaign_id"))
+        out.add(last)
+    return out
+
+
+def _dashboard_first_contacts(ids: list) -> dict:
+    """{cid: iso|None} — each campaign's earliest contact_history
+    first_contacted_at, i.e. when the client's campaign actually started.
+    One tiny indexed limit-1 read per campaign, run in a small thread pool and
+    only ever for the handful of campaigns that are RUNNING. A failed probe
+    returns None so the page renders "–", never a wrong date."""
+    from concurrent.futures import ThreadPoolExecutor
+    todo = [str(c) for c in ids if str(c).isdigit()][:_DASHBOARD_EDGE_CAP]
+    if not todo:
+        return {}
+
+    def first(cid: str) -> tuple:
+        try:
+            r = sb("GET", f"contact_history?smartlead_campaign_id=eq.{cid}"
+                          "&select=first_contacted_at&first_contacted_at=not.is.null"
+                          "&order=first_contacted_at.asc&limit=1")
+            if isinstance(r, list) and r:
+                return cid, r[0].get("first_contacted_at")
+        except Exception:  # noqa: BLE001 - "-" beats a wrong date
+            pass
+        return cid, None
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        return dict(ex.map(first, todo))
+
+
+def _dashboard_campaign_positives(ids: list) -> tuple:
+    """(positives_by_cid, meetings_by_cid) over a campaign's WHOLE life, from
+    the replies archive under the analytics hub's category-NAME mapping
+    (_AH_POSITIVE_CATS), with the hub's Call Booked dedupe: a calendly booking
+    counts once per booking DAY, a legacy Call Booked lead once per campaign
+    and never on top of a calendly booking for the same lead."""
+    pos_by: dict = {}
+    mtg_by: dict = {}
+    ids = [str(c) for c in ids if str(c).isdigit()]
+    if not ids:
+        return pos_by, mtg_by
+    try:
+        cats = urllib.parse.quote(",".join(_AH_POSITIVE_CATS))
+        rows = sb_get_all(
+            "replies?select=smartlead_campaign_id,email,category,replied_at,"
+            f"src:raw->>source&category=in.({cats})"
+            f"&smartlead_campaign_id=in.({','.join(ids)})&order=id") or []
+    except Exception as e:  # noqa: BLE001 - additive; the columns render "-"
+        print(f"[dashboard] positives read failed: {e}", file=sys.stderr)
+        return pos_by, mtg_by
+    id_set = set(ids)
+    seen: set = set()
+    cal_events: set = set()
+    cal_emails: set = set()
+    legacy: set = set()
+    for r in rows:
+        cid = str(r.get("smartlead_campaign_id"))
+        if cid not in id_set:
+            continue
+        em = (r.get("email") or "").strip().lower()
+        if (cid, em) not in seen:
+            seen.add((cid, em))
+            pos_by[cid] = pos_by.get(cid, 0) + 1
+        if r.get("category") == "Call Booked":
+            day = str(r.get("replied_at") or "")[:10]
+            if r.get("src") == "calendly":
+                cal_emails.add(em)
+                cal_events.add((cid, em, day))
+            else:
+                legacy.add((cid, em))
+    for (cid, _em, _day) in cal_events:
+        mtg_by[cid] = mtg_by.get(cid, 0) + 1
+    for (cid, em) in legacy:
+        if em in cal_emails:
+            continue
+        mtg_by[cid] = mtg_by.get(cid, 0) + 1
+    return pos_by, mtg_by
+
+
+def _dash_rate(numer, denom):
+    if not denom:
+        return None
+    return round((numer or 0) * 1000.0 / denom) / 10
+
+
+def dashboard_data_get(client: str) -> tuple:
+    """Everything /app/dashboard.html renders for ONE client:
+      months[]            - ascending, straight out of client_monthly_stats
+                            (written by the daily cron; never computed here)
+      campaigns_running[] - the client's scorecard campaigns that are ACTIVE or
+                            contacted someone in the last 7 days, with their
+                            LIFETIME numbers from the precomputed scorecard
+      week                - the last-7-days /api/report/data payload, so the
+                            four existing report widgets render unchanged
+    Cached per client for 10 minutes. No internal labels (score, tier,
+    workspace key) ever leave this function."""
+    from datetime import date as _date, timedelta as _td
+    client = str(client or "")
+    with _DASHBOARD_LOCK:
+        ent = _DASHBOARD_CACHE.get(client)
+        if ent and (time.time() - ent["ts"]) < _DASHBOARD_TTL_S:
+            return ent["data"], 200
+
+    _scorecard_seed_from_snapshot()
+    score = _inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get())
+    camps_all = ((score or {}).get("campaigns")) or {}
+    mine = [(str(cid), c) for cid, c in camps_all.items()
+            if (c.get("client") or "") == client
+            and str(c.get("status") or "").upper() != "DRAFTED"]
+    try:
+        enc = urllib.parse.quote(client, safe="")
+        mrows = sb_get_all("client_monthly_stats?select=month,sent,replied,bounced,"
+                           f"positive,meetings,campaigns_active&client=eq.{enc}"
+                           "&order=month.asc") or []
+    except Exception as e:  # noqa: BLE001
+        print(f"[dashboard] monthly read failed {client}: {e}", file=sys.stderr)
+        mrows = []
+    if not mine and not mrows:
+        # unknown label (renamed / removed since minting, or never real) -
+        # refuse rather than serve an empty page that reads as "no activity"
+        return {"error": "unknown client"}, 404
+
+    months = []
+    for r in mrows:
+        sent = int(r.get("sent") or 0)
+        months.append({
+            "month": str(r.get("month") or "")[:7],
+            "sent": sent, "replied": int(r.get("replied") or 0),
+            "reply_rate": _dash_rate(r.get("replied"), sent),
+            "bounced": int(r.get("bounced") or 0),
+            "bounce_rate": _dash_rate(r.get("bounced"), sent),
+            "positive": int(r.get("positive") or 0),
+            "meetings": int(r.get("meetings") or 0),
+            "campaigns_active": int(r.get("campaigns_active") or 0)})
+
+    # "running now" = ACTIVE, or contacted someone in the last 7 days
+    cutoff = (_date.today() - _td(days=_DASHBOARD_RUNNING_DAYS)).isoformat()
+    recent = _dashboard_recent_campaigns(
+        [cid for cid, c in mine if (c.get("sent") or 0) > 0], cutoff)
+    running_ids = [cid for cid, c in mine
+                   if str(c.get("status") or "").upper() == "ACTIVE" or cid in recent]
+    started = _dashboard_first_contacts(running_ids)
+    pos_by, mtg_by = _dashboard_campaign_positives(running_ids)
+    running = []
+    for cid in running_ids:
+        c = camps_all[cid]
+        sent = int(c.get("sent") or 0)
+        replied = int(c.get("replied") or 0)
+        bounced = int(c.get("bounced") or 0)
+        running.append({
+            "id": cid, "name": c.get("name") or f"Campaign {cid}",
+            "status": c.get("status") or "", "started": started.get(cid),
+            "sent": sent, "replied": replied, "reply_rate": _dash_rate(replied, sent),
+            "bounced": bounced, "bounce_rate": _dash_rate(bounced, sent),
+            "positive": int(pos_by.get(cid, 0)), "meetings": int(mtg_by.get(cid, 0))})
+    running.sort(key=lambda r: (r["reply_rate"] is None, -(r["reply_rate"] or 0)))
+
+    # the last-7-days report payload, built by the SAME call /api/report/data
+    # makes, so every key report.html's JS reads is present and identical
+    today = _date.today()
+    week, wstatus = report_data_get(client, (today - _td(days=6)).isoformat(),
+                                    today.isoformat())
+    if wstatus != 200:
+        week = None
+
+    out = {"ok": True, "client_label": _dashboard_display_label(client),
+           "months": months, "campaigns_running": running, "week": week,
+           "asof": int(time.time())}
+    with _DASHBOARD_LOCK:
+        _DASHBOARD_CACHE[client] = {"data": out, "ts": time.time()}
+        if len(_DASHBOARD_CACHE) > 60:
+            _DASHBOARD_CACHE.pop(next(iter(_DASHBOARD_CACHE)))
+    return out, 200
+
+
 def _report_align(src, src_days, axis, cutoff, fill=None, fb=None):
     """Port of the analytics page's alignDaily: re-key a client-windows series
     onto the chart axis by DATE. Days on/after the CW asof date (a partial
@@ -26028,13 +26293,20 @@ class Handler(SimpleHTTPRequestHandler):
             # the token itself is verified inside the /api/report/data handler.
             _report_share = (path in ("/api/report/data", "/app/report.html")
                              and "share=" in self.path)
+            # Client campaign dashboard (client-campaign-dashboard): identical
+            # pattern - the page + its one data read load logged-out when a
+            # share=<token> rides the URL; the token itself is verified inside
+            # the /api/dashboard/data handler.
+            _dash_share = (path in ("/api/dashboard/data", "/app/dashboard.html")
+                           and "share=" in self.path)
             # Client setter share (setter-client-view): the setter page + the
             # allowlisted reads load logged-out ONLY with a share= token; the
             # token is verified (and the client scope applied) in the
             # /api/setter/ dispatch below and inside setter.py's routes.
             _client_share = (path in _CLIENT_SHARE_GET and "share=" in self.path)
             if not (path in _TRAIN_SHARE_GET and "share=" in self.path) \
-                    and not _strat_share and not _report_share and not _client_share:
+                    and not _strat_share and not _report_share and not _dash_share \
+                    and not _client_share:
                 if not self._gate(path):
                     return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
@@ -26701,6 +26973,20 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "invalid share link"}, 403)
             body, status = report_data_get(p["client"], p["start"], p["end"])
             return self._json(body, status)
+        if path == "/api/dashboard/data":
+            # Client campaign dashboard: reachable logged-out ONLY with a valid
+            # HMAC token (gate bypass in do_GET requires share= present;
+            # validity is enforced here). The TOKEN IS THE ONLY SCOPE SOURCE -
+            # every other query param on this URL is ignored, so no param can
+            # widen scope or reach another client's rows.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            p = verify_client_dashboard_share((q.get("share") or [""])[0])
+            if not p:
+                return self._json({"error": "this dashboard link is not valid",
+                                   "months": [], "campaigns_running": []}, 403)
+            body, status = dashboard_data_get(p["client"])
+            return self._json(body, status)
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
             return self._json(body, status)
@@ -26965,6 +27251,27 @@ class Handler(SimpleHTTPRequestHandler):
             tok = mint_strategy_share(rid)
             return self._json({"ok": True, "run_id": rid, "token": tok,
                                "url": f"/app/strategy.html?share={tok}#/r/{rid}"})
+        if path == "/api/dashboard/share":
+            # GTME-only (behind the same gate as the report-share mint): mint
+            # the client's permanent campaign-dashboard link. Runs
+            # dashboard_data_get first so a link only ever mints for a real
+            # client (and the mint warms the cache the client's first open reads).
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            client = str(p.get("client") or "").strip()
+            if not client or client in ("All", "__all", "__unassigned"):
+                return self._json({"ok": False, "message": "pick a client"}, 400)
+            body, status = dashboard_data_get(client)
+            if status != 200:
+                return self._json({"ok": False,
+                                   "message": body.get("error") or "bad request"}, status)
+            tok = mint_client_dashboard_share(client)
+            log_activity(path, {"client": client}, action="dashboard-share-mint",
+                         entity="dashboard", entity_id=client)
+            return self._json({"ok": True, "client": client, "token": tok,
+                               "url": f"https://app.navreo.ai/app/dashboard.html?share={tok}"})
         if path == "/api/report/share":
             # GTME-only (behind the gate above): mint the client report link.
             # Runs report_data_get first so a link only ever mints for a real
