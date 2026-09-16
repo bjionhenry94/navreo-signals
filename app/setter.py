@@ -17268,6 +17268,20 @@ _STAGED_FALLBACK_OUTREACH = (
 )
 
 
+def _training_camp_ids(agent: dict) -> list:
+    """Campaign ids training may draw REAL replies and REAL sends from: the
+    agent's live campaigns, or - for an agent that is not (yet) the live
+    drafter - `training_campaign_ids`, a training-only list that claims
+    nothing (owner ruling 2026-09-16: real campaign data always wins; a
+    second brain being trained for the same client reads the live
+    campaigns' history without stealing them from the live agent)."""
+    a = agent or {}
+    live = [str(c) for c in (a.get("campaign_ids") or []) if str(c).strip()]
+    if live:
+        return live
+    return [str(c) for c in (a.get("training_campaign_ids") or []) if str(c).strip()]
+
+
 def _training_outreach_pool(agent: dict) -> list:
     """The agent's stored REAL campaign copy for training (owner ruling
     2026-08-20: training scenarios must be built on the campaigns the agent
@@ -17836,7 +17850,7 @@ def _invent_training_scenarios(agent: dict, doc: dict, count: int, allowed_campa
     # zero reusable outreach - the invention must then write email 1 itself
     # or the synthetic thread has no us-side at all.
     _camp_ids_for_outreach = allowed_campaign_ids if allowed_campaign_ids is not None \
-        else (agent.get("campaign_ids") or [])
+        else _training_camp_ids(agent)
     outreach_needed = not _fetch_agent_outreach_sample(_camp_ids_for_outreach, limit=1)
     # Real-campaigns-only (owner ruling 2026-08-20): when the agent carries
     # stored campaign copy (training_outreach), the model NEVER writes email 1
@@ -18268,7 +18282,7 @@ def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: di
         # thread reply is the REAL drafter's output over that prior turn —
         # every us-side email is pipeline output, never hand-written.
         first_name = str(scenario.get("lead_first_name") or "").strip()
-        camp_ids = [campaign_id] if campaign_id else (agent.get("campaign_ids") or [])
+        camp_ids = [campaign_id] if campaign_id else _training_camp_ids(agent)
         # OUTREACH ROTATION (owner ask 2026-09-03: "draft the scenarios based
         # off of the copy in those [live campaigns]"). The old limit=1 sample
         # reused ONE real sent email for every synthetic card - 39 cards of
@@ -18592,7 +18606,7 @@ def route_training_generate(payload):
         # before its campaign launches, owner ruling 2026-08-18) is configured
         # enough to practise: the synthetic top-up builds the whole batch from
         # the instructions alone. Only refuse a truly empty agent.
-        allowed_campaign_ids = [str(c) for c in (agent.get("campaign_ids") or [])]
+        allowed_campaign_ids = _training_camp_ids(agent)
         if is_share_mode and not allowed_campaign_ids and not (agent.get("instructions") or "").strip():
             return 400, {"error": "Add some instructions to this agent before training it."}
 
@@ -18898,18 +18912,18 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # e.g. the strategy-board sequences). With NEITHER, generation fails
         # loudly and tells the owner exactly what to supply - it never
         # invents an outreach email the client never sent.
+        # Owner ruling 2026-09-16 supersedes the hard refusal: real campaign
+        # data always wins when it exists, but in its absence generation
+        # falls back to SIMULATED scenarios (the invention's own outreach,
+        # see _build_synthetic_training_case) instead of failing. Logged so
+        # the fallback is visible.
         if staged_scenarios or shortfall > 0:
             _gate_camp_ids = allowed_campaign_ids if allowed_campaign_ids is not None \
-                else (agent.get("campaign_ids") or [])
+                else _training_camp_ids(agent)
             if not _fetch_agent_outreach_sample(_gate_camp_ids, limit=1) \
                     and not _training_outreach_pool(agent):
-                _finish_training_generation(agent_id, "failed",
-                    error="This agent has no real campaign outreach to build scenarios on. "
-                          "Attach its live campaigns, or save its real campaign copy "
-                          "(training_outreach - e.g. the strategy-board sequences) to the "
-                          "agent, then generate again. Training is never built on "
-                          "invented campaigns.")
-                return
+                _LOG("/api/setter/training/generate:simulated_fallback",
+                     agent_id=agent_id, note="no real outreach; building simulated scenarios")
 
         scenarios = list(staged_scenarios)
         # FIRST-ROUNDS CURRICULUM (owner ask 2026-08-28): a fresh training doc
