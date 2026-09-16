@@ -1,0 +1,813 @@
+{
+ "client_label": "Acme",
+ "months": [
+  {
+   "month": "2025-04",
+   "sent": 1180,
+   "replied": 28,
+   "reply_rate": 2.4,
+   "bounced": 31,
+   "bounce_rate": 2.6,
+   "positive": 6,
+   "meetings": 3,
+   "campaigns_active": 1
+  },
+  {
+   "month": "2025-05",
+   "sent": 1072,
+   "replied": 32,
+   "reply_rate": 3.0,
+   "bounced": 27,
+   "bounce_rate": 2.5,
+   "positive": 7,
+   "meetings": 3,
+   "campaigns_active": 1
+  },
+  {
+   "month": "2025-06",
+   "sent": 1550,
+   "replied": 53,
+   "reply_rate": 3.4,
+   "bounced": 38,
+   "bounce_rate": 2.5,
+   "positive": 13,
+   "meetings": 5,
+   "campaigns_active": 1
+  },
+  {
+   "month": "2025-07",
+   "sent": 1423,
+   "replied": 55,
+   "reply_rate": 3.9,
+   "bounced": 33,
+   "bounce_rate": 2.3,
+   "positive": 14,
+   "meetings": 6,
+   "campaigns_active": 2
+  },
+  {
+   "month": "2025-08",
+   "sent": 1676,
+   "replied": 69,
+   "reply_rate": 4.1,
+   "bounced": 38,
+   "bounce_rate": 2.3,
+   "positive": 18,
+   "meetings": 8,
+   "campaigns_active": 2
+  },
+  {
+   "month": "2025-09",
+   "sent": 2378,
+   "replied": 100,
+   "reply_rate": 4.2,
+   "bounced": 51,
+   "bounce_rate": 2.1,
+   "positive": 28,
+   "meetings": 12,
+   "campaigns_active": 2
+  },
+  {
+   "month": "2025-10",
+   "sent": 2154,
+   "replied": 89,
+   "reply_rate": 4.1,
+   "bounced": 44,
+   "bounce_rate": 2.0,
+   "positive": 26,
+   "meetings": 11,
+   "campaigns_active": 3
+  },
+  {
+   "month": "2025-11",
+   "sent": 2659,
+   "replied": 104,
+   "reply_rate": 3.9,
+   "bounced": 52,
+   "bounce_rate": 2.0,
+   "positive": 32,
+   "meetings": 13,
+   "campaigns_active": 3
+  },
+  {
+   "month": "2025-12",
+   "sent": 3110,
+   "replied": 111,
+   "reply_rate": 3.6,
+   "bounced": 58,
+   "bounce_rate": 1.9,
+   "positive": 35,
+   "meetings": 15,
+   "campaigns_active": 3
+  },
+  {
+   "month": "2026-01",
+   "sent": 2801,
+   "replied": 88,
+   "reply_rate": 3.1,
+   "bounced": 50,
+   "bounce_rate": 1.8,
+   "positive": 29,
+   "meetings": 12,
+   "campaigns_active": 4
+  },
+  {
+   "month": "2026-02",
+   "sent": 3489,
+   "replied": 95,
+   "reply_rate": 2.7,
+   "bounced": 59,
+   "bounce_rate": 1.7,
+   "positive": 32,
+   "meetings": 13,
+   "campaigns_active": 4
+  },
+  {
+   "month": "2026-03",
+   "sent": 3416,
+   "replied": 79,
+   "reply_rate": 2.3,
+   "bounced": 55,
+   "bounce_rate": 1.6,
+   "positive": 28,
+   "meetings": 12,
+   "campaigns_active": 4
+  },
+  {
+   "month": "2026-04",
+   "sent": 3464,
+   "replied": 69,
+   "reply_rate": 2.0,
+   "bounced": 53,
+   "bounce_rate": 1.5,
+   "positive": 25,
+   "meetings": 10,
+   "campaigns_active": 5
+  },
+  {
+   "month": "2026-05",
+   "sent": 3628,
+   "replied": 65,
+   "reply_rate": 1.8,
+   "bounced": 52,
+   "bounce_rate": 1.4,
+   "positive": 24,
+   "meetings": 10,
+   "campaigns_active": 5
+  },
+  {
+   "month": "2026-06",
+   "sent": 3984,
+   "replied": 69,
+   "reply_rate": 1.7,
+   "bounced": 52,
+   "bounce_rate": 1.3,
+   "positive": 27,
+   "meetings": 11,
+   "campaigns_active": 5
+  },
+  {
+   "month": "2026-07",
+   "sent": 3968,
+   "replied": 74,
+   "reply_rate": 1.9,
+   "bounced": 52,
+   "bounce_rate": 1.3,
+   "positive": 30,
+   "meetings": 13,
+   "campaigns_active": 6
+  },
+  {
+   "month": "2026-08",
+   "sent": 3611,
+   "replied": 77,
+   "reply_rate": 2.1,
+   "bounced": 47,
+   "bounce_rate": 1.3,
+   "positive": 32,
+   "meetings": 13,
+   "campaigns_active": 6
+  },
+  {
+   "month": "2026-09",
+   "sent": 3786,
+   "replied": 97,
+   "reply_rate": 2.6,
+   "bounced": 49,
+   "bounce_rate": 1.3,
+   "positive": 41,
+   "meetings": 17,
+   "campaigns_active": 6
+  }
+ ],
+ "campaigns_running": [
+  {
+   "id": 9100,
+   "name": "Ops leaders \u00b7 fixed list",
+   "status": "ACTIVE",
+   "started": "2026-03-02",
+   "sent": 14820,
+   "replied": 612,
+   "reply_rate": 4.1,
+   "bounced": 196,
+   "bounce_rate": 1.3,
+   "positive": 142,
+   "meetings": 54
+  },
+  {
+   "id": 9101,
+   "name": "Hiring signal \u00b7 finance teams",
+   "status": "ACTIVE",
+   "started": "2026-05-18",
+   "sent": 9640,
+   "replied": 455,
+   "reply_rate": 4.7,
+   "bounced": 121,
+   "bounce_rate": 1.3,
+   "positive": 88,
+   "meetings": 37
+  },
+  {
+   "id": 9102,
+   "name": "Lookalikes of best clients",
+   "status": "ACTIVE",
+   "started": "2026-06-09",
+   "sent": 7310,
+   "replied": 266,
+   "reply_rate": 3.6,
+   "bounced": 95,
+   "bounce_rate": 1.3,
+   "positive": 63,
+   "meetings": 21
+  },
+  {
+   "id": 9103,
+   "name": "Funding signal \u00b7 Series A",
+   "status": "ACTIVE",
+   "started": "2026-07-21",
+   "sent": 4180,
+   "replied": 214,
+   "reply_rate": 5.1,
+   "bounced": 52,
+   "bounce_rate": 1.2,
+   "positive": 41,
+   "meetings": 18
+  },
+  {
+   "id": 9104,
+   "name": "Event follow-up \u00b7 SaaStock",
+   "status": "ACTIVE",
+   "started": "2026-08-04",
+   "sent": 2960,
+   "replied": 96,
+   "reply_rate": 3.2,
+   "bounced": 44,
+   "bounce_rate": 1.5,
+   "positive": 19,
+   "meetings": 7
+  },
+  {
+   "id": 9105,
+   "name": "Re-contact \u00b7 2025 no-replies",
+   "status": "PAUSED",
+   "started": "2026-09-01",
+   "sent": 1240,
+   "replied": 28,
+   "reply_rate": 2.3,
+   "bounced": 22,
+   "bounce_rate": 1.8,
+   "positive": 5,
+   "meetings": 1
+  }
+ ],
+ "week": {
+  "client": "Acme",
+  "start": "2026-09-09",
+  "end": "2026-09-15",
+  "days": [
+   "2026-08-12",
+   "2026-08-13",
+   "2026-08-14",
+   "2026-08-15",
+   "2026-08-16",
+   "2026-08-17",
+   "2026-08-18",
+   "2026-08-19",
+   "2026-08-20",
+   "2026-08-21",
+   "2026-08-22",
+   "2026-08-23",
+   "2026-08-24",
+   "2026-08-25",
+   "2026-08-26",
+   "2026-08-27",
+   "2026-08-28",
+   "2026-08-29",
+   "2026-08-30",
+   "2026-08-31",
+   "2026-09-01",
+   "2026-09-02",
+   "2026-09-03",
+   "2026-09-04",
+   "2026-09-05",
+   "2026-09-06",
+   "2026-09-07",
+   "2026-09-08",
+   "2026-09-09",
+   "2026-09-10",
+   "2026-09-11",
+   "2026-09-12",
+   "2026-09-13",
+   "2026-09-14",
+   "2026-09-15"
+  ],
+  "series": {
+   "sent": [
+    543,
+    681,
+    576,
+    0,
+    0,
+    615,
+    647,
+    636,
+    540,
+    593,
+    0,
+    0,
+    722,
+    668,
+    698,
+    694,
+    525,
+    0,
+    0,
+    562,
+    741,
+    617,
+    579,
+    557,
+    0,
+    0,
+    719,
+    620,
+    573,
+    665,
+    743,
+    0,
+    0,
+    599,
+    732
+   ],
+   "replies": [
+    23,
+    31,
+    17,
+    0,
+    0,
+    19,
+    30,
+    24,
+    23,
+    26,
+    0,
+    0,
+    37,
+    33,
+    32,
+    35,
+    28,
+    0,
+    0,
+    23,
+    32,
+    33,
+    16,
+    22,
+    0,
+    0,
+    39,
+    19,
+    23,
+    21,
+    25,
+    0,
+    0,
+    18,
+    34
+   ],
+   "interested": [
+    4,
+    12,
+    6,
+    0,
+    0,
+    6,
+    8,
+    5,
+    6,
+    4,
+    0,
+    0,
+    8,
+    6,
+    5,
+    8,
+    7,
+    0,
+    0,
+    7,
+    10,
+    6,
+    6,
+    5,
+    0,
+    0,
+    12,
+    6,
+    4,
+    4,
+    6,
+    0,
+    0,
+    3,
+    9
+   ],
+   "meetings": [
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    0,
+    1,
+    1,
+    0,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    0,
+    1,
+    0,
+    0,
+    1
+   ],
+   "bounces": [
+    2.0,
+    1.2,
+    0.8,
+    null,
+    null,
+    1.5,
+    1.5,
+    1.8,
+    1.7,
+    0.8,
+    null,
+    null,
+    1.5,
+    1.0,
+    1.6,
+    1.6,
+    1.3,
+    null,
+    null,
+    1.8,
+    1.6,
+    0.9,
+    1.0,
+    2.0,
+    null,
+    null,
+    1.2,
+    0.7,
+    0.8,
+    0.6,
+    2.0,
+    null,
+    null,
+    1.0,
+    2.0
+   ],
+   "rate": [
+    4.2,
+    4.6,
+    3.0,
+    null,
+    null,
+    3.1,
+    4.6,
+    3.8,
+    4.3,
+    4.4,
+    null,
+    null,
+    5.1,
+    4.9,
+    4.6,
+    5.0,
+    5.3,
+    null,
+    null,
+    4.1,
+    4.3,
+    5.3,
+    2.8,
+    3.9,
+    null,
+    null,
+    5.4,
+    3.1,
+    4.0,
+    3.2,
+    3.4,
+    null,
+    null,
+    3.0,
+    4.6
+   ]
+  },
+  "range": {
+   "sent": 3312,
+   "replied": 121,
+   "bounced": 46
+  },
+  "range_days": 7,
+  "campaigns_scope": "range",
+  "asof": {
+   "cw": "2026-09-15T21:10:00Z",
+   "hub": "2026-09-15T21:10:00Z"
+  },
+  "campaigns": [
+   {
+    "id": 9100,
+    "name": "Ops leaders \u00b7 fixed list",
+    "status": "ACTIVE",
+    "sent": 741,
+    "replied": 36,
+    "pos": 9,
+    "mtg": 4
+   },
+   {
+    "id": 9101,
+    "name": "Hiring signal \u00b7 finance teams",
+    "status": "ACTIVE",
+    "sent": 482,
+    "replied": 27,
+    "pos": 6,
+    "mtg": 2
+   },
+   {
+    "id": 9102,
+    "name": "Lookalikes of best clients",
+    "status": "ACTIVE",
+    "sent": 365,
+    "replied": 15,
+    "pos": 4,
+    "mtg": 1
+   },
+   {
+    "id": 9103,
+    "name": "Funding signal \u00b7 Series A",
+    "status": "ACTIVE",
+    "sent": 209,
+    "replied": 12,
+    "pos": 2,
+    "mtg": 1
+   },
+   {
+    "id": 9104,
+    "name": "Event follow-up \u00b7 SaaStock",
+    "status": "ACTIVE",
+    "sent": 148,
+    "replied": 5,
+    "pos": 1,
+    "mtg": 0
+   },
+   {
+    "id": 9105,
+    "name": "Re-contact \u00b7 2025 no-replies",
+    "status": "PAUSED",
+    "sent": 62,
+    "replied": 1,
+    "pos": 1,
+    "mtg": 0
+   }
+  ],
+  "scorecard": {},
+  "offer": {
+   "generated_at": "2026-09-15T06:00:00Z",
+   "rows": [
+    [
+     "15-minute call",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     [
+      9100,
+      9101
+     ]
+    ],
+    [
+     "Free audit",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     [
+      9102,
+      9103
+     ]
+    ],
+    [
+     "Benchmark report",
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     null,
+     [
+      9104,
+      9105
+     ]
+    ]
+   ]
+  },
+  "who": {
+   "asof": "2026-09-15T21:10:00Z",
+   "named": 31,
+   "buckets": [
+    [
+     "Operations",
+     11
+    ],
+    [
+     "Finance",
+     8
+    ],
+    [
+     "Founder / CEO",
+     6
+    ],
+    [
+     "Sales",
+     4
+    ],
+    [
+     "HR",
+     2
+    ]
+   ],
+   "sizes": [
+    [
+     "11\u201350",
+     9
+    ],
+    [
+     "51\u2013200",
+     12
+    ],
+    [
+     "201\u20131,000",
+     7
+    ],
+    [
+     "1,000+",
+     3
+    ]
+   ],
+   "size_order": [
+    "1\u201310",
+    "11\u201350",
+    "51\u2013200",
+    "201\u20131,000",
+    "1,000+"
+   ],
+   "combos": [
+    [
+     "Operations",
+     "51\u2013200",
+     6
+    ],
+    [
+     "Operations",
+     "11\u201350",
+     4
+    ],
+    [
+     "Finance",
+     "51\u2013200",
+     4
+    ],
+    [
+     "Finance",
+     "201\u20131,000",
+     3
+    ],
+    [
+     "Founder / CEO",
+     "11\u201350",
+     3
+    ],
+    [
+     "Sales",
+     "1,000+",
+     2
+    ],
+    [
+     "Founder / CEO",
+     "51\u2013200",
+     2
+    ],
+    [
+     "Sales",
+     "201\u20131,000",
+     1
+    ]
+   ]
+  },
+  "who_replied": [
+   {
+    "date": "2026-09-15",
+    "name": "Dana Whitfield",
+    "role": "Head of Operations",
+    "email": "dana@northgate.example",
+    "website": "northgate.example",
+    "linkedin": "",
+    "reply": "Yes \u2014 this is timely. We are reviewing suppliers this quarter.\nCan you do Thursday afternoon?",
+    "first_email": {
+     "subject": "Northgate's supplier review",
+     "body": "Hi Dana,\n\nSaw Northgate is consolidating suppliers.\n\nWorth 15 minutes?"
+    }
+   },
+   {
+    "date": "2026-09-12",
+    "name": "Priya Raman",
+    "role": "Finance Director",
+    "email": "priya@lumenfields.example",
+    "website": "lumenfields.example",
+    "linkedin": "",
+    "reply": "Interested. Send over the benchmark report and I will take a look.",
+    "first_email": {
+     "subject": "Benchmark for finance teams",
+     "body": "Hi Priya,\n\nWe benchmarked 40 finance teams this year.\n\nWant the numbers?"
+    }
+   },
+   {
+    "date": "2026-09-10",
+    "name": "Tom Alvarez",
+    "role": "Founder",
+    "email": "tom@brightkiln.example",
+    "website": "brightkiln.example",
+    "linkedin": "",
+    "reply": "Happy to chat. Next week works better for me.",
+    "first_email": {
+     "subject": "Quick one for Brightkiln",
+     "body": "Hi Tom,\n\nNoticed you are hiring ops.\n\nOpen to 15 minutes?"
+    }
+   }
+  ],
+  "launches": [
+   {
+    "date": "2026-09-01",
+    "campaign": "Re-contact \u00b7 2025 no-replies",
+    "count": 1240
+   }
+  ],
+  "additions": [
+   {
+    "date": "2026-09-11",
+    "campaign": "Ops leaders \u00b7 fixed list",
+    "count": 860
+   }
+  ],
+  "moves": []
+ }
+}
