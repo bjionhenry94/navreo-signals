@@ -7,7 +7,11 @@
 <title>Campaign dashboard · Navreo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- Google Fonts is a cross-origin RENDER-BLOCKING stylesheet: loading it as print
+     media and promoting it on load takes one serialized round trip off DOMContentLoaded.
+     The brand face (AcidGrotesk) is self-hosted, so nothing here blocks first paint. -->
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<noscript><link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet"></noscript>
 <link rel="stylesheet" href="navreo.css">
 
 <!-- ── Client report share (client-report-share, 2026-08-16) — the shareable,
