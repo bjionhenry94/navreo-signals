@@ -23,6 +23,17 @@ Covers:
   7. a client positive older than the lookback window is not selected
   8. the per-tick post cap trips loudly and leaves leftovers for next tick
   9. no Supabase -> skipped, no crash
+ 11. a positive from a lead with an EARLIER positive row (Georgi / Chattermill,
+     2026-09-16) is carded "Interested lead replied again" + *Interested since*,
+     never "New positive reply"; card + mirror alike; stamped
+     'client-re-reply-alerted'; counted in re_replies
+ 12. a re-reply threads "In reply to" + our last sent message; a fresh positive
+     still threads "First Email Sent"
+ 13. the prior-positive check is workspace-scoped
+ 14. a prior NON-positive row (Out Of Office) does not make a re-reply
+ 15. two unalerted positives from one lead in one tick: first new, second again
+ 16. an old, never-alerted positive still counts as the lead's interest on record
+ 17. an unmapped client's re-reply posts once, internally, with the same header
 """
 
 import datetime as dt
@@ -90,6 +101,9 @@ class FakeSB:
                 rows = [r for r in rows if r.get("workspace") in allowed]
             elif ws.startswith("eq."):
                 rows = [r for r in rows if r.get("workspace") == ws[3:]]
+            if params.get("email", "").startswith("ilike."):
+                em = unquote(params["email"][6:])
+                rows = [r for r in rows if (r.get("email") or "").lower() == em.lower()]
             if params.get("category", "").startswith("in.("):
                 cats = [unquote(c) for c in params["category"][4:-1].split(",")]
                 rows = [r for r in rows if r.get("category") in cats]
@@ -302,6 +316,177 @@ def test_no_supabase_skips():
     check("9 no Supabase -> skipped, no crash", res.get("skipped") is True)
 
 
+# The Georgi / Chattermill miss (2026-09-16): his first positive (15 Sep,
+# Information Request) was carded; his "Tuesday 10am works" the next day was
+# carded AGAIN as "New positive reply". A lead the client already met is never new.
+GEORGI_FIRST = {"id": 37848, "workspace": "grout", "smartlead_campaign_id": 3729147,
+                "email": "georgi@chattermill.io", "replied_at": _iso(hours_ago=20),
+                "category": "Information Request",
+                "reply_body": "We currently spend around $10k on Google Ads per month, "
+                              "can you work with that budget?",
+                "smartlead_message_id": "4351145697-2026-09-15T15:56:00.000Z",
+                "notify_alerted_at": _iso(hours_ago=19.9),
+                "notify_kind": "client-positive-alerted"}
+GEORGI_AGAIN = {"id": 38238, "workspace": "grout", "smartlead_campaign_id": 3729147,
+                "email": "georgi@chattermill.io", "replied_at": _iso(hours_ago=1),
+                "category": "Call Booked",
+                "reply_body": "Great, Tuesday 10am UK time works for me, speak to you then.",
+                "smartlead_message_id": "4351145697-2026-09-16T11:17:14.000Z",
+                "notify_alerted_at": None, "notify_kind": None}
+
+
+def _first_post(http, i=0):
+    return (http.posts[i][1] or {}) if len(http.posts) > i else {}
+
+
+def test_interested_lead_replying_again_is_not_new():
+    sb = FakeSB([dict(GEORGI_FIRST), dict(GEORGI_AGAIN)], campaigns=CAMPS)
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    check("11a only the new reply is a candidate; card + mirror posted",
+          res.get("checked") == 1 and len(http.posts) == 2, str(res))
+    body = _first_post(http)
+    txt = body.get("text") or ""
+    check("11b client card header: the interested lead replied again",
+          txt.startswith("*" + setter.RE_REPLY_HEADER), txt[:120])
+    check("11c ... and never 'New positive reply'", "New positive reply" not in txt, txt)
+    since = setter._fmt_day(GEORGI_FIRST["replied_at"])
+    check("11d card carries *Interested since* with the first positive's day",
+          bool(since) and f"*Interested since* \u00b7 {since}" in txt, txt)
+    check("11e card still client-safe: no workspace, no category word, one link",
+          "grout" not in txt.lower() and "Call Booked" not in txt
+          and "Information Request" not in txt
+          and txt.count("|Open conversation>") == 1, txt)
+    check("11f card goes to #grouts-navreo", body.get("channel") == "C0BEGAKS8TX", str(body))
+    mbody = _first_post(http, 1)
+    mtxt = mbody.get("text") or ""
+    check("11g internal mirror wears the same re-reply header",
+          mtxt.startswith("*" + setter.RE_REPLY_HEADER) and "New positive reply" not in mtxt
+          and mbody.get("channel") == "C0B96LNPWDB", mtxt[:120])
+    check("11h reply body rides the thread child",
+          body.get("reply_text") == GEORGI_AGAIN["reply_body"], str(body))
+    row = sb._row(38238)
+    check("11i row stamped client-re-reply-alerted",
+          row.get("notify_kind") == "client-re-reply-alerted" and row.get("notify_alerted_at"))
+    check("11j the first positive's stamp is untouched",
+          sb._row(37848).get("notify_kind") == "client-positive-alerted")
+    check("11k summary counts the re-reply",
+          res.get("alerted") == 1 and res.get("re_replies") == 1 and res.get("ok") is True,
+          str(res))
+
+
+def test_re_reply_threads_last_sent_not_cold_email():
+    thread = [
+        {"type": "SENT", "time": _iso(hours_ago=48), "body": "<p>Hi Georgi, cold email</p>"},
+        {"type": "REPLY", "time": GEORGI_FIRST["replied_at"], "body": "budget question"},
+        {"type": "SENT", "time": _iso(hours_ago=10),
+         "body": "<p>Yes we can - does Tuesday 10am work?</p>"},
+        {"type": "REPLY", "time": GEORGI_AGAIN["replied_at"], "body": "Great, Tuesday 10am works"},
+    ]
+    real = setter.hydrate_lead
+    setter.hydrate_lead = lambda cid, email, mid: (
+        True, {"first_outbound": "Hi Georgi, cold email", "thread": thread}, None)
+    try:
+        sb = FakeSB([dict(GEORGI_FIRST), dict(GEORGI_AGAIN)], campaigns=CAMPS)
+        http = FakeHTTP()
+        wire(sb, http)
+        setter.run_client_positive_alerts()
+        body = _first_post(http)
+        check("12a re-reply threads 'In reply to' + our last sent message",
+              body.get("original_label") == "In reply to"
+              and "Tuesday 10am work" in (body.get("original_email") or ""), str(body))
+        mbody = _first_post(http, 1)
+        check("12a2 mirror threads the same 'In reply to'",
+              mbody.get("original_label") == "In reply to", str(mbody))
+        sb2 = FakeSB([dict(GROUT_POS)], campaigns=CAMPS)
+        http2 = FakeHTTP()
+        wire(sb2, http2)
+        setter.run_client_positive_alerts()
+        body2 = _first_post(http2)
+        check("12b a fresh positive still threads 'First Email Sent'",
+              body2.get("original_label") == "First Email Sent"
+              and body2.get("original_email") == "Hi Georgi, cold email", str(body2))
+    finally:
+        setter.hydrate_lead = real
+
+
+def test_prior_positive_is_workspace_scoped():
+    other = dict(GEORGI_FIRST, id=900, workspace="krg")
+    sb = FakeSB([other, dict(GEORGI_AGAIN)], campaigns=CAMPS)
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    txt = _first_post(http).get("text") or ""
+    check("13a a positive in ANOTHER workspace is not this client's history",
+          txt.startswith("*\U0001F389 New positive reply") and "Interested since" not in txt, txt[:120])
+    check("13b ... stamped as a plain client positive",
+          sb._row(38238).get("notify_kind") == "client-positive-alerted"
+          and res.get("re_replies") == 0, str(res))
+
+
+def test_prior_non_positive_is_not_interest():
+    ooo = dict(GEORGI_FIRST, id=31639, category="Out Of Office",
+               replied_at=_iso(hours_ago=30), notify_alerted_at=None, notify_kind=None)
+    sb = FakeSB([ooo, dict(GEORGI_AGAIN)], campaigns=CAMPS)
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    txt = _first_post(http).get("text") or ""
+    check("14a an earlier Out Of Office row does not make a re-reply",
+          res.get("checked") == 1 and txt.startswith("*\U0001F389 New positive reply"), txt[:120])
+    check("14b the OOO row stays untouched",
+          not sb._row(31639).get("notify_alerted_at"))
+
+
+def test_backlog_orders_first_new_then_again():
+    first = dict(GEORGI_FIRST, notify_alerted_at=None, notify_kind=None)
+    sb = FakeSB([first, dict(GEORGI_AGAIN)], campaigns=CAMPS)
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    check("15a both rows are candidates; 2 cards + 2 mirrors",
+          res.get("checked") == 2 and len(http.posts) == 4, str(res))
+    t0 = _first_post(http, 0).get("text") or ""
+    t2 = _first_post(http, 2).get("text") or ""
+    check("15b the earlier positive is new",
+          t0.startswith("*\U0001F389 New positive reply"), t0[:120])
+    check("15c the later one replied again (order decides, not the stamp)",
+          t2.startswith("*" + setter.RE_REPLY_HEADER), t2[:120])
+    check("15d stamps + counters follow",
+          sb._row(37848).get("notify_kind") == "client-positive-alerted"
+          and sb._row(38238).get("notify_kind") == "client-re-reply-alerted"
+          and res.get("alerted") == 2 and res.get("re_replies") == 1, str(res))
+
+
+def test_unalerted_old_positive_still_counts_as_prior():
+    old = dict(GEORGI_FIRST, replied_at=_iso(hours_ago=setter.CP_LOOKBACK_HOURS + 10),
+               notify_alerted_at=None, notify_kind=None)
+    sb = FakeSB([old, dict(GEORGI_AGAIN)], campaigns=CAMPS)
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    txt = _first_post(http).get("text") or ""
+    check("16a an old, never-carded positive is still interest on record",
+          res.get("checked") == 1 and txt.startswith("*" + setter.RE_REPLY_HEADER), txt[:120])
+    check("16b the old row is outside the window and left alone",
+          not sb._row(37848).get("notify_alerted_at"))
+
+
+def test_unmapped_client_re_reply_posts_once_internally():
+    prior = dict(GEORGI_FIRST, id=901, workspace="asteri", email="lead@asteri.com")
+    again = dict(GEORGI_AGAIN, id=902, workspace="asteri", email="lead@asteri.com")
+    sb = FakeSB([prior, again])
+    http = FakeHTTP()
+    wire(sb, http)
+    res = setter.run_client_positive_alerts()
+    body = _first_post(http)
+    check("17 unmapped client re-reply: one internal post, re-reply header",
+          len(http.posts) == 1 and body.get("channel") == "C0B96LNPWDB"
+          and (body.get("text") or "").startswith("*" + setter.RE_REPLY_HEADER)
+          and res.get("re_replies") == 1, str(body)[:200])
+
+
 if __name__ == "__main__":
     test_client_positive_alerts_once()
     test_navreo_positive_not_touched()
@@ -314,4 +499,11 @@ if __name__ == "__main__":
     test_post_cap_trips_loudly()
     test_no_supabase_skips()
     test_mapped_unmirrored_client_posts_once()
+    test_interested_lead_replying_again_is_not_new()
+    test_re_reply_threads_last_sent_not_cold_email()
+    test_prior_positive_is_workspace_scoped()
+    test_prior_non_positive_is_not_interest()
+    test_backlog_orders_first_new_then_again()
+    test_unalerted_old_positive_still_counts_as_prior()
+    test_unmapped_client_re_reply_posts_once_internally()
     sys.exit(1 if report() else 0)

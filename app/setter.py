@@ -8792,6 +8792,13 @@ def _humanise_category(cat) -> str:
     return key[:1].upper() + key[1:]
 
 
+# The header an "already-interested lead came back" card wears: the internal
+# once-positive alert and (2026-09-16, Bjion) the client-workspace sweep's
+# card + mirror. A lead the client already met is never "new". (The REViVE
+# Slack Connect post keeps its own "Reply in ongoing conversation" wording.)
+RE_REPLY_HEADER = "\U0001F501 Interested lead replied again"
+
+
 def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -> str:
     """INTERNAL once-positive alert — the only card that keeps the Campaign
     line, because this alert exists precisely because a lead we already booked
@@ -8813,7 +8820,7 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -
     since = _fmt_day(prior.get("replied_at"))
     if since:
         extra.append(f"*Interested since* · {since}")
-    return _card_text("\U0001F501 Interested lead replied again",
+    return _card_text(RE_REPLY_HEADER,
                       f.get("company"), f.get("name"), f.get("title"), email,
                       f.get("website"), f.get("linkedin"),
                       campaign=cname,           # internal — kept
@@ -9003,7 +9010,11 @@ def run_ever_positive_alerts() -> dict:
 # double-fire. Positives only, so it never touches the deliberately
 # scoped-out once-positive→negative client class. Rides the reply-sync tick.
 # Fail-closed and retryable (marker stamped only after the hook accepts);
-# never raises.
+# never raises. A positive from a lead with an EARLIER positive row (same
+# workspace, any campaign, alerted or not) is carded as a re-reply —
+# RE_REPLY_HEADER + *Interested since* — never as a new positive (Georgi /
+# Chattermill, 2026-09-16: "Tuesday 10am works" carded as new a day after his
+# first positive was).
 CP_LOOKBACK_HOURS = 72        # scan window; the marker (not the window) stops re-alerts
 CP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, loudly
 
@@ -9092,28 +9103,45 @@ def _cp_smartlead_link(campaign_id, email: str) -> str:
     return ""
 
 
-def _cp_compose(row: dict, cname: str, link: str, channel: str = None) -> str:
+def _cp_compose(row: dict, cname: str, link: str, channel: str = None,
+                prior: dict = None) -> str:
     """Client positive. CLIENT-SAFE everywhere: this composer routes to the
     internal lane AND to client-facing channels (grout, krg), so the workspace
     header, the `Workspace: <ws> (client)` line and the category word are all
     gone — a client must never read our internal labelling. `cname` / `link`
-    stay available to callers but neither renders (design doc §4)."""
+    stay available to callers but neither renders (design doc §4).
+
+    `prior` is the lead's earlier positive row when this reply is a RE-reply
+    from a lead the client already knows: the header then says so
+    (RE_REPLY_HEADER, never "New positive reply") and *Interested since*
+    carries that first positive's date, as the internal once-positive card
+    does. No category word either way."""
     email = (row.get("email") or "").strip()
     f = _alert_lead_facts(row.get("smartlead_campaign_id"), email)
-    return _card_text("\U0001F389 New positive reply",
+    header = "\U0001F389 New positive reply"
+    extra = []
+    if prior:
+        header = RE_REPLY_HEADER
+        since = _fmt_day(prior.get("replied_at"))
+        if since:
+            extra.append(f"*Interested since* \u00b7 {since}")
+    return _card_text(header,
                       f.get("company"), f.get("name"), f.get("title"), email,
                       f.get("website"), f.get("linkedin"),
                       campaign=None,            # client-safe — dropped
                       replied_at=row.get("replied_at"),
-                      chat_url=_alert_chat_link(row, channel))
+                      chat_url=_alert_chat_link(row, channel),
+                      extra=extra)
 
 
 def run_client_positive_alerts() -> dict:
     """Internal notification guarantee for a NEW positive reply on a client
     (non-navreo) workspace — the backstop navreo has and clients lacked (see
-    the section comment above). Rides every reply-sync tick. Never raises."""
+    the section comment above). A positive from a lead who already replied
+    positively is announced as a re-reply, never as new. Rides every
+    reply-sync tick. Never raises."""
     summary = {"ok": True, "skipped": False, "checked": 0, "alerted": 0,
-               "failed_posts": 0, "capped": False, "errors": 0}
+               "re_replies": 0, "failed_posts": 0, "capped": False, "errors": 0}
     if not _SB:
         summary["skipped"] = True
         return summary
@@ -9160,10 +9188,18 @@ def run_client_positive_alerts() -> dict:
             # -> #client-interested-replies (ruling 2026-08-18: the hook's
             # #interested-replies default is Navreo-own only).
             chan = CLIENT_ALERT_CHANNELS.get(ws) or CLIENT_INTERNAL_CHANNEL
-            text = _cp_compose(row, cname, link, channel=chan)
+            # A lead who already replied positively is coming BACK, not
+            # arriving: the ever-positive predicate (any earlier positive row
+            # for this email, same workspace, any campaign — alerted or not).
+            # The card then reads "replied again" with the first positive's
+            # date, and the threaded original is the last thing we sent
+            # before this reply rather than the cold email.
+            prior = _ep_prior_positive(ws, email, rt)
+            re_reply = prior is not None
+            text = _cp_compose(row, cname, link, channel=chan, prior=prior)
             payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
             payload["channel"] = chan
-            payload.update(_ep_thread_fields(row, re_reply=False))
+            payload.update(_ep_thread_fields(row, re_reply=re_reply))
             posted = False
             try:
                 _HTTP("POST", EVER_POSITIVE_HOOK, {}, payload)
@@ -9177,10 +9213,11 @@ def run_client_positive_alerts() -> dict:
                     and chan != CLIENT_INTERNAL_CHANNEL:
                 # Internal mirror (CLIENT_INTERNAL_MIRROR): the same positive
                 # into #client-interested-replies with the owner link.
-                mtext = _cp_compose(row, cname, link, channel=CLIENT_INTERNAL_CHANNEL)
+                mtext = _cp_compose(row, cname, link, channel=CLIENT_INTERNAL_CHANNEL,
+                                    prior=prior)
                 mpayload = {"event_type": "EVER_POSITIVE_ALERT", "text": mtext,
                             "channel": CLIENT_INTERNAL_CHANNEL}
-                mpayload.update(_ep_thread_fields(row, re_reply=False))
+                mpayload.update(_ep_thread_fields(row, re_reply=re_reply))
                 try:
                     _HTTP("POST", EVER_POSITIVE_HOOK, {}, mpayload)
                 except ValueError:
@@ -9190,8 +9227,11 @@ def run_client_positive_alerts() -> dict:
                     summary["ok"] = False
             if posted:
                 # stamp ONLY after the hook accepted — fail-closed, retryable
-                _ep_stamp(rid, "client-positive-alerted")
+                _ep_stamp(rid, "client-re-reply-alerted" if re_reply
+                          else "client-positive-alerted")
                 summary["alerted"] += 1
+                if re_reply:
+                    summary["re_replies"] += 1
         return summary
     except Exception as e:  # noqa: BLE001 — record, never crash the cron thread
         summary["ok"] = False
