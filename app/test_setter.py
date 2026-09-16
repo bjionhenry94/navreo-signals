@@ -5557,27 +5557,37 @@ def test_training_generate_owner_mode_no_campaign_ids_is_fully_synthetic():
          (doc.get("used_reply_ids") or []) == [], doc.get("used_reply_ids"))
 
 
-def test_training_generate_refuses_without_real_outreach():
-    """Real-campaigns-only gate (owner ruling 2026-08-20: "You should never,
-    ever give training based on campaigns which don't exist"): an agent with
-    no sent outreach anywhere AND no stored campaign copy must not get
-    invented scenarios - generation fails loudly, telling the owner exactly
-    what to supply."""
+def test_training_generate_simulated_fallback_without_real_outreach():
+    """Owner ruling 2026-09-16 (supersedes the 2026-08-20 hard refusal): real
+    campaign data always wins, but with no sent outreach anywhere AND no
+    stored campaign copy generation falls back to SIMULATED scenarios
+    instead of failing - the batch still builds."""
     sb, http = fresh_setter()
     http.classify_fn = _training_classify_fn
     http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi there, thanks. Best, Bjion"}
     agent = {"id": "agent-nogrounding1", "mode": "draft_only", "enabled": True,
+             "instructions": "Pricing: it costs 100 a month.",
              "allowed_intents": ["send_resource"]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
     status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
     doc = setter._load_training(agent["id"])
     gen = doc.get("generating") or {}
-    check("no-grounding gate: generation fails, never invents a campaign",
-         gen.get("status") == "failed" and "campaign" in (gen.get("error") or "").lower(), gen)
-    check("no-grounding gate: the error tells the owner what to supply (training_outreach)",
-         "training_outreach" in (gen.get("error") or ""), gen)
-    check("no-grounding gate: zero cases were built", (doc.get("cases") or []) == [], doc.get("cases"))
+    check("simulated fallback: generation does not fail without real outreach",
+         gen.get("status") != "failed", gen)
+    check("simulated fallback: cases were built", len(doc.get("cases") or []) > 0, len(doc.get("cases") or []))
+
+
+def test_training_camp_ids_prefers_live_then_training_only():
+    """training_campaign_ids feeds real replies/sends into training for an
+    agent that is not the live drafter, and never overrides live campaigns."""
+    f = setter._training_camp_ids
+    check("no campaigns at all -> []", f({}) == [], f({}))
+    check("training-only ids used when no live campaigns",
+         f({"training_campaign_ids": [1, "2"]}) == ["1", "2"], f({"training_campaign_ids": [1, "2"]}))
+    check("live campaigns win over training-only ids",
+         f({"campaign_ids": [9], "training_campaign_ids": [1]}) == ["9"],
+         f({"campaign_ids": [9], "training_campaign_ids": [1]}))
 
 
 def test_training_outreach_pool_used_verbatim_for_synthetic():
@@ -12600,7 +12610,8 @@ if __name__ == "__main__":
     test_draft_no_live_slots_directive()
     test_training_reset_clears_answers_keeps_used_ids()
     test_training_reset_full_wipes_whole_doc()
-    test_training_generate_refuses_without_real_outreach()
+    test_training_generate_simulated_fallback_without_real_outreach()
+    test_training_camp_ids_prefers_live_then_training_only()
     test_training_outreach_pool_used_verbatim_for_synthetic()
     test_staged_scenarios_use_training_outreach_pool()
     test_training_get_route()
