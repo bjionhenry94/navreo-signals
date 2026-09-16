@@ -11850,6 +11850,26 @@ def test_stranded_sending_claim_reaped_to_needs_review():
          by_id[809].get("status") == "sending", by_id[809])
 
 
+def test_federated_workspaces_send_by_default():
+    """Owner ruling 2026-09-16: federated client workspaces were added so we can
+    REPLY from the Setter — they are sendable by default; only an explicitly
+    frozen id (SETTER_MONITOR_ONLY_WS) is monitor-only. navreo never is."""
+    saved_frozen, saved_gate = setter._MONITOR_ONLY_WS, setter.SETTER_MONITOR_ALL_WS
+    try:
+        setter._MONITOR_ONLY_WS = frozenset()
+        setter.SETTER_MONITOR_ALL_WS = True
+        for ws in ("grout", "asteri", "krg", "Grout", None, "navreo"):
+            check(f"{ws!r} is sendable by default", setter._is_monitor_ws(ws) is False, ws)
+        setter._MONITOR_ONLY_WS = frozenset({"asteri"})
+        check("frozen id is monitor-only", setter._is_monitor_ws("Asteri") is True)
+        check("unfrozen sibling still sends", setter._is_monitor_ws("grout") is False)
+        check("navreo can never be frozen", setter._is_monitor_ws("navreo") is False)
+        setter.SETTER_MONITOR_ALL_WS = False
+        check("gate off → nothing is monitor-only", setter._is_monitor_ws("asteri") is False)
+    finally:
+        setter._MONITOR_ONLY_WS, setter.SETTER_MONITOR_ALL_WS = saved_frozen, saved_gate
+
+
 def test_monitor_surface_gate_positives_and_uncategorised_only():
     """Client monitor intake surfaces positives + still-uncategorised only;
     clear non-positives (OOO, Not Interested, Wrong Person, Do Not Contact,
@@ -12672,6 +12692,7 @@ if __name__ == "__main__":
     test_recent_send_block_ignores_test_rows()
     test_agent_adoption_busts_the_read_caches()
     test_redraft_async_job_returns_immediately_and_reports_its_result()
+    test_federated_workspaces_send_by_default()
     test_monitor_surface_gate_positives_and_uncategorised_only()
     test_monitor_surface_skips_uncategorised_autoreplies()
     test_autoreply_category_labels_and_signature_veto()

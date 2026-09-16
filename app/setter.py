@@ -81,31 +81,36 @@ OPENAI_MODEL = "gpt-5-mini"
 # Amplifyy / Arnic) were the only clients that ever appeared. Every OTHER
 # client (asteri, krg, grout, …) is its own federated workspace whose replies
 # the Setter never read. This gate widens the LIST + intake to every enabled
-# workspace so any client can be MANAGED here — but strictly as MONITOR-ONLY:
-# a non-navreo row is surfaced for review and can NEVER send (enforced three
-# ways: _is_monitor_ws, the _send_reply dry-force, and the send-action
-# refusal). navreo behaviour AND navreo KPIs stay byte-for-byte unchanged
-# (the pill/KPI queries remain navreo-scoped; the KPI fold re-filters to
-# navreo even off the federated light scan).
+# workspace so any client can be MANAGED here. Federated workspaces were
+# monitor-only (review, never send) while federation was proven; since
+# 2026-09-16 (owner ruling: "we should be able to send/respond to workspaces
+# outside of ours, that's why they've been added") every enabled workspace is
+# SENDABLE by default — Approve / follow-up / subsequence / category writes
+# reach the CLIENT's own Smartlead because /campaigns/<id>/... resolves that
+# workspace's api_key via _sl_key_for. A workspace can still be frozen to
+# review-only explicitly (_MONITOR_ONLY_WS below). navreo behaviour AND
+# navreo KPIs stay byte-for-byte unchanged (the pill/KPI queries remain
+# navreo-scoped; the KPI fold re-filters to navreo even off the federated
+# light scan).
 #
 # ONE reversal switch: SETTER_MONITOR_ALL_WS=0 restores navreo-only scoping.
-# Default ON. Making a proven workspace genuinely sendable is a SEPARATE,
-# explicit change (remove it from _is_monitor_ws's net) — never done here.
+# Default ON.
 SETTER_MONITOR_ALL_WS = os.environ.get("SETTER_MONITOR_ALL_WS", "1") not in ("0", "false", "False", "")
 
 # Never a real Setter reply source even if present in the table.
 _WS_MONITOR_SKIP = ("heyreach", "opan-test")
 
-# SENDABLE federated workspaces — the explicit, deliberate carve-out the design
-# note above calls for. A workspace listed here is a fully-managed client that
-# can SEND from the Setter (Approve / follow-up / subsequence / category writes
-# all reach the CLIENT's own Smartlead, because /campaigns/<id>/... resolves
-# that workspace's api_key via _sl_key_for). Everything NOT listed stays strict
-# monitor-only. Comma-separated env override; defaults to the workspaces we've
-# promoted. Removing an id here re-freezes it to review-only, no other change.
-_SENDABLE_WS = frozenset(
+# MONITOR-ONLY (frozen) federated workspaces — the explicit, deliberate
+# carve-out. A workspace listed here surfaces for review but can NEVER send
+# (enforced three ways: _is_monitor_ws, the _send_reply dry-force, and the
+# send-action refusal) and never writes to the client's Smartlead. Everything
+# NOT listed is a fully-managed client that sends from the Setter exactly like
+# navreo does. Comma-separated env override; default EMPTY (owner ruling
+# 2026-09-16 — before that the default was the inverse: only `krg` sendable).
+# Adding an id here re-freezes it to review-only, no other change.
+_MONITOR_ONLY_WS = frozenset(
     w.strip().lower() for w in
-    os.environ.get("SETTER_SENDABLE_WS", "krg").split(",") if w.strip()
+    os.environ.get("SETTER_MONITOR_ONLY_WS", "").split(",") if w.strip()
 )
 _WS_IDS_CACHE = {"at": 0.0, "ids": None}
 
@@ -159,13 +164,14 @@ def _list_ws_filter() -> str:
 
 def _is_monitor_ws(ws) -> bool:
     """True for a workspace whose Setter rows are review-only and must NEVER
-    send. Fail-closed: while the gate is on, ANYTHING that isn't navreo is
-    monitor-only — UNLESS it's an explicitly promoted sendable workspace
-    (_SENDABLE_WS), which sends to its own client Smartlead like navreo does."""
+    send. Since 2026-09-16 that is ONLY a workspace explicitly frozen via
+    _MONITOR_ONLY_WS (SETTER_MONITOR_ONLY_WS); every other enabled workspace
+    sends to its own client Smartlead like navreo does. navreo is never
+    monitor-only. Gate OFF (navreo-only scoping) → nothing is monitor-only."""
     w = (ws or "navreo")
-    if w == "navreo" or w.lower() in _SENDABLE_WS:
+    if w == "navreo" or not SETTER_MONITOR_ALL_WS:
         return False
-    return bool(SETTER_MONITOR_ALL_WS)
+    return w.lower() in _MONITOR_ONLY_WS
 
 # ── one OpenAI round trip, with a deadline and a retry ──────────────────────
 # Every model call used to be a bare _HTTP on http_json's 60s default with
@@ -13137,7 +13143,10 @@ def route_queue_get(params):
             # ?before= page above deliberately carries none: the head fetch
             # owns the counts, an older page only extends the list.
             return 200, {"rows": rows, "kpis": {"counts": _share_counts()}}
-        return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at()}
+        return 200, {"rows": rows, "kpis": _compute_kpis(), "last_checked": _last_poll_done_at(),
+                     # Frozen review-only workspaces (usually none): the UI derives
+                     # its monitor-only wording from THIS, never from "not navreo".
+                     "monitor_only_ws": sorted(_MONITOR_ONLY_WS) if SETTER_MONITOR_ALL_WS else []}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
 
@@ -15676,7 +15685,7 @@ def route_queue_action(payload):
             if row.get("status") == "sending":
                 return 409, {"error": "This reply is already being sent — wait for it to finish."}
             if _is_monitor_ws(row.get("workspace")):
-                return 403, {"error": "This workspace is monitor-only (federation test) — "
+                return 403, {"error": "This workspace is frozen to review-only — "
                                       "sending is disabled here. Reply in Smartlead directly."}
             # No recency pre-check here: _send_reply verifies AFTER taking the
             # claim (atomic, one GET per send) and returns "blocked".
@@ -15734,7 +15743,7 @@ def route_queue_action(payload):
             if row.get("status") not in ("sent", "auto_sent"):
                 return 409, {"error": "This thread's reply hasn't been sent yet - use Approve for the first send."}
             if _is_monitor_ws(row.get("workspace")):
-                return 403, {"error": "This workspace is monitor-only (federation test) — "
+                return 403, {"error": "This workspace is frozen to review-only — "
                                       "sending is disabled here. Reply in Smartlead directly."}
             body_html = payload.get("body") or ""
             if not _TAG_RE.sub(" ", body_html).strip():
