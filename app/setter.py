@@ -8543,7 +8543,7 @@ def _fmt_day(iso) -> str:
 
 def _card_text(header: str, company: str, name: str, title: str, email: str,
                website: str, linkedin: str, campaign=None, replied_at=None,
-               chat_url: str = "", extra=None) -> str:
+               chat_url: str = "", extra=None, dashboard_url: str = "") -> str:
     """The ONE positive-alert card shape. A missing fact is omitted, never
     placeholdered. No workspace labels, no raw URLs, no divider."""
     lines = [f"*{header}" + (f" \u00b7 {company}" if company else "") + "*"]
@@ -8566,6 +8566,10 @@ def _card_text(header: str, company: str, name: str, title: str, email: str,
         lines.append(f"*Replied* \u00b7 {when}")
     if chat_url:
         lines.append(f"\U0001F3AF <{chat_url}|Open conversation>")
+        # ONE extra line, client surfaces only, never a third link
+        # (client-campaign-dashboard step 4a).
+        if dashboard_url:
+            lines.append(f"\U0001F4CA <{dashboard_url}|Open your campaign dashboard>")
     lines.append(_CARD_SEPARATOR)
     return "\n".join(lines)
 
@@ -8635,7 +8639,8 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
                       f.get("website"), f.get("linkedin"),
                       campaign=None,            # client channel — dropped
                       replied_at=row.get("replied_at"),
-                      chat_url=_alert_chat_link(row, channel))
+                      chat_url=_alert_chat_link(row, channel),
+                      dashboard_url=_alert_dashboard_link(row, channel))
 
 
 def _ep_thread_fields(row: dict, re_reply: bool = False) -> dict:
@@ -8826,6 +8831,7 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -
                       campaign=cname,           # internal — kept
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
+                      dashboard_url=_alert_dashboard_link(row, channel),
                       extra=extra)
 
 
@@ -9076,6 +9082,48 @@ def _client_chat_link(email: str, campaign_id, message_id: str = "") -> str:
     return _chat_permalink(email, message_id)
 
 
+# ── client campaign dashboard link (client-campaign-dashboard, step 4a) ─────
+# server.py injects `_DASHBOARD_LINK_FOR_CLIENT` (a client_id -> permanent
+# https://app.navreo.ai/app/dashboard.html?share=<tok> resolver built on
+# mint_client_dashboard_share and the SAME share-scope map that resolves the
+# client here). setter.py never imports server, so an un-injected process
+# (a CLI, a test) simply renders no dashboard line rather than a broken one.
+_DASHBOARD_LINK_FOR_CLIENT = None
+_DASH_LINK_CACHE = {}          # client_id -> (ts, url)
+_DASH_LINK_TTL_S = 21600       # 6 h; the token itself is 12 months
+
+
+def _client_dashboard_link(campaign_id) -> str:
+    """The client's permanent campaign-dashboard link for the client that
+    owns `campaign_id`, or "" when the campaign resolves to no client / no
+    resolver is wired / the client has no dashboard. Cached per client (the
+    token is deterministic per expiry window anyway). Never raises."""
+    try:
+        client = _client_id_for_campaign(campaign_id)
+        if not client:
+            return ""
+        hit = _DASH_LINK_CACHE.get(client)
+        if hit and (_time.time() - hit[0]) < _DASH_LINK_TTL_S:
+            return hit[1]
+        fn = _DASHBOARD_LINK_FOR_CLIENT
+        url = str(fn(client) or "") if callable(fn) else ""
+        _DASH_LINK_CACHE[client] = (_time.time(), url)
+        return url
+    except Exception as e:  # noqa: BLE001 - decoration, never load-bearing
+        print(f"[setter] dashboard link failed: {type(e).__name__}: {e}",
+              file=sys.stderr)
+        return ""
+
+
+def _alert_dashboard_link(row: dict, channel) -> str:
+    """The dashboard line's URL for one alert: only on a CLIENT-FACING
+    channel (the same gate _alert_chat_link uses for the client share link);
+    internal / owner cards are unchanged. Never raises."""
+    if not (channel and channel in CLIENT_FACING_CHANNELS):
+        return ""
+    return _client_dashboard_link(row.get("smartlead_campaign_id"))
+
+
 def _alert_chat_link(row: dict, channel) -> str:
     """The setter deep link for one Slack alert. Into a client-facing channel
     it is the CLIENT share link (see _client_chat_link); into an internal lane
@@ -9131,6 +9179,7 @@ def _cp_compose(row: dict, cname: str, link: str, channel: str = None,
                       campaign=None,            # client-safe — dropped
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
+                      dashboard_url=_alert_dashboard_link(row, channel),
                       extra=extra)
 
 
@@ -16104,6 +16153,22 @@ def _client_id_for_campaign(campaign_id) -> str:
             if cid in ids:
                 return client
     except Exception:  # noqa: BLE001
+        pass
+    return ""
+
+
+def client_id_for_agent(agent_id) -> str:
+    """The share-scope client id that owns `agent_id`'s campaigns ("" when the
+    agent has none, or none of them resolves to a client). Used by the
+    training portal's "Campaign dashboard" button, which holds only a training
+    token. Never raises."""
+    try:
+        doc = _load_agent(agent_id) or {}
+        for cid in (doc.get("campaign_ids") or []):
+            client = _client_id_for_campaign(cid)
+            if client:
+                return client
+    except Exception:  # noqa: BLE001 - decoration, never load-bearing
         pass
     return ""
 

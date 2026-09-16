@@ -15906,6 +15906,10 @@ def compose_positive_card_payload(lead: dict, history: list, campaign_id, catego
         "setter_url": setter._client_chat_link(
             lead.get("email") or "", campaign_id,
             last_reply.get("message_id") or ""),
+        # The client's permanent campaign-dashboard link (step 4a). 8946472
+        # composes its own card text, so this field is only RENDERED once that
+        # scenario maps it — the app never depends on it.
+        "dashboard_url": setter._client_dashboard_link(campaign_id),
         "owner_setter_url": setter._chat_permalink(
             lead.get("email") or "",
             last_reply.get("message_id") or ""),
@@ -22404,6 +22408,41 @@ def verify_client_dashboard_share(token: str):
         return None
 
 
+def _dashboard_client_label_for_id(client_id: str) -> str:
+    """The scorecard client LABEL ("Altius Reach") for a setter share-scope
+    client id ("altius reach"), or "" when that client has no campaigns in the
+    scorecard. Case-insensitive — the two handles differ only in case for
+    every real client. Never raises."""
+    cid = str(client_id or "").strip().lower()
+    if not cid:
+        return ""
+    try:
+        _scorecard_seed_from_snapshot()
+        score = _inject_demo_scorecard(_CAMPAIGN_SCORECARD_ALL_SWR.get()) or {}
+        for c in (score.get("campaigns") or {}).values():
+            lab = str(c.get("client") or "")
+            if lab and lab.lower() == cid:
+                return lab
+    except Exception as e:  # noqa: BLE001 - decoration, never load-bearing
+        print(f"[dashboard] label lookup failed {cid}: {e}", file=sys.stderr)
+    return ""
+
+
+def dashboard_share_link_for_client_id(client_id: str) -> str:
+    """The permanent client dashboard URL for a setter share-scope client id,
+    or "" when that client has no dashboard. Injected into setter.py below so
+    every CLIENT-FACING reply card can carry the one extra line (step 4a)
+    without setter importing server. Always app.navreo.ai (HARD RULE)."""
+    label = _dashboard_client_label_for_id(client_id)
+    if not label:
+        return ""
+    return ("https://app.navreo.ai/app/dashboard.html?share="
+            + urllib.parse.quote(mint_client_dashboard_share(label), safe=""))
+
+
+setter._DASHBOARD_LINK_FOR_CLIENT = dashboard_share_link_for_client_id
+
+
 def _dashboard_display_label(client: str) -> str:
     """workspaces.display_label for an own-workspace client; the client label
     itself for a shared-workspace client (that label IS the client's name).
@@ -26297,7 +26336,8 @@ class Handler(SimpleHTTPRequestHandler):
             # pattern - the page + its one data read load logged-out when a
             # share=<token> rides the URL; the token itself is verified inside
             # the /api/dashboard/data handler.
-            _dash_share = (path in ("/api/dashboard/data", "/app/dashboard.html")
+            _dash_share = (path in ("/api/dashboard/data", "/app/dashboard.html",
+                                    "/api/dashboard/link")
                            and "share=" in self.path)
             # Client setter share (setter-client-view): the setter page + the
             # allowlisted reads load logged-out ONLY with a share= token; the
@@ -26987,6 +27027,27 @@ class Handler(SimpleHTTPRequestHandler):
                                    "months": [], "campaigns_running": []}, 403)
             body, status = dashboard_data_get(p["client"])
             return self._json(body, status)
+        if path == "/api/dashboard/link":
+            # "Campaign dashboard" button on the two CLIENT pages (setter
+            # client view, training portal): those pages hold a client-share /
+            # training-share token, never a dashboard token, so they ask the
+            # server to resolve their own client's permanent dashboard link.
+            # The token is the ONLY input - it can never name another client.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            tok = (q.get("share") or [""])[0]
+            client_id = ""
+            cs = setter.verify_client_share(tok)
+            if cs:
+                client_id = str(cs[0] if isinstance(cs, tuple) else cs)
+            else:
+                agent = setter.verify_training_share(tok)
+                if agent:
+                    client_id = setter.client_id_for_agent(agent)
+            if not client_id:
+                return self._json({"ok": False, "url": ""}, 403)
+            url = dashboard_share_link_for_client_id(client_id)
+            return self._json({"ok": bool(url), "url": url}, 200)
         if path == "/api/restore-plan":
             body, status = api_restore_plan()
             return self._json(body, status)

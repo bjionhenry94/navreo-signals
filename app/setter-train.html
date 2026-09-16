@@ -346,6 +346,29 @@ const SS = {
 if (SHARE_MODE) {
   document.body.classList.add("share-mode");
   document.getElementById("rail").outerHTML = "";
+  /* "Campaign dashboard" (client-campaign-dashboard, step 4b): the one
+     permanent link the client's reply notifications also carry. The portal
+     holds a TRAINING token, so the server resolves the client (and the
+     dashboard link) from that token alone - /api/dashboard/link. The button
+     only appears once a real link comes back. */
+  const headRow = document.querySelector(".setter-head-row");
+  if (headRow) {
+    fetch("/api/dashboard/link?share=" + encodeURIComponent(SHARE_TOKEN))
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d || !d.ok || !d.url) return;
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.id = "clientDashBtn";
+        a.href = d.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.title = "Open your campaign dashboard";
+        a.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg><span>Campaign dashboard</span>`;
+        headRow.appendChild(a);
+      })
+      .catch(() => {});
+  }
 } else {
   document.getElementById("rail").outerHTML = renderRail("setter");
 }

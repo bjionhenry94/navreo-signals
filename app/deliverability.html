@@ -345,6 +345,15 @@
           </div>
         </div>
         <div class="subline" id="rs-msg" style="margin-top:8px">The link shows only this client, over these dates (inside the last 30 days). It works without a login.</div>
+        <!-- ══ Campaign dashboard link (client-campaign-dashboard, step 4c):
+             the client's PERMANENT link — no dates, whole history. Same client
+             picker above. ══ -->
+        <div style="border-top:1px solid var(--line-2);margin-top:14px;padding-top:12px">
+          <div style="font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);margin-bottom:8px">Campaign dashboard</div>
+          <button class="chip" id="ds-copy" type="button" style="width:100%;justify-content:center;display:inline-flex">Copy dashboard link</button>
+          <input id="ds-url" readonly style="display:none;width:100%;margin-top:8px;font:500 11px var(--font-mono);padding:7px 8px;border:1px solid var(--line-2);border-radius:8px;color:var(--ink-2);background:var(--bg-sunken)">
+          <div class="subline" id="ds-msg" style="margin-top:8px">One permanent link: month by month, every campaign running now, and this week. No login needed.</div>
+        </div>
       </div>
     </div>
   </header>
@@ -3411,6 +3420,29 @@ boot();
       $("rs-out").style.display = "";
       $("rs-msg").textContent = "Link ready — " + d.client + ", " + d.start + " to " + d.end + ". Valid 90 days, no login needed.";
     }).catch(function () { $("rs-msg").textContent = "Could not create the link."; });
+  });
+  $("ds-copy").addEventListener("click", function () {
+    var client = $("rs-client").value;
+    if (!client) { $("ds-msg").textContent = "Pick a client first."; return; }
+    $("ds-msg").textContent = "Creating…";
+    fetch("/api/dashboard/share", {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ client: client })
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      if (!d || !d.ok || !d.url) { $("ds-msg").textContent = (d && d.message) || "Could not create the link."; return; }
+      var inp = $("ds-url");
+      inp.value = d.url;                     // absolute app.navreo.ai link
+      inp.style.display = "";
+      inp.select();
+      var done = function () {
+        $("ds-copy").textContent = "Copied ✓";
+        setTimeout(function () { $("ds-copy").textContent = "Copy dashboard link"; }, 1600);
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(d.url).then(done, done);
+      else { document.execCommand("copy"); done(); }
+      $("ds-msg").textContent = "Permanent dashboard link for " + d.client + " — copied.";
+    }).catch(function () { $("ds-msg").textContent = "Could not create the link."; });
   });
   $("rs-copy").addEventListener("click", function () {
     var inp = $("rs-url");

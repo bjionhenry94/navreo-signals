@@ -1560,6 +1560,29 @@ if (CLIENT_MODE) {
      here rather than in the markup so the owner page never carries a hidden
      node. */
   const headRow = document.querySelector(".setter-head-row");
+  /* "Campaign dashboard" (client-campaign-dashboard, step 4b): the same one
+     permanent link the reply notifications carry. The page holds a client
+     share token, never a dashboard token, so the server resolves it from that
+     token alone (/api/dashboard/link) - and the button only appears once a
+     real link comes back, so a client without a dashboard never sees a dead
+     control. */
+  if (headRow) {
+    fetch("/api/dashboard/link?share=" + encodeURIComponent(SHARE_TOKEN))
+      .then((r) => r.json())
+      .then((d) => {
+        if (!d || !d.ok || !d.url) return;
+        const a = document.createElement("a");
+        a.className = "btn";
+        a.id = "clientDashBtn";
+        a.href = d.url;
+        a.target = "_blank";
+        a.rel = "noopener";
+        a.title = "Open your campaign dashboard";
+        a.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg><span>Campaign dashboard</span>`;
+        headRow.appendChild(a);
+      })
+      .catch(() => {});
+  }
   if (headRow) {
     const tourBtn = document.createElement("button");
     tourBtn.className = "btn";
