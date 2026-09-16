@@ -744,6 +744,41 @@ def _autoreply_category(body):
     return None
 
 
+# Automated acknowledgements that are NOT out-of-office: "thanks for your
+# email, we'll get back to you", "this inbox is checked once a day", support
+# ticket receipts, CSAT surveys. Owner ruling 2026-09-16 (Amplifyy training
+# review): a training scenario is never built from an automated message, so
+# _fetch_training_candidates drops these even when the categoriser filed
+# them as positive. Judged on the head of the lead's own unquoted text.
+_AR_AUTOACK = re.compile(
+    r"(thank(s| you) for (your (e-?mail|message|enquiry|inquiry|note)|contacting|"
+    r"reaching out|getting in touch|writing)[^.!\n]{0,120}"
+    r"\b(we|i|someone|our team|a member of (our|the) team)('ll| will| shall| aim to)?\s*"
+    r"(get back|be in touch|respond|reply|review|contact you|follow up)"
+    r"|(this |the |our )?(inbox|mailbox|e-?mail) is (checked|monitored|reviewed) "
+    r"|please allow (up to )?\d+\s*(-\s*\d+\s*)?(hours|hrs|business days|working days|days)"
+    r"|we (have|'ve) received your (message|e-?mail|enquiry|inquiry|request|submission)"
+    r"|this is an automated (message|response|reply|acknowledg\w+|e-?mail)"
+    r"|automated (message|response|reply)\b"
+    r"|do not reply to this (e-?mail|message)"
+    r"|(ticket|case|request) (number|no\.?|#|id)\s*[:#]?\s*\w*\d"
+    r"|(has been|was) (received|logged|created) and (a |our )?(team|agent|member)"
+    r"|how would you rate (the|your|our) (support|service|experience)"
+    r"|rate (the|your) (support|service) you received)",
+    re.IGNORECASE)
+
+
+def _is_automated_ack(body) -> bool:
+    """True iff the lead's own new message reads as an automated
+    acknowledgement / ticket receipt / survey (see _AR_AUTOACK). Head-only,
+    no positive veto: this is used to keep such mail OUT of training
+    scenarios, never to categorise or dismiss a live reply."""
+    lead = clean_body(body or "")
+    if not lead:
+        return False
+    return bool(_AR_AUTOACK.search(lead[:600]))
+
+
 def _autoreply_needs_no_human(body) -> bool:
     """True iff a still-uncategorised client reply is plainly automated / a clear
     non-positive that needs no human (out-of-office, left-company / wrong person,
@@ -14954,6 +14989,13 @@ def _fetch_training_candidates(category: str, exclude_ids: list, want: int,
             if str(r.get("id")) in exclude_set:
                 continue
             if len(str(r.get("reply_body") or "").strip()) < 10:
+                continue
+            # Never build a scenario from an automated message (owner ruling
+            # 2026-09-16): out-of-office, auto-acknowledgements, ticket
+            # receipts, surveys, bounces, wrong-person redirects - whatever
+            # the categoriser filed them as.
+            body = r.get("reply_body")
+            if _autoreply_category(body) is not None or _is_automated_ack(body):
                 continue
             out.append(r)
         return out

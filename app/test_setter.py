@@ -11820,6 +11820,56 @@ def test_autoreply_category_labels_and_signature_veto():
         check(f"positive/soft stays None: {pos[:36]!r}", cat(pos) is None, cat(pos))
 
 
+def test_is_automated_ack_and_training_candidates_skip_it():
+    """Owner ruling 2026-09-16 (Amplifyy training review): a training scenario
+    is never built from an automated message. _is_automated_ack catches the
+    auto-acknowledgement shapes _autoreply_category does not (they are not
+    out-of-office), and _fetch_training_candidates drops BOTH classes even
+    when the categoriser filed the row as positive."""
+    ack = setter._is_automated_ack
+    for b in (
+        "Thank you for your email, we want to know what you have to say, and we will be "
+        "getting back to you as soon as possible. This inbox is checked once a day, so please "
+        "allow 36 hours (not including weekends or holidays) for a response.",
+        "We appreciate you reaching out. You can expect to hear back from us within 2 business "
+        "days. Please reply with any additional comments or photos.",
+        "Hi Kevin, Thank you for contacting our team! We'd love to hear about your recent support "
+        "experience. How would you rate the support you received today?",
+        "This is an automated response. Your request has been received and a member of our team "
+        "will be in touch.",
+        "Ticket #48213 has been created and an agent will review it shortly.",
+    ):
+        check(f"automated ack detected: {b[:40]!r}", ack(b) is True, ack(b))
+    for b in (
+        "Thanks for reaching out, yes I'd be interested. What's your price?",
+        "Sure, send me the breakdown and a couple of times that work.",
+        "Hi Kevin, we are on Amazon already, open to hearing what you'd do differently.",
+        "Thank you for your email. Which marketplace would this be for?",
+    ):
+        check(f"real reply stays eligible: {b[:40]!r}", ack(b) is False, ack(b))
+
+    rows = [
+        {"id": "r1", "smartlead_campaign_id": "1", "email": "a@x.com", "replied_at": "2026-09-07",
+         "category": "Interested", "reply_subject": "Re", "reply_body":
+         "Thank you for your email, we will be getting back to you as soon as possible. "
+         "This inbox is checked once a day, so please allow 36 hours for a response."},
+        {"id": "r2", "smartlead_campaign_id": "1", "email": "b@x.com", "replied_at": "2026-09-07",
+         "category": "Interested", "reply_subject": "Re", "reply_body":
+         "I'm currently out of office and will be back on Monday."},
+        {"id": "r3", "smartlead_campaign_id": "1", "email": "c@x.com", "replied_at": "2026-09-07",
+         "category": "Interested", "reply_subject": "Re", "reply_body":
+         "Sounds interesting, send over the breakdown and let's find a time."},
+    ]
+    orig = setter._SB
+    setter._SB = lambda *a, **k: rows
+    try:
+        got = setter._fetch_training_candidates("Interested", [], 3, None)
+    finally:
+        setter._SB = orig
+    ids = [r["id"] for r in got]
+    check("training candidates drop the auto-ack and the OOO, keep the real reply", ids == ["r3"], ids)
+
+
 def test_sweep_client_uncategorised_categorises_and_resolves():
     """Grout durable fix 2026-08-19: a client campaign missing its categoriser
     webhook lands every reply uncategorised. The client sweep deterministically
@@ -12468,6 +12518,7 @@ if __name__ == "__main__":
     test_monitor_surface_gate_positives_and_uncategorised_only()
     test_monitor_surface_skips_uncategorised_autoreplies()
     test_autoreply_category_labels_and_signature_veto()
+    test_is_automated_ack_and_training_candidates_skip_it()
     test_sweep_client_uncategorised_categorises_and_resolves()
     test_attach_campaign_names()
     test_training_answer_edit_teaches_via_lesson_from_edit()
