@@ -2675,6 +2675,13 @@ def lint_draft(html: str, ctx: dict):
         for link in (ctx.get("slot_links") or []):
             if link and link not in text:
                 return False, "The draft is missing one of the suggested call times."
+        # Link-less slots (instruction-authorised times, PR #279): the label
+        # itself must appear, since there is no href to look for.
+        _plain_for_labels = _TAG_RE.sub(" ", text)
+        for _lnk, _lbl in zip(ctx.get("slot_links") or [], ctx.get("slot_labels") or []):
+            if not _lnk and _lbl and str(_lbl) not in _plain_for_labels:
+                return False, ("The draft is missing one of the suggested call times - write both "
+                               "labels exactly as given: " + ", ".join(str(x) for x in ctx.get("slot_labels") or []))
     elif ctx.get("slots_fallback") and ctx.get("needs_availability_ask"):
         # Owner ruling 2026-07-14: when Calendly can't offer real times, the
         # fallback draft must still give the lead a real hyperlink to pick a
@@ -2713,7 +2720,8 @@ def lint_draft(html: str, ctx: dict):
     # proposed their own time or asked for the call gets bare times, no clause.
     _instr_low = str(ctx.get("instructions") or "").lower()
     if ("would you be open to a call on" in _instr_low
-            and ctx.get("slot_status") == "ok" and (ctx.get("slot_links") or [])
+            and ctx.get("slot_status") == "ok"
+            and (any(ctx.get("slot_links") or []) or any(ctx.get("slot_labels") or []))
             and not ctx.get("lead_proposed_time")
             and not ctx.get("lead_requested_call")
             and ctx.get("call_ask") != "avoid"):

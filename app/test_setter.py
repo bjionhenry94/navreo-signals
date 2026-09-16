@@ -962,6 +962,22 @@ def test_instruction_authorised_slots_when_calendly_cannot_resolve():
     setter.draft_reply({"first_name": "Joe", "subject": "hi", "first_outbound": "Hi Joe,", "body": "Sure"},
                        auth, {"primary_intent": "send_resource"}, live, "ok", "William")
     check("directive: absent for real Calendly slots", "instruction_times_directive" not in seen["payload"])
+    # lint: the opener + where-clause law applies to link-less instruction
+    # slots too (live row 3840, 2026-09-16: "Would Thu ... or Fri ... work for you?")
+    lctx = {"slot_status": "ok", "slot_links": ["", ""], "slot_labels": [x["label"] for x in bs],
+            "instructions": auth["instructions"] + " Would you be open to a call on {t1} or {t2} where ...?",
+            "booking_link": "https://calendly.com/x/intro", "thread_text": "", "call_ask": "required"}
+    bad = (f'<div>Hi Joe,</div><br><div>Would {bs[0]["label"]} or {bs[1]["label"]} work for you?</div>'
+           '<br><div>If those times aren\'t suitable, feel free to suggest some times, or book in direct.</div>'
+           '<br><div>https://calendly.com/x/intro</div><br><div>William</div>')
+    ok, why = setter.lint_draft(bad, lctx)
+    check("lint: instruction slots still demand the house opener", not ok and "Would you be open to a call" in why, why)
+    good = bad.replace(f"Would {bs[0]['label']}", f"Would you be open to a call on {bs[0]['label']}").replace(
+        "work for you?", "where I could show you which products I'd put budget behind first?")
+    ok, why = setter.lint_draft(good, lctx)
+    check("lint: the house shape with both labels passes", ok, why)
+    ok, why = setter.lint_draft(good.replace(bs[1]["label"], "Friday afternoon"), lctx)
+    check("lint: a dropped label is caught even without a slot link", not ok and "missing one of the suggested" in why, why)
 
 
 def test_currency_mojibake_and_quote_runs_repaired():
