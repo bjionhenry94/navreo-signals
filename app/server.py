@@ -22701,23 +22701,35 @@ def dashboard_data_get(client: str) -> tuple:
     # No running campaign should show a dash for "Started". contact_history only
     # knows the leads THIS system uploaded, so a campaign launched before us (or
     # uploaded straight in Smartlead) comes back with nothing. Fall back to the
-    # campaign's Smartlead created_at - one /campaigns call for the client's
-    # workspace, and only when something is actually missing.
-    if running_ids and any(not started.get(cid) for cid in running_ids):
+    # campaign's Smartlead created_at.
+    #
+    # One call PER MISSING CAMPAIGN, not a workspace /campaigns listing: the
+    # Navreo workspace's listing is large enough that it times out / rate-limits
+    # and returns nothing (measured 2026-09-16 — it was silently costing Arnic's
+    # two newest campaigns their start date). Only the handful of running
+    # campaigns that are actually missing one are fetched, capped, in a small
+    # pool, and a failed probe leaves "-" rather than inventing a date.
+    _missing = [cid for cid in running_ids if not started.get(cid)][:_DASHBOARD_EDGE_CAP]
+    if _missing:
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+
+        def _created(cid: str):
+            try:
+                k = ws_key((camps_all.get(cid) or {}).get("workspace") or "navreo")
+                if not k:
+                    return cid, None
+                r = http_json("GET", f"{SMARTLEAD_BASE}/campaigns/{cid}?api_key={k}", {})
+                if isinstance(r, dict):
+                    return cid, r.get("created_at")
+            except Exception:  # noqa: BLE001 - "-" beats a wrong date
+                pass
+            return cid, None
         try:
-            _wss = {(camps_all[cid].get("workspace") or "navreo") for cid in running_ids}
-            for _ws in _wss:
-                if not any(not started.get(cid) for cid in running_ids
-                           if (camps_all[cid].get("workspace") or "navreo") == _ws):
-                    continue
-                _k = ws_key(_ws)
-                if not _k:
-                    continue
-                for _c in (_sl_campaigns_for_ws(_k) or []):
-                    _cid = str(_c.get("id") or "")
-                    if _cid in started and not started.get(_cid):
-                        started[_cid] = _c.get("created_at")
-        except Exception as e:  # noqa: BLE001 - additive; the cell falls back to "-"
+            with _TPE(max_workers=4) as _ex:
+                for _cid, _at in _ex.map(_created, _missing):
+                    if _at:
+                        started[_cid] = _at
+        except Exception as e:  # noqa: BLE001 - additive
             print(f"[dashboard] started fallback failed: {e}", file=sys.stderr)
     pos_by, mtg_by = _dashboard_campaign_positives(running_ids)
     running = []
