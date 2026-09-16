@@ -919,6 +919,26 @@ def test_instruction_authorised_slots_when_calendly_cannot_resolve():
           [s["label"] for s in late] == ["Thursday, 17th September at 1:00 PM BST",
                                          "Friday, 18th September at 10:00 AM BST"], late)
     check("self-times: none for an unauthorised brain", setter.instruction_authorised_slots(plain, "Europe/London", now) == [])
+    # TouchPoint v2 wording (2026-09-16): "you MUST propose two specific call
+    # times" + "Times: pick two later in the week" + per-country windows.
+    v2 = {"id": "agent-touch2", "instructions": (
+        "you MUST propose two specific call times using exactly this format: \"Would you be open to a call on "
+        "{time 1} or {time 2} where {value-led clause}?\".\n"
+        "Times: pick two later in the week, never today, never a past date, never a weekend, on two different days. "
+        "William protects his mornings for deep work, so UK leads get afternoon slots between 2:30pm and 6pm UK time. "
+        "US leads get slots between 10am and 2pm Eastern, written with the time zone (for example 11am Eastern).")}
+    fmt_only = {"id": "agent-fmt", "instructions": (
+        "When you offer two call times, use exactly this format: \"Would you be open to a call on {time 1} or {time 2} where ...?\".")}
+    check("self-times v2: MUST-propose + pick-two-later-in-the-week authorises", setter.instructions_authorise_self_times(v2))
+    check("self-times v2: a format-only house rule does not authorise", not setter.instructions_authorise_self_times(fmt_only))
+    uk = setter.instruction_authorised_slots(v2, "Europe/London", now)
+    check("self-times v2: UK window 2:30pm-6pm honoured",
+          [s["label"] for s in uk] == ["Thursday, 17th September at 2:30 PM BST",
+                                       "Friday, 18th September at 4:30 PM BST"], uk)
+    us = setter.instruction_authorised_slots(v2, "America/New_York", now)
+    check("self-times v2: US window 10am-2pm Eastern honoured",
+          [s["label"] for s in us] == ["Thursday, 17th September at 10:00 AM EDT",
+                                       "Friday, 18th September at 12:00 PM EDT"], us)
     live = [{"label": "L", "link": "https://cal.example/b/1"}]
     check("backfill: live slots untouched", setter.backfill_instruction_slots(auth, live, "ok", "Europe/London", now) == (live, "ok"))
     bs, bst = setter.backfill_instruction_slots(auth, [], "error", "Europe/London", now)
