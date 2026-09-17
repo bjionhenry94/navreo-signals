@@ -101,17 +101,17 @@ def _campaign_client_map() -> dict:
 
 
 def _active_clients(cur_month: str) -> set:
-    """Clients that sent this month (client_monthly_stats.sent > 0). Excludes
-    Navreo-own and the demo client."""
-    rows = server.sb_get_all(
-        "client_monthly_stats?select=client,sent&month=eq.%s" % urllib.parse.quote(cur_month)
-    ) or []
-    active = set()
+    """Every client we run campaigns for — the SAME roster the Analytics page
+    shows (distinct campaign_scorecard.client), so the board lists all clients,
+    not just this month's senders (owner ask 2026-09-17). Excludes Navreo-own,
+    the demo client, and the unassigned bucket."""
+    rows = server.sb_get_all("campaign_scorecard?select=client&client=not.is.null") or []
+    out = set()
     for r in rows:
         cl = (r.get("client") or "").strip()
-        if cl and cl not in _EXCLUDE_LABELS and int(r.get("sent") or 0) > 0:
-            active.add(cl)
-    return active
+        if cl and cl not in _EXCLUDE_LABELS and cl != "__unassigned":
+            out.add(cl)
+    return out
 
 
 # ── names ───────────────────────────────────────────────────────────────────
