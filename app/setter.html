@@ -1296,6 +1296,9 @@ body.client-mode .send-gate .sg-intro { font-size: 12.5px; color: var(--ink-2); 
    to the corner instead - under the tour dim (z-index 500) so the tour it
    starts still covers it. */
 body.client-mode #clientTourBtn { display: inline-flex !important; }
+/* The guide link is always the LAST control in the header row = the top-right
+   corner, whichever order the async dashboard button lands in. */
+body.client-mode #clientGuideBtn { order: 99; }
 @media (max-width: 640px) {
   body.client-mode > #clientTourBtn { position: fixed; top: 10px; right: 10px; z-index: 450; }
 }
@@ -1591,6 +1594,21 @@ if (CLIENT_MODE) {
         headRow.appendChild(a);
       })
       .catch(() => {});
+  }
+  /* "Guide: How to respond to leads" (Bjion 2026-09-17): the public Notion
+     playbook on turning positive replies into booked calls. A plain link, so
+     it sits in the header's top-right slot alongside the other client
+     controls and never touches the owner page. */
+  if (headRow) {
+    const g = document.createElement("a");
+    g.className = "btn";
+    g.id = "clientGuideBtn";
+    g.href = "https://navreo.notion.site/How-to-convert-positive-responses-into-booked-calls-2e06e75598d980e095eec446de923937";
+    g.target = "_blank";
+    g.rel = "noopener";
+    g.title = "Open the guide: how to convert positive responses into booked calls";
+    g.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5z"/><path d="M4 20.5A2.5 2.5 0 0 0 6.5 23H20v-5"/></svg><span>Guide: How to respond to leads</span>`;
+    headRow.appendChild(g);
   }
   if (headRow) {
     const tourBtn = document.createElement("button");
