@@ -3164,6 +3164,43 @@ def test_dismiss_sweeps_conversation_siblings():
     check("dismiss sweep: other lead untouched", by_id[923]["status"] == "needs_review", by_id[923])
 
 
+def test_move_conversation_between_lanes():
+    """Owner ask 2026-09-17 (REViVE/StayDry thread): a reviewer can re-file a
+    conversation into another lane by hand — Needs review or Sent — with no
+    email sent. This is the way back for a dismissed conversation the client is
+    still pursuing. Only those two targets are valid, and the move is
+    idempotent so a double-click or a stale menu is a success, not an error."""
+    sb, http = fresh_setter()
+    sb.queue.append({"id": 970, "workspace": "navreo", "smartlead_campaign_id": 444,
+                     "lead_email": "d@x.com", "message_id": "d1", "status": "dismissed",
+                     "is_test": False})
+    # Dismissed -> Needs review (the rescue path from the thread).
+    st, resp = setter.route_queue_action({"id": 970, "action": "move", "to": "needs_review"})
+    check("move: dismissed -> needs_review succeeds",
+          st == 200 and resp.get("status") == "needs_review", (st, resp))
+    check("move: row is now needs_review",
+          {r["id"]: r for r in sb.queue}[970]["status"] == "needs_review", None)
+    # Needs review -> Sent.
+    st2, resp2 = setter.route_queue_action({"id": 970, "action": "move", "to": "sent"})
+    check("move: needs_review -> sent succeeds",
+          st2 == 200 and resp2.get("status") == "sent", (st2, resp2))
+    check("move: row is now sent",
+          {r["id"]: r for r in sb.queue}[970]["status"] == "sent", None)
+    # Same-lane move is idempotent (double-click / stale menu another tab moved).
+    st3, resp3 = setter.route_queue_action({"id": 970, "action": "move", "to": "sent"})
+    check("move: same-lane move is an idempotent 200",
+          st3 == 200 and resp3.get("already") is True, (st3, resp3))
+    # Only the two named lanes are valid targets — Dismiss keeps its own door,
+    # and no free-text status can be hand-set.
+    st4, resp4 = setter.route_queue_action({"id": 970, "action": "move", "to": "dismissed"})
+    check("move: an unsupported target is rejected 400", st4 == 400, (st4, resp4))
+    check("move: a rejected target leaves the row unchanged",
+          {r["id"]: r for r in sb.queue}[970]["status"] == "sent", None)
+    # A missing row 404s like every other action (no identity to re-resolve on).
+    st5, resp5 = setter.route_queue_action({"id": 999999, "action": "move", "to": "sent"})
+    check("move: a missing row 404s", st5 == 404, (st5, resp5))
+
+
 def test_unresolved_tray_collapses_to_one_row_per_conversation():
     """Owner ruling 2026-08-15 ("there should only ever be one row in the
     whole system"): the tray shows ONE row per (workspace, campaign, lead)
@@ -12587,6 +12624,7 @@ if __name__ == "__main__":
     test_send_gate_push_stamps_pushing_before_the_worker_runs()
     test_subsequence_dismiss_is_idempotent()
     test_dismiss_sweeps_conversation_siblings()
+    test_move_conversation_between_lanes()
     test_unresolved_tray_collapses_to_one_row_per_conversation()
     test_tray_dismiss_sweeps_followup_siblings()
     test_collapse_degrade_serves_stale_rep_ids()

@@ -323,6 +323,29 @@
    Scoped to .dh-band so the sidebar lead-panel quick links keep their size. */
 .dh-links .lp-qbtn { flex: 0 0 auto; min-height: 30px; padding: 5px 11px; }
 .dh-band .lp-panel-toggle { min-height: 30px; width: 32px; }
+/* "Move conversation" — re-file the open thread into another lane by hand
+   (owner ask 2026-09-17, REViVE/StayDry thread: a dismissed conversation the
+   client was still pursuing had no way back). A small header control with a
+   two-option popover; the current lane is shown disabled so the two choices
+   are always the OTHER lanes. Nothing is emailed — it only moves the pill. */
+.dh-move-wrap { position: relative; flex: 0 0 auto; }
+.dh-move-btn { display: inline-flex; align-items: center; gap: 5px; min-height: 30px; padding: 5px 11px;
+  border: 1px solid var(--line-2); border-radius: 8px; background: transparent; color: var(--ink-2);
+  font-size: 12.5px; cursor: pointer; white-space: nowrap; }
+.dh-move-btn:hover { background: var(--bg-sunken); color: var(--ink); }
+.dh-move-btn[aria-expanded="true"] { background: var(--bg-sunken); color: var(--ink); border-color: var(--ink-3); }
+.dh-move-btn .dh-move-caret { color: var(--ink-3); font-size: 10px; }
+.dh-move-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 40; min-width: 190px;
+  background: var(--bg, #fff); border: 1px solid var(--line-2); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(16,24,40,.14); padding: 6px; }
+.dh-move-lab { padding: 3px 9px 6px; font-size: 11.5px; color: var(--ink-3);
+  border-bottom: 1px solid var(--line); margin-bottom: 4px; }
+.dh-move-opt { display: flex; align-items: center; width: 100%; text-align: left; gap: 8px;
+  padding: 8px 10px; border: none; background: transparent; color: var(--ink); font-size: 13px;
+  border-radius: 8px; cursor: pointer; }
+.dh-move-opt:hover { background: var(--bg-sunken); }
+.dh-move-opt[disabled] { color: var(--ink-3); cursor: default; background: transparent; }
+.dh-move-opt .dh-move-cur { margin-left: auto; font-size: 11px; color: var(--ink-3); }
 /* The decision */
 .lead-panel .lp-decision { margin-bottom: 11px; }
 .lead-panel .lp-decision-head { display: block; font-weight: 600; font-size: 13px; color: var(--ink); margin-bottom: 3px; }
@@ -4585,6 +4608,7 @@ function renderDetail(row) {
         `<div class="dh-campaign" title="${esc(campaignNameFor(row))}"><span class="dh-campaign-name">${esc(campaignNameFor(row))}</span></div>`}
         <div class="dh-actions">
           <div class="lp-quick dh-links">${leadQuickLinksHtml(row)}</div>
+          ${moveControlHtml(row)}
           <button type="button" class="lp-panel-toggle" id="panelToggleBtn" aria-pressed="true" title="Hide lead details">${ICON_PANEL}</button>
         </div>
       </div>
@@ -5977,6 +6001,29 @@ const DISMISS_TITLE_ATTR = CLIENT_MODE
   : ` title="Removes it from this queue only. Nothing is sent and the lead stays in Smartlead."`;
 const DISMISS_LABEL = CLIENT_MODE ? "No reply needed" : "Dismiss";
 
+/* "Move conversation" (owner ask 2026-09-17): a header control that re-files
+   the open conversation into another lane by hand. Only the two lanes the
+   owner named are offered — Needs review and Sent — and the lane the row is
+   already in is shown disabled, so the menu always presents the two OTHER
+   destinations. Available in every status and in client mode (the client is
+   who got stuck on a dismissed conversation with no way back). A read-only
+   Smartlead search hit (__slkey) has no queue row to move, so it gets none. */
+const MOVE_TARGETS = ["needs_review", "sent"];
+function moveControlHtml(row) {
+  if (!row || row.id == null || row.__slkey) return "";
+  const opt = (to) => {
+    const isCur = row.status === to;
+    return `<button type="button" class="dh-move-opt" role="menuitem" data-id="${esc(row.id)}" data-to="${to}"${isCur ? " disabled aria-disabled=\"true\"" : ""}>${esc(STATUS_LABELS[to])}${isCur ? `<span class="dh-move-cur">Current</span>` : ""}</button>`;
+  };
+  return `<div class="dh-move-wrap">
+    <button type="button" class="dh-move-btn" id="moveBtn-${esc(row.id)}" data-id="${esc(row.id)}" aria-haspopup="true" aria-expanded="false" title="Move this conversation to another lane — nothing is sent">Move<span class="dh-move-caret">&#9662;</span></button>
+    <div class="dh-move-menu" id="moveMenu-${esc(row.id)}" role="menu" hidden>
+      <div class="dh-move-lab">Move conversation to</div>
+      ${MOVE_TARGETS.map(opt).join("")}
+    </div>
+  </div>`;
+}
+
 function gateLockHintHtml(rowId, hidden) {
   // The single wording change permitted anywhere in client mode (ruling 4.ii):
   // "track" is our word for a subsequence. Everything else - chip labels,
@@ -6588,6 +6635,24 @@ function wireDetailEvents(root, row) {
     if (btn) btn.click();
   }));
   root.querySelectorAll(".qc-dismiss").forEach((btn) => btn.addEventListener("click", () => doDismiss(btn)));
+  // "Move conversation" header menu (owner ask 2026-09-17): a two-option popover
+  // that re-files the thread into Needs review or Sent. The button toggles it;
+  // an option fires the move. A single document-level listener (wired once)
+  // closes it on an outside click or Escape.
+  root.querySelectorAll(".dh-move-btn").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleMoveMenu(btn);
+  }));
+  root.querySelectorAll(".dh-move-opt").forEach((btn) => btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (btn.disabled) return;
+    doMoveConversation(btn.getAttribute("data-id"), btn.getAttribute("data-to"), btn.closest(".dh-move-menu"));
+  }));
+  if (!_moveMenuGlobalWired) {
+    _moveMenuGlobalWired = true;
+    document.addEventListener("click", (e) => { if (!e.target.closest(".dh-move-wrap")) closeMoveMenu(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMoveMenu(); });
+  }
   // The follow-up compose box is open by default (owner ask 2026-08-15) -
   // there is no opener button any more. No auto-focus here: renderDetail
   // re-runs on background refreshes, and focusing on every repaint would
@@ -7833,6 +7898,89 @@ async function doDismiss(btn) {
   }
   clearError();
   delete EDITED_DRAFTS[id];
+}
+
+/* ── "Move conversation" (owner ask 2026-09-17) ─────────────────────────────
+   A small header menu that re-files the open conversation into another lane by
+   hand — Needs review or Sent. It exists because a dismissed conversation the
+   REViVE client was still pursuing had no way back into an actionable lane, and
+   a needs-review/sent row sometimes wants filing the other way. Nothing is
+   emailed: it only moves the queue row between pills (server action "move"). */
+let _moveMenuGlobalWired = false;
+function closeMoveMenu() {
+  document.querySelectorAll(".dh-move-menu").forEach((m) => { m.hidden = true; });
+  document.querySelectorAll(".dh-move-btn").forEach((b) => b.setAttribute("aria-expanded", "false"));
+}
+function toggleMoveMenu(btn) {
+  const id = btn.getAttribute("data-id");
+  const menu = document.getElementById(`moveMenu-${id}`);
+  if (!menu) return;
+  const willOpen = menu.hidden;
+  closeMoveMenu();
+  if (willOpen) { menu.hidden = false; btn.setAttribute("aria-expanded", "true"); }
+}
+/* Optimistic, mirroring doDismiss: flip the status locally, shield the move
+   against the ~20s stale queue cache (tombstone the id under its NEW pill +
+   force the status through an override so a pre-move payload can't show it in
+   the old lane), move the pill counts, then roll it all back if the server
+   rejects it. Moving anywhere also clears any conversation-level dismiss shield
+   so a resurfaced (to Needs review) row is not filtered straight back out. */
+async function doMoveConversation(id, dest, menuEl) {
+  if (!MOVE_TARGETS.includes(dest)) return;
+  const qIdx = QUEUE_ROWS.findIndex((r) => String(r.id) === String(id));
+  const qRow = qIdx >= 0 ? QUEUE_ROWS[qIdx] : null;
+  const aRow = ALL_ROWS.find((r) => String(r.id) === String(id)) || null;
+  const row = qRow || aRow;
+  if (!row) { closeMoveMenu(); return; }
+  if (row.status === dest) { closeMoveMenu(); return; }   // already there — no-op
+  if (menuEl) menuEl.querySelectorAll(".dh-move-opt").forEach((b) => { b.disabled = true; });
+  const prevStatus = row.status;
+  if (qRow) qRow.status = dest;
+  if (aRow) aRow.status = dest;
+  const prevOverride = ROW_OVERRIDES[String(id)];
+  tombstoneRow(id, dest);
+  overrideRow({ id: row.id, status: dest });   // force ONLY the status through the stale payload
+  const _ck = convoKey(row);
+  const prevConvoTomb = _ck ? CONVO_TOMBSTONES[_ck] : undefined;
+  if (_ck) delete CONVO_TOMBSTONES[_ck];
+  // Leaves the current pill when it no longer belongs there (Dismissed/Sent →
+  // Needs review, etc.); on "All" or the destination pill it stays and just
+  // re-renders under the new status.
+  if (qIdx >= 0 && currentStatus && currentStatus !== dest) QUEUE_ROWS.splice(qIdx, 1);
+  bumpCounts(row, prevStatus, dest);
+  rememberIdentity(row);
+  renderKpis(); renderQueueFilters(); renderQueue();
+  // Re-render the open pane so the composer matches the new lane (a move to
+  // Needs review brings back the review/reply box; a move to Sent brings the
+  // follow-up box + follow-up decision controls). renderDetail rebuilds the
+  // header, so the Move menu is recreated closed with the new "Current" lane.
+  if (String(selectedRowId) === String(id)) renderDetail(row);
+  else closeMoveMenu();
+  protoNote(`Moved to ${STATUS_LABELS[dest]}`);
+  if (FE_SEND_TEST) return;   // demo/front-only: no backend write
+  const payload = { id: Number(id), action: "move", to: dest };
+  if (ROW_IDENTITY[id]) payload.identity = ROW_IDENTITY[id];
+  const res = await fetchJson("/api/setter/queue/action", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    // Roll the optimistic state back — same objects, index and counts.
+    delete ROW_TOMBSTONES[String(id)];
+    if (prevOverride) ROW_OVERRIDES[String(id)] = prevOverride; else delete ROW_OVERRIDES[String(id)];
+    if (_ck) { if (prevConvoTomb !== undefined) CONVO_TOMBSTONES[_ck] = prevConvoTomb; else delete CONVO_TOMBSTONES[_ck]; }
+    if (qRow) qRow.status = prevStatus;
+    if (aRow) aRow.status = prevStatus;
+    if (qIdx >= 0 && !QUEUE_ROWS.some((r) => String(r.id) === String(id))) {
+      QUEUE_ROWS.splice(Math.min(qIdx, QUEUE_ROWS.length), 0, qRow);
+    }
+    bumpCounts(row, dest, prevStatus);
+    renderKpis(); renderQueueFilters(); renderQueue();
+    if (String(selectedRowId) === String(id)) renderDetail(row);
+    showError("Couldn't move the conversation: " + res.error);
+    showDetailError("Couldn't move the conversation: " + res.error);
+    return;
+  }
+  clearError();
 }
 
 async function doSubsequence(chk) {
