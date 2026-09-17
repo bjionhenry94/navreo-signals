@@ -21762,7 +21762,12 @@ def _prewarm_training_interview(agent_id: str):
         doc = _load_training(agent_id)
         interviews = [i for i in (doc.get("interviews") or []) if isinstance(i, dict)]
         latest = interviews[-1] if interviews else None
-        if latest and _iv_unanswered(latest):
+        # A SKIPPED set is consumed, not waiting (deadlock 2026-09-17, Amplifyy
+        # wizard): the questions route refuses to re-serve a skipped set, so
+        # treating it as "already waiting" here meant no set was ever built
+        # again and the page sat on "Training is still being built" forever
+        # for anyone who had skipped their last questionnaire.
+        if latest and _iv_unanswered(latest) and not latest.get("skipped_at"):
             return  # a set with unanswered questions is already waiting
         questions_text = _generate_interview_questions(agent, doc)
         if not questions_text:

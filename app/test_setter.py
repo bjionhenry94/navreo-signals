@@ -5627,6 +5627,39 @@ def test_training_camp_ids_prefers_live_then_training_only():
          f({"campaign_ids": [9], "training_campaign_ids": [1]}))
 
 
+def test_prewarm_interview_builds_after_a_skipped_set():
+    """Deadlock 2026-09-17 (Amplifyy wizard): the questions route never
+    re-serves a SKIPPED set, so the prewarm must not treat one as "already
+    waiting" - otherwise no set is ever built again and the portal sits on
+    "Training is still being built" forever. An UNSKIPPED unanswered set
+    still blocks a duplicate."""
+    sb, http = fresh_setter()
+    agent = {"id": "agent-ivskip1", "mode": "draft_only", "enabled": True,
+             "instructions": "Pricing: 100 a month.", "allowed_intents": ["pricing"]}
+    sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
+    calls = []
+    orig_gen, orig_app = setter._generate_interview_questions, setter._append_interview_set
+    setter._generate_interview_questions = lambda a, d: "What is your refund policy?"
+    setter._append_interview_set = lambda aid, text: (calls.append((aid, text)) or ([], "", False))
+    try:
+        doc = setter._load_training(agent["id"])
+        doc["interviews"] = [{"questions": [{"id": "q-1", "q": "Old question?"}], "answers": {},
+                              "asked_at": "2026-09-16T18:20:50+00:00",
+                              "skipped_at": "2026-09-16T18:22:03+00:00"}]
+        setter._save_training(agent["id"], doc)
+        setter._prewarm_training_interview(agent["id"])
+        check("prewarm: a skipped latest set does not block a new set", len(calls) == 1, calls)
+
+        doc = setter._load_training(agent["id"])
+        doc["interviews"] = [{"questions": [{"id": "q-2", "q": "Waiting question?"}], "answers": {},
+                              "asked_at": "2026-09-17T09:00:00+00:00"}]
+        setter._save_training(agent["id"], doc)
+        setter._prewarm_training_interview(agent["id"])
+        check("prewarm: an unskipped unanswered set still blocks a duplicate", len(calls) == 1, calls)
+    finally:
+        setter._generate_interview_questions, setter._append_interview_set = orig_gen, orig_app
+
+
 def test_training_outreach_pool_used_verbatim_for_synthetic():
     """Stored campaign copy (training_outreach) IS email 1 of every synthetic
     scenario, verbatim with {first}/{Company} resolved per invented lead - the
@@ -12634,6 +12667,7 @@ if __name__ == "__main__":
     test_training_reset_full_wipes_whole_doc()
     test_training_generate_simulated_fallback_without_real_outreach()
     test_training_camp_ids_prefers_live_then_training_only()
+    test_prewarm_interview_builds_after_a_skipped_set()
     test_training_outreach_pool_used_verbatim_for_synthetic()
     test_staged_scenarios_use_training_outreach_pool()
     test_training_get_route()
