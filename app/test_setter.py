@@ -12838,3 +12838,15 @@ def test_strip_who_joins_ask_drops_the_question():
     keep = "<div>Looking forward to meeting you and Thusharan.</div>"
     assert S.strip_who_joins_ask(keep) == keep
     assert "confirm who should join" not in S.DRAFT_SYSTEM
+
+
+def test_vague_yes_is_classified_against_what_was_offered():
+    """Owner HARD RULE 2026-09-17: 'Sounds interesting.' to a trial/call offer
+    must not become a resource send. The lint forces a resource link whenever
+    send_resource is an intent, so the classifier must not pick it unless the
+    message being answered actually offered a resource."""
+    import setter as S
+    src = open(S.__file__).read()
+    assert "WHAT-WAS-OFFERED RULE" in src and "ANSWER-WHAT-WAS-OFFERED" in S.DRAFT_SYSTEM
+    assert 'or gave an unqualified yes ("sure", "send it", "interested", "know more"). The resource IS' not in src
+    assert "send_resource must NOT appear in all_intents" in src
