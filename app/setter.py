@@ -909,6 +909,9 @@ _LEXICON_PATTERNS = [
 _QUOTE_MARKERS = [
     r"\n\s*On .{0,100} wrote:\s*\n",
     r"\n-{2,}\s*Original Message\s*-{2,}",
+    # Outlook plain-text reply header ("From: X <x@y>\nSent: ...") - the quoted
+    # thread below it was rendering as part of the lead's new message.
+    r"\n\s*From:\s[^\n]{1,200}\n\s*(?:Sent|Date):\s",
     r"\n>",
 ]
 
@@ -1860,6 +1863,109 @@ def instruction_authorised_slots(agent: dict, tz: str, now_utc, settings: dict =
         return out if len(out) == 2 else []
     except Exception:  # noqa: BLE001 - a fallback helper must never break drafting
         return []
+
+
+_CLOCK_WINDOW_RE = re.compile(
+    r"\b(?:between|from|any\s?time(?:\s+between|\s+from)?|anytime(?:\s+between|\s+from)?)\s+"
+    r"(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*(?:and|&|to|-|–|until|till|til)\s*"
+    r"(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\b", re.IGNORECASE)
+
+
+def _lead_clock_window(text: str):
+    """"You can call me between 10.30 & 3.30" -> (630, 930) minutes of the
+    lead's day; None when the lead named no clock window. A bare hour of 1-7
+    reads as afternoon, and an end at or before the start moves to the
+    afternoon, the way a person means it. Never raises."""
+    try:
+        m = _CLOCK_WINDOW_RE.search(_strip_quoted(str(text or "")))
+        if not m:
+            return None
+        h0, m0, ap0, h1, m1, ap1 = m.groups()
+        # "we sell between 10 and 20 products" is not a call window: need a
+        # clock shape (minutes or am/pm) or call wording just before it.
+        _src = _strip_quoted(str(text or ""))
+        if not (m0 or m1 or ap0 or ap1) and not re.search(
+                r"\b(?:call|ring|phone|available|free|reach|speak|talk|chat)\b",
+                _src[max(0, m.start() - 60):m.start()], re.I):
+            return None
+        h0, h1, m0, m1 = int(h0), int(h1), int(m0 or 0), int(m1 or 0)
+        if h0 > 23 or h1 > 23 or m0 > 59 or m1 > 59:
+            return None
+        ap0, ap1 = (ap0 or "").lower(), (ap1 or "").lower()
+        if ap1 == "pm" and h1 < 12:
+            h1 += 12
+        if ap0 == "pm" and h0 < 12:
+            h0 += 12
+        if not ap0 and 1 <= h0 <= 7 and not (ap1 == "am"):
+            h0 += 12
+        w0, w1 = h0 * 60 + m0, h1 * 60 + m1
+        if w1 <= w0 and h1 < 12:
+            w1 += 12 * 60
+        if not (6 * 60 <= w0 < w1 <= 22 * 60):
+            return None
+        return w0, w1
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def narrow_slots_to_lead_window(slots: list, slot_status: str, lead_text: str, tz: str, now_utc,
+                                settings: dict = None, agent: dict = None, avail: list = None):
+    """(slots, slot_status) after every other pick. Owner HARD RULE 2026-09-17
+    ("if they offer a time ... why do you need to then offer another time?"):
+    a lead who names a clock window ("call me between 10.30 & 3.30") gets ONE
+    time inside that window, marked lead_fit so the drafter and the draft
+    backstop confirm it and stop - never two fresh times outside it. The one
+    time comes from the real calendar when it has a slot inside the window;
+    otherwise, only for an agent whose instructions authorise self-proposed
+    times, the next working day at the first half-hour inside the window.
+    Unchanged when the lead named no window or nothing fits. Never raises."""
+    try:
+        win = _lead_clock_window(lead_text)
+        if not win:
+            return slots, slot_status
+        w0, w1 = win
+        try:
+            zi = ZoneInfo(tz or "Europe/London")
+        except Exception:  # noqa: BLE001
+            zi = ZoneInfo("Europe/London")
+
+        def _inside(iso):
+            d = _parse_iso(iso)
+            if d.tzinfo is None:
+                d = d.replace(tzinfo=_dt.timezone.utc)
+            loc = d.astimezone(zi)
+            return w0 <= loc.hour * 60 + loc.minute <= w1 - 15
+
+        real = [s for s in (slots or []) if isinstance(s, dict) and s.get("source") != "instructions"]
+        if avail and (real or slot_status == "ok"):
+            filt = [iso for iso in avail if _inside(iso)]
+            if filt:
+                got = pick_slots(filt, tz, settings or {}, now_utc)
+                if got:
+                    got[0]["lead_fit"] = True
+                    return got[:1], "ok"
+        if not instructions_authorise_self_times(agent or {}):
+            return slots, slot_status
+        now_dt = _parse_iso(now_utc) if not isinstance(now_utc, _dt.datetime) else (
+            now_utc if now_utc.tzinfo else now_utc.replace(tzinfo=_dt.timezone.utc))
+        start = ((w0 + 29) // 30) * 30
+        if start + 30 <= w1 - 30:
+            start += 30 if start == w0 and w0 % 60 else 0
+        if start > w1 - 15:
+            start = w0
+        d = now_dt.astimezone(zi).date()
+        for _ in range(10):
+            d = d + _dt.timedelta(days=1)
+            if d.weekday() >= 5:
+                continue
+            local = _dt.datetime(d.year, d.month, d.day, start // 60, start % 60, tzinfo=zi)
+            if local.astimezone(_dt.timezone.utc) < now_dt + _dt.timedelta(hours=12):
+                continue
+            return [{"iso": local.isoformat(), "label": _slot_label(local), "link": "",
+                     "source": "instructions", "lead_fit": True}], "ok"
+        return slots, slot_status
+    except Exception:  # noqa: BLE001 - never break drafting
+        return slots, slot_status
 
 
 def backfill_instruction_slots(agent: dict, slots: list, slot_status: str, tz: str, now_utc,
@@ -3284,6 +3390,51 @@ def _thread_transcript(thread: list) -> str:
     return "\n".join(reversed(blocks))
 
 
+_LEAD_TIME_DROP_RE = re.compile(
+    r"would you be open to a call|work(?:s)? for you\s*\?|would either|which (?:of (?:those|these) )?works"
+    r"|(?:those|these|neither|none of (?:those|these)|either of (?:those|these))\s+(?:times?\s+)?(?:aren|isn|don|do not|are not|work|suit)"
+    r"|if neither|see my availability|grab a (?:time|slot)|book in directly|suggest (?:some|a few) times"
+    r"|pick (?:a|whichever) (?:time|slot)", re.IGNORECASE)
+_LEAD_PHONE_RE = re.compile(r"(?<![\d/])(\+?\d[\d\s().\-]{8,16}\d)(?!\d)")
+
+
+def confirm_lead_time_only(html_body: str, fit_slot: dict, lead_text: str) -> str:
+    """Owner HARD RULE 2026-09-17: the lead offered their own time or window,
+    so the reply CONFIRMS one time inside it and stops. Drops every paragraph
+    that offers fresh times, asks which time works, or points at the calendar
+    as a fallback, then makes sure the one lead-fit time is stated. The
+    prompt rule and three lint retries kept losing to the two-times habit;
+    this is the deterministic guard. Never raises."""
+    try:
+        label = str((fit_slot or {}).get("label") or "")
+        if not html_body or not label:
+            return html_body
+        blocks = re.split(r"(?<=</div>)(?:\s*<br\s*/?>)*", html_body)
+        blocks = [b for b in blocks if b and b.strip()]
+        if len(blocks) < 2:
+            return html_body
+        greeting, signoff, middle = blocks[0], blocks[-1], blocks[1:-1]
+        kept = []
+        for b in middle:
+            plain = _TAG_RE.sub(" ", b)
+            if _LEAD_TIME_DROP_RE.search(plain) and label not in plain:
+                continue
+            kept.append(b)
+        if not any(label in _TAG_RE.sub(" ", b) for b in kept):
+            pm = _LEAD_PHONE_RE.search(_strip_quoted(str(lead_text or "")))
+            phone = re.sub(r"\s+", " ", pm.group(1)).strip() if pm else ""
+            anchor = ('<a href="' + fit_slot["link"] + '">' + label + "</a>") if fit_slot.get("link") else label
+            line = ("<div>That works for me. I'll call you on " + phone + " on " + anchor + ".</div>") if phone \
+                else ("<div>That works for me, let's do " + anchor + ".</div>")
+            # a vaguer "I'll call you" line would now say the same thing twice
+            kept = [b for b in kept if not re.search(r"\bI(?:'|’| wi)ll (?:call|ring)\b|\bI can call\b",
+                                                     _TAG_RE.sub(" ", b), re.I)]
+            kept.insert(0, line)
+        return "<br>".join([greeting] + kept + [signoff])
+    except Exception:  # noqa: BLE001
+        return html_body
+
+
 def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slot_status: str, sender_first: str,
                 regen_feedback: str = "") -> dict:
     key = _KEYS.get("OPENAI_API_KEY")
@@ -3715,6 +3866,9 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         html_body = html_body.replace(" \u2014 ", ", ").replace("\u2014", ", ")
         _plain2 = _TAG_RE.sub(" ", html_body)
         _fit = [s_ for s_ in (slots or []) if (s_ or {}).get("lead_fit") and (s_ or {}).get("label")]
+        if _fit and (classification or {}).get("lead_proposed_time"):
+            html_body = confirm_lead_time_only(html_body, _fit[0], (reply or {}).get("body") or "")
+            _plain2 = _TAG_RE.sub(" ", html_body)
         if _fit and not any(str(s_["label"]) in _plain2 for s_ in _fit):
             _sig = _SIGNOFF_TAIL_RE.search(html_body)
             _line = "<div>I have pencilled in " + " or ".join(
@@ -7002,6 +7156,8 @@ def _self_heal_campaigns(agent: dict, cids: list) -> None:
                         if not slots:
                             slot_status = "none_available"
                     slots, slot_status = backfill_instruction_slots(snapshot, slots, slot_status, tz, now, eff_settings)
+                    slots, slot_status = narrow_slots_to_lead_window(
+                        slots, slot_status, body_text, tz, now, eff_settings, snapshot, locals().get("avail"))
                     thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
                     d = draft_reply(
                         {"first_name": row.get("lead_first_name"), "subject": row.get("reply_subject"),
@@ -7625,6 +7781,8 @@ def _process_reply_inner(reply: dict, agent: dict, settings: dict) -> dict:
             if not slots:
                 slot_status = "none_available"
         slots, slot_status = backfill_instruction_slots(agent, slots, slot_status, tz, now, eff_settings)
+        slots, slot_status = narrow_slots_to_lead_window(
+            slots, slot_status, body_text, tz, now, eff_settings, agent, locals().get("avail"))
         if serr and not row.get("error"):
             row["error"] = serr
     row["slots"] = slots
@@ -16429,6 +16587,8 @@ def _redraft_sync(payload):
             if not slots:
                 slot_status = "none_available"
         slots, slot_status = backfill_instruction_slots(agent, slots, slot_status, tz, now, eff_settings)
+        slots, slot_status = narrow_slots_to_lead_window(
+            slots, slot_status, clean_body(row.get("reply_body") or ""), tz, now, eff_settings, agent, locals().get("avail"))
         thread_text = " ".join(str(m.get("body") or "") for m in (row.get("thread") or []))
         # Standing memory always applies first, then this specific redraft's
         # feedback on top of it - same order Feature 1's spec sets for every
@@ -18372,6 +18532,8 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
             if not slots:
                 slot_status = "none_available"
         slots, slot_status = backfill_instruction_slots(agent, slots, slot_status, tz, now, eff_settings)
+        slots, slot_status = narrow_slots_to_lead_window(
+            slots, slot_status, body, tz, now, eff_settings, agent, locals().get("avail"))
 
     # Calendly fallback (owner ruling 2026-07-14) - see decide() gate 7
     # and lint_draft().
@@ -18477,8 +18639,11 @@ def _build_case_core(*, subject: str, body: str, raw_body: str, category, campai
         thread_earlier = 0
     else:
         last = thread[-1]
-        same_inbound = last.get("who") == "lead" and \
-            (last.get("body") or "").strip()[:80] == (body or "").strip()[:80]
+        # Whitespace-insensitive (2026-09-17): the queue thread and the replies
+        # table break lines differently, so an exact-prefix compare showed the
+        # same reply twice on the card.
+        _sq = lambda s_: re.sub(r"\s+", " ", str(s_ or "")).strip()[:80]
+        same_inbound = last.get("who") == "lead" and _sq(last.get("body")) == _sq(body)
         if not same_inbound:
             thread.append({"who": "lead", "subject": subject, "body": body,
                            "at": str(inbound_at or ""), "from_name": ""})
@@ -20182,6 +20347,8 @@ def _retrain_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 if not slots:
                     slot_status = "none_available"
             slots, slot_status = backfill_instruction_slots(agent_snapshot, slots, slot_status, tz, now, eff_settings)
+            slots, slot_status = narrow_slots_to_lead_window(
+                slots, slot_status, body, tz, now, eff_settings, agent_snapshot, locals().get("avail"))
 
         slots_fallback = slot_status != "ok"
         needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
@@ -20340,6 +20507,8 @@ def _recheck_one_training_case(case: dict, agent_snapshot: dict, eff_settings: d
                 if not slots:
                     slot_status = "none_available"
             slots, slot_status = backfill_instruction_slots(agent_snapshot, slots, slot_status, tz, now, eff_settings)
+            slots, slot_status = narrow_slots_to_lead_window(
+                slots, slot_status, body, tz, now, eff_settings, agent_snapshot, locals().get("avail"))
 
         slots_fallback = slot_status != "ok"
         needs_availability_ask = "scheduling" in (cls.get("all_intents") or [])
