@@ -376,6 +376,27 @@
 .client-pill { font-size: 10.5px; font-weight: 600; padding: 2px 8px; border-radius: 999px;
   white-space: nowrap; flex-shrink: 0; letter-spacing: 0.01em; }
 .ii-line3 .client-pill { margin-left: auto; }
+/* Header pill is a BUTTON (owner ask 2026-09-17: click it to re-file the
+   conversation under another client). Same pill, plus a caret and a focus
+   ring; the list-row pill stays a plain span so a row click is never hijacked. */
+button.client-pill { border: none; font-family: inherit; cursor: pointer; display: inline-flex;
+  align-items: center; gap: 4px; line-height: inherit; }
+button.client-pill:hover { filter: brightness(0.96); }
+button.client-pill:focus-visible { outline: 2px solid var(--accent, #2b62d9); outline-offset: 2px; }
+button.client-pill[disabled] { opacity: .6; cursor: progress; }
+.client-pill .cp-caret { font-size: 8px; opacity: .7; }
+.client-menu { position: fixed; z-index: 120; min-width: 190px; max-width: 260px; max-height: 320px;
+  overflow-y: auto; background: var(--bg, #fff); border: 1px solid var(--line-2); border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(16,24,40,.14); padding: 6px; }
+.client-menu .cm-head { padding: 4px 9px 7px; font: 500 11.5px var(--font-sans); color: var(--ink-3); }
+.client-menu .cm-opt { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
+  border: none; background: none; text-align: left; padding: 7px 9px; border-radius: 8px;
+  font: 400 12.5px var(--font-sans); color: var(--ink); cursor: pointer; }
+.client-menu .cm-opt:hover, .client-menu .cm-opt:focus-visible { background: var(--bg-sunken); outline: none; }
+.client-menu .cm-opt .cm-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.client-menu .cm-opt .cm-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.client-menu .cm-opt .cm-tick { margin-left: auto; color: var(--ink-2); font-size: 12px; }
+.client-menu .cm-reset { border-top: 1px solid var(--line); margin-top: 4px; padding-top: 9px; border-radius: 0 0 8px 8px; color: var(--ink-2); }
 /* Waiting tab age badge - neutral under 15 minutes, amber past the
    response-time target so a stale reply stands out in the list. */
 .ii-age { font-size: 10.5px; font-weight: 600; padding: 2px 7px; border-radius: 999px; background: var(--bg-sunken); color: var(--ink-2); flex-shrink: 0; }
@@ -1992,7 +2013,26 @@ function clientFromCampaignName(name) {
    "no name at all" into "Other", so that terminal case needs no extra code
    here. Used everywhere a client label is needed (queue filter dropdown +
    row filtering below). */
+/* A human's verdict from the header pill's menu (owner ask 2026-09-17). The
+   server stamps it on every row of that lead (`client_override`, keyed by
+   workspace + lead email so it survives re-intake id swaps and re-replies).
+   CLIENT_OVERRIDE_LOCAL holds a just-saved pick for a short while so a poll
+   that lands stale rows can't flick the pill back. "" = reset to automatic. */
+const CLIENT_OVERRIDE_LOCAL = {};   // "ws|email" -> {label, at}
+const CLIENT_OVERRIDE_LOCAL_MS = 120000;
+function clientOverrideKey(row) {
+  return `${String(row.workspace || "navreo").toLowerCase()}|${String(row.lead_email || "").trim().toLowerCase()}`;
+}
+function clientOverrideFor(row) {
+  const loc = CLIENT_OVERRIDE_LOCAL[clientOverrideKey(row)];
+  if (loc && (Date.now() - loc.at) < CLIENT_OVERRIDE_LOCAL_MS) return loc.label;
+  return String(row.client_override || "").trim();
+}
 function clientForRow(row) {
+  return clientOverrideFor(row) || clientAutoForRow(row);
+}
+/* The client a row files under when nobody has said otherwise. */
+function clientAutoForRow(row) {
   // A federated client workspace IS the client (Asteri, Grout, KRG, …): its
   // label is authoritative over the campaign-name heuristic, which has no
   // client registry for these and would bucket every one into "Other". navreo
@@ -2005,6 +2045,11 @@ function clientForRow(row) {
   if (ws !== "navreo") {
     return workspaceLabels[ws] || (ws.charAt(0).toUpperCase() + ws.slice(1));
   }
+  // The server's ONE label authority (campaign_scorecard.client, parent-hopped)
+  // beats every guess below. Those guesses only know Navreo/Amplifyy/Arnic, so
+  // "Thunderbird Campaign 4 (financial services)" - no dash, no agent - used to
+  // fall all the way to the "Navreo" default (owner report 2026-09-17).
+  if (row.client_auto) return String(row.client_auto);
   const sid = row.smartlead_campaign_id;
   // Subsequence hop: the client lives in the PARENT campaign's registry link
   // and name, never in "Interested Reply" / "Meeting Request".
@@ -2051,15 +2096,171 @@ function clientHue(name) {
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return h % 360;
 }
-function clientPillHtml(row) {
+function clientPillHtml(row, editable) {
   // One-client view, and the pill is exactly where another client's name
   // would surface (spec §2 row f). Kills both call sites - list row + header.
   if (CLIENT_MODE) return "";
   const name = clientForRow(row);
   if (!name) return "";
   const hue = clientHue(name);
-  return `<span class="client-pill" style="background:hsl(${hue} 62% 90%);color:hsl(${hue} 55% 28%)" title="Client: ${esc(name)}">${esc(name)}</span>`;
+  const style = `background:hsl(${hue} 62% 90%);color:hsl(${hue} 55% 28%)`;
+  // Only a real queue row with an email can be re-filed (a read-only
+  // Smartlead search hit has no override to hang on).
+  if (!editable || !row.lead_email || row.__slkey) {
+    return `<span class="client-pill" style="${style}" title="Client: ${esc(name)}">${esc(name)}</span>`;
+  }
+  const byHand = !!clientOverrideFor(row);
+  return `<button type="button" class="client-pill" id="clientPillBtn" data-client-pill="1"
+    data-key="${esc(clientOverrideKey(row))}" aria-haspopup="menu" aria-expanded="false" style="${style}"
+    title="Client: ${esc(name)}${byHand ? " (set by hand)" : ""} - click to change">${esc(name)}<span class="cp-caret">&#9662;</span></button>`;
 }
+/* ── Header pill menu: re-file this lead's conversation under another client.
+   Delegated on document so it survives every header repaint; the menu is one
+   body-level element, positioned off the pill's rect. */
+let CLIENT_OPTIONS = null;          // canonical client names from the server
+let _clientMenuEl = null;
+function rowsForClientKey(key) {
+  const seen = new Set(), out = [];
+  [QUEUE_ROWS, ALL_ROWS].forEach((list) => (list || []).forEach((r) => {
+    if (r && !seen.has(r) && clientOverrideKey(r) === key) { seen.add(r); out.push(r); }
+  }));
+  return out;
+}
+function closeClientMenu() {
+  if (_clientMenuEl) { _clientMenuEl.remove(); _clientMenuEl = null; }
+  const b = document.getElementById("clientPillBtn");
+  if (b) b.setAttribute("aria-expanded", "false");
+}
+async function loadClientOptions() {
+  if (Array.isArray(CLIENT_OPTIONS) && CLIENT_OPTIONS.length) return CLIENT_OPTIONS;
+  const res = await fetchJson("/api/setter/client-options", { _timeoutMs: 15000, _retries: 1 });
+  if (res.ok && res.data && Array.isArray(res.data.clients) && res.data.clients.length) {
+    CLIENT_OPTIONS = res.data.clients;
+    return CLIENT_OPTIONS;
+  }
+  // Server list unavailable: offer what the inbox already shows rather than nothing.
+  return Array.from(new Set(QUEUE_ROWS.map((r) => clientForRow(r)).filter(Boolean)))
+    .sort((a, b) => a.localeCompare(b));
+}
+async function openClientMenu(btn) {
+  const key = btn.getAttribute("data-key") || "";
+  const row = rowsForClientKey(key)[0];
+  if (!row) return;
+  closeClientMenu();
+  btn.setAttribute("aria-expanded", "true");
+  const menu = document.createElement("div");
+  menu.className = "client-menu";
+  menu.setAttribute("role", "menu");
+  menu.innerHTML = `<div class="cm-head">Loading clients…</div>`;
+  document.body.appendChild(menu);
+  _clientMenuEl = menu;
+  const place = () => {
+    const r = btn.getBoundingClientRect();
+    menu.style.top = `${Math.min(r.bottom + 6, window.innerHeight - 60)}px`;
+    menu.style.right = `${Math.max(8, window.innerWidth - r.right)}px`;
+    menu.style.maxHeight = `${Math.max(140, window.innerHeight - r.bottom - 24)}px`;
+  };
+  place();
+  const options = await loadClientOptions();
+  if (_clientMenuEl !== menu) return;            // closed (or reopened) while loading
+  const current = clientForRow(row);
+  const auto = clientAutoForRow(row);
+  const byHand = !!clientOverrideFor(row);
+  const names = Array.from(new Set([...options, current].filter(Boolean)));
+  menu.innerHTML = `<div class="cm-head">File this conversation under</div>` +
+    names.map((n) => {
+      const hue = clientHue(n);
+      return `<button type="button" class="cm-opt" role="menuitemradio" aria-checked="${n === current}" data-client="${esc(n)}">
+        <span class="cm-dot" style="background:hsl(${hue} 55% 55%)"></span><span class="cm-name">${esc(n)}</span>${n === current ? `<span class="cm-tick">&#10003;</span>` : ""}</button>`;
+    }).join("") +
+    (byHand ? `<button type="button" class="cm-opt cm-reset" role="menuitem" data-client="">Back to automatic${auto ? ` (${esc(auto)})` : ""}</button>` : "");
+  place();
+  menu.querySelectorAll(".cm-opt").forEach((o) => o.addEventListener("click", () => {
+    const pick = o.getAttribute("data-client") || "";
+    closeClientMenu();
+    // Picking the automatic label by hand is just "no override".
+    setClientForLead(key, (pick && pick === auto) ? "" : pick);
+  }));
+  const first = menu.querySelector('.cm-opt[aria-checked="true"]') || menu.querySelector(".cm-opt");
+  if (first) first.focus();
+}
+function repaintClientPill(key) {
+  const btn = document.getElementById("clientPillBtn");
+  const row = rowsForClientKey(key)[0];
+  if (btn && row && btn.getAttribute("data-key") === key) {
+    btn.outerHTML = clientPillHtml(row, true);
+  }
+  renderClientFilter();
+  renderQueue();
+}
+async function setClientForLead(key, label) {
+  const rows = rowsForClientKey(key);
+  if (!rows.length) return;
+  const row = rows[0];
+  if ((clientOverrideFor(row) || "") === (label || "")) return;
+  const prevLocal = CLIENT_OVERRIDE_LOCAL[key];
+  CLIENT_OVERRIDE_LOCAL[key] = { label: label || "", at: Date.now() };
+  // "" must beat a stale server-stamped override too, so blank it on the rows.
+  const prevStamps = rows.map((r) => r.client_override);
+  rows.forEach((r) => { if (label) r.client_override = label; else delete r.client_override; });
+  repaintClientPill(key);
+  const res = await fetchJson("/api/setter/queue/client", {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email: row.lead_email, workspace: row.workspace || "navreo", client: label || "" }),
+  });
+  if (!res.ok) {
+    if (prevLocal) CLIENT_OVERRIDE_LOCAL[key] = prevLocal; else delete CLIENT_OVERRIDE_LOCAL[key];
+    rows.forEach((r, i) => { if (prevStamps[i]) r.client_override = prevStamps[i]; else delete r.client_override; });
+    repaintClientPill(key);
+    showDetailError((res.data && res.data.error) || "Couldn't change the client - try again.");
+    return;
+  }
+  refreshClientFold(row);
+  showCopyToast(label ? `Filed under ${label}` : `Back to automatic${clientAutoForRow(row) ? ` - ${clientAutoForRow(row)}` : ""}`);
+}
+/* The About-the-client fold describes whoever the row is filed under. It
+   rides the lead-contact payload, so refetch that and swap ONLY the fold
+   (never the whole panel: a category pick or a half-typed note must survive).
+   The qualified verdict in the same payload is stored for the next repaint. */
+async function refreshClientFold(row) {
+  const em = String(row.lead_email || "").toLowerCase();
+  if (WARMCALL[em]) WARMCALL[em] = { ...WARMCALL[em], client: {} };
+  const paint = () => {
+    const cur = rowsForClientKey(clientOverrideKey(row)).find((r) => String(r.id) === String(selectedRowId));
+    const clEl = document.getElementById("lpClient");
+    if (cur && clEl) { clEl.outerHTML = clientSectionHtml(cur); wireClientToggle(document); }
+  };
+  paint();
+  const res = await fetchJson(`/api/setter/lead-contact?id=${encodeURIComponent(row.id)}`, { _retries: 1 });
+  if (!res.ok || !res.data || !WARMCALL[em]) return;
+  WARMCALL[em] = { ...WARMCALL[em], client: res.data.client || {}, qualified: res.data.qualified || WARMCALL[em].qualified };
+  paint();
+}
+document.addEventListener("click", (e) => {
+  const t = e.target && e.target.closest ? e.target : null;
+  const btn = t && t.closest("[data-client-pill]");
+  if (btn) {
+    e.preventDefault();
+    if (_clientMenuEl) closeClientMenu(); else openClientMenu(btn);
+    return;
+  }
+  if (_clientMenuEl && !(t && t.closest(".client-menu"))) closeClientMenu();
+});
+document.addEventListener("keydown", (e) => {
+  if (!_clientMenuEl) return;
+  if (e.key === "Escape") {
+    closeClientMenu();
+    const b = document.getElementById("clientPillBtn");
+    if (b) b.focus();
+  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    const opts = Array.from(_clientMenuEl.querySelectorAll(".cm-opt"));
+    if (!opts.length) return;
+    e.preventDefault();
+    const i = opts.indexOf(document.activeElement);
+    opts[(i + (e.key === "ArrowDown" ? 1 : -1) + opts.length) % opts.length].focus();
+  }
+});
+window.addEventListener("resize", closeClientMenu);
 /* {smartlead_campaign_id (string) -> client display name}, joining
    /api/campaigns-unified's rows (platform="smartlead", client_id set only
    when the campaign is managed by this tool) against /api/clients (id ->
@@ -4366,7 +4567,7 @@ function renderDetail(row) {
           </span>
         </div>
         <div class="dh-row1-right">
-          ${clientPillHtml(row)}
+          ${clientPillHtml(row, true)}
           <span class="dh-replied" title="${esc(row.replied_at || "")} (their reply)">replied ${pulledAgo(row.replied_at)}</span>
         </div>
       </div>

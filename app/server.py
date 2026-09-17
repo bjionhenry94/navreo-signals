@@ -27450,6 +27450,9 @@ class Handler(SimpleHTTPRequestHandler):
         # (efficiency fix 2026-08-01).
         "/api/setter/queue/action", "/api/setter/queue/redraft",
         "/api/setter/queue/recategorise", "/api/setter/thread/hide",
+        # client reassign writes ONLY setter_client_overrides and stale-marks
+        # the setter's own read caches itself (_bust_read_caches)
+        "/api/setter/queue/client",
     }
 
     def do_POST(self):

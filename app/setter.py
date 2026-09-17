@@ -11775,6 +11775,7 @@ def route_subsequence_unresolved(_params):
         out = _reconcile_unresolved_against_smartlead(candidates)
         out.sort(key=lambda r: r.get("sent_at") or "", reverse=True)
         _attach_campaign_names(out)
+        _attach_client_labels(out)
         return 200, {"rows": out}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -12449,6 +12450,257 @@ def _attach_campaign_names(rows) -> None:
         pass
 
 
+# ── client label + manual reassign (Bjion 2026-09-17) ───────────────────────
+# "If I click the client pill I can change the client this message is assigned
+# to." Two halves:
+#   1. client_auto - the label the SERVER's one authority gives the row's
+#      campaign (campaign_scorecard.client, parent-hopped for a subsequence,
+#      then the hosted-registry name markers). The page used to guess from the
+#      campaign name with a registry that only knew Navreo/Amplifyy/Arnic, so
+#      "Thunderbird Campaign 4 (financial services)" - no dash, no agent - fell
+#      to the "Navreo" default while the scorecard said ThunderBird all along.
+#   2. client_override - a human's verdict, which outranks every derivation.
+#      Keyed by (workspace, lead_email), NOT the queue row: a row id dies on
+#      every re-intake (delete + re-insert) and a re-reply is a brand-new row,
+#      so a per-row flag would silently vanish. "Komal is a ThunderBird lead"
+#      has to stay true for every later message.
+# The override is a LABEL for Navreo's own inbox (pill, client filter, the
+# About-the-client fold). It deliberately does NOT move a client share link's
+# scope or a Slack route - those stay pinned to the campaign, because a label
+# click must never be able to show one client another client's conversation.
+CLIENT_OVERRIDE_TABLE = "setter_client_overrides"
+_CLIENT_LABEL_CACHE: dict = {}     # campaign id -> (label or "", fetched_at)
+_CLIENT_LABEL_TTL = 600.0
+_CLIENT_LABEL_LOCK = threading.Lock()
+_CLIENT_OVR_CACHE = {"at": 0.0, "map": None}
+_CLIENT_OVR_TTL = 30.0
+_CLIENT_OPTIONS_CACHE = {"at": 0.0, "val": None}
+_CLIENT_OPTIONS_TTL = 300.0
+_CLIENT_LABEL_MAX = 80
+# Same "name contains X" law as server.py's _SHARED_WS_CLIENTS, minus Navreo:
+# a name that merely mentions Navreo is not proof of a Navreo-own campaign, and
+# "" lets the page's own fallbacks (agent, workspace) name the row instead.
+_CLIENT_NAME_LABELS = (
+    ("amplif", "Amplifyy"), ("arnic", "Arnic"), ("qwintiq", "Qwintiq"),
+) + tuple((c["token"], c["label"]) for c in NAVREO_HOSTED_CLIENTS)
+
+
+def _scorecard_clients(ids) -> dict:
+    """{str(campaign_id): label} straight off campaign_scorecard.client for the
+    ids that carry a real one ("__unassigned" and blanks are absent)."""
+    out = {}
+    want = sorted({str(i) for i in ids if i})
+    if not (want and _SB):
+        return out
+    rows = _SB("GET", "campaign_scorecard?smartlead_campaign_id=in.(" + ",".join(
+        quote(i, safe="") for i in want) + ")&select=smartlead_campaign_id,client")
+    for r in rows if isinstance(rows, list) else []:
+        c = str((r or {}).get("client") or "").strip()
+        if c and not c.startswith("__"):
+            out[str(r.get("smartlead_campaign_id"))] = c
+    return out
+
+
+def _client_labels_for(ids) -> dict:
+    """{str(campaign_id): client label} for every id the authority can name.
+    A subsequence asks its PARENT first ("Interested Reply" names no client;
+    the campaign the lead came from does). Unnameable ids are absent, never
+    guessed. Cached per id; never raises."""
+    want = sorted({str(i) for i in ids if i})
+    if not want:
+        return {}
+    now = _time.time()
+    out, missing = {}, []
+    with _CLIENT_LABEL_LOCK:
+        for cid in want:
+            ent = _CLIENT_LABEL_CACHE.get(cid)
+            if ent and (now - ent[1]) < _CLIENT_LABEL_TTL:
+                if ent[0]:
+                    out[cid] = ent[0]
+            else:
+                missing.append(cid)
+    if not missing:
+        return out
+    try:
+        try:
+            pmap = _parent_map()
+        except Exception:  # noqa: BLE001 - a Smartlead blip just means no hop
+            pmap = {}
+        parent = {c: str(pmap[c]) for c in missing
+                  if isinstance(pmap, dict) and pmap.get(c)}
+        score = _scorecard_clients(set(missing) | set(parent.values()))
+        names = _campaign_names_for(set(missing) | set(parent.values()))
+        found = {}
+        for cid in missing:
+            chain = [parent[cid], cid] if cid in parent else [cid]
+            label = next((score[c] for c in chain if score.get(c)), "")
+            if not label:
+                for c in chain:
+                    nm = str(names.get(c) or "").lower()
+                    label = next((lab for tok, lab in _CLIENT_NAME_LABELS if tok in nm), "")
+                    if label:
+                        break
+            found[cid] = label
+        with _CLIENT_LABEL_LOCK:
+            for cid, label in found.items():
+                _CLIENT_LABEL_CACHE[cid] = (label, now)
+        out.update({c: l for c, l in found.items() if l})
+    except Exception:  # noqa: BLE001 - a blip leaves the page on its own fallback
+        pass
+    return out
+
+
+def _client_overrides(force: bool = False) -> dict:
+    """{(workspace, lead_email): label} - every manual client verdict. A few
+    dozen rows at most, so one short-TTL read serves the whole list. A failed
+    read keeps the last-good map (an override must not flicker off)."""
+    now = _time.time()
+    cur = _CLIENT_OVR_CACHE.get("map")
+    if not force and cur is not None and (now - _CLIENT_OVR_CACHE["at"]) < _CLIENT_OVR_TTL:
+        return cur
+    if not _SB:
+        return cur or {}
+    try:
+        rows = _SB("GET", f"{CLIENT_OVERRIDE_TABLE}?select=workspace,lead_email,client_label&limit=5000")
+        if isinstance(rows, list):
+            cur = {(str(r.get("workspace") or "navreo").lower(),
+                    str(r.get("lead_email") or "").strip().lower()):
+                   str(r.get("client_label") or "").strip()
+                   for r in rows if isinstance(r, dict) and r.get("client_label")}
+            _CLIENT_OVR_CACHE.update(at=now, map=cur)
+    except Exception:  # noqa: BLE001
+        pass
+    return cur or {}
+
+
+def _client_override_for(workspace, email) -> str:
+    try:
+        return _client_overrides().get(
+            (str(workspace or WORKSPACE or "navreo").lower(),
+             str(email or "").strip().lower())) or ""
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _attach_client_labels(rows) -> None:
+    """Stamp `client_auto` (the authority's label for the row's campaign) and
+    `client_override` (the human verdict, when one exists) onto queue row dicts
+    IN PLACE. Read-time annotation, never written back. A share response gets
+    neither: a client must never read another client's name off a row."""
+    try:
+        if _share_scope() is not None:
+            return
+        labels = _client_labels_for({(r or {}).get("smartlead_campaign_id")
+                                     for r in rows if isinstance(r, dict)})
+        ovr = _client_overrides()
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            auto = labels.get(str(r.get("smartlead_campaign_id") or ""))
+            if auto:
+                r["client_auto"] = auto
+            o = ovr.get((str(r.get("workspace") or "navreo").lower(),
+                         str(r.get("lead_email") or "").strip().lower()))
+            if o:
+                r["client_override"] = o
+    except Exception:  # noqa: BLE001 - a label must never break the queue
+        pass
+
+
+def _client_options() -> list:
+    """Every client a conversation can be filed under, canonical spelling:
+    the scorecard's distinct labels + each workspace's display label + the
+    hosted registry + Navreo. Sorted, case-insensitively de-duplicated."""
+    now = _time.time()
+    if _CLIENT_OPTIONS_CACHE["val"] is not None and (now - _CLIENT_OPTIONS_CACHE["at"]) < _CLIENT_OPTIONS_TTL:
+        return _CLIENT_OPTIONS_CACHE["val"]
+    seen = {}
+
+    def add(label):
+        lab = str(label or "").strip()
+        if lab and not lab.startswith("__"):
+            seen.setdefault(lab.lower(), lab)
+
+    add("Navreo")
+    for _tok, lab in _CLIENT_NAME_LABELS:
+        add(lab)
+    ok = False
+    if _SB:
+        try:
+            rows = _SB("GET", "campaign_scorecard?select=client&limit=5000")
+            for r in rows if isinstance(rows, list) else []:
+                add((r or {}).get("client"))
+            ok = isinstance(rows, list)
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            rows = _SB("GET", "workspaces?select=id,display_label")
+            for r in rows if isinstance(rows, list) else []:
+                add((r or {}).get("display_label"))
+        except Exception:  # noqa: BLE001
+            pass
+    val = sorted(seen.values(), key=lambda x: x.lower())
+    if ok:   # only a complete list is worth holding for five minutes
+        _CLIENT_OPTIONS_CACHE.update(at=now, val=val)
+    return val
+
+
+def route_client_options_get(_params):
+    """GET /api/setter/client-options - the clients the pill's menu offers."""
+    try:
+        if _share_scope() is not None:
+            return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+        return 200, {"clients": _client_options()}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
+def route_queue_client_post(payload):
+    """POST /api/setter/queue/client {email, workspace, client} - file this
+    lead's conversation under `client` (owner ask 2026-09-17: click the client
+    pill to change it). client "" puts the lead back on the automatic label.
+    Owner-only: not in CLIENT_SHARE_POST / _AUTH_PUBLIC_POST, and refused
+    outright inside a share scope. `client` must be one of _client_options()
+    and is stored in ITS spelling, so a typo can never mint a new bucket."""
+    try:
+        if _share_scope() is not None:
+            return 403, {"error": _CLIENT_SHARE_DENIED_MSG}
+        payload = payload if isinstance(payload, dict) else {}
+        email = str(payload.get("email") or "").strip().lower()
+        ws = str(payload.get("workspace") or WORKSPACE or "navreo").strip().lower()
+        want = str(payload.get("client") or "").strip()
+        if not email or "@" not in email:
+            return 400, {"error": "email is required"}
+        if len(want) > _CLIENT_LABEL_MAX:
+            return 400, {"error": "client name too long"}
+        if not _SB:
+            return 503, {"error": "storage unavailable"}
+        key = (f"{CLIENT_OVERRIDE_TABLE}?workspace=eq.{quote(ws, safe='')}"
+               f"&lead_email=eq.{quote(email, safe='')}")
+        if not want:
+            _SB("DELETE", key)
+            label = ""
+        else:
+            label = next((c for c in _client_options() if c.lower() == want.lower()), "")
+            if not label:
+                return 400, {"error": f"'{want}' isn't a client in this tool."}
+            now_iso = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+            _SB("POST", f"{CLIENT_OVERRIDE_TABLE}?on_conflict=workspace,lead_email",
+                {"workspace": ws, "lead_email": email, "client_label": label, "set_at": now_iso},
+                prefer="resolution=merge-duplicates,return=minimal")
+        # Read it back: a write the store refused must not answer "ok" (the
+        # page already moved the pill; a false ok would strand it there).
+        saved = _client_overrides(force=True).get((ws, email)) or ""
+        if saved != label:
+            return 502, {"error": "The client change didn't save - reload and try again."}
+        for k in [k for k in _LEAD_CONTACT_CACHE if k[0] == email]:
+            _LEAD_CONTACT_CACHE.pop(k, None)
+        _bust_read_caches()
+        return 200, {"ok": True, "email": email, "workspace": ws, "client_override": label}
+    except Exception as e:  # noqa: BLE001
+        return 500, {"error": str(e)[:300]}
+
+
 # decide()'s exact master-switch hold reason — the read-time ground for
 # "this WOULD have auto-sent". Keep in sync with decide().
 _MASTER_SWITCH_REASON = "Held for review: every check passed, but the autopilot master switch is off."
@@ -12951,6 +13203,7 @@ def _fetch_queue_rows(status: str, limit: int, before: str = None,
     out = [_annotate_queue_row(r) for r in rows
            if isinstance(r, dict) and _scope_ok(r)]
     _attach_campaign_names(out)
+    _attach_client_labels(out)
     return (out, raw_len) if return_raw_count else out
 
 
@@ -13630,6 +13883,7 @@ def _locate_heal_from_archive(email: str, mid: str):
             pass
     out = _annotate_queue_row(row)
     _attach_campaign_names([out])
+    _attach_client_labels([out])
     return out
 
 
@@ -13685,6 +13939,7 @@ def route_queue_locate_get(params):
             return 404, {"error": "Conversation not found."}
         out = _annotate_queue_row(row)
         _attach_campaign_names([out])
+        _attach_client_labels([out])
         return 200, {"row": out, "matched": matched}
     except Exception as e:  # noqa: BLE001
         return 500, {"error": str(e)[:300]}
@@ -15274,7 +15529,11 @@ def route_lead_contact_get(params):
                     "industry": comp.get("industry") or "",
                     "linkedin_url": comp.get("linkedin_url") or "",
                 }
-            client_slug = _client_slug_for(campaign_id, workspace)
+            # A human's client verdict (the pill's menu) outranks the
+            # campaign's: the About fold must describe the client the row is
+            # actually filed under. Owner view only - a share never sees it.
+            _ovr = _client_override_for(workspace, email) if _share_scope() is None else ""
+            client_slug = _ovr.lower() if _ovr else _client_slug_for(campaign_id, workspace)
             # No fallback to the workspace row: an Amplifyy lead borrowing
             # Navreo's about/offer is exactly the wrong-client bug (owner,
             # 2026-08-17) - an honest empty fold beats the wrong pitch.
@@ -15282,7 +15541,7 @@ def route_lead_contact_get(params):
             icp = ctx.get("icp") if isinstance(ctx.get("icp"), dict) else {}
             verdict, reason = _qualify(comp or {}, icp, (out.get("person") or {}).get("title") or "")
             out["qualified"] = {"verdict": verdict, "reason": reason}
-            out["client"] = {"label": ctx.get("client_label") or client_slug.title(),
+            out["client"] = {"label": ctx.get("client_label") or _ovr or client_slug.title(),
                              "slug": client_slug,
                              "about": ctx.get("about") or "",
                              "offer": ctx.get("offer") or "",
@@ -16985,6 +17244,9 @@ _SHARE_STRIP_KEYS = frozenset({
     "notes", "decision_reason", "classification",
     "held_only_by_master_switch", "would_auto_send",
     "qualified", "client", "instructions", "settings", "agent",
+    # another client's NAME could ride these (see _attach_client_labels, which
+    # already skips a share scope - this is the second lock on the same door)
+    "client_auto", "client_override",
 })
 _SHARE_GUARDRAIL_KEEP = ("tz_confident", "tz_source", "tz_basis", "slot_status", "slot_reason")
 
@@ -22057,6 +22319,7 @@ GET_ROUTES = {
     "/api/setter/search-smartlead": route_search_smartlead_get,
     "/api/setter/smartlead-thread": route_smartlead_thread_get,
     "/api/setter/categories": route_categories_get,
+    "/api/setter/client-options": route_client_options_get,
     "/api/setter/thread": route_thread_get,
     "/api/setter/thread/batch": route_thread_batch_get,
     "/api/setter/lead-contact": route_lead_contact_get,
@@ -22080,6 +22343,7 @@ POST_ROUTES = {
     "/api/setter/queue/action": route_queue_action,
     "/api/setter/queue/redraft": route_queue_redraft,
     "/api/setter/queue/recategorise": route_queue_recategorise,
+    "/api/setter/queue/client": route_queue_client_post,
     "/api/setter/subsequence/push": route_subsequence_push,
     "/api/setter/training/generate": route_training_generate,
     "/api/setter/training/answer": route_training_answer,
