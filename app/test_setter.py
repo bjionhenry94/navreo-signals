@@ -5607,7 +5607,18 @@ def test_training_generate_simulated_fallback_without_real_outreach():
              "allowed_intents": ["send_resource"]}
     sb.agents[agent["id"]] = {"id": agent["id"], "doc": agent}
 
-    status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    # The production logger is log_activity(endpoint, payload, actor): a
+    # strict stub proves the fallback log line can never crash the worker
+    # (it did, 2026-09-17, by passing keyword args).
+    logged = []
+    orig_log = setter._LOG
+    setter._LOG = lambda endpoint, payload=None, actor="app": logged.append((endpoint, payload, actor))
+    try:
+        status, resp = _generate_and_wait({"agent_id": agent["id"], "batch_size": 4})
+    finally:
+        setter._LOG = orig_log
+    check("simulated fallback: the fallback is logged with the real logger signature",
+         any(e[0].endswith("simulated_fallback") and isinstance(e[1], dict) for e in logged), logged[:3])
     doc = setter._load_training(agent["id"])
     gen = doc.get("generating") or {}
     check("simulated fallback: generation does not fail without real outreach",
