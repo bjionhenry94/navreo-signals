@@ -19385,8 +19385,16 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                 else _training_camp_ids(agent)
             if not _fetch_agent_outreach_sample(_gate_camp_ids, limit=1) \
                     and not _training_outreach_pool(agent):
-                _LOG("/api/setter/training/generate:simulated_fallback",
-                     agent_id=agent_id, note="no real outreach; building simulated scenarios")
+                if _LOG:
+                    try:
+                        # (2026-09-17) was called with keyword args log_activity
+                        # does not take - it crashed the whole worker for every
+                        # agent with no real outreach ("worker_failed").
+                        _LOG("/api/setter/training/generate:simulated_fallback",
+                             {"agent_id": agent_id, "note": "no real outreach; building simulated scenarios"},
+                             actor="system")
+                    except Exception:  # noqa: BLE001
+                        pass
 
         scenarios = list(staged_scenarios)
         # FIRST-ROUNDS CURRICULUM (owner ask 2026-08-28): a fresh training doc
@@ -19475,7 +19483,9 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                             f"{s.get('category') or ''}: {str(s.get('body') or '')[:80]}")
                     offset += chunk
                     remaining -= chunk
-                scenarios = list(staged_scenarios) + invented
+                # keep the curriculum scenarios added above (2026-09-17: rebuilding
+                # from staged_scenarios dropped them, and the gap was padded with clones)
+                scenarios = list(scenarios) + invented
             except Exception as e:  # noqa: BLE001 - inventing scenarios must never crash the worker
                 if _LOG:
                     try:
@@ -19632,7 +19642,14 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
         # something to recycle (a brand-new doc still leans on invention).
         if is_share_mode:
             _produced = len(new_cases) + len(new_synthetic_cases) + len(recycled_cases)
-            if _produced < batch_size:
+            # Cloning UNANSWERED cards is a last resort for a round that would
+            # otherwise be EMPTY (owner report 2026-09-17, REViVE: "I keep seeing
+            # this repetition" - a 50-card bank held 7 real replies five times
+            # each). A short batch of unique cards beats a full one of repeats.
+            _ans = doc.get("answers") or {}
+            _answered_any = any(_is_case_answered(c.get("id"), _ans) for c in (doc.get("cases") or []))
+            _unanswered_left = any(not _is_case_answered(c.get("id"), _ans) for c in (doc.get("cases") or []))
+            if _produced < batch_size and (_answered_any or (_produced == 0 and not _unanswered_left)):
                 if recycle_cursor is not None:
                     doc["recycle_cursor"] = recycle_cursor
                 _topup, _topup_cursor = _recycle_bank_cases(
