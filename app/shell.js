@@ -53,6 +53,7 @@ const ICONS = {
   deliverability: ic8("analytics.svg", "lg"),
   mbxhub: ic8("mail", "lg"),
   setter: ic8("reply", "lg"),
+  target: ic8("target.svg", "lg"),
   settings: ic8("settings.svg", "lg"),
 };
 
@@ -65,6 +66,7 @@ const NAV = [
   ["deliverability.html", "deliverability", "Analytics"],
   ["mailboxes-hub.html", "mbxhub", "Mailboxes"],
   ["setter.html", "setter", "Setter"],
+  ["team-target.html", "target", "Team Target"],
 ];
 
 function renderRail(active) {

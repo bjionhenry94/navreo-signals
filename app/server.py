@@ -26599,6 +26599,15 @@ class Handler(SimpleHTTPRequestHandler):
                     return
         if path.startswith("/qa-gate/") or path.startswith("/api/qa-gate/"):
             return self._qa_gate_get(path)
+        if path == "/api/team-target/data":
+            # The team meetings board (team-only; the gate above already
+            # required a logged-in teammate). Read model lives in team_target.py.
+            import team_target
+            try:
+                return self._json(team_target.data())
+            except Exception as e:  # noqa: BLE001 — never 500 the board on a data hiccup
+                print(f"[team-target] data failed: {e}", file=sys.stderr)
+                return self._json({"error": "team target data unavailable"}, 503)
         if path.startswith("/recontact/") and len(path) > len("/recontact/"):
             # Recontact review page (tier1-live-ship) - behind the normal login
             # gate above (this path is deliberately NOT in _AUTH_PUBLIC_GET).
@@ -27532,6 +27541,25 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(body, status)
         if path.startswith("/api/qa-gate/") and path != "/api/qa-gate/runs" and self._qa_token_ok():
             return self._qa_gate_post(path)
+        if path in ("/api/team-target/meeting", "/api/team-target/status"):
+            # Team meetings board writes — logged-in teammates only. Who-did-it
+            # is stamped from the session, never the payload.
+            email = self._authed_email()
+            if not email:
+                return self._json({"error": "sign in first"}, 401)
+            if int(self.headers.get("Content-Length") or 0) > 8192:
+                return self._json({"error": "payload too large"}, 413)
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"error": "invalid JSON body"}, 400)
+            who = team_display_names().get(email.lower()) or email
+            import team_target
+            fn = team_target.add_meeting if path.endswith("/meeting") else team_target.set_status
+            body, status = fn(p, who)
+            log_activity(path, {k: p.get(k) for k in ("client", "status", "id")},
+                         action=path.rsplit("/", 1)[1], entity="team_target")
+            return self._json(body, status)
         # Client copy-edit from a share link (strategy-session-share): allowed
         # past the login gate — the handler verifies the HMAC share token and
         # accepts copy fields only, same trust model as the training share.
