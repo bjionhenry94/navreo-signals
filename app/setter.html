@@ -1297,7 +1297,7 @@ body.client-mode .send-gate .sg-intro { font-size: 12.5px; color: var(--ink-2); 
    starts still covers it. */
 body.client-mode #clientTourBtn { display: inline-flex !important; }
 /* The guide link is always the LAST control in the header row = the top-right
-   corner, whichever order the async dashboard button lands in. */
+   corner, it is always the right-most control. */
 body.client-mode #clientGuideBtn { order: 99; margin-left: auto; }   /* stays right-aligned when the row wraps */
 @media (max-width: 640px) {
   body.client-mode > #clientTourBtn { position: fixed; top: 10px; right: 10px; z-index: 450; }
@@ -1572,29 +1572,9 @@ if (CLIENT_MODE) {
      here rather than in the markup so the owner page never carries a hidden
      node. */
   const headRow = document.querySelector(".setter-head-row");
-  /* "Campaign dashboard" (client-campaign-dashboard, step 4b): the same one
-     permanent link the reply notifications carry. The page holds a client
-     share token, never a dashboard token, so the server resolves it from that
-     token alone (/api/dashboard/link) - and the button only appears once a
-     real link comes back, so a client without a dashboard never sees a dead
-     control. */
-  if (headRow) {
-    fetch("/api/dashboard/link?share=" + encodeURIComponent(SHARE_TOKEN))
-      .then((r) => r.json())
-      .then((d) => {
-        if (!d || !d.ok || !d.url) return;
-        const a = document.createElement("a");
-        a.className = "btn";
-        a.id = "clientDashBtn";
-        a.href = d.url;
-        a.target = "_blank";
-        a.rel = "noopener";
-        a.title = "Open your campaign dashboard";
-        a.innerHTML = `<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/></svg><span>Campaign dashboard</span>`;
-        headRow.appendChild(a);
-      })
-      .catch(() => {});
-  }
+  /* The "Campaign dashboard" header button was removed (Bjion 2026-09-17).
+     The dashboard itself and the link the reply notifications carry are
+     untouched. */
   /* "Guide: How to respond to leads" (Bjion 2026-09-17): the public Notion
      playbook on turning positive replies into booked calls. A plain link, so
      it sits in the header's top-right slot alongside the other client
