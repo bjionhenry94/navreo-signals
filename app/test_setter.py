@@ -5314,6 +5314,43 @@ def test_synthetic_scenario_with_no_buildable_outreach_yields_no_case():
          case is None, case)
 
 
+def test_synthetic_case_falls_back_to_other_campaigns_sends_and_logs_drops():
+    """REViVE 2026-09-17: the agent's FIRST campaign had zero sends, the
+    builder sampled email 1 only from it, and every invented/curriculum
+    scenario was dropped without a trace - the bank stuck at 11."""
+    sb, http = fresh_setter()
+    http.classify_fn = _training_classify_fn
+    http.draft_fn = lambda _b: {"subject": "Re: hi", "html": "Hi Ana, happy to explain. Best, Nik"}
+    sb.sent_messages.append({
+        "smartlead_campaign_id": 9502, "email": "someone@real.com", "email_seq_number": 1,
+        "is_manual_reply": False, "subject": "One to share", "body": "Hi Someone, a breakdown for your brand.",
+        "sent_at": "2026-06-01T09:00:00+00:00",
+    })
+    agent = {"id": "agent-firstempty", "campaign_ids": [9501, 9502], "resource_link": "https://x.example/r"}
+    now = dt.datetime.now(dt.timezone.utc)
+    scen = {"category": "Interested", "lead_first_name": "Ana", "lead_company": "Nowhere Co",
+            "subject": "Re: One to share", "body": "Tell me more.",
+            "prior_lead_reply": "", "outreach_subject": "", "outreach_body": ""}
+    logged = []
+    orig_log = setter._LOG
+    setter._LOG = lambda endpoint, payload=None, actor="app": logged.append((endpoint, payload, actor))
+    try:
+        case = setter._build_synthetic_training_case(scen, agent, {}, [], "not_configured", now, "", idx=0,
+                                                     campaign_id=9501)
+        t = (case or {}).get("thread") or []
+        check("synthetic fallback: first campaign has no sends -> email 1 comes from a sibling campaign",
+             bool(case) and t and t[0]["who"] == "us" and t[0]["body"].startswith("Hi Ana,"), case)
+        check("synthetic fallback: a built case logs no drop", not logged, logged)
+        lonely = {"id": "agent-nosends", "campaign_ids": [9599]}
+        dropped = setter._build_synthetic_training_case(scen, lonely, {}, [], "not_configured", now, "", idx=0,
+                                                        campaign_id=9599)
+        check("synthetic drop: no email 1 anywhere -> no case, and the drop is LOGGED",
+             dropped is None and any(e.endswith(":synthetic_case_dropped") and p.get("agent_id") == "agent-nosends"
+                                     for e, p, _a in logged), (dropped, logged))
+    finally:
+        setter._LOG = orig_log
+
+
 def test_training_generate_memory_digest_reaches_classify():
     sb, http = fresh_setter()
     _seed_training_corpus(sb, per_category=6, campaign_id=8100)
@@ -12615,6 +12652,7 @@ if __name__ == "__main__":
     test_training_case_drafts_human_negatives_but_not_machine_mail()
     test_invention_outreach_reuse_keeps_batches_full()
     test_synthetic_scenario_with_no_buildable_outreach_yields_no_case()
+    test_synthetic_case_falls_back_to_other_campaigns_sends_and_logs_drops()
     test_training_generate_memory_digest_reaches_classify()
     test_training_generate_concurrent_preserves_selection_order()
     test_training_generate_one_worker_failure_drops_only_that_case()

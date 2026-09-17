@@ -18718,6 +18718,19 @@ def _build_training_case(reply_row: dict, agent: dict, eff_settings: dict, avail
         return None
 
 
+def _log_training_drop(kind: str, agent: dict, reason: str, extra: dict | None = None):
+    """One activity-log row whenever training generation loses a scenario
+    without raising (2026-09-17: invented scenarios vanished with no trace).
+    Never raises."""
+    if not _LOG:
+        return
+    try:
+        _LOG(f"/api/setter/training/generate:{kind}",
+             {"agent_id": (agent or {}).get("id"), "reason": reason, **(extra or {})}, actor="system")
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: dict, avail: list, slot_status0: str,
                                    now, mem_digest: str, idx: int, campaign_id=None) -> dict:
     """Turns one invented lead-side scenario (see _invent_training_scenarios)
@@ -18758,7 +18771,16 @@ def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: di
         # the invention's own outreach exactly as before.
         _real = []
         _seen = set()
-        for s in _fetch_agent_outreach_sample(camp_ids, limit=12):
+        _sample = _fetch_agent_outreach_sample(camp_ids, limit=12)
+        if not _sample and campaign_id:
+            # The case's own campaign has no sends yet (REViVE 2026-09-17: the
+            # agent's FIRST campaign was brand new, so every invented and
+            # curriculum scenario fell through to an empty outreach and was
+            # dropped below - the bank stuck at 11). The worker's gate and the
+            # invention both look across ALL the agent's campaigns, so look
+            # there too before giving up on a real email 1.
+            _sample = _fetch_agent_outreach_sample(_training_camp_ids(agent), limit=12)
+        for s in _sample:
             k = re.sub(r"\s+", " ", str(s.get("body") or ""))[:200]
             if k and k not in _seen:
                 _seen.add(k)
@@ -18785,7 +18807,11 @@ def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: di
             # invention wrote no outreach): a practice thread where nobody
             # wrote to the lead first isn't a thread - drop the scenario
             # (same bad-scenario discipline as every other None return;
-            # training round 1, 2026-08-17).
+            # training round 1, 2026-08-17). Logged - a silent drop here hid
+            # a whole bank's worth of lost scenarios (2026-09-17).
+            _log_training_drop("synthetic_case_dropped", agent, "no us-side email 1",
+                               {"category": category, "staged_key": scenario.get("staged_key") or "",
+                                "campaign_id": campaign_id})
             return None
 
         def _at(days_ago: float) -> str:
@@ -18827,8 +18853,12 @@ def _build_synthetic_training_case(scenario: dict, agent: dict, eff_settings: di
             # say plainly that this lead is made up (owner confusion
             # 2026-08-20: a fictional "BrightLane" read as a real client).
             case["lead_company"] = str(scenario.get("lead_company") or "").strip()
+        if not case:
+            _log_training_drop("synthetic_case_dropped", agent, "case core returned nothing",
+                               {"category": category, "staged_key": scenario.get("staged_key") or ""})
         return case
-    except Exception:  # noqa: BLE001 - a single bad scenario must never abort the whole batch
+    except Exception as e:  # noqa: BLE001 - a single bad scenario must never abort the whole batch
+        _log_training_drop("synthetic_case_dropped", agent, f"exception: {str(e)[:160]}", {})
         return None
 
 
@@ -19478,6 +19508,9 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                         reference_sample=reference_sample, avoid_gists=accumulated_gists,
                         outreach_offset=offset)
                     invented += batch
+                    if len(batch) < chunk:
+                        _log_training_drop("invent_short", agent, "invention returned fewer scenarios than asked",
+                                           {"asked": chunk, "got": len(batch)})
                     for s in batch:
                         accumulated_gists.append(
                             f"{s.get('category') or ''}: {str(s.get('body') or '')[:80]}")
