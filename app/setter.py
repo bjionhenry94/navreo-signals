@@ -1154,6 +1154,7 @@ _AR_AUTOACK = re.compile(
     r"|this is an automated (message|response|reply|acknowledg\w+|e-?mail)"
     r"|automated (message|response|reply)\b"
     r"|do not reply to this (e-?mail|message)"
+    r"|(please )?type your reply above this line|reply above this line"
     r"|(ticket|case|request) (number|no\.?|#|id)\s*[:#]?\s*\w*\d"
     r"|(has been|was) (received|logged|created) and (a |our )?(team|agent|member)"
     r"|how would you rate (the|your|our) (support|service|experience)"
