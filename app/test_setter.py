@@ -12123,6 +12123,7 @@ def test_is_automated_ack_and_training_candidates_skip_it():
         "This is an automated response. Your request has been received and a member of our team "
         "will be in touch.",
         "Ticket #48213 has been created and an agent will review it shortly.",
+        "Please type your reply above this line\n\nZoe (Flash Tattoos)\nSep 16, 2026, 20:28\nHi Kevin, thanks for your note.",
         "Hey Kevin, thank you for reaching out to us at White Orange Skincare. We\u2019ve received your "
         "message and are working through inquiries as quickly as we can.",
         "Hi, and thanks for reaching out to Blissoma! We love providing personal, caring service, and look "
