@@ -52,3 +52,15 @@ def test_backstop_confirms_and_stops():
 def test_outlook_quoted_header_stripped_and_thread_not_doubled():
     body = "You can call me.\n07976207810\nMike\n \nFrom: Nik Hall <n@x.co>\nSent: 16 September 2026 23:57\nTo: a\n\nWould a quick call"
     assert s.clean_body(body) == "You can call me.\n07976207810\nMike"
+
+
+def test_backstop_drops_second_time_fallback_and_unasked_resource():
+    fit = {"label": "Wednesday, 23rd September at 9:00 AM BST", "link": "", "lead_fit": True}
+    html = ("<div>Hi Ben,</div><br><div>That works for me, let's do Wednesday, 23rd September at 9:00 AM BST.</div><br>"
+            "<div>Yes, I can make Friday 2-4 pm; that slot at 2:00 PM works for me.</div><br>"
+            "<div>You can lock it in here: <a href='x'>see my availability</a>.</div><br>"
+            "<div>Here's the short Loom I recorded: [LOOM LINK]</div><br><div>Nik</div>")
+    out = s.confirm_lead_time_only(html, fit, "Wed morning 9-11am or Fri 2-4pm", wants_resource=False)
+    assert "Friday" not in out and "lock it in" not in out and "Loom" not in out
+    assert fit["label"] in out
+    assert "Loom" in s.confirm_lead_time_only(html, fit, "x", wants_resource=True)

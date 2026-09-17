@@ -3398,7 +3398,8 @@ _LEAD_TIME_DROP_RE = re.compile(
 _LEAD_PHONE_RE = re.compile(r"(?<![\d/])(\+?\d[\d\s().\-]{8,16}\d)(?!\d)")
 
 
-def confirm_lead_time_only(html_body: str, fit_slot: dict, lead_text: str) -> str:
+def confirm_lead_time_only(html_body: str, fit_slot: dict, lead_text: str,
+                           wants_resource: bool = True) -> str:
     """Owner HARD RULE 2026-09-17: the lead offered their own time or window,
     so the reply CONFIRMS one time inside it and stops. Drops every paragraph
     that offers fresh times, asks which time works, or points at the calendar
@@ -3417,7 +3418,10 @@ def confirm_lead_time_only(html_body: str, fit_slot: dict, lead_text: str) -> st
         kept = []
         for b in middle:
             plain = _TAG_RE.sub(" ", b)
-            if _LEAD_TIME_DROP_RE.search(plain) and label not in plain:
+            if label not in plain and (
+                    _LEAD_TIME_DROP_RE.search(plain)
+                    or re.search(r"\block it in\b|\b\d{1,2}(?::\d{2})?\s?(?:am|pm)\b", plain, re.I)
+                    or (not wants_resource and re.search(r"\bloom\b|\bbreakdown\b|\bcase stud", plain, re.I))):
                 continue
             kept.append(b)
         if not any(label in _TAG_RE.sub(" ", b) for b in kept):
@@ -3443,6 +3447,12 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
     reply = reply or {}
     agent = agent or {}
     classification = classification or {}
+    # Owner HARD RULE 2026-09-17: the lead offered the time, so ONE time inside
+    # it is confirmed - a second lead-fit slot only invites "A or B work".
+    if classification.get("lead_proposed_time"):
+        _lf = [s_ for s_ in (slots or []) if isinstance(s_, dict) and s_.get("lead_fit")]
+        if _lf:
+            slots = _lf[:1]
     payload = {
         # "" when unknown, never "there" (owner report 2026-07-28: the old
         # "there" fallback was handed to the model as if it WERE the lead's
@@ -3867,7 +3877,9 @@ def draft_reply(reply: dict, agent: dict, classification: dict, slots: list, slo
         _plain2 = _TAG_RE.sub(" ", html_body)
         _fit = [s_ for s_ in (slots or []) if (s_ or {}).get("lead_fit") and (s_ or {}).get("label")]
         if _fit and (classification or {}).get("lead_proposed_time"):
-            html_body = confirm_lead_time_only(html_body, _fit[0], (reply or {}).get("body") or "")
+            html_body = confirm_lead_time_only(
+                html_body, _fit[0], (reply or {}).get("body") or "",
+                wants_resource="send_resource" in ((classification or {}).get("all_intents") or []))
             _plain2 = _TAG_RE.sub(" ", html_body)
         if _fit and not any(str(s_["label"]) in _plain2 for s_ in _fit):
             _sig = _SIGNOFF_TAIL_RE.search(html_body)
