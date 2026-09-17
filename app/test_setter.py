@@ -2743,6 +2743,43 @@ def _gate_row(row_id, **extra):
     return row
 
 
+def test_filed_away_conversation_can_always_be_answered():
+    """Owner ruling 2026-09-17: "you should always be able to send another
+    follow-up". A filed-away conversation (dismissed / no_action) has no reply
+    on it yet, so its first reply goes through Approve's own door - the "send"
+    action with the typed text as body_override - never send_followup, which
+    stays refused until a first reply exists. And because that reply box starts
+    blank, an empty send must be refused before anything is touched."""
+    for rid, st in ((711, "dismissed"), (712, "no_action")):
+        sb, http = fresh_setter()
+        sb.queue.append(_gate_row(rid, status=st, draft_body=None))
+        status, resp = setter.route_queue_action(
+            {"id": rid, "action": "send", "body_override": "<div>Happy to call you at 11.</div>"})
+        check(f"filed-away reply: send from a {st} row goes out",
+             status == 200 and resp.get("ok") is True, (status, resp))
+        row = [r for r in sb.queue if r["id"] == rid][0]
+        check(f"filed-away reply: the {st} row becomes sent, carrying the typed reply",
+             row.get("status") == "sent" and "call you at 11" in (row.get("sent_body") or ""), row)
+
+        # The follow-up door stays shut on a row that has never been answered.
+        sb2, _http2 = fresh_setter()
+        sb2.queue.append(_gate_row(rid, status=st, draft_body=None))
+        s409, r409 = setter.route_queue_action({"id": rid, "action": "send_followup", "body": "<div>hi</div>"})
+        check(f"filed-away reply: send_followup on a {st} row is still 409 (first reply uses send)",
+             s409 == 409, (s409, r409))
+
+        # Blank box + no stored draft: refused, row untouched.
+        for blank in ("", "<div><br></div>", "   "):
+            sb3, _http3 = fresh_setter()
+            sb3.queue.append(_gate_row(rid, status=st, draft_body=None))
+            s400, r400 = setter.route_queue_action({"id": rid, "action": "send", "body_override": blank})
+            check(f"filed-away reply: an empty send from a {st} row is refused ({blank!r})",
+                 s400 == 400 and "nothing to send" in str(r400.get("error", "")), (s400, r400))
+            row3 = [r for r in sb3.queue if r["id"] == rid][0]
+            check(f"filed-away reply: a refused empty send leaves the {st} row untouched ({blank!r})",
+                 row3.get("status") == st and not row3.get("sent_at"), row3)
+
+
 def test_send_gate_choice_none_records_decision():
     sb, http = fresh_setter()
     sb.queue.append(_gate_row(701))
@@ -12457,6 +12494,7 @@ if __name__ == "__main__":
     test_map_id_by_email_error_falls_back_to_paging()
     test_map_id_beyond_2000_lead_paging_cap_resolves_by_email()
 
+    test_filed_away_conversation_can_always_be_answered()
     test_send_gate_choice_none_records_decision()
     test_send_gate_choice_push_success_patches_pushed()
     test_send_gate_choice_push_failure_patches_push_failed()
