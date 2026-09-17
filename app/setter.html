@@ -6370,6 +6370,28 @@ function composerHtml(row) {
     return `<div class="qc-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>
       <div class="qc-savestate small muted" id="save-${esc(row.id)}"></div>`;
   }
+  if (row.status === "new") {
+    // Intake claims a reply's row at status "new" and only sets it to
+    // needs_review AFTER the slow hydrate -> classify -> draft (setter.py
+    // handle_inbound). This branch used to fall through to the bare `return ""`
+    // below, so a row opened during that window (a just-landed re-reply, a
+    // Slack alert / permalink opened mid-draft) rendered an EMPTY reply pane:
+    // no compose box, no Approve, no learn bar — only the "Your reply" label
+    // and the teach link. That is the "ability to reply has vanished" report
+    // (2026-09-17): the data was healthy (the draft lands seconds later), the
+    // UI just had no state for the in-between. Show a live "drafting" state
+    // that the auto-refresh + the per-open heal nudge (wireDetailEvents) turn
+    // into the real composer, with an immediate action so it is never a dead
+    // end — even for a row the background draft stranded.
+    const drafting = CLIENT_MODE
+      ? "We're preparing a reply to their latest message…"
+      : "The agent is drafting a reply to their latest message…";
+    // Agentless rows have no brain to draft with (rare — intake needs an agent),
+    // so name the manual path instead of promising an automatic one.
+    const actLabel = row.agent_id ? "Draft it now" : "Write a reply";
+    return `<div class="qc-drafting small muted" style="display:flex;align-items:center;gap:8px"><span class="btnspin"></span> ${drafting}</div>
+      <button class="btn qc-draft-anyway" data-id="${esc(row.id)}" type="button" style="margin-top:10px">${actLabel}</button>`;
+  }
   if (row.status === "auto_sent" || row.status === "sent") {
     // A sent thread stays writable (owner ask 2026-07-28: "even after an
     // email has been sent, you should still be able to send more emails").
@@ -6410,6 +6432,34 @@ function composerHtml(row) {
   return "";
 }
 
+/* A row at intake status "new" is the agent mid-draft; the pane shows a
+   "drafting" placeholder until it flips to needs_review (or auto_sent). The
+   plain 60s auto-refresh eventually heals it, but the draft normally lands in
+   seconds, so poll a few times early. Guarded so repaints can't stack timers,
+   scoped to the OPEN row, paused while the reviewer is typing, and capped at a
+   handful of tries so a genuinely stranded row falls back to the 60s cycle
+   rather than polling the API forever. */
+const _NEW_HEAL_TIMERS = new Set();
+function scheduleNewRowHeal(id, tries) {
+  const k = String(id);
+  if (_NEW_HEAL_TIMERS.has(k)) return;
+  _NEW_HEAL_TIMERS.add(k);
+  setTimeout(async () => {
+    _NEW_HEAL_TIMERS.delete(k);
+    const find = () => (QUEUE_ROWS || []).find((x) => String(x.id) === k)
+                    || (ALL_ROWS || []).find((x) => String(x.id) === k);
+    let r = find();
+    // Closed, gone, or already healed away from "new" — nothing to do.
+    if (String(selectedRowId) !== k || !r || r.status !== "new") return;
+    // Never reload out from under a half-typed reply; retry once the caret frees.
+    if (isTypingIn(k)) { scheduleNewRowHeal(k, tries); return; }
+    await loadQueue();
+    r = find();
+    const t = (tries || 0) + 1;
+    if (t < 6 && String(selectedRowId) === k && r && r.status === "new") scheduleNewRowHeal(k, t);
+  }, 4000);
+}
+
 function wireDetailEvents(root, row) {
   const backLink = root.querySelector("#backToInboxLink");
   if (backLink) backLink.addEventListener("click", (e) => { e.preventDefault(); backToInbox(); });
@@ -6429,6 +6479,13 @@ function wireDetailEvents(root, row) {
     curMsg.scrollIntoView({ block: "center" });
   }
   if (rowKey) _lastScrolledRowId = rowKey;
+
+  // A row still at intake status "new" (the agent is mid-draft) shows the
+  // "drafting" placeholder, not the composer. It heals on the 60s auto-refresh,
+  // but that is a long time to stare at a spinner when the draft usually lands
+  // in seconds — nudge a few early reloads so the real reply box appears on its
+  // own. Idempotent and self-limiting (see scheduleNewRowHeal).
+  if (row && row.status === "new" && !row.is_test) scheduleNewRowHeal(row.id);
 
   const teachBtn = root.querySelector("#teachAgentBtn");
   if (teachBtn) teachBtn.addEventListener("click", () => openTeachAgentModal(teachBtn.getAttribute("data-agent-id"), teachBtn.getAttribute("data-id")));
