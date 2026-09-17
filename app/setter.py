@@ -15979,6 +15979,13 @@ def route_queue_action(payload):
             agent = _load_agent(row.get("agent_id")) or {}
             subject = payload.get("subject_override") or row.get("draft_subject") or f"Re: {row.get('reply_subject') or ''}"
             body_html = payload.get("body_override") or row.get("draft_body") or ""
+            # An empty email is never a legitimate send (2026-09-17). Approve
+            # always had a draft behind it, so this door never needed the guard
+            # send_followup has; the reply box on a filed-away conversation
+            # starts BLANK, so "send" can now arrive with nothing typed and no
+            # stored draft. Refuse before the claim - nothing is touched.
+            if not _TAG_RE.sub(" ", body_html).strip():
+                return 400, {"error": "Write the reply first - there is nothing to send."}
             original = row.get("original_draft_body") or ""
             result = _send_reply(row, agent, subject, body_html, is_test=bool(row.get("is_test")), success_status="sent")
             if result.get("blocked"):

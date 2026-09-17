@@ -938,6 +938,9 @@ html.headless .main > .inbox-shell { flex: 1 1 auto; height: auto; min-height: 0
 .qc-draft:focus { outline: none; box-shadow: var(--focus); }
 .qc-followup { margin-top: 12px; }
 .qc-followup-draft { min-height: 72px; margin-top: 8px; }
+/* The reply box on a filed-away conversation starts empty: say what it is for
+   (and out-rank the phone rule's "use Regenerate below", which isn't there). */
+.qc-filed-reply .qc-draft:empty::before { content: "Write your reply…"; color: var(--ink-3); }
 .qc-draft div { min-height: 1em; }
 .qc-draft a { color: var(--orange-700); cursor: pointer; text-decoration: underline; }
 .composer-head .ch-spacer { flex: 1; }
@@ -6421,7 +6424,7 @@ function composerHtml(row) {
 
     const anywayBtn = (!CLIENT_MODE && row.status === "no_action")
       ? `<button class="btn qc-draft-anyway" data-id="${esc(row.id)}" type="button" style="margin-top:10px">Draft a reply anyway</button>` : "";
-    return `<div class="small muted">${label}${cat}</div>${anywayBtn}`;
+    return `<div class="small muted">${label}${cat}</div>${anywayBtn}${filedReplyBoxHtml(row)}`;
   }
   if (row.status === "error") {
     return `<div class="qc-actions">
@@ -6430,6 +6433,52 @@ function composerHtml(row) {
     </div>`;
   }
   return "";
+}
+
+/* A filed-away conversation (dismissed / no_action) can ALWAYS be answered
+   (owner ruling 2026-09-17: "you should always be able to send another
+   follow-up"). The client's Dismissed tab even says "Open one and reply if we
+   got it wrong" - and then offered no box to reply in: a lead who wrote "you
+   can call me between 10.30 & 3.30" sat filed as an information request with
+   only "Filed away — no reply was sent." under it.
+   Same open compose box the sent view uses, so it is one step. It carries
+   .qc-followup-draft on purpose: the autosave skips that class, so typing here
+   never writes a draft onto a filed row (a no_action row that gains a
+   draft_body flips to the full review composer). A draft the row already has
+   (reviewed, then dismissed) is offered back for editing rather than lost. */
+function filedReplyBoxHtml(row) {
+  // A read-only Smartlead search hit has no queue row to send from.
+  if (!row || row.id == null || row.__slkey) return "";
+  const hint = CLIENT_MODE
+    ? "Nothing was sent on this one. Write a reply and it goes out in this same conversation."
+    : "Nothing was sent on this one. Write a reply and it goes out in this same thread, from the same mailbox.";
+  return `<div class="qc-followup qc-filed-reply" data-id="${esc(row.id)}" style="margin-top:12px">
+      <div class="qc-followup-box">
+        <div class="qc-draft qc-followup-draft" contenteditable="true" data-id="${esc(row.id)}">${row.draft_body || ""}</div>
+        <div class="qc-actions">
+          <button class="btn primary qc-filed-send" type="button" data-id="${esc(row.id)}">Send reply</button>
+          <span class="small muted">${hint}</span>
+        </div>
+      </div>
+    </div>`;
+}
+/* The FIRST reply on a filed-away conversation goes through Approve's own door
+   (the server's "send" action, body_override = what was typed) - never
+   send_followup, which the server deliberately refuses until a first reply
+   exists. doSend is status-agnostic and carries the whole optimistic / rollback
+   / count-moving machinery; the one thing it never needed is an empty-box
+   guard, because Approve always had a draft. Deliberately NOT a .qc-send
+   button: that class is what the Enter-to-approve shortcut fires. */
+async function doSendFiledReply(btn) {
+  if (btn.disabled) return;
+  const box = btn.closest(".qc-followup-box");
+  const draftEl = box && box.querySelector(".qc-followup-draft");
+  if (!draftEl || !plainWords(draftEl.innerHTML)) {
+    showDetailError("Write your reply first - the box is empty.");
+    if (draftEl) draftEl.focus();
+    return;
+  }
+  return doSend(btn);
 }
 
 /* A row at intake status "new" is the agent mid-draft; the pane shows a
@@ -6545,6 +6594,8 @@ function wireDetailEvents(root, row) {
   // steal the cursor mid-read.
   const fuSend = root.querySelector(".qc-followup-send");
   if (fuSend) fuSend.addEventListener("click", () => doSendFollowup(fuSend));
+  // First reply on a filed-away (dismissed / no_action) conversation.
+  root.querySelectorAll(".qc-filed-send").forEach((btn) => btn.addEventListener("click", () => doSendFiledReply(btn)));
   root.querySelectorAll(".qc-draft-anyway").forEach((btn) => btn.addEventListener("click", () => doDraftAnyway(btn)));
 
   root.querySelectorAll(".qc-link-btn").forEach((btn) => {
