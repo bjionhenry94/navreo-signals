@@ -8959,7 +8959,8 @@ def campaign_readonly(p: dict) -> dict:
                 "positives": m["positives"],
                 "bounced": m["bounced"],
                 "total": m["total"],
-                "completed": m["completed"]}
+                "completed": m["completed"],
+                "lead_stats": m.get("lead_stats")}
     if platform == "heyreach":
         rows = sb("GET", f"heyreach_campaigns?heyreach_id=eq.{cid}&order=snapshot_date.desc&limit=1") or []
         payload = (rows[0].get("payload") if rows and isinstance(rows, list) else {}) or {}
@@ -12201,7 +12202,15 @@ def _compute_campaign_insights(sid: str) -> dict:
     pace_per_day = (pace_n / 14.0) if pace_n else 0.0
     days_left = None
     if isinstance(leads_total, int) and isinstance(leads_completed, int) and pace_per_day > 0:
-        remaining = max(0, leads_total - leads_completed)
+        # Leads left = only the ones that can still go out: not started +
+        # in progress. Paused and blocked leads never send, so counting them
+        # (total - completed) overstated the runway (Amplifyy 2026-09-17:
+        # 29,177 "left" of which 12,300 were paused/blocked).
+        _ls = ro.get("lead_stats") or {}
+        if _ls.get("notStarted") is not None or _ls.get("inprogress") is not None:
+            remaining = (_ls.get("notStarted") or 0) + (_ls.get("inprogress") or 0)
+        else:
+            remaining = max(0, leads_total - leads_completed)
         days_left = int(round(remaining / pace_per_day)) if remaining else 0
     best = max(per_source, key=lambda r: (r["positives"], r["reply_pct"] or 0.0), default=None)
 
