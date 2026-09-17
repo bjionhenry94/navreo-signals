@@ -16091,6 +16091,29 @@ def route_queue_action(payload):
             except Exception:  # noqa: BLE001 - sweep is belt-and-braces, never the action
                 pass
 
+        if action == "move":
+            # Manual lane move (owner ask 2026-09-17, REViVE/StayDry thread):
+            # a reviewer can re-file a conversation into another lane by hand.
+            # This is the way back for a dismissed conversation the client is
+            # still pursuing ("this one in dismissed that we're still trying to
+            # get") and the way to file a needs-review/sent row the other way.
+            # ONLY the two lanes the owner named are valid targets — Needs
+            # review and Sent; Dismiss keeps its own dedicated door and no other
+            # status (new/error/no_action) is a hand-set destination. Nothing is
+            # emailed: this only moves the queue row between pills. The
+            # representative-row model (thread collapse) means one row is the
+            # conversation, so no sibling sweep is needed here.
+            dest = str(payload.get("to") or "").strip()
+            if dest not in ("needs_review", "sent"):
+                return 400, {"error": "You can only move a conversation to Needs review or Sent."}
+            if row.get("status") == dest:
+                # Idempotent (a double-click, a stale menu another tab already
+                # moved): the row is where the reviewer wanted it.
+                return 200, {"ok": True, "status": dest, "already": True}
+            wrote = _apply_patch(row, {"status": dest})
+            if not wrote:
+                return 404, {"error": "Queue row not found."}
+            return 200, {"ok": True, "status": dest}
         if action == "subsequence":
             checked = bool(payload.get("checked"))
             if not checked:
@@ -17178,7 +17201,7 @@ CLIENT_SHARE_GET = frozenset({
     "/api/setter/queue/redraft/status",
 })
 CLIENT_SHARE_POST = frozenset({
-    "/api/setter/queue/action",             # approve / edit-save / no-follow-up / dismiss
+    "/api/setter/queue/action",             # approve / edit-save / no-follow-up / dismiss / move
     "/api/setter/queue/redraft",
 })
 
