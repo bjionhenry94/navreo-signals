@@ -1774,6 +1774,15 @@ function ribbon(x0, x1, t0, b0, t1, b1) {
   return "M" + x0 + "," + t0 + " C" + a + "," + t0 + " " + b + "," + t1 + " " + x1 + "," + t1 +
          " L" + x1 + "," + b1 + " C" + b + "," + b1 + " " + a + "," + b0 + " " + x0 + "," + b0 + " Z";
 }
+// Leads left = only the ones that can still go out: not started + in progress,
+// in ACTIVE campaigns. Paused and blocked leads never send, so total − completed
+// overstated the runway (Amplifyy 2026-09-17: 29,177 shown, 12,300 of them
+// paused/blocked). Falls back to the old sum minus the known dead buckets for a
+// row the sync has not split yet.
+function sendableLeft(c) {
+  if (c.not_started != null || c.inprogress != null) return (c.not_started || 0) + (c.inprogress || 0);
+  return Math.max(0, (c.total || 0) - (c.completed || 0) - (c.paused || 0) - (c.blocked || 0) - (c.stopped || 0));
+}
 function funnelSums() {
   // Lifetime sums power the runway maths (leads left, emails per lead) and
   // stay the fallback while /api/client-windows is still building; the funnel
@@ -1783,7 +1792,7 @@ function funnelSums() {
   scoreRows().forEach(function (c) {
     v.sentLT += c.sent || 0; v.repLT += c.replied || 0;
     v.total += c.total || 0; v.completed += c.completed || 0;
-    if (c.status === "ACTIVE") { v.active++; v.leadsLeft += Math.max(0, (c.total || 0) - (c.completed || 0)); }
+    if (c.status === "ACTIVE") { v.active++; v.leadsLeft += sendableLeft(c); }
   });
   var cw = cwFor(state.client);
   if (cw) {
