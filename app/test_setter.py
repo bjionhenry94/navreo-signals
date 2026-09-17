@@ -12789,3 +12789,18 @@ if __name__ == "__main__":
 
     failed = run_report()
     sys.exit(1 if failed else 0)
+
+
+def test_strip_who_joins_ask_drops_the_question():
+    """Owner HARD RULE 2026-09-17: never ask who from their side should join."""
+    import setter as S
+    html = ("<div>Hi Sofia,</div><div>Tuesday at 14:00 works for me, I'll send an invite.</div>"
+            "<div>Who from your side should join?</div><div>Roman</div>")
+    out = S.strip_who_joins_ask(html)
+    assert "should join" not in out and "Tuesday at 14:00 works" in out and "Roman" in out
+    for bad in ["Who else should attend the call?", "Is there anyone else who should join?",
+                "Should I invite anyone from your team?", "Who will be joining from your side?"]:
+        assert S.strip_who_joins_ask(f"<div>Great. {bad}</div>") == "<div>Great.</div>", bad
+    keep = "<div>Looking forward to meeting you and Thusharan.</div>"
+    assert S.strip_who_joins_ask(keep) == keep
+    assert "confirm who should join" not in S.DRAFT_SYSTEM
