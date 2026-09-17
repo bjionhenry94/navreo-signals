@@ -23,6 +23,13 @@
     return Math.round(m / 1440) + "d ago";
   }
   function waitTxt(d) { return d <= 0 ? "said yes today" : "waiting " + d + (d === 1 ? " day" : " days"); }
+  var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function fmtDate(s) {
+    if (!s) return "";
+    var m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!m) return String(s);
+    return MON[(+m[2]) - 1] + " " + (+m[3]);
+  }
 
   function load(cb) {
     fetch("/api/team-target/data", {credentials: "same-origin"})
@@ -63,8 +70,11 @@
     if (m.status === "said_yes") {
       right = '<span class="wait' + amber + '">' + waitTxt(m.waiting_days) + "</span>" +
         (showMk ? ' <button class="mk" data-act="quickbook">Mark booked</button>' : "");
+    } else if (m.status === "booked") {
+      right = (m.date ? '<span class="date">' + esc(fmtDate(m.date)) + "</span>" : "") +
+        ' <button class="mk attend" data-act="confirmattended">Confirmed attended</button>';
     } else {
-      right = '<span class="date">' + esc(m.date || "") + "</span>";
+      right = '<span class="date">' + esc(fmtDate(m.date)) + "</span>";
     }
     var tag = m.source && m.source.indexOf("auto") === 0 && m.status === "said_yes"
       ? '<span class="tag">auto</span>' : "";
@@ -82,6 +92,8 @@
     d.querySelector(".who").onclick = open;
     var qb = d.querySelector('[data-act="quickbook"]');
     if (qb) qb.onclick = function (e) { e.stopPropagation(); setStatus(m, "booked"); };
+    var ca = d.querySelector('[data-act="confirmattended"]');
+    if (ca) ca.onclick = function (e) { e.stopPropagation(); setStatus(m, "attended"); };
     return d;
   }
 
