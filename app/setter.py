@@ -19385,8 +19385,17 @@ def _training_generate_worker(agent_id, agent, allowed_campaign_ids, batch_size,
                 else _training_camp_ids(agent)
             if not _fetch_agent_outreach_sample(_gate_camp_ids, limit=1) \
                     and not _training_outreach_pool(agent):
-                _LOG("/api/setter/training/generate:simulated_fallback",
-                     agent_id=agent_id, note="no real outreach; building simulated scenarios")
+                # log_activity(endpoint, payload, actor) - keyword args crashed
+                # the whole worker (2026-09-17, Amplifyy rebuild). A log line
+                # must never be able to fail generation.
+                if _LOG:
+                    try:
+                        _LOG("/api/setter/training/generate:simulated_fallback",
+                             {"agent_id": agent_id,
+                              "note": "no real outreach; building simulated scenarios"},
+                             actor="system")
+                    except Exception:  # noqa: BLE001
+                        pass
 
         scenarios = list(staged_scenarios)
         # FIRST-ROUNDS CURRICULUM (owner ask 2026-08-28): a fresh training doc
