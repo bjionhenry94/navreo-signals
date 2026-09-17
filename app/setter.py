@@ -17071,6 +17071,50 @@ def _client_permalink(email: str, client_id: str, message_id: str = "") -> str:
     return url
 
 
+# ── any shared conversation link opens without a login (Bjion 2026-09-17) ───
+# PERMANENT RULE: "any conversation shared via link can be viewed without
+# signing in, and only shows that client's other conversations". Several card
+# producers build the bare owner permalink (setter.html#/r/<email>/<message-id>)
+# - Make 9251436's internal card does it inline, and every card already sitting
+# in Slack carries it - so a client or a logged-out teammate hit the login wall
+# (Yasir, Remission / Altius / REViVE). Rather than chase every producer, the
+# login page exchanges the link's own (email, message-id) pair here for the
+# owning client's share token and re-opens the same link in the client view.
+#
+# The message-id is the capability: a long mail-server-generated id nobody can
+# guess, so holding the pair IS holding the link. Email alone is never enough.
+# What comes back is an ordinary client token - the view is scoped server-side
+# to that client's own campaigns exactly like a minted share link. A
+# conversation on a Navreo-own campaign resolves to no client and gets the same
+# 404 as a miss, so it stays behind the login.
+def route_share_for_link_get(params):
+    """GET /api/setter/share-for-link?email=X&message_id=Y (public). 200
+    {"share": token} when the pair names a real reply on a CLIENT's campaign,
+    else a uniform 404. Never runs under a share scope; never raises."""
+    miss = (404, {"error": "Conversation not found."})
+    try:
+        email = _qp(params, "email", "").strip().lower()
+        mid = _qp(params, "message_id", "").strip()
+        if not email or "@" not in email or len(mid) < 12 or not _SB:
+            return miss
+        e, m = quote(email, safe=""), quote(mid, safe="")
+        camp = None
+        for q in (f"{QUEUE_TABLE}?lead_email=ilike.{e}&message_id=eq.{m}",
+                  f"{QUEUE_TABLE}?lead_email=ilike.{e}&source_message_id=eq.{m}",
+                  f"replies?email=ilike.{e}&smartlead_message_id=eq.{m}"):
+            rows = _SB("GET", q + "&select=smartlead_campaign_id&limit=1")
+            if isinstance(rows, list) and rows and rows[0].get("smartlead_campaign_id"):
+                camp = rows[0]["smartlead_campaign_id"]
+                break
+        client = _client_id_for_campaign(camp) if camp else ""
+        if not client:
+            return miss
+        return 200, {"share": mint_client_share(client)}
+    except Exception as e:  # noqa: BLE001 - a failed exchange is just "sign in"
+        print(f"[setter] share-for-link failed: {e}", file=sys.stderr)
+        return miss
+
+
 def _resolve_share_scope(agent_id, share_token: str, public: bool = False):
     """Common share-token enforcement shared by the three training routes
     (get/generate/answer). Returns (resolved_agent_id, None) on success, or
@@ -22009,6 +22053,7 @@ GET_ROUTES = {
     "/api/setter/queue": route_queue_get,
     "/api/setter/queue/row": route_queue_row_get,
     "/api/setter/queue/locate": route_queue_locate_get,
+    "/api/setter/share-for-link": route_share_for_link_get,
     "/api/setter/search-smartlead": route_search_smartlead_get,
     "/api/setter/smartlead-thread": route_smartlead_thread_get,
     "/api/setter/categories": route_categories_get,

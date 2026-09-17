@@ -64,9 +64,26 @@
   const next = (raw.startsWith("/") && !raw.startsWith("//") ? raw : "/app/campaigns.html")
              + (location.hash || "");
 
+  // A shared conversation link never asks for a sign-in (owner ruling
+  // 2026-09-17). A bare chat permalink (setter.html#/r/<email>/<message-id>)
+  // opened logged-out is exchanged for the owning client's share token and
+  // re-opened in the client view, which only ever shows that client's own
+  // conversations. No client (a Navreo-own campaign) -> the form below.
+  function shareExchange() {
+    const m = /^#\/r\/([^/]+)\/(.+)$/.exec(location.hash || "");
+    if (!m || !/^\/app\/setter\.html(?:$|\?)/.test(raw) || /[?&]share=/.test(raw)) return;
+    const enc = v => { try { return encodeURIComponent(decodeURIComponent(v)); } catch (e) { return encodeURIComponent(v); } };
+    fetch("/api/setter/share-for-link?email=" + enc(m[1]) + "&message_id=" + enc(m[2]))
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d && d.share) location.replace(
+        "/app/setter.html?share=" + encodeURIComponent(d.share) + location.hash); })
+      .catch(() => {});
+  }
+
   // already signed in? go straight through
   fetch("/api/auth/me").then(r => r.json())
-    .then(d => { if (d.email) location.replace(next); }).catch(() => {});
+    .then(d => { if (d.email) location.replace(next); else shareExchange(); })
+    .catch(shareExchange);
 
   const f = document.getElementById("f"), go = document.getElementById("go"),
         err = document.getElementById("err");

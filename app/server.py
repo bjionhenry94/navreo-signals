@@ -25121,6 +25121,11 @@ AUTH_COOKIE = "navreo_session"
 AUTH_SESSION_DAYS = 30
 
 _AUTH_PUBLIC_GET = {"/healthz", "/favicon.ico", "/app/login.html", "/app/navreo.css",
+                    # Any shared conversation link opens without a login (owner
+                    # ruling 2026-09-17): the login page exchanges a chat
+                    # permalink's (email, message-id) for the owning client's
+                    # share token. See setter.route_share_for_link_get.
+                    "/api/setter/share-for-link",
                     # Client onboarding hub (owner ruling 2026-08-31: the client
                     # portal must NEVER sit behind a login wall) — the page, the
                     # two explainer iframes it embeds, and its draft read.
