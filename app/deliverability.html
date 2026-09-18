@@ -1737,6 +1737,24 @@ function trendMove(ev) {
     if (!state.on[k] || seriesFor(k) == null) return;
     var v = slice(seriesFor(k))[oi];
     if (RAXIS[k]) {
+      if (v == null && k === "rate") {
+        // The rate SERIES gaps out on the newest (as-of / partial) day, whose
+        // sent client-windows hasn't settled yet — but this card is already
+        // showing that day's Sent and Replies from fresher sources, so the
+        // reply-rate row used to vanish on exactly the day people hover most
+        // (owner report: a Fri card showed Sent 22,315 / Replies 240 but no
+        // reply rate). Derive it from the two numbers already in the card, under
+        // the same low-send floor the series uses, so it stays present and reads
+        // back as Replies ÷ Sent. No marker: the line genuinely has a gap here.
+        var _sd = state.on.sent ? sentDailyFull() : null;
+        var _sv = _sd ? (slice(_sd)[oi] || 0) : 0;
+        var _rr = seriesFor("replies");
+        var _rv = _rr != null ? slice(_rr)[oi] : null;
+        if (_rv != null && _sv >= rateMinSent())
+          rows += '<div class="row"><i style="background:' + COL[k] + '"></i>' + NAME[k] +
+            '<span class="v num">' + (Math.round(_rv * 10000 / _sv) / 100) + "%</span></div>";
+        return;
+      }
       if (v == null) return;   // no sends that day — the line has a gap here
       var Yr = T + (1 - v / (GEO.rmax || 1)) * ph;
       html += '<circle cx="' + X.toFixed(1) + '" cy="' + Yr.toFixed(1) + '" r="3.5" fill="' + COL[k] + '" stroke="#fff" stroke-width="1.5"/>';
