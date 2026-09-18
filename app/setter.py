@@ -16097,15 +16097,16 @@ def route_queue_action(payload):
             # This is the way back for a dismissed conversation the client is
             # still pursuing ("this one in dismissed that we're still trying to
             # get") and the way to file a needs-review/sent row the other way.
-            # ONLY the two lanes the owner named are valid targets — Needs
-            # review and Sent; Dismiss keeps its own dedicated door and no other
-            # status (new/error/no_action) is a hand-set destination. Nothing is
+            # ONLY the lanes the owner named are valid targets — Needs
+            # review, Sent and Dismissed (owner ask 2026-09-18: the Move menu
+            # should also file a thread straight to Dismissed); no other status
+            # (new/error/no_action) is a hand-set destination. Nothing is
             # emailed: this only moves the queue row between pills. The
             # representative-row model (thread collapse) means one row is the
             # conversation, so no sibling sweep is needed here.
             dest = str(payload.get("to") or "").strip()
-            if dest not in ("needs_review", "sent"):
-                return 400, {"error": "You can only move a conversation to Needs review or Sent."}
+            if dest not in ("needs_review", "sent", "dismissed"):
+                return 400, {"error": "You can only move a conversation to Needs review, Sent or Dismissed."}
             if row.get("status") == dest:
                 # Idempotent (a double-click, a stale menu another tab already
                 # moved): the row is where the reviewer wanted it.
