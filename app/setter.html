@@ -6002,13 +6002,13 @@ const DISMISS_TITLE_ATTR = CLIENT_MODE
 const DISMISS_LABEL = CLIENT_MODE ? "No reply needed" : "Dismiss";
 
 /* "Move conversation" (owner ask 2026-09-17): a header control that re-files
-   the open conversation into another lane by hand. Only the two lanes the
-   owner named are offered — Needs review and Sent — and the lane the row is
-   already in is shown disabled, so the menu always presents the two OTHER
-   destinations. Available in every status and in client mode (the client is
+   the open conversation into another lane by hand. Only the lanes the
+   owner named are offered — Needs review, Sent and Dismissed — and the lane
+   the row is already in is shown disabled, so the menu always presents the
+   OTHER destinations. Available in every status and in client mode (the client is
    who got stuck on a dismissed conversation with no way back). A read-only
    Smartlead search hit (__slkey) has no queue row to move, so it gets none. */
-const MOVE_TARGETS = ["needs_review", "sent"];
+const MOVE_TARGETS = ["needs_review", "sent", "dismissed"];
 function moveControlHtml(row) {
   if (!row || row.id == null || row.__slkey) return "";
   const opt = (to) => {
