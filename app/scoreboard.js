@@ -100,18 +100,32 @@
     return '<div class="mini"><div class="mf" style="width:' + clamp(100 * meetings / target) + '%"></div>' +
       '<div class="mp" style="left:' + clamp(100 * pace / target) + '%"></div><div class="mt" style="left:100%"></div></div>';
   }
-  function chart(rows, opts) {
-    opts = opts || {};
-    var maxVal = rows.reduce(function (m, r) { return Math.max(m, r.value); }, 0);
-    var axisMax = opts.target ? Math.max(opts.target + 1, Math.min(opts.target * 2, maxVal)) : (maxVal || 1);
-    var tgtPct = opts.target ? clamp(100 * opts.target / axisMax) : 0;
+  /* per-client pipeline bar — attended (solid) then booked + meeting-ready
+     (dashed segments), stacked toward the target: the hero bar, per client.
+     Shows EVERY client, most attended first, so a client with no attended but
+     live pipeline still reads as progress instead of an empty row. */
+  function pipelineChart(clients, target) {
+    var rows = (clients || []).slice().sort(function (a, z) {
+      return (z.attended - a.attended) ||
+        ((z.booked + z.said_yes) - (a.booked + a.said_yes)) ||
+        (String(a.name).toLowerCase() < String(z.name).toLowerCase() ? -1 : 1);
+    });
+    var maxAtt = rows.reduce(function (m, r) { return Math.max(m, r.attended || 0); }, 0);
+    var axisMax = Math.max(target + 1, Math.min(target * 2, maxAtt));
+    var tgtPct = clamp(100 * target / axisMax);
     var body = rows.map(function (r, i) {
-      var w = clamp(100 * r.value / axisMax), clipped = r.value > axisMax;
-      var tgtLine = opts.target ? '<div class="chtgt" style="left:' + tgtPct + '%">' +
-        (i === 0 ? '<span class="lbl">target ' + opts.target + "</span>" : "") + "</div>" : "";
+      var att = r.attended || 0, bk = r.booked || 0, rd = r.said_yes || 0;
+      var attPct = clamp(100 * att / axisMax);
+      var bkPct = Math.max(0, Math.min(100 - attPct, 100 * bk / axisMax));
+      var rdPct = Math.max(0, Math.min(100 - attPct - bkPct, 100 * rd / axisMax));
+      var segs =
+        (attPct > 0 ? '<div class="chbar' + (att > axisMax ? " clip" : "") + '" style="width:' + attPct + '%"></div>' : "") +
+        (bkPct > 0 ? '<div class="chseg book" style="left:' + attPct + '%;width:' + bkPct + '%"></div>' : "") +
+        (rdPct > 0 ? '<div class="chseg ready" style="left:' + (attPct + bkPct) + '%;width:' + rdPct + '%"></div>' : "");
+      var tgtLine = '<div class="chtgt" style="left:' + tgtPct + '%">' +
+        (i === 0 ? '<span class="lbl">target ' + target + "</span>" : "") + "</div>";
       return '<div class="chrow"><div class="cl">' + esc(r.name) + '</div><div class="chtrack">' +
-        '<div class="chbar ' + (opts.cls || "") + (clipped ? " clip" : "") + '" style="width:' + w + '%"></div>' +
-        tgtLine + '</div><div class="chval">' + num(r.value) + "</div></div>";
+        segs + tgtLine + '</div><div class="chval">' + num(att) + "</div></div>";
     }).join("");
     return body || '<div class="skel" style="padding:14px 0">Nothing yet this month.</div>';
   }
@@ -162,9 +176,6 @@
         '<div class="num rate">' + (c.reply_mins == null ? "—" : fmtReply(c.reply_mins) + dot(RAG.resp(c.reply_mins))) + "</div>" +
         '<div><span class="badge ' + esc(c.tone) + '">' + esc(c.status) + "</span></div></div>";
     }).join("");
-    var mx = (d.attended_chart || []).reduce(function (m, x) { return Math.max(m, x.value); }, 0);
-    var anyClip = (d.attended_chart || []).some(function (r) {
-      return r.value > Math.max(d.per_client_target + 1, Math.min(d.per_client_target * 2, mx)); });
     var b = document.createElement("div");
     b.innerHTML =
       '<div class="eyebrow">Meetings this month</div>' +
@@ -180,9 +191,9 @@
             '<div title="Business hours only — excludes out-of-hours">Avg reply</div><div>Status</div></div>' +
           rowsHtml + "</div></div></div>" +
       '<div class="sec"><h2>Meetings attended vs target</h2>' +
-        '<p class="desc">Dashed line is the ' + d.per_client_target + "-attended-meeting target." +
-          (anyClip ? " A runaway leader is clipped at the axis edge — the number is exact." : "") + "</p>" +
-        '<div class="chart">' + chart(d.attended_chart || [], {target: d.per_client_target}) + "</div></div>";
+        '<div class="chleg"><span><i class="a"></i>Attended</span>' +
+          '<span><i class="b"></i>Booked</span><span><i class="r"></i>Meeting-ready</span></div>' +
+        '<div class="chart">' + pipelineChart(d.clients || [], d.per_client_target) + "</div></div>";
     return b;
   }
 
