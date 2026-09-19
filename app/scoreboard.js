@@ -241,22 +241,25 @@
     d.setAttribute("data-id", m.id);
     d.setAttribute("data-status", m.status);
 
-    // dates — the meeting/status date, coloured by state
-    var dateTxt = "", dateCls = "";
+    // when — label + value, coloured by state
+    var whenLbl = "", whenVal = "", whenCls = "";
     if (m.status === "booked") {
-      if (m.overdue) { dateTxt = "⚠ was " + fmtDate(m.date); dateCls = "od"; }
-      else if (m.date) dateTxt = "Meeting " + fmtDate(m.date);
-    } else if (m.status === "attended") { dateTxt = m.date ? "Attended " + fmtDate(m.date) : "Attended"; dateCls = "gd"; }
-    else if (m.status === "no_show") { dateTxt = m.date ? "No-show " + fmtDate(m.date) : "No-show"; dateCls = "od"; }
-    else if (m.status === "cancelled") dateTxt = m.date ? "Cancelled " + fmtDate(m.date) : "Cancelled";
-    else if (m.status === "said_yes" && m.said_yes_on) dateTxt = "Said yes " + fmtDate(m.said_yes_on);
+      if (m.overdue) { whenLbl = "Overdue"; whenVal = "was " + fmtDate(m.date); whenCls = "od"; }
+      else if (m.date) { whenLbl = "Meeting"; whenVal = fmtDate(m.date); }
+    } else if (m.status === "attended") { whenLbl = "Attended"; whenVal = m.date ? fmtDate(m.date) : "this month"; whenCls = "gd"; }
+    else if (m.status === "no_show") { whenLbl = "No-show"; whenVal = m.date ? fmtDate(m.date) : "—"; whenCls = "od"; }
+    else if (m.status === "cancelled") { whenLbl = "Cancelled"; whenVal = m.date ? fmtDate(m.date) : "—"; }
+    else if (m.status === "said_yes" && m.said_yes_on) { whenLbl = "Said yes"; whenVal = fmtDate(m.said_yes_on); }
 
     var domain = webFromEmail(m.email);
     var url = setterLink(m.email);
 
-    // low hierarchy — client, auto, waiting
+    var metaCells = "";
+    if (whenVal) metaCells += '<div><div class="mk-lbl ' + whenCls + '">' + whenLbl + '</div><div class="mk-val">' + esc(whenVal) + "</div></div>";
+    if (domain) metaCells += '<div><div class="mk-lbl">Website</div><a class="mk-val" href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + esc(domain) + "</a></div>";
+
+    // low hierarchy — auto, waiting (client pill now lives top-right)
     var lows = "";
-    if (m.client) lows += clientPill(m.client);
     if (m.source && m.source.indexOf("auto") === 0) lows += '<span class="lowtag">Auto</span>';
     if (m.status === "said_yes") lows += '<span class="lowtag' + (m.waiting_days >= 7 ? " late" : "") +
       '">waiting ' + m.waiting_days + "d</span>";
@@ -266,14 +269,16 @@
     var by = m.by ? '<span class="mcard-by">' + esc(m.by) + "</span>" : "";
 
     d.innerHTML =
-      '<button class="mcard-del" data-act="dismiss" title="Remove from board">×</button>' +
-      '<div class="mcard-t"><span class="mcard-ic">' + ICON_DOC + "</span><span>" + esc(m.person || "(no name)") + "</span></div>" +
+      '<div class="mcard-head">' +
+        '<div class="mcard-t"><span>' + esc(m.person || "(no name)") + "</span></div>" +
+        (m.client ? '<span class="mcard-pill">' + clientPill(m.client) + "</span>" : "") +
+        '<button class="mcard-del" data-act="dismiss" title="Remove from board">×</button>' +
+      "</div>" +
       (m.company ? '<div class="mcard-co">' + esc(m.company) + "</div>" : "") +
-      (domain ? '<a class="mcard-web" href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + ICON_WEB + " " + esc(domain) + "</a>" : "") +
-      (dateTxt ? '<div class="mcard-date ' + dateCls + '">' + esc(dateTxt) + "</div>" : "") +
+      (metaCells ? '<div class="mcard-meta">' + metaCells + "</div>" : "") +
       (url ? '<div class="mcard-contacts">' +
-          '<a class="cbtn" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter to call">' + ICON_PHONE + " Call</a>" +
-          '<a class="cbtn" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter to reply">' + ICON_MAIL + " Email</a></div>" : "") +
+          '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter — dial from the multi-number picker">' + ICON_PHONE + "<span>Call</span>" + ICON_EXT + "</a>" +
+          '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open the lead in the setter to reply">' + ICON_MAIL + '<span class="cval">' + esc(m.email) + "</span>" + ICON_EXT + "</a></div>" : "") +
       (lows ? '<div class="mcard-low">' + lows + "</div>" : "") +
       (action || by ? '<div class="mcard-foot">' + (action || "<span></span>") + by + "</div>" : "");
 
