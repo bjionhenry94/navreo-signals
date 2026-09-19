@@ -180,6 +180,8 @@
       '</div>' +
       '<p class="sb-sub">Positive replies and booked meetings per client, scored against the target of ' +
         '4 booked meetings per active client each month.</p>' +
+      '<div class="sb-scope">Every number on this page is for ' + esc(d.month) + ' only (1–' + dayN + ' ' +
+        monShort + ') and resets at the start of each month.</div>' +
 
       // KPI callout
       '<div class="kpi"><div class="k1">Internal target</div>' +
