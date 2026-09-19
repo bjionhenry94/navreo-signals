@@ -118,11 +118,21 @@
     var vTxt = behind > 0 ? "Behind by " + behind : (behind < 0 ? "Ahead by " + (-behind) : "On track");
 
     // stat cards
+    var rr = cards.runrate_diff || 0;
+    var rrVal = (rr > 0 ? "+" : (rr < 0 ? "−" : "")) + Math.abs(rr);     // proper minus sign
+    var rrLbl = rr < 0 ? "behind the pace to hit " + t.target
+              : (rr > 0 ? "ahead of the pace for " + t.target : "on the pace for " + t.target);
+    var resp = cards.avg_response_mins;
+    var pctS = function (v) { return v == null ? "—" : v + "%"; };
     var cardHtml =
-      scard(cards.clients_on_target + ' <small>of ' + cards.scored_clients + '</small>', "clients on target · 4+ booked", "") +
-      scard(num(cards.total_meetings), "meetings booked, all clients", "") +
-      scard(cards.zero_meeting_clients, "clients with zero meetings", cards.zero_meeting_clients > 0 ? "bad" : "") +
-      scard(cards.days_left, "days left in " + esc(d.month), cards.days_left <= 5 ? "warn" : "");
+      scard(cards.avg_meetings_per_client + ' <small>of ' + d.per_client_target + '</small>',
+            "average meetings per client",
+            cards.avg_meetings_per_client < d.pace_mark ? "warn" : "") +
+      scard(num(cards.attended), "meetings attended this month", "") +
+      scard(pctS(cards.pos_to_booked_pct), "positive reply → booked call", "") +
+      scard(pctS(cards.show_up_pct), "show-up rate", "") +
+      scard(rrVal, rrLbl, rr < 0 ? "bad" : "") +
+      scard(resp == null ? "—" : num(resp), "average response time (mins)", "");
 
     // client scoreboard table
     var rowsHtml = (d.clients || []).map(function (c) {
@@ -131,15 +141,25 @@
           '<div class="cn">' + esc(c.name) + '</div>' +
           '<div class="num mut pos-col">—</div>' +
           '<div class="num mut">—</div>' +
-          '<div class="mini-cell"><div class="mini blank"></div></div>' +
+          '<div class="num mut">—</div>' +
+          '<div class="num mut">—</div>' +
+          '<div class="num mut rate">—</div>' +
+          '<div class="num mut rate">—</div>' +
           '<div><span class="badge muted">' + esc(c.status) + '</span></div>' +
         '</div>';
       }
+      // per-client conversion rates
+      var p2b = c.positives > 0 ? Math.round(100 * c.meetings / c.positives) + "%" : "—";
+      var suDen = (c.attended || 0) + (c.no_show || 0);
+      var su = suDen > 0 ? Math.round(100 * c.attended / suDen) + "%" : "—";
       return '<div class="trow">' +
         '<div class="cn">' + esc(c.name) + '</div>' +
         '<div class="num pos-col">' + num(c.positives) + '</div>' +
-        '<div class="num">' + num(c.meetings) + '</div>' +
-        '<div class="mini-cell">' + miniBar(c.meetings, c.target, d.pace_mark) + '</div>' +
+        '<div class="num">' + num(c.said_yes) + '</div>' +       // Meeting-ready (said yes)
+        '<div class="num">' + num(c.booked) + '</div>' +          // Booked (upcoming)
+        '<div class="num">' + num(c.attended) + '</div>' +        // Attended
+        '<div class="num rate">' + p2b + '</div>' +               // positive → booked call
+        '<div class="num rate">' + su + '</div>' +                // show-up rate
         '<div><span class="badge ' + esc(c.tone) + '">' + esc(c.status) + '</span></div>' +
       '</div>';
     }).join("");
@@ -185,14 +205,13 @@
 
       // client scoreboard
       '<div class="sec"><h2>Client scoreboard</h2>' +
-        '<p class="desc">Each client against 4 booked meetings. Booked counts every meeting that reached the calendar.</p>' +
-        '<div class="tbl">' +
-          '<div class="trow head"><div>Client</div><div class="h-pos pos-col">Positives</div><div>Booked</div>' +
-            '<div class="mini-cell">Progress</div><div>Status</div></div>' +
+        '<p class="desc">Ready = said yes, waiting to book · Booked = scheduled and upcoming · Attended = happened. Pos→Booked = positive replies that became a booked call · Show-up = attended of the calls that were due.</p>' +
+        '<div class="tbl-scroll"><div class="tbl">' +
+          '<div class="trow head"><div>Client</div><div class="h-pos pos-col">Positives</div>' +
+            '<div>Ready</div><div>Booked</div><div>Attended</div>' +
+            '<div>Pos→Booked</div><div>Show-up</div><div>Status</div></div>' +
           rowsHtml +
-        '</div>' +
-        '<div class="tbl-lbl"><span><i></i>Target of ' + d.per_client_target + '</span>' +
-          '<span><span class="pd"></span>Pace mark for today (' + (d.pace_mark != null ? d.pace_mark : "—") + ')</span></div>' +
+        '</div></div>' +
       '</div>' +
 
       // charts

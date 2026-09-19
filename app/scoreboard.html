@@ -54,7 +54,7 @@
 .leg b{color:var(--ink);font-weight:600}
 .leg .tk{width:2px;height:14px;background:var(--ink);border-radius:2px}
 /* stat cards */
-.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:26px}
+.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:26px}
 .scard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px}
 .scard .v{font-family:var(--font-display);font-weight:400;font-size:40px;line-height:1;letter-spacing:-.02em}
 .scard .v small{font-size:19px;color:var(--ink-3)}
@@ -66,8 +66,10 @@
 .sec h2{font-family:var(--font-display);font-weight:400;font-size:20px;letter-spacing:-.01em;margin:0 0 3px}
 .sec .desc{color:var(--ink-3);font-size:13.5px;margin:0 0 14px}
 /* client scoreboard table */
-.tbl{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff}
-.trow{display:grid;grid-template-columns:1.5fr 68px 68px 190px 130px;align-items:center;gap:14px;padding:13px 18px;border-top:1px solid var(--line)}
+.tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.tbl{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff;min-width:800px}
+.trow{display:grid;grid-template-columns:minmax(150px,1.5fr) 74px 58px 58px 74px 92px 82px 118px;align-items:center;gap:12px;padding:13px 18px;border-top:1px solid var(--line)}
+.trow .num.rate{color:var(--ink-2)}
 .trow.head{border-top:0;background:var(--bg-sunken);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);padding-top:10px;padding-bottom:10px}
 .trow .cn{font-weight:600;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .trow.unscored .cn{color:var(--ink-3);font-weight:500}
@@ -103,9 +105,6 @@
   .sb-wrap{padding:0 15px 48px}
   .hero .big{font-size:64px}.hero .rt{min-width:0}
   .bar,.leg{max-width:none}
-  .trow{grid-template-columns:1.4fr 46px 130px;gap:10px;row-gap:8px}
-  .trow .mini-cell{display:none}
-  .trow.head .h-pos,.trow .num.pos-col{display:none}
   .chrow{grid-template-columns:96px 1fr 34px;gap:10px}
 }
 </style>
