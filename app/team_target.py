@@ -22,7 +22,7 @@ degrades instead of breaking. No number is invented.
 import sys
 import time
 import urllib.parse
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 
 import server
 
@@ -138,7 +138,38 @@ def _names_for(emails: set) -> dict:
 
 
 # ── reply-time (avg speed we reply after a lead's positive reply) ────────────
+def _et_tz():
+    """US Eastern tz (DST-aware); falls back to a fixed EDT offset without tzdata."""
+    try:
+        from zoneinfo import ZoneInfo
+        return ZoneInfo("America/New_York")
+    except Exception:  # noqa: BLE001
+        return timezone(timedelta(hours=-4))
+
+
+def _business_minutes(start_utc, end_utc) -> float:
+    """Minutes between two instants that fall inside 9am–6pm ET, Mon–Fri, so a
+    reply answered the next morning counts only the working-hours gap, not the
+    overnight / weekend clock (owner ask 2026-09-19)."""
+    tz = _et_tz()
+    a, b = start_utc.astimezone(tz), end_utc.astimezone(tz)
+    if b <= a:
+        return 0.0
+    total, d, last = 0.0, a.date(), b.date()
+    while d <= last:
+        if d.weekday() < 5:                     # Mon–Fri only
+            lo = max(a, datetime(d.year, d.month, d.day, 9, 0, tzinfo=tz))
+            hi = min(b, datetime(d.year, d.month, d.day, 18, 0, tzinfo=tz))
+            if hi > lo:
+                total += (hi - lo).total_seconds() / 60.0
+        d += timedelta(days=1)
+    return total
+
+
 def _avg_reply_minutes(cur_iso: str) -> float | None:
+    """Avg BUSINESS-HOURS minutes from a lead's positive reply to our send — time
+    outside 9am–6pm ET, Mon–Fri is not counted, so overnight / weekend gaps don't
+    skew the number (owner ask 2026-09-19)."""
     rows = server.sb_get_all(
         "setter_queue?select=sent_at,replied_at&status=in.(sent,auto_sent)&is_test=eq.false"
         "&sent_at=not.is.null&replied_at=not.is.null&sent_at=gte.%s" % cur_iso) or []
@@ -149,7 +180,7 @@ def _avg_reply_minutes(cur_iso: str) -> float | None:
             rp = datetime.fromisoformat(str(r["replied_at"]).replace("Z", "+00:00"))
         except Exception:  # noqa: BLE001
             continue
-        m = (st - rp).total_seconds() / 60.0
+        m = _business_minutes(rp, st)
         if m > 0:
             mins.append(m)
     if not mins:

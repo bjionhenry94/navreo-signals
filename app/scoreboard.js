@@ -119,19 +119,13 @@
     var behind = t.behind || 0;
     var vClass = behind > 0 ? "behind" : "ok";
     var vTxt = behind > 0 ? "Behind by " + behind : (behind < 0 ? "Ahead by " + (-behind) : "On track");
-    var rr = cards.runrate_diff || 0;
-    var rrVal = (rr > 0 ? "+" : (rr < 0 ? "−" : "")) + Math.abs(rr);
-    var rrLbl = rr < 0 ? "behind the pace to hit " + t.target
-      : (rr > 0 ? "ahead of the pace for " + t.target : "on the pace for " + t.target);
     var resp = cards.avg_response_mins;
     var pctS = function (v) { return v == null ? "—" : v + "%"; };
     var cardHtml =
       scard(cards.avg_meetings_per_client + ' <small>of ' + d.per_client_target + "</small>",
             "average meetings per client", cards.avg_meetings_per_client < d.pace_mark ? "warn" : "") +
-      scard(num(cards.attended), "meetings attended this month", "") +
       scard(pctS(cards.pos_to_booked_pct), "positive reply → booked call", "") +
       scard(pctS(cards.show_up_pct), "show-up rate", "") +
-      scard(rrVal, rrLbl, rr < 0 ? "bad" : "") +
       scard(resp == null ? "—" : num(resp), "average response time (mins)", "");
     var rowsHtml = (d.clients || []).map(function (c) {
       if (!c.scored) {
