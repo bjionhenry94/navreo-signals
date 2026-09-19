@@ -33,9 +33,9 @@ _COUNTS = ("attended",)                      # only these count toward target
 _GOT_MEETING = {"booked", "attended", "no_show", "cancelled", "not_fit"}
 STATUSES = ("said_yes", "booked", "attended", "no_show", "cancelled", "not_fit")
 PER_CLIENT_TARGET = 4
-# App-wide positive-reply set (mirrors server._AH_POSITIVE_CATS). Used by the
-# Scoreboard's "Positive replies, clean" column/chart — a unique-lead count, not
-# the meetings pipeline.
+# App-wide positive-reply set (mirrors server._AH_POSITIVE_CATS). Feeds the
+# Scoreboard's per-client "Positives" column + the cross-agency positive→booked
+# rate — a unique-lead count, not the meetings pipeline.
 _POSITIVE_CATS = ("Interested", "Call Booked", "Meeting Request", "Information Request")
 
 _CACHE = {"ts": 0.0, "data": None}
@@ -195,6 +195,33 @@ def _reply_time_str(mins: float | None) -> str:
     if mins < 90:
         return "%d min" % round(mins)
     return "%.1f h" % (mins / 60.0)
+
+
+def _avg_reply_minutes_by_client(cur_iso: str, cid_client: dict) -> dict:
+    """{client: avg BUSINESS-HOURS minutes from a lead's positive reply to our
+    send}, attributed by campaign — the per-client version of
+    _avg_reply_minutes. Same 9am–6pm ET Mon–Fri rule, so overnight / weekend
+    gaps don't skew any client's number (owner ask 2026-09-20)."""
+    rows = server.sb_get_all(
+        "setter_queue?select=sent_at,replied_at,smartlead_campaign_id"
+        "&status=in.(sent,auto_sent)&is_test=eq.false"
+        "&sent_at=not.is.null&replied_at=not.is.null&sent_at=gte.%s" % cur_iso) or []
+    acc: dict = {}                                   # client -> [sum_mins, n]
+    for r in rows:
+        cl = cid_client.get(str(r.get("smartlead_campaign_id")))
+        if not cl or cl in _EXCLUDE_LABELS:
+            continue
+        try:
+            st = datetime.fromisoformat(str(r["sent_at"]).replace("Z", "+00:00"))
+            rp = datetime.fromisoformat(str(r["replied_at"]).replace("Z", "+00:00"))
+        except Exception:  # noqa: BLE001
+            continue
+        m = _business_minutes(rp, st)
+        if m > 0:
+            a = acc.setdefault(cl, [0.0, 0])
+            a[0] += m
+            a[1] += 1
+    return {cl: (s / n) for cl, (s, n) in acc.items() if n}
 
 
 # ── the read model ──────────────────────────────────────────────────────────
@@ -546,6 +573,7 @@ def scoreboard(force: bool = False) -> dict:
     cur_iso = _iso_month(today)
     cid_client = _campaign_client_map()
     pos = _positive_counts(cur_iso, cid_client)
+    reply_by_client = _avg_reply_minutes_by_client(cur_iso, cid_client)
     wk = base["weekdays"]
     cal = _cal_days(today)
     pace_mark = round(PER_CLIENT_TARGET * wk["gone"] / wk["inMonth"], 1) if wk["inMonth"] else 0.0
@@ -555,10 +583,14 @@ def scoreboard(force: bool = False) -> dict:
         meetings = c["meetings"]
         positives = pos.get(c["name"], 0)
         label, tone = _client_status(meetings, positives, pace_mark)
+        rmins = reply_by_client.get(c["name"])
         rows.append({
             "name": c["name"], "positives": positives, "meetings": meetings,
             "attended": c["attended"], "booked": c["booked"], "said_yes": c["said_yes"],
             "no_show": c["no_show"], "target": PER_CLIENT_TARGET,
+            # per-client avg business-hours reply time (mins); None when we've
+            # sent no replies for them this month
+            "reply_mins": round(rmins) if rmins is not None else None,
             "scored": bool(positives or meetings), "status": label, "tone": tone,
         })
     # scored clients first (most meetings, then most positives), not-scored last
@@ -602,10 +634,9 @@ def scoreboard(force: bool = False) -> dict:
             "show_up_den": base["metrics"]["show_up_den"],
         },
         "clients": rows,
-        "booked_chart": sorted(({"name": r["name"], "value": r["meetings"]} for r in scored),
-                               key=lambda x: -x["value"]),
-        "positives_chart": sorted(({"name": r["name"], "value": r["positives"]} for r in scored),
-                                  key=lambda x: -x["value"]),
+        # ranked bar chart: ATTENDED meetings per client vs the 4-attended target
+        "attended_chart": sorted(({"name": r["name"], "value": r["attended"]} for r in scored),
+                                 key=lambda x: -x["value"]),
         "team": base.get("team", {}),
     }
     _SB_CACHE.update(ts=now, data=return_data)
