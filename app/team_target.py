@@ -618,8 +618,10 @@ def scoreboard(force: bool = False) -> dict:
             "total_meetings": total_meetings,
             "zero_meeting_clients": sum(1 for r in scored if r["meetings"] == 0),
             "days_left": cal["left"],
-            # the four headline stat cards
-            "avg_meetings_per_client": round(total_meetings / len(rows), 1) if rows else 0.0,
+            # the four headline stat cards. avg is ATTENDED per client (owner
+            # 2026-09-20) — matches the "of 4" attended target + the hero count,
+            # not the broader meetings metric (which no-shows/cancelled inflate).
+            "avg_meetings_per_client": round(base["totals"]["counted"] / len(rows), 1) if rows else 0.0,
             "attended": base["totals"]["counted"],
             # run-rate differential: where this month's pace projects us to finish
             # minus the target (negative = short of target at today's pace)

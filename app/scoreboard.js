@@ -135,7 +135,7 @@
     var pctS = function (v) { return v == null ? "—" : v + "%"; };
     var cardHtml =
       scard(cards.avg_meetings_per_client + ' <small>of ' + d.per_client_target + "</small>" +
-            dot(RAG.meetings(cards.avg_meetings_per_client), true), "average meetings per client", "") +
+            dot(RAG.meetings(cards.avg_meetings_per_client), true), "average meetings attended per client", "") +
       scard(pctS(cards.pos_to_booked_pct) + dot(RAG.p2b(cards.pos_to_booked_pct), true),
             "positive reply → booked call", "") +
       scard(pctS(cards.show_up_pct) + dot(RAG.show(cards.show_up_pct), true), "show-up rate", "") +
@@ -214,6 +214,7 @@
   var ICON_PHONE = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6.6 10.8a15 15 0 006.6 6.6l2.2-2.2a1 1 0 011-.24 11 11 0 003.5.56 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11 11 0 00.56 3.5 1 1 0 01-.24 1l-2.2 2.3z" fill="currentColor"/></svg>';
   var ICON_MAIL = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M4 7l8 6 8-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
   var ICON_WEB = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/><path d="M3 12h18M12 3c2.5 2.5 3.5 6 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-6-3.5-9s1-6.5 3.5-9z" stroke="currentColor" stroke-width="1.7"/></svg>';
+  var ICON_EXT = '<svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   function webFromEmail(email) {
     var at = String(email || "").split("@")[1];
     if (!at) return "";
