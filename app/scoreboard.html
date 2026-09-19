@@ -3,34 +3,39 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Scoreboard · Navreo</title>
+<title>Team Target · Navreo</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="navreo.css">
 <style>
-/* Meetings Scoreboard — the team's live per-client meetings board, in the house
-   light theme. Data (live): /api/scoreboard/data (reuses the Team Target
-   pipeline, adds per-client positives). The hero bar shows the three meeting
-   states — Attended (solid) · Booked/pending (dashed) · Meeting-ready (dashed
-   muted) — against the target of 4 booked meetings per active client. */
+/* Team Target — the team's meetings hub. Two tabs: Scoreboard (live per-client
+   numbers, /api/scoreboard/data) and Board (add/move/remove the three meeting
+   states, /api/team-target/*). One header + Add-a-meeting; a write refreshes both. */
 .app > main{min-width:0}
-.sb-wrap{max-width:1160px;margin:0 auto;padding:0 22px 64px;min-width:0}
-.sb-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:24px 0 2px}
-.sb-head h1{font-family:var(--font-display);font-weight:400;font-size:26px;letter-spacing:-.02em;margin:0}
-.sb-head .mo{color:var(--ink-3);font-size:14.5px}
-.sb-head .sp{flex:1}
-.sb-head .tt-link{color:var(--ink-3);font-size:13px;text-decoration:none;border:1px solid var(--line-2);border-radius:999px;padding:6px 13px;white-space:nowrap}
-.sb-head .tt-link:hover{background:var(--bg-sunken);color:var(--ink)}
+.sb-wrap{max-width:1180px;margin:0 auto;padding:0 22px 64px;min-width:0}
+/* header + tabs */
+.tt-head{display:flex;align-items:center;gap:14px;padding:24px 0 4px}
+.tt-head h1{font-family:var(--font-display);font-weight:400;font-size:30px;letter-spacing:-.02em;margin:0}
+.tt-head .mo{color:var(--ink-3);font-size:16px}
+.tt-head .sp{flex:1}
+.tt-add{background:var(--orange);color:#fff;border:0;border-radius:999px;padding:10px 18px;font:600 14px var(--font-sans);cursor:pointer}
+.tt-add:hover{filter:brightness(.95)}
+.tt-tabs{display:flex;gap:22px;border-bottom:1px solid var(--line);margin:8px 0 24px;min-width:0}
+.tt-tab{background:0;border:0;padding:10px 2px;font:500 15px var(--font-sans);color:var(--ink-3);cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tt-tab.on{color:var(--ink);border-bottom-color:var(--ink)}
+.tt-tab .b{color:var(--ink-3);font-size:13px;margin-left:5px}
+.h4{font-family:var(--font-display);font-weight:400;font-size:18px;margin:0 0 2px}
+.hint{color:var(--ink-3);font-size:12.5px}
+.skel{color:var(--ink-3);padding:44px 0}
+/* Scoreboard tab */
 .eyebrow{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-4);margin:14px 0 6px}
 .sb-sub{color:var(--ink-2);font-size:15px;max-width:760px;margin:0 0 4px}
 .sb-scope{display:inline-block;background:var(--bg-sunken);border:1px solid var(--line-2);color:var(--ink-2);font-size:12px;font-weight:500;border-radius:999px;padding:4px 12px;margin:12px 0 2px}
-/* KPI callout */
 .kpi{border-left:3px solid var(--orange);padding:2px 0 2px 16px;margin:22px 0 6px}
 .kpi .k1{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-4)}
 .kpi .k2{font-family:var(--font-display);font-weight:400;font-size:22px;letter-spacing:-.01em;margin:3px 0 2px}
 .kpi .k3{color:var(--ink-3);font-size:13.5px}
-/* hero: the 3-state progress bar */
 .hero{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;margin-top:8px}
 .hero .big{font-family:var(--font-display);font-weight:400;font-size:88px;line-height:.9;letter-spacing:-.03em}
 .hero .big small{font-size:34px;color:var(--ink-3);letter-spacing:-.02em}
@@ -54,7 +59,6 @@
 .leg .s-ready{border:1.5px dashed var(--ink-3);background:color-mix(in srgb,var(--ink-3) 11%,transparent)}
 .leg b{color:var(--ink);font-weight:600}
 .leg .tk{width:2px;height:14px;background:var(--ink);border-radius:2px}
-/* stat cards */
 .cards{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:26px}
 .scard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px}
 .scard .v{font-family:var(--font-display);font-weight:400;font-size:40px;line-height:1;letter-spacing:-.02em}
@@ -62,11 +66,9 @@
 .scard .k{color:var(--ink-3);font-size:13px;margin-top:8px}
 .scard.warn .v{color:#8F6600}
 .scard.bad .v{color:#C2371F}
-/* section titles */
 .sec{margin-top:38px}
 .sec h2{font-family:var(--font-display);font-weight:400;font-size:20px;letter-spacing:-.01em;margin:0 0 3px}
 .sec .desc{color:var(--ink-3);font-size:13.5px;margin:0 0 14px}
-/* client scoreboard table */
 .tbl-scroll{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .tbl{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff;min-width:800px}
 .trow{display:grid;grid-template-columns:minmax(150px,1.5fr) 74px 58px 58px 74px 92px 82px 118px;align-items:center;gap:12px;padding:13px 18px;border-top:1px solid var(--line)}
@@ -80,16 +82,11 @@
 .mini .mf{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:var(--orange)}
 .mini .mp{position:absolute;top:-3px;bottom:-3px;width:1.5px;background:var(--ink-3);border-radius:2px}
 .mini .mt{position:absolute;top:-4px;bottom:-4px;border-left:1.5px dashed var(--ink);width:0}
-.mini.blank{background:repeating-linear-gradient(90deg,#EDEDEA 0 6px,transparent 6px 10px);max-width:110px}
 .badge{display:inline-block;border-radius:999px;padding:4px 11px;font:600 12px var(--font-sans);white-space:nowrap}
 .badge.good{background:#E2F1E9;color:#2E7D5B}
 .badge.warn{background:#F8EAC4;color:#8F6600}
 .badge.bad{background:#F7DCD5;color:#C2371F}
 .badge.muted{background:#EFEFEC;color:var(--ink-3)}
-.tbl-lbl{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12.5px;color:var(--ink-3);margin-top:10px;align-items:center}
-.tbl-lbl i{display:inline-block;width:18px;border-top:1.5px dashed var(--ink);vertical-align:middle;margin-right:6px}
-.tbl-lbl .pd{display:inline-block;width:12px;height:12px;border-radius:2px;background:var(--ink-3);vertical-align:middle;margin-right:6px;transform:translateY(1px)}
-/* charts */
 .chart{border:1px solid var(--line);border-radius:14px;padding:18px 22px 20px;background:#fff}
 .chrow{display:grid;grid-template-columns:132px 1fr 40px;align-items:center;gap:14px;padding:5px 0}
 .chrow .cl{font-size:13.5px;color:var(--ink-2);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -100,10 +97,80 @@
 .chtgt{position:absolute;top:-4px;bottom:-4px;border-left:1.5px dashed var(--ink);width:0}
 .chtgt .lbl{position:absolute;top:-16px;left:-16px;font-size:10.5px;color:var(--ink-3);white-space:nowrap}
 .chval{font-variant-numeric:tabular-nums;font-weight:600;font-size:13.5px;text-align:right}
-.skel{color:var(--ink-3);padding:44px 0}
+/* Board tab */
+.mk{background:#fff;border:1px solid var(--line-2);border-radius:8px;padding:6px 12px;font:600 12.5px var(--font-sans);cursor:pointer;white-space:nowrap}
+.mk:hover{background:var(--bg-sunken)}
+.mk.attend{background:#E2F1E9;border-color:#C4E2D3;color:#2E7D5B}
+.mk.attend:hover{background:#D3EADD}
+.choices{display:flex;flex-wrap:wrap;gap:6px;padding:4px 0 12px}
+.choice{border:1px solid var(--line-2);background:#fff;border-radius:8px;padding:6px 11px;font:600 12.5px var(--font-sans);cursor:pointer}
+.choice:hover{background:var(--bg-sunken)}
+.choice.cur{background:var(--ink);color:#fff;border-color:var(--ink)}
+.prow{display:flex;align-items:center;gap:10px;padding:11px 0;border-top:1px solid var(--line)}
+.prow .who{flex:1;min-width:0}
+.prow .nm{font-weight:600;font-size:14.5px}
+.prow .sub{color:var(--ink-3);font-size:12.5px;margin-top:1px}
+.board-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.bfilter{font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.bfilter select{border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:500 13px var(--font-sans);background:#fff;color:var(--ink);cursor:pointer}
+.board-alert{background:#F7DCD5;color:#C2371F;border-radius:10px;padding:10px 14px;font-size:13.5px;margin:12px 0 2px;font-weight:500}
+.board-alert b{font-weight:700}
+.board{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:10px;align-items:start}
+.odpill{background:#F7DCD5;color:#C2371F;border-radius:999px;padding:2px 8px;font:600 11px var(--font-sans);margin-left:3px}
+.bcol.over{outline:2px dashed var(--orange);outline-offset:-3px;background:#FFF3EE;border-radius:14px}
+.bcol-list{padding-top:2px}
+.mcard{position:relative;background:#fff;border:1px solid var(--line);border-radius:10px;padding:12px 13px;box-shadow:0 1px 2px rgba(20,17,14,.05);cursor:grab}
+.mcard + .mcard{margin-top:10px}
+.mcard:hover{box-shadow:0 3px 10px rgba(20,17,14,.09);border-color:var(--line-2)}
+.mcard.dragging{opacity:.4;cursor:grabbing;box-shadow:0 6px 18px rgba(20,17,14,.14)}
+.mcard.overdue{border-color:#F0C4B8}
+.mcard-t{display:flex;gap:8px;align-items:flex-start;font-weight:600;font-size:14.5px;line-height:1.32;color:var(--ink);cursor:pointer;padding-right:16px}
+.mcard-t:hover{color:#000}
+.mcard-ic{flex:none;color:var(--ink-4);margin-top:1px}
+.mcard-co{color:var(--ink-3);font-size:12.5px;margin:4px 0 0 23px}
+.mcard-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.mtag{display:inline-block;border-radius:6px;padding:2px 8px;font:600 11.5px var(--font-sans);white-space:nowrap}
+.mtag.grey{background:#EFEFEC;color:var(--ink-2)}
+.mtag.amber{background:#F8EAC4;color:#8F6600}
+.mtag.red{background:#F7DCD5;color:#C2371F}
+.mtag.green{background:#E2F1E9;color:#2E7D5B}
+.mtag.auto{background:#F1F0ED;color:var(--ink-4);font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:9.5px;padding:3px 7px}
+.mcard-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:11px}
+.mcard-foot .mk{margin:0}
+.mcard-by{color:var(--ink-4);font-size:11px;text-align:right;flex:1}
+.mcard-del{position:absolute;top:8px;right:8px;background:0;border:0;color:var(--ink-4);font-size:16px;line-height:1;cursor:pointer;padding:1px 6px;border-radius:6px;opacity:.5;transition:opacity .12s,background .12s}
+.mcard:hover .mcard-del{opacity:1}
+.mcard-del:hover{color:#C2371F;background:#F7DCD5}
+.bcol{background:var(--bg-sunken);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px}
+.bcol-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:2px}
+.bcol-h b{font-family:var(--font-display);font-weight:400;font-size:16px}
+.bcol-h .bn{color:var(--ink-3);font-size:13px;margin-left:4px}
+.bcol-sub{color:var(--ink-3);font-size:12px;margin-top:1px}
+.badd{background:#fff;border:1px solid var(--line-2);border-radius:8px;padding:5px 10px;font:600 12.5px var(--font-sans);cursor:pointer;white-space:nowrap}
+.badd:hover{border-color:var(--ink-3)}
+.bempty{color:var(--ink-3);font-size:12.5px;padding:12px 2px}
+.removed-sec{margin-top:22px;border-top:1px solid var(--line);padding-top:12px}
+.rm-h{font:600 12px var(--font-sans);letter-spacing:.03em;text-transform:uppercase;color:var(--ink-4);margin-bottom:2px}
+.rm-h .hint{text-transform:none;letter-spacing:0;font-weight:400;margin-left:6px}
+.rm-row{opacity:.72}
+/* add modal */
+.ov{position:fixed;inset:0;background:rgba(20,17,14,.28);display:none;align-items:center;justify-content:center;z-index:50}
+.ov.on{display:flex}
+.card{background:#fff;border-radius:16px;padding:24px;width:min(420px,92vw);box-shadow:0 18px 50px rgba(0,0,0,.18)}
+.card h3{font-family:var(--font-display);font-weight:400;margin:0 0 14px}
+.card label{display:block;font-size:12.5px;color:var(--ink-3);margin:12px 0 4px}
+.card input,.card select{width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--line-2);border-radius:9px;font:400 14px var(--font-sans)}
+.card .row{display:flex;gap:16px;justify-content:flex-end;align-items:center;margin-top:20px}
+.card .note{color:var(--ink-3);font-size:12.5px;flex:1}
+.ghost{background:0;border:0;color:var(--ink-3);font:500 14px var(--font-sans);cursor:pointer}
 @media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:820px){.board{grid-template-columns:1fr}}
 @media(max-width:640px){
   .sb-wrap{padding:0 15px 48px}
+  .tt-head{flex-wrap:wrap;gap:8px}.tt-head h1{font-size:24px}
+  .tt-add{margin-left:auto;padding:9px 15px}
+  .tt-tabs{gap:16px;overflow-x:auto;-webkit-overflow-scrolling:touch;flex-wrap:nowrap}
+  .tt-tab{white-space:nowrap}
   .hero .big{font-size:64px}.hero .rt{min-width:0}
   .bar,.leg{max-width:none}
   .chrow{grid-template-columns:96px 1fr 34px;gap:10px}
@@ -115,10 +182,35 @@
   <div id="rail"></div>
   <main>
     <div class="sb-wrap">
-      <div id="sb-body"><div class="skel">Loading the scoreboard…</div></div>
+      <div class="tt-head">
+        <h1>Team Target</h1><span class="mo" id="sb-mo"></span>
+        <span class="sp"></span>
+        <button class="tt-add" id="sb-addbtn">Add a meeting</button>
+      </div>
+      <div class="tt-tabs" id="sb-tabs"></div>
+      <div id="sb-body"><div class="skel">Loading…</div></div>
     </div>
   </main>
 </div>
+
+<div class="ov" id="tt-ov">
+  <div class="card">
+    <h3>Add to the board</h3>
+    <label>Stage</label><select id="f-stage">
+      <option value="said_yes">Meeting-ready · said yes</option>
+      <option value="booked" selected>Booked</option>
+      <option value="attended">Attended</option>
+    </select>
+    <label>Client</label><select id="f-client"></select>
+    <label>Person</label><input id="f-person" placeholder="Who is it with?">
+    <label>Company</label><input id="f-company" placeholder="Optional">
+    <label>Date</label><input id="f-date" type="date">
+    <div class="row"><span class="note">Added to the stage you pick — move it along as things happen.</span>
+      <button class="ghost" id="f-cancel">Cancel</button>
+      <button class="tt-add" id="f-save">Add</button></div>
+  </div>
+</div>
+
 <script src="shell.js"></script>
 <script src="scoreboard.js"></script>
 </body>
