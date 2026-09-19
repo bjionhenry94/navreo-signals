@@ -27,7 +27,8 @@ from datetime import date, datetime, timedelta, timezone
 import server
 
 WORKSPACE = "navreo"
-_EXCLUDE_LABELS = {"", "Navreo", "Acme", "navreo", "acme"}   # Navreo-own / demo, any case
+_EXCLUDE_LABELS = {"", "Navreo", "Acme", "navreo", "acme",    # Navreo-own / demo, any case
+                   "Asteri", "asteri", "Acquird", "acquird"}  # clients we don't book meetings for
 _COUNTS = ("attended",)                      # only these count toward target
 _GOT_MEETING = {"booked", "attended", "no_show", "cancelled", "not_fit"}
 STATUSES = ("said_yes", "booked", "attended", "no_show", "cancelled", "not_fit")
@@ -635,16 +636,16 @@ def add_meeting(payload: dict, who: str) -> tuple:
         return {"error": "client and person are required"}, 400
     if client in _EXCLUDE_LABELS:
         return {"error": "not a client we track"}, 400
-    # the Board can add a lead in any of the three stages; default stays "booked"
+    # the Board can add a lead in any stage; default stays "booked"
     status = (payload.get("status") or "booked").strip()
-    if status not in ("said_yes", "booked", "attended"):
+    if status not in ("said_yes", "booked", "attended", "no_show", "cancelled"):
         status = "booked"
     when = (payload.get("date") or None)
     row = {"id": _uid(), "workspace": WORKSPACE, "lead_email": (payload.get("email") or "").strip().lower() or None,
            "client_label": client, "person": person,
            "company": (payload.get("company") or "").strip(),
            "status": status,
-           "meeting_date": when if status in ("booked", "attended") else None,
+           "meeting_date": when if status in ("booked", "attended", "no_show", "cancelled") else None,
            "said_yes_on": when if status == "said_yes" else None,
            "source": "hand", "created_by": who, "updated_by": who}
     res = server.sb("POST", "team_meetings", row, prefer="return=minimal")
