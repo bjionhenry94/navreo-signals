@@ -124,6 +124,9 @@
     var t = MODEL.totals, mt = MODEL.metrics, b = document.createElement("div");
     var pct = t.target ? Math.min(100, 100 * t.counted / t.target) : 0;
     var tickPct = t.target ? Math.min(100, 100 * t.should_be_today / t.target) : 0;
+    /* "Pending" = booked, still to happen — shown as a dashed segment continuing
+       from the solid attended fill, capped at the target. */
+    var pendPct = t.target ? Math.max(0, Math.min(100 - pct, 100 * t.booked / t.target)) : 0;
     var vClass = t.behind > 0 ? "behind" : "ok";
     var vTxt = t.behind > 0 ? "Behind by " + t.behind : (t.behind < 0 ? "Ahead by " + (-t.behind) : "On track");
     b.innerHTML =
@@ -133,8 +136,11 @@
         '<p class="pace" data-tt="pace">At this pace we finish on ' + t.pace + ". Target " + t.target + ".</p>" +
         '<p class="subline">' + t.booked + " booked, still to happen · mark them Attended once they do. Last-month feel: " +
         t.said_yes_open + " said yes and waiting.</p></div></div>" +
-      '<div class="bar"><div class="fill" style="width:' + pct + '%"></div><div class="tick" style="left:' + tickPct + '%"></div></div>' +
-      '<div class="bar-lbl"><b>' + t.should_be_today + "</b> where we should be today</div>";
+      '<div class="bar"><div class="fill" style="width:' + pct + '%"></div>' +
+        (pendPct > 0 ? '<div class="pending" style="left:' + pct + '%;width:' + pendPct + '%"></div>' : "") +
+        '<div class="tick" style="left:' + tickPct + '%"></div></div>' +
+      '<div class="bar-lbl"><b>' + t.should_be_today + "</b> where we should be today" +
+        (t.booked > 0 ? ' · <span class="leg-pending">' + t.booked + " pending</span>" : "") + "</div>";
 
     var cols = document.createElement("div");
     cols.className = "cols";
