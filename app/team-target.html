@@ -39,7 +39,10 @@
 .bar{position:relative;height:12px;border-radius:7px;background:#EDEDEA;margin:20px 0 6px;max-width:920px}
 .bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:7px;background:var(--orange)}
 .bar .tick{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--ink)}
+.bar .pending{position:absolute;top:0;bottom:0;border:1.5px dashed var(--orange);border-radius:7px;background:color-mix(in srgb,var(--orange) 12%,transparent);box-sizing:border-box}
 .bar-lbl{font-size:12.5px;color:var(--ink-2);max-width:920px}
+.bar-lbl .leg-pending{color:var(--ink-3);white-space:nowrap}
+.bar-lbl .leg-pending::before{content:"";display:inline-block;width:16px;height:9px;border:1.5px dashed var(--orange);border-radius:3px;background:color-mix(in srgb,var(--orange) 12%,transparent);vertical-align:middle;margin-right:5px;box-sizing:border-box}
 /* two-column chase + help */
 .cols{display:grid;grid-template-columns:1fr 360px;gap:26px;margin-top:26px}
 .h4{font-family:var(--font-display);font-weight:400;font-size:18px;margin:0 0 2px}
