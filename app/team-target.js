@@ -50,6 +50,7 @@
   function renderTabs() {
     var t = MODEL.totals;
     var defs = [["month", "This month", ""],
+                ["board", "Board", MODEL.meetings.length],
                 ["yes", "Said yes", t.said_yes_open],
                 ["meetings", "Meetings", MODEL.meetings.length],
                 ["clients", "Clients", MODEL.clients.length]];
@@ -63,7 +64,7 @@
   }
 
   /* ---------- person row with inline status ---------- */
-  function personRow(m, showMk) {
+  function personRow(m, showMk, showDelete) {
     var sub = [m.client, m.company].filter(Boolean).join(" · ");
     var amber = m.waiting_days >= 7 ? " amber" : "";
     var right = "";
@@ -76,6 +77,7 @@
     } else {
       right = '<span class="date">' + esc(fmtDate(m.date)) + "</span>";
     }
+    if (showDelete) right += ' <button class="del" data-act="dismiss" title="Remove from board">×</button>';
     var tag = m.source && m.source.indexOf("auto") === 0 && m.status === "said_yes"
       ? '<span class="tag">auto</span>' : "";
     var by = m.by ? '<span class="sub">' + esc(m.by) + " · " + ago(m.at) + "</span>" : "";
@@ -94,7 +96,18 @@
     if (qb) qb.onclick = function (e) { e.stopPropagation(); setStatus(m, "booked"); };
     var ca = d.querySelector('[data-act="confirmattended"]');
     if (ca) ca.onclick = function (e) { e.stopPropagation(); setStatus(m, "attended"); };
+    var dl = d.querySelector('[data-act="dismiss"]');
+    if (dl) dl.onclick = function (e) { e.stopPropagation(); dismiss(m); };
     return d;
+  }
+
+  function dismiss(m) {
+    // hand-added rows are hard-deleted (confirm); auto leads soft-remove and can
+    // be restored from the board's "Removed" section.
+    if (String(m.id).indexOf("man:") === 0 &&
+        !window.confirm("Delete " + (m.person || "this meeting") + "? A hand-added meeting can't be restored.")) return;
+    post("/api/team-target/dismiss", {id: m.id, email: m.email, client: m.client,
+      person: m.person, company: m.company, said_yes_on: m.said_yes_on || null});
   }
 
   function openChooser(rowEl, m) {
@@ -217,6 +230,54 @@
     rows.forEach(function (m) { b.appendChild(personRow(m, false)); });
   }
 
+  /* ---------- Board: add / list / remove the three live states ---------- */
+  var BOARD_COLS = [
+    {key: "said_yes", title: "Meeting-ready", sub: "said yes, waiting to book"},
+    {key: "booked", title: "Booked", sub: "scheduled, still to happen"},
+    {key: "attended", title: "Attended", sub: "happened this month"}];
+
+  function renderBoard() {
+    var b = document.createElement("div");
+    b.innerHTML = '<div class="h4">Board <span class="hint">everyone in play this month · ' +
+      "tap a name to move them, + Add to create, × to remove</span></div>";
+    var wrap = document.createElement("div"); wrap.className = "board";
+    BOARD_COLS.forEach(function (c) {
+      var rows = MODEL.meetings.filter(function (m) { return m.status === c.key; });
+      if (c.key === "said_yes") rows.sort(function (a, z) { return z.waiting_days - a.waiting_days; });
+      var col = document.createElement("div"); col.className = "bcol";
+      col.innerHTML = '<div class="bcol-h"><div><b>' + c.title + '</b> <span class="bn">' + rows.length +
+        '</span><div class="bcol-sub">' + c.sub + "</div></div>" +
+        '<button class="badd" data-stage="' + c.key + '">+ Add</button></div>';
+      col.querySelector(".badd").onclick = function () { openAdd(c.key); };
+      var list = document.createElement("div"); list.className = "bcol-list";
+      if (!rows.length) list.innerHTML = '<div class="bempty">Nobody here yet.</div>';
+      rows.forEach(function (m) { list.appendChild(personRow(m, true, true)); });
+      col.appendChild(list);
+      wrap.appendChild(col);
+    });
+    b.appendChild(wrap);
+
+    var rm = MODEL.removed || [];
+    if (rm.length) {
+      var sec = document.createElement("div"); sec.className = "removed-sec";
+      sec.innerHTML = '<div class="rm-h">Removed this month · ' + rm.length +
+        ' <span class="hint">— auto-pulled leads; restore any time</span></div>';
+      rm.forEach(function (m) {
+        var r = document.createElement("div"); r.className = "prow rm-row";
+        var sub = [m.client, m.company].filter(Boolean).join(" · ");
+        r.innerHTML = '<div class="who"><div class="nm">' + esc(m.person || "(no name)") + "</div>" +
+          (sub ? '<div class="sub">' + esc(sub) + "</div>" : "") +
+          '</div><div class="rt-cell"><button class="mk" data-act="restore">Restore</button></div>';
+        r.querySelector('[data-act="restore"]').onclick = function () {
+          post("/api/team-target/restore", {id: m.id, email: m.email});
+        };
+        sec.appendChild(r);
+      });
+      b.appendChild(sec);
+    }
+    return b;
+  }
+
   /* ---------- Clients ---------- */
   function renderClients() {
     var b = document.createElement("div"), t = MODEL.totals;
@@ -254,25 +315,28 @@
     el("tt-mo").textContent = MODEL.month;
     renderTabs();
     var body = el("tt-body"); body.innerHTML = "";
-    body.appendChild(TAB === "yes" ? renderYes() : TAB === "meetings" ? renderMeetings() :
-      TAB === "clients" ? renderClients() : renderMonth());
+    body.appendChild(TAB === "board" ? renderBoard() : TAB === "yes" ? renderYes() :
+      TAB === "meetings" ? renderMeetings() : TAB === "clients" ? renderClients() : renderMonth());
   }
 
-  function openAdd() {
+  function openAdd(stage) {
     var sel = el("f-client");
     sel.innerHTML = (MODEL.clients_all.length ? MODEL.clients_all : MODEL.clients.map(function (c) { return c.name; }))
       .map(function (c) { return '<option>' + esc(c) + "</option>"; }).join("");
     el("f-person").value = ""; el("f-company").value = ""; el("f-date").value = MODEL.today;
+    var st = typeof stage === "string" ? stage : "booked";     // rail button passes an event
+    if (el("f-stage")) el("f-stage").value = st;
     el("tt-ov").classList.add("on");
   }
-  el("tt-addbtn").onclick = openAdd;
+  el("tt-addbtn").onclick = function () { openAdd(); };
   el("f-cancel").onclick = function () { el("tt-ov").classList.remove("on"); };
   el("tt-ov").onclick = function (e) { if (e.target === el("tt-ov")) el("tt-ov").classList.remove("on"); };
   el("f-save").onclick = function () {
     var person = el("f-person").value.trim();
     if (!person) { el("f-person").focus(); return; }
     post("/api/team-target/meeting", {client: el("f-client").value, person: person,
-      company: el("f-company").value.trim(), date: el("f-date").value || null},
+      company: el("f-company").value.trim(), date: el("f-date").value || null,
+      status: el("f-stage") ? el("f-stage").value : "booked"},
       function () { el("tt-ov").classList.remove("on"); });
   };
 

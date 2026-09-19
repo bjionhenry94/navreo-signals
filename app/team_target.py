@@ -234,6 +234,7 @@ def data(force: bool = False) -> dict:
     per = {c: _bucket() for c in (set(active) | {l["client"] for l in auto.values()})
            if c and c not in _EXCLUDE_LABELS}
     meetings = []
+    removed = []                    # dismissed leads (status "removed"), for restore
     emitted = set()                 # emails already tallied — dedupe across paths
     name_cache = _names_for(set(auto) | set(overrides) |
                             {(r.get("lead_email") or "").strip().lower() for r in hand})
@@ -250,6 +251,9 @@ def data(force: bool = False) -> dict:
         if cl not in per:
             continue
         status, ov = _eff(em, al)
+        if status == "removed":         # dismissed from the board — hide, don't tally
+            emitted.add(em)
+            continue
         person, company = name_cache.get(em, ("", ""))
         if ov:
             person = ov.get("person") or person
@@ -280,8 +284,10 @@ def data(force: bool = False) -> dict:
         mmonth = (mdate[:7] if mdate else str(ov.get("updated_at") or "")[:7])
         if mmonth != cur_ym:
             continue
-        per.setdefault(cl, _bucket())
         status = ov.get("status") or "booked"
+        if status == "removed":         # dismissed — never resurface as active
+            continue
+        per.setdefault(cl, _bucket())
         person, company = name_cache.get(em, ("", ""))
         person = ov.get("person") or person
         company = ov.get("company") or company
@@ -304,8 +310,10 @@ def data(force: bool = False) -> dict:
         em = (r.get("lead_email") or "").strip().lower()
         if em and em in emitted:
             continue
-        per.setdefault(cl, _bucket())
         status = r.get("status") or "booked"
+        if status == "removed":         # a soft-removed hand-add (rare; normally hard-deleted)
+            continue
+        per.setdefault(cl, _bucket())
         wait = _days_between(r.get("said_yes_on") or r.get("created_at"), today)
         meetings.append({"id": r.get("id"), "email": em, "client": cl,
                          "person": r.get("person") or "", "company": r.get("company") or "",
@@ -318,7 +326,18 @@ def data(force: bool = False) -> dict:
         if em:
             emitted.add(em)
 
-    result = _assemble(today, cur_month, wk, active, per, meetings)
+    # dismissed (status "removed") auto leads that belong to THIS month — surfaced
+    # so the Board can restore them; they are hidden from the active tallies above.
+    for em, ov in overrides.items():
+        if ov.get("status") != "removed" or em not in auto:
+            continue
+        person, company = name_cache.get(em, ("", ""))
+        removed.append({"id": ov.get("id") or ("ovr:%s:%s" % (WORKSPACE, em)),
+                        "email": em, "client": auto[em]["client"],
+                        "person": ov.get("person") or person,
+                        "company": ov.get("company") or company, "source": "auto"})
+
+    result = _assemble(today, cur_month, wk, active, per, meetings, removed)
     _CACHE.update(ts=now, data=result)
     return result
 
@@ -339,7 +358,7 @@ def _tally(bucket, status, wait, row, key):
             bucket[status] += 1
 
 
-def _assemble(today, cur_month, wk, active, per, meetings):
+def _assemble(today, cur_month, wk, active, per, meetings, removed=None):
     # ONE client base for numerator and denominator: every client in play this
     # month (active senders ∪ anyone with a meeting), so counted/target/avg
     # can't disagree about who is being counted.
@@ -417,6 +436,7 @@ def _assemble(today, cur_month, wk, active, per, meetings):
         "clients": clients,
         "chase_next": waiting[:8],
         "meetings": sorted(meetings, key=lambda m: str(m.get("at") or ""), reverse=True),
+        "removed": removed or [],
         "team": server.team_display_names(),
     }
 
@@ -568,10 +588,17 @@ def add_meeting(payload: dict, who: str) -> tuple:
         return {"error": "client and person are required"}, 400
     if client in _EXCLUDE_LABELS:
         return {"error": "not a client we track"}, 400
+    # the Board can add a lead in any of the three stages; default stays "booked"
+    status = (payload.get("status") or "booked").strip()
+    if status not in ("said_yes", "booked", "attended"):
+        status = "booked"
+    when = (payload.get("date") or None)
     row = {"id": _uid(), "workspace": WORKSPACE, "lead_email": (payload.get("email") or "").strip().lower() or None,
            "client_label": client, "person": person,
            "company": (payload.get("company") or "").strip(),
-           "status": "booked", "meeting_date": (payload.get("date") or None),
+           "status": status,
+           "meeting_date": when if status in ("booked", "attended") else None,
+           "said_yes_on": when if status == "said_yes" else None,
            "source": "hand", "created_by": who, "updated_by": who}
     res = server.sb("POST", "team_meetings", row, prefer="return=minimal")
     if _write_failed(res):
@@ -579,6 +606,57 @@ def add_meeting(payload: dict, who: str) -> tuple:
     _CACHE["data"] = None
     _SB_CACHE["data"] = None
     return {"ok": True, "id": row["id"]}, 200
+
+
+def dismiss(payload: dict, who: str) -> tuple:
+    """Remove a lead from the board. Hand-added rows (man:) are hard-deleted;
+    auto-pulled leads are soft-removed via an override (status "removed") so they
+    don't reappear on the next reply sync — restorable from the Board."""
+    mid = (payload.get("id") or "").strip()
+    if mid.startswith("man:"):
+        res = server.sb("DELETE", "team_meetings?id=eq.%s" % urllib.parse.quote(mid))
+        if _write_failed(res):
+            return {"error": "could not remove"}, 502
+        _CACHE["data"] = None
+        _SB_CACHE["data"] = None
+        return {"ok": True, "mode": "deleted"}, 200
+    email = (payload.get("email") or "").strip().lower()
+    if not email and mid.startswith("ovr:"):
+        email = mid.split(":", 2)[2] if mid.count(":") >= 2 else ""
+    if not email:
+        return {"error": "which lead?"}, 400
+    now_iso = datetime.utcnow().isoformat() + "Z"
+    row = {"id": "ovr:%s:%s" % (WORKSPACE, email), "workspace": WORKSPACE, "lead_email": email,
+           "client_label": (payload.get("client") or "").strip() or "?",
+           "person": (payload.get("person") or "").strip(),
+           "company": (payload.get("company") or "").strip(),
+           "status": "removed", "said_yes_on": (payload.get("said_yes_on") or None),
+           "source": "auto-override", "updated_by": who, "updated_at": now_iso, "created_by": who}
+    res = server.sb("POST", "team_meetings?on_conflict=id", row,
+                    prefer="resolution=merge-duplicates,return=minimal")
+    if _write_failed(res):
+        return {"error": "could not remove"}, 502
+    _CACHE["data"] = None
+    _SB_CACHE["data"] = None
+    return {"ok": True, "mode": "removed"}, 200
+
+
+def restore(payload: dict, who: str) -> tuple:
+    """Undo a soft-remove: delete the override so the auto lead reverts to its
+    live status. (Hand-added rows were hard-deleted and can't be restored.)"""
+    mid = (payload.get("id") or "").strip()
+    email = (payload.get("email") or "").strip().lower()
+    if not email and mid.startswith("ovr:"):
+        email = mid.split(":", 2)[2] if mid.count(":") >= 2 else ""
+    if not email:
+        return {"error": "which lead?"}, 400
+    res = server.sb("DELETE", "team_meetings?id=eq.%s"
+                    % urllib.parse.quote("ovr:%s:%s" % (WORKSPACE, email)))
+    if _write_failed(res):
+        return {"error": "could not restore"}, 502
+    _CACHE["data"] = None
+    _SB_CACHE["data"] = None
+    return {"ok": True}, 200
 
 
 def set_status(payload: dict, who: str) -> tuple:

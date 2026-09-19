@@ -27550,7 +27550,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(body, status)
         if path.startswith("/api/qa-gate/") and path != "/api/qa-gate/runs" and self._qa_token_ok():
             return self._qa_gate_post(path)
-        if path in ("/api/team-target/meeting", "/api/team-target/status"):
+        if path in ("/api/team-target/meeting", "/api/team-target/status",
+                    "/api/team-target/dismiss", "/api/team-target/restore"):
             # Team meetings board writes — logged-in teammates only. Who-did-it
             # is stamped from the session, never the payload.
             email = self._authed_email()
@@ -27564,8 +27565,9 @@ class Handler(SimpleHTTPRequestHandler):
                 return self._json({"error": "invalid JSON body"}, 400)
             who = team_display_names().get(email.lower()) or email
             import team_target
-            fn = team_target.add_meeting if path.endswith("/meeting") else team_target.set_status
-            body, status = fn(p, who)
+            _tt_fns = {"meeting": team_target.add_meeting, "status": team_target.set_status,
+                       "dismiss": team_target.dismiss, "restore": team_target.restore}
+            body, status = _tt_fns[path.rsplit("/", 1)[1]](p, who)
             log_activity(path, {k: p.get(k) for k in ("client", "status", "id")},
                          action=path.rsplit("/", 1)[1], entity="team_target")
             return self._json(body, status)
