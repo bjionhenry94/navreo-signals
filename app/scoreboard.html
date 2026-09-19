@@ -141,22 +141,25 @@
 .mcard-t:hover{color:#000}
 .mcard-pill{flex:none}
 .mcard-pill .mtag{font-size:10.5px;padding:2px 8px}
-.mcard-co{color:var(--ink-2);font-size:13px;font-weight:500;margin:3px 0 0;padding:0 13px}
-.mcard-meta{display:flex;gap:20px;flex-wrap:wrap;padding:11px 13px 0}
-.mcard-meta .mk-lbl{font-size:10px;color:var(--ink-4);letter-spacing:.05em;text-transform:uppercase;font-weight:700;margin-bottom:3px}
-.mcard-meta .mk-lbl.od{color:#C2371F}
-.mcard-meta .mk-lbl.gd{color:#2E7D5B}
-.mcard-meta .mk-val{font-size:13px;color:var(--ink);font-weight:600}
-.mcard-meta a.mk-val{color:#3B6FB0;text-decoration:none;display:block;max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mcard-meta a.mk-val:hover{text-decoration:underline}
-.mcard-contacts{margin-top:12px;border-top:1px solid var(--line)}
-.mcard-contacts .crow{display:flex;align-items:center;gap:9px;padding:10px 13px;font:600 13px var(--font-sans);color:var(--ink);text-decoration:none;cursor:pointer}
-.mcard-contacts .crow + .crow{border-top:1px solid var(--line)}
-.mcard-contacts .crow:hover{background:var(--bg-sunken)}
-.mcard-contacts .crow > svg:first-child{color:var(--ink-3);flex:none}
-.mcard-contacts .crow .cval{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
-.mcard-contacts .crow .ext{margin-left:auto;color:var(--ink-4);flex:none}
-.mcard-contacts .crow:hover .ext{color:var(--orange,#FF4D00)}
+.mcard-idline{display:flex;flex-wrap:wrap;align-items:center;gap:6px;color:var(--ink-2);font-size:13px;font-weight:500;margin:3px 0 0;padding:0 13px}
+.mcard-idline a{color:#3B6FB0;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.mcard-idline a:hover{text-decoration:underline}
+.mcard-idline .sep{color:var(--ink-4)}
+.mcard-band{display:flex;align-items:center;gap:9px;margin:12px 13px 0;background:var(--bg-sunken);border-radius:10px;padding:10px 12px;font-size:13.5px;color:var(--ink)}
+.mcard-band svg{flex:none;color:var(--ink-3)}
+.mcard-band .bl{font-size:10px;letter-spacing:.05em;text-transform:uppercase;font-weight:700;color:var(--ink-4)}
+.mcard-band .bv{font-weight:600}
+.mcard-band.od{background:#FBEDE9;color:#C2371F}
+.mcard-band.od svg,.mcard-band.od .bl{color:#C2371F}
+.mcard-band.gd{background:#E7F3EC;color:#2E7D5B}
+.mcard-band.gd svg,.mcard-band.gd .bl{color:#2E7D5B}
+.mcard-crows{display:flex;flex-direction:column;gap:1px;margin:10px 8px 0}
+.mcard-crows .crow{display:flex;align-items:center;gap:9px;padding:8px;border-radius:8px;font:600 13px var(--font-sans);color:var(--ink);text-decoration:none;cursor:pointer}
+.mcard-crows .crow:hover{background:var(--bg-sunken)}
+.mcard-crows .crow > svg:first-child{color:var(--ink-3);flex:none}
+.mcard-crows .crow .cval{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.mcard-crows .crow .ext{margin-left:auto;color:var(--ink-4);flex:none}
+.mcard-crows .crow:hover .ext{color:var(--orange,#FF4D00)}
 .mcard-low{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:11px 13px 0}
 .lowtag{font:500 10.5px var(--font-sans);color:var(--ink-4);background:var(--bg-sunken);border-radius:5px;padding:2px 7px;letter-spacing:.02em}
 .lowtag.late{color:#8F6600;background:#F8EAC4}
