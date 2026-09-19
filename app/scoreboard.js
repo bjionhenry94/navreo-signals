@@ -226,6 +226,8 @@
   var ICON_MAIL = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M4 7l8 6 8-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
   var ICON_WEB = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/><path d="M3 12h18M12 3c2.5 2.5 3.5 6 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-6-3.5-9s1-6.5 3.5-9z" stroke="currentColor" stroke-width="1.7"/></svg>';
   var ICON_EXT = '<svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var ICON_CAL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 10h18M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  var ICON_WARN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l9 16H3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4M12 17v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
   function webFromEmail(email) {
     var at = String(email || "").split("@")[1];
     if (!at) return "";
@@ -249,14 +251,19 @@
     } else if (m.status === "attended") { whenLbl = "Attended"; whenVal = m.date ? fmtDate(m.date) : "this month"; whenCls = "gd"; }
     else if (m.status === "no_show") { whenLbl = "No-show"; whenVal = m.date ? fmtDate(m.date) : "—"; whenCls = "od"; }
     else if (m.status === "cancelled") { whenLbl = "Cancelled"; whenVal = m.date ? fmtDate(m.date) : "—"; }
-    else if (m.status === "said_yes" && m.said_yes_on) { whenLbl = "Said yes"; whenVal = fmtDate(m.said_yes_on); }
+    else if (m.status === "said_yes") { whenLbl = "Said yes"; whenVal = m.said_yes_on ? fmtDate(m.said_yes_on) : "—"; }
 
     var domain = webFromEmail(m.email);
     var url = setterLink(m.email);
 
-    var metaCells = "";
-    if (whenVal) metaCells += '<div><div class="mk-lbl ' + whenCls + '">' + whenLbl + '</div><div class="mk-val">' + esc(whenVal) + "</div></div>";
-    if (domain) metaCells += '<div><div class="mk-lbl">Website</div><a class="mk-val" href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + esc(domain) + "</a></div>";
+    // company · website — one quiet identity line
+    var idbits = [];
+    if (m.company) idbits.push(esc(m.company));
+    if (domain) idbits.push('<a href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + esc(domain) + "</a>");
+    var idline = idbits.length ? '<div class="mcard-idline">' + idbits.join('<span class="sep">·</span>') + "</div>" : "";
+    // the hero: a meeting band, tinted by state (od = red alert, gd = green done)
+    var band = whenVal ? ('<div class="mcard-band ' + whenCls + '">' + (whenCls === "od" ? ICON_WARN : ICON_CAL) +
+      '<span class="bl">' + whenLbl + '</span><span class="bv">' + esc(whenVal) + "</span></div>") : "";
 
     // low hierarchy — auto, waiting (client pill now lives top-right)
     var lows = "";
@@ -274,9 +281,9 @@
         (m.client ? '<span class="mcard-pill">' + clientPill(m.client) + "</span>" : "") +
         '<button class="mcard-del" data-act="dismiss" title="Remove from board">×</button>' +
       "</div>" +
-      (m.company ? '<div class="mcard-co">' + esc(m.company) + "</div>" : "") +
-      (metaCells ? '<div class="mcard-meta">' + metaCells + "</div>" : "") +
-      (url ? '<div class="mcard-contacts">' +
+      idline +
+      band +
+      (url ? '<div class="mcard-crows">' +
           '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter — dial from the multi-number picker">' + ICON_PHONE + "<span>Call</span>" + ICON_EXT + "</a>" +
           '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open the lead in the setter to reply">' + ICON_MAIL + '<span class="cval">' + esc(m.email) + "</span>" + ICON_EXT + "</a></div>" : "") +
       (lows ? '<div class="mcard-low">' + lows + "</div>" : "") +
