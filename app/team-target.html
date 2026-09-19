@@ -96,7 +96,18 @@
 .spill.attended{background:#E2F1E9;color:#2E7D5B}
 .spill.bad{background:#F7DCD5;color:#C2371F}
 /* board — three live columns you can add to / move / remove from */
+.board-head{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;flex-wrap:wrap}
+.bfilter{font-size:12.5px;color:var(--ink-3);display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.bfilter select{border:1px solid var(--line-2);border-radius:8px;padding:6px 10px;font:500 13px var(--font-sans);background:#fff;color:var(--ink);cursor:pointer}
+.board-alert{background:#F7DCD5;color:#C2371F;border-radius:10px;padding:10px 14px;font-size:13.5px;margin:12px 0 2px;font-weight:500}
+.board-alert b{font-weight:700}
 .board{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:10px;align-items:start}
+.odpill{background:#F7DCD5;color:#C2371F;border-radius:999px;padding:2px 8px;font:600 11px var(--font-sans);margin-left:3px}
+.date.od{color:#C2371F;font-weight:600}
+.prow.overdue{background:#FDF4F1}
+.bcol-list .prow{cursor:grab}
+.bcol-list .prow.dragging{opacity:.4;cursor:grabbing}
+.bcol.over{outline:2px dashed var(--orange);outline-offset:-3px;background:#FFF3EE;border-radius:14px}
 .bcol{background:var(--bg-sunken);border:1px solid var(--line);border-radius:14px;padding:12px 12px 6px}
 .bcol-h{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;margin-bottom:2px}
 .bcol-h b{font-family:var(--font-display);font-weight:400;font-size:16px}
