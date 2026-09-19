@@ -635,10 +635,10 @@ def scoreboard(force: bool = False) -> dict:
             "show_up_num": base["metrics"]["show_up_num"],
             "show_up_den": base["metrics"]["show_up_den"],
         },
+        # "clients" carries per-client attended/booked/said_yes — the Scoreboard's
+        # "Meetings attended vs target" chart builds its stacked bars from these,
+        # so there's no separate chart array.
         "clients": rows,
-        # ranked bar chart: ATTENDED meetings per client vs the 4-attended target
-        "attended_chart": sorted(({"name": r["name"], "value": r["attended"]} for r in scored),
-                                 key=lambda x: -x["value"]),
         "team": base.get("team", {}),
     }
     _SB_CACHE.update(ts=now, data=return_data)
