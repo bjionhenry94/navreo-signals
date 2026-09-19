@@ -115,10 +115,7 @@
     return '<div class="scard ' + (tone || "") + '"><div class="v">' + vHtml + '</div><div class="k">' + esc(k) + "</div></div>";
   }
   function renderScoreboard(d) {
-    var t = d.totals, cal = d.cal_days || {}, cards = d.cards || {};
-    var today = new Date((d.today || "") + "T00:00:00");
-    var dayN = isNaN(today.getDate()) ? "" : today.getDate();
-    var monShort = isNaN(today.getMonth()) ? "" : MON[today.getMonth()];
+    var t = d.totals, cards = d.cards || {};
     var behind = t.behind || 0;
     var vClass = behind > 0 ? "behind" : "ok";
     var vTxt = behind > 0 ? "Behind by " + behind : (behind < 0 ? "Ahead by " + (-behind) : "On track");
@@ -159,14 +156,6 @@
       return r.value > Math.max(d.per_client_target + 1, Math.min(d.per_client_target * 2, mx)); });
     var b = document.createElement("div");
     b.innerHTML =
-      '<p class="sb-sub">Positive replies and booked meetings per client, scored against the target of ' +
-        "4 booked meetings per active client each month.</p>" +
-      '<div class="sb-scope">Every number on this page is for ' + esc(d.month) + " only (1–" + dayN + " " +
-        monShort + ") and resets at the start of each month.</div>" +
-      '<div class="kpi"><div class="k1">Internal target</div>' +
-        '<div class="k2">' + d.per_client_target + " booked meetings per client per month</div>" +
-        '<div class="k3">' + (cal.gone || 0) + " of " + (cal.total || 0) + " days elapsed · pace mark is " +
-          (d.pace_mark != null ? d.pace_mark : "—") + " meetings</div></div>" +
       '<div class="eyebrow">Meetings this month</div>' +
       '<div class="hero"><div class="big">' + t.counted + ' <small>of ' + t.target + "</small></div>" +
         '<div class="rt"><span class="verdict ' + vClass + '">' + vTxt + "</span>" +
