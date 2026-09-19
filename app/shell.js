@@ -79,8 +79,7 @@ function renderRail(active) {
     <a class="logo" href="campaigns.html" title="Navreo">n</a>
     ${items}
     <div class="spacer"></div>
-    <a class="nav-i ${active === "scoreboard" ? "on" : ""}" href="scoreboard.html" title="Scoreboard">${ICONS.scoreboard}</a>
-    <a class="nav-i ${active === "target" ? "on" : ""}" href="team-target.html" title="Team Target">${ICONS.target}</a>
+    <a class="nav-i ${active === "target" ? "on" : ""}" href="scoreboard.html" title="Team Target">${ICONS.target}</a>
     <a class="nav-i ${active === "settings" ? "on" : ""}" href="settings.html" title="Settings">${ICONS.settings}</a>
   </nav>`;
 }
