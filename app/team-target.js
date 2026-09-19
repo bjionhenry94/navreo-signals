@@ -238,6 +238,64 @@
     {key: "booked", title: "Booked", sub: "scheduled, still to happen"},
     {key: "attended", title: "Attended", sub: "happened this month"}];
 
+  // each client gets a consistent soft-coloured tag (Notion style), by name hash
+  var PILL_COLORS = [
+    {bg: "#E7EFFB", fg: "#1E40AF"}, {bg: "#E4F4EA", fg: "#166534"},
+    {bg: "#F3E8FD", fg: "#6B21A8"}, {bg: "#FCE7EF", fg: "#9D174D"},
+    {bg: "#FBEAD7", fg: "#9A3412"}, {bg: "#D8F3F0", fg: "#115E59"},
+    {bg: "#FBEACB", fg: "#854D0E"}, {bg: "#E6E6F5", fg: "#3730A3"}];
+  function clientColor(name) {
+    var h = 0, s = String(name || "");
+    for (var i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+    return PILL_COLORS[h % PILL_COLORS.length];
+  }
+  function clientPill(client) {
+    if (!client) return "";
+    var c = clientColor(client);
+    return '<span class="mtag" style="background:' + c.bg + ';color:' + c.fg + '">' + esc(client) + "</span>";
+  }
+  var ICON_DOC = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
+    '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>' +
+    '<path d="M14 3v5h5" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+
+  // a Notion-style meeting card for the Board
+  function boardCard(m) {
+    var d = document.createElement("div");
+    d.className = "mcard" + (m.overdue ? " overdue" : "");
+    d.setAttribute("data-tt", "person");
+    d.setAttribute("data-id", m.id);
+    d.setAttribute("data-status", m.status);
+    d.setAttribute("data-client", m.client);
+    var pills = clientPill(m.client);
+    if (m.source && m.source.indexOf("auto") === 0) pills += '<span class="mtag auto">Auto</span>';
+    if (m.status === "said_yes") {
+      var late = m.waiting_days >= 7;
+      pills += '<span class="mtag ' + (late ? "amber" : "grey") + '">' +
+        (m.waiting_days <= 0 ? "said yes today" : "waiting " + m.waiting_days + "d") + "</span>";
+    } else if (m.status === "booked") {
+      if (m.overdue) pills += '<span class="mtag red">⚠ overdue' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
+      else if (m.date) pills += '<span class="mtag grey">' + esc(fmtDate(m.date)) + "</span>";
+    } else if (m.status === "attended") {
+      pills += '<span class="mtag green">attended' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
+    }
+    var action = m.status === "said_yes" ? '<button class="mk" data-act="quickbook">Mark booked</button>'
+      : m.status === "booked" ? '<button class="mk attend" data-act="confirmattended">Confirmed attended</button>' : "";
+    var by = m.by ? '<span class="mcard-by">' + esc(m.by) + " · " + ago(m.at) + "</span>" : "";
+    d.innerHTML =
+      '<button class="mcard-del" data-act="dismiss" title="Remove from board">×</button>' +
+      '<div class="mcard-t"><span class="mcard-ic">' + ICON_DOC + "</span><span>" + esc(m.person || "(no name)") + "</span></div>" +
+      (m.company ? '<div class="mcard-co">' + esc(m.company) + "</div>" : "") +
+      '<div class="mcard-tags">' + pills + "</div>" +
+      (action || by ? '<div class="mcard-foot">' + (action || "<span></span>") + by + "</div>" : "");
+    d.querySelector(".mcard-t").onclick = function () { openChooser(d, m); };
+    var qb = d.querySelector('[data-act="quickbook"]');
+    if (qb) qb.onclick = function (e) { e.stopPropagation(); setStatus(m, "booked"); };
+    var ca = d.querySelector('[data-act="confirmattended"]');
+    if (ca) ca.onclick = function (e) { e.stopPropagation(); setStatus(m, "attended"); };
+    d.querySelector('[data-act="dismiss"]').onclick = function (e) { e.stopPropagation(); dismiss(m); };
+    return d;
+  }
+
   function renderBoard() {
     var b = document.createElement("div");
     // client filter — everyone in play this month (meetings + removed)
@@ -284,7 +342,7 @@
       var list = document.createElement("div"); list.className = "bcol-list";
       if (!rows.length) list.innerHTML = '<div class="bempty">Nobody here yet.</div>';
       rows.forEach(function (m) {
-        var card = personRow(m, true, true);
+        var card = boardCard(m);
         card.draggable = true;
         card.addEventListener("dragstart", function (e) {
           DRAG = m; card.classList.add("dragging"); e.dataTransfer.effectAllowed = "move";
