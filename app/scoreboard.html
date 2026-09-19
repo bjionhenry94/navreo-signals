@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Scoreboard · Navreo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="navreo.css">
+<style>
+/* Meetings Scoreboard — the team's live per-client meetings board, in the house
+   light theme. Data (live): /api/scoreboard/data (reuses the Team Target
+   pipeline, adds per-client positives). The hero bar shows the three meeting
+   states — Attended (solid) · Booked/pending (dashed) · Meeting-ready (dashed
+   muted) — against the target of 4 booked meetings per active client. */
+.app > main{min-width:0}
+.sb-wrap{max-width:1160px;margin:0 auto;padding:0 22px 64px;min-width:0}
+.sb-head{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;padding:24px 0 2px}
+.sb-head h1{font-family:var(--font-display);font-weight:400;font-size:26px;letter-spacing:-.02em;margin:0}
+.sb-head .mo{color:var(--ink-3);font-size:14.5px}
+.sb-head .sp{flex:1}
+.sb-head .tt-link{color:var(--ink-3);font-size:13px;text-decoration:none;border:1px solid var(--line-2);border-radius:999px;padding:6px 13px;white-space:nowrap}
+.sb-head .tt-link:hover{background:var(--bg-sunken);color:var(--ink)}
+.eyebrow{font-size:11.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-4);margin:14px 0 6px}
+.sb-sub{color:var(--ink-2);font-size:15px;max-width:760px;margin:0 0 4px}
+/* KPI callout */
+.kpi{border-left:3px solid var(--orange);padding:2px 0 2px 16px;margin:22px 0 6px}
+.kpi .k1{font-size:11.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-4)}
+.kpi .k2{font-family:var(--font-display);font-weight:400;font-size:22px;letter-spacing:-.01em;margin:3px 0 2px}
+.kpi .k3{color:var(--ink-3);font-size:13.5px}
+/* hero: the 3-state progress bar */
+.hero{display:flex;align-items:flex-start;gap:18px;flex-wrap:wrap;margin-top:8px}
+.hero .big{font-family:var(--font-display);font-weight:400;font-size:88px;line-height:.9;letter-spacing:-.03em}
+.hero .big small{font-size:34px;color:var(--ink-3);letter-spacing:-.02em}
+.hero .rt{flex:1;min-width:260px}
+.verdict{display:inline-block;border-radius:999px;padding:6px 14px;font:600 14px var(--font-sans);margin:6px 0}
+.verdict.behind{background:#F7DCD5;color:#C2371F}
+.verdict.ok{background:#E2F1E9;color:#2E7D5B}
+.pace{color:var(--ink-2);font-size:16px;margin:2px 0 0}
+.subline{color:var(--ink-3);font-size:13.5px;margin-top:6px}
+.bar{position:relative;height:14px;border-radius:8px;background:#EDEDEA;margin:20px 0 12px;max-width:940px}
+.bar .fill{position:absolute;left:0;top:0;bottom:0;border-radius:8px;background:var(--orange)}
+.bar .seg{position:absolute;top:0;bottom:0;border-radius:8px;box-sizing:border-box}
+.bar .seg-booked{border:1.5px dashed var(--orange);background:color-mix(in srgb,var(--orange) 15%,transparent)}
+.bar .seg-ready{border:1.5px dashed var(--ink-3);background:color-mix(in srgb,var(--ink-3) 11%,transparent)}
+.bar .tick{position:absolute;top:-6px;bottom:-6px;width:2px;background:var(--ink);border-radius:2px}
+.leg{display:flex;flex-wrap:wrap;gap:10px 20px;font-size:13px;color:var(--ink-2);max-width:940px}
+.leg span{display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.leg i{width:22px;height:12px;border-radius:3px;display:inline-block;box-sizing:border-box;flex:none}
+.leg .s-att{background:var(--orange)}
+.leg .s-book{border:1.5px dashed var(--orange);background:color-mix(in srgb,var(--orange) 15%,transparent)}
+.leg .s-ready{border:1.5px dashed var(--ink-3);background:color-mix(in srgb,var(--ink-3) 11%,transparent)}
+.leg b{color:var(--ink);font-weight:600}
+.leg .tk{width:2px;height:14px;background:var(--ink);border-radius:2px}
+/* stat cards */
+.cards{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:26px}
+.scard{background:#fff;border:1px solid var(--line);border-radius:14px;padding:18px 18px}
+.scard .v{font-family:var(--font-display);font-weight:400;font-size:40px;line-height:1;letter-spacing:-.02em}
+.scard .v small{font-size:19px;color:var(--ink-3)}
+.scard .k{color:var(--ink-3);font-size:13px;margin-top:8px}
+.scard.warn .v{color:#8F6600}
+.scard.bad .v{color:#C2371F}
+/* section titles */
+.sec{margin-top:38px}
+.sec h2{font-family:var(--font-display);font-weight:400;font-size:20px;letter-spacing:-.01em;margin:0 0 3px}
+.sec .desc{color:var(--ink-3);font-size:13.5px;margin:0 0 14px}
+/* client scoreboard table */
+.tbl{border:1px solid var(--line);border-radius:14px;overflow:hidden;background:#fff}
+.trow{display:grid;grid-template-columns:1.5fr 68px 68px 190px 130px;align-items:center;gap:14px;padding:13px 18px;border-top:1px solid var(--line)}
+.trow.head{border-top:0;background:var(--bg-sunken);font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-4);padding-top:10px;padding-bottom:10px}
+.trow .cn{font-weight:600;font-size:15px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trow.unscored .cn{color:var(--ink-3);font-weight:500}
+.trow .num{font-variant-numeric:tabular-nums;font-size:15px;font-weight:600}
+.trow .num.mut{color:var(--ink-3);font-weight:400}
+.mini{position:relative;height:9px;border-radius:5px;background:#EDEDEA;width:100%;max-width:180px}
+.mini .mf{position:absolute;left:0;top:0;bottom:0;border-radius:5px;background:var(--orange)}
+.mini .mp{position:absolute;top:-3px;bottom:-3px;width:1.5px;background:var(--ink-3);border-radius:2px}
+.mini .mt{position:absolute;top:-4px;bottom:-4px;border-left:1.5px dashed var(--ink);width:0}
+.mini.blank{background:repeating-linear-gradient(90deg,#EDEDEA 0 6px,transparent 6px 10px);max-width:110px}
+.badge{display:inline-block;border-radius:999px;padding:4px 11px;font:600 12px var(--font-sans);white-space:nowrap}
+.badge.good{background:#E2F1E9;color:#2E7D5B}
+.badge.warn{background:#F8EAC4;color:#8F6600}
+.badge.bad{background:#F7DCD5;color:#C2371F}
+.badge.muted{background:#EFEFEC;color:var(--ink-3)}
+.tbl-lbl{display:flex;flex-wrap:wrap;gap:8px 18px;font-size:12.5px;color:var(--ink-3);margin-top:10px;align-items:center}
+.tbl-lbl i{display:inline-block;width:18px;border-top:1.5px dashed var(--ink);vertical-align:middle;margin-right:6px}
+.tbl-lbl .pd{display:inline-block;width:12px;height:12px;border-radius:2px;background:var(--ink-3);vertical-align:middle;margin-right:6px;transform:translateY(1px)}
+/* charts */
+.chart{border:1px solid var(--line);border-radius:14px;padding:18px 22px 20px;background:#fff}
+.chrow{display:grid;grid-template-columns:132px 1fr 40px;align-items:center;gap:14px;padding:5px 0}
+.chrow .cl{font-size:13.5px;color:var(--ink-2);text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chtrack{position:relative;height:18px;background:transparent}
+.chbar{position:absolute;left:0;top:1px;bottom:1px;border-radius:5px;background:var(--orange);min-width:2px}
+.chbar.pos{background:#5B7BC2}
+.chbar.clip::after{content:"";position:absolute;right:0;top:0;bottom:0;width:8px;background:linear-gradient(90deg,transparent,#fff);border-radius:0 5px 5px 0}
+.chtgt{position:absolute;top:-4px;bottom:-4px;border-left:1.5px dashed var(--ink);width:0}
+.chtgt .lbl{position:absolute;top:-16px;left:-16px;font-size:10.5px;color:var(--ink-3);white-space:nowrap}
+.chval{font-variant-numeric:tabular-nums;font-weight:600;font-size:13.5px;text-align:right}
+.skel{color:var(--ink-3);padding:44px 0}
+@media(max-width:900px){.cards{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:640px){
+  .sb-wrap{padding:0 15px 48px}
+  .hero .big{font-size:64px}.hero .rt{min-width:0}
+  .bar,.leg{max-width:none}
+  .trow{grid-template-columns:1.4fr 46px 130px;gap:10px;row-gap:8px}
+  .trow .mini-cell{display:none}
+  .trow.head .h-pos,.trow .num.pos-col{display:none}
+  .chrow{grid-template-columns:96px 1fr 34px;gap:10px}
+}
+</style>
+</head>
+<body>
+<div class="app">
+  <div id="rail"></div>
+  <main>
+    <div class="sb-wrap">
+      <div id="sb-body"><div class="skel">Loading the scoreboard…</div></div>
+    </div>
+  </main>
+</div>
+<script src="shell.js"></script>
+<script src="scoreboard.js"></script>
+</body>
+</html>

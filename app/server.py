@@ -26608,6 +26608,15 @@ class Handler(SimpleHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001 — never 500 the board on a data hiccup
                 print(f"[team-target] data failed: {e}", file=sys.stderr)
                 return self._json({"error": "team target data unavailable"}, 503)
+        if path == "/api/scoreboard/data":
+            # Meetings Scoreboard (team-only, same gate). Reuses the Team Target
+            # pipeline + per-client positives; read model in team_target.py.
+            import team_target
+            try:
+                return self._json(team_target.scoreboard())
+            except Exception as e:  # noqa: BLE001 — never 500 the board on a data hiccup
+                print(f"[scoreboard] data failed: {e}", file=sys.stderr)
+                return self._json({"error": "scoreboard data unavailable"}, 503)
         if path.startswith("/recontact/") and len(path) > len("/recontact/"):
             # Recontact review page (tier1-live-ship) - behind the normal login
             # gate above (this path is deliberately NOT in _AUTH_PUBLIC_GET).
