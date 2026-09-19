@@ -126,7 +126,7 @@
             "average meetings per client", cards.avg_meetings_per_client < d.pace_mark ? "warn" : "") +
       scard(pctS(cards.pos_to_booked_pct), "positive reply → booked call", "") +
       scard(pctS(cards.show_up_pct), "show-up rate", "") +
-      scard(resp == null ? "—" : num(resp), "average response time (mins)", "");
+      scard(resp == null ? "—" : num(resp), "average response time (mins) · excluding out-of-hours", "");
     var rowsHtml = (d.clients || []).map(function (c) {
       if (!c.scored) {
         return '<div class="trow unscored"><div class="cn">' + esc(c.name) + "</div>" +
