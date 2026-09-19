@@ -326,6 +326,22 @@ def data(force: bool = False) -> dict:
         if em:
             emitted.add(em)
 
+    # "overdue" = a booked meeting that has passed and is still unconfirmed
+    # (attended / no-show not yet marked). When we hold a real meeting date
+    # (hand-adds / edited overrides) it's overdue the day after that date. For a
+    # pure auto lead `date` is only the BOOKING date, so we wait a few days before
+    # flagging — by then the call has almost certainly happened.
+    today_iso = today.isoformat()
+    grace_iso = (today - timedelta(days=4)).isoformat()
+    for m in meetings:
+        d10 = str(m.get("date") or "")[:10]
+        if m.get("status") != "booked" or not d10:
+            m["overdue"] = False
+        elif m.get("source") == "auto":
+            m["overdue"] = d10 < grace_iso            # booking date — flag once stale
+        else:
+            m["overdue"] = d10 < today_iso            # a real meeting date
+
     # dismissed (status "removed") auto leads that belong to THIS month — surfaced
     # so the Board can restore them; they are hidden from the active tallies above.
     for em, ov in overrides.items():

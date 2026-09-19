@@ -5,7 +5,7 @@
   var el = function (id) { return document.getElementById(id); };
   el("rail").outerHTML = renderRail("target");
 
-  var MODEL = null, TAB = "month";
+  var MODEL = null, TAB = "month", DRAG = null, BOARD_CLIENT = "";
   var STATUS_WORDS = {said_yes: "Said yes", booked: "Booked", attended: "Attended",
                       no_show: "No-show", cancelled: "Cancelled", not_fit: "Not a fit"};
   var ORDER = ["said_yes", "booked", "attended", "no_show", "cancelled", "not_fit"];
@@ -67,12 +67,14 @@
   function personRow(m, showMk, showDelete) {
     var sub = [m.client, m.company].filter(Boolean).join(" · ");
     var amber = m.waiting_days >= 7 ? " amber" : "";
+    var past = !!m.overdue;                       // server flag: booked, date passed, unconfirmed
     var right = "";
     if (m.status === "said_yes") {
       right = '<span class="wait' + amber + '">' + waitTxt(m.waiting_days) + "</span>" +
         (showMk ? ' <button class="mk" data-act="quickbook">Mark booked</button>' : "");
     } else if (m.status === "booked") {
-      right = (m.date ? '<span class="date">' + esc(fmtDate(m.date)) + "</span>" : "") +
+      right = (m.date ? '<span class="date' + (past ? " od" : "") + '">' + (past ? "⚠ " : "") +
+        esc(fmtDate(m.date)) + "</span>" : (past ? '<span class="date od">⚠ confirm</span>' : "")) +
         ' <button class="mk attend" data-act="confirmattended">Confirmed attended</button>';
     } else {
       right = '<span class="date">' + esc(fmtDate(m.date)) + "</span>";
@@ -82,7 +84,7 @@
       ? '<span class="tag">auto</span>' : "";
     var by = m.by ? '<span class="sub">' + esc(m.by) + " · " + ago(m.at) + "</span>" : "";
     var d = document.createElement("div");
-    d.className = "prow";
+    d.className = "prow" + (past ? " overdue" : "");
     d.setAttribute("data-tt", "person");
     d.setAttribute("data-id", m.id);
     d.setAttribute("data-status", m.status);
@@ -238,26 +240,78 @@
 
   function renderBoard() {
     var b = document.createElement("div");
-    b.innerHTML = '<div class="h4">Board <span class="hint">everyone in play this month · ' +
-      "tap a name to move them, + Add to create, × to remove</span></div>";
+    // client filter — everyone in play this month (meetings + removed)
+    var seen = {};
+    MODEL.meetings.forEach(function (m) { if (m.client) seen[m.client] = 1; });
+    (MODEL.removed || []).forEach(function (m) { if (m.client) seen[m.client] = 1; });
+    var clientList = Object.keys(seen).sort(function (a, z) {
+      return a.toLowerCase() < z.toLowerCase() ? -1 : 1; });
+    if (BOARD_CLIENT && clientList.indexOf(BOARD_CLIENT) < 0) BOARD_CLIENT = "";
+    var match = function (m) { return !BOARD_CLIENT || m.client === BOARD_CLIENT; };
+
+    var head = document.createElement("div");
+    head.className = "board-head";
+    head.innerHTML = '<div class="h4">Board <span class="hint">' +
+      "drag a card between columns, or tap a name · + Add to create, × to remove</span></div>" +
+      '<label class="bfilter">Client <select id="b-client"><option value="">All clients</option>' +
+      clientList.map(function (c) {
+        return '<option value="' + esc(c) + '"' + (c === BOARD_CLIENT ? " selected" : "") + ">" + esc(c) + "</option>";
+      }).join("") + "</select></label>";
+    b.appendChild(head);
+    head.querySelector("#b-client").onchange = function () { BOARD_CLIENT = this.value; render(); };
+
+    // alert: booked meetings whose date has passed with no confirmation (filter-scoped)
+    var overdue = MODEL.meetings.filter(function (m) { return m.overdue && match(m); });
+    if (overdue.length) {
+      var al = document.createElement("div"); al.className = "board-alert";
+      al.innerHTML = "⚠ <b>" + overdue.length + " " +
+        (overdue.length === 1 ? "meeting has" : "meetings have") +
+        " passed without confirmation</b> — confirm attended, or move them to no-show.";
+      b.appendChild(al);
+    }
+
     var wrap = document.createElement("div"); wrap.className = "board";
     BOARD_COLS.forEach(function (c) {
-      var rows = MODEL.meetings.filter(function (m) { return m.status === c.key; });
+      var rows = MODEL.meetings.filter(function (m) { return m.status === c.key && match(m); });
       if (c.key === "said_yes") rows.sort(function (a, z) { return z.waiting_days - a.waiting_days; });
+      var od = c.key === "booked" ? rows.filter(function (m) { return m.overdue; }).length : 0;
       var col = document.createElement("div"); col.className = "bcol";
       col.innerHTML = '<div class="bcol-h"><div><b>' + c.title + '</b> <span class="bn">' + rows.length +
-        '</span><div class="bcol-sub">' + c.sub + "</div></div>" +
+        "</span>" + (od ? ' <span class="odpill">' + od + " overdue</span>" : "") +
+        '<div class="bcol-sub">' + c.sub + "</div></div>" +
         '<button class="badd" data-stage="' + c.key + '">+ Add</button></div>';
       col.querySelector(".badd").onclick = function () { openAdd(c.key); };
       var list = document.createElement("div"); list.className = "bcol-list";
       if (!rows.length) list.innerHTML = '<div class="bempty">Nobody here yet.</div>';
-      rows.forEach(function (m) { list.appendChild(personRow(m, true, true)); });
+      rows.forEach(function (m) {
+        var card = personRow(m, true, true);
+        card.draggable = true;
+        card.addEventListener("dragstart", function (e) {
+          DRAG = m; card.classList.add("dragging"); e.dataTransfer.effectAllowed = "move";
+          try { e.dataTransfer.setData("text/plain", String(m.id)); } catch (_) { /* IE */ }
+        });
+        card.addEventListener("dragend", function () {
+          DRAG = null; card.classList.remove("dragging");
+          Array.prototype.forEach.call(document.querySelectorAll(".bcol.over"),
+            function (x) { x.classList.remove("over"); });
+        });
+        list.appendChild(card);
+      });
       col.appendChild(list);
+      col.addEventListener("dragover", function (e) {
+        if (DRAG && DRAG.status !== c.key) { e.preventDefault(); e.dataTransfer.dropEffect = "move"; col.classList.add("over"); }
+      });
+      col.addEventListener("dragleave", function (e) { if (!col.contains(e.relatedTarget)) col.classList.remove("over"); });
+      col.addEventListener("drop", function (e) {
+        e.preventDefault(); col.classList.remove("over");
+        if (DRAG && DRAG.status !== c.key) setStatus(DRAG, c.key);
+        DRAG = null;
+      });
       wrap.appendChild(col);
     });
     b.appendChild(wrap);
 
-    var rm = MODEL.removed || [];
+    var rm = (MODEL.removed || []).filter(match);
     if (rm.length) {
       var sec = document.createElement("div"); sec.className = "removed-sec";
       sec.innerHTML = '<div class="rm-h">Removed this month · ' + rm.length +
