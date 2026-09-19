@@ -170,9 +170,7 @@
       '<div class="eyebrow">Meetings this month</div>' +
       '<div class="hero"><div class="big">' + t.counted + ' <small>of ' + t.target + "</small></div>" +
         '<div class="rt"><span class="verdict ' + vClass + '">' + vTxt + "</span>" +
-          '<p class="pace">At this pace we finish on ' + t.pace + ". Target " + t.target + ".</p>" +
-          '<p class="subline">' + t.booked + " booked and still to happen · " + t.said_yes_open +
-            " more said yes and are waiting to be booked.</p></div></div>" +
+          '<p class="pace">At this pace we finish on ' + t.pace + ". Target " + t.target + ".</p></div></div>" +
       heroBar(t) +
       '<div class="cards">' + cardHtml + "</div>" +
       '<div class="sec"><h2>Client scoreboard</h2>' +
