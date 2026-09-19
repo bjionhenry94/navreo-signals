@@ -114,6 +114,14 @@
   function scard(vHtml, k, tone) {
     return '<div class="scard ' + (tone || "") + '"><div class="v">' + vHtml + '</div><div class="k">' + esc(k) + "</div></div>";
   }
+  /* red / amber / green thresholds (owner 2026-09-19) */
+  var RAG = {
+    meetings: function (v) { return v == null ? "" : (v >= 4 ? "good" : (v < 3 ? "bad" : "warn")); },
+    p2b: function (v) { return v == null ? "" : (v >= 40 ? "good" : (v <= 15 ? "bad" : "warn")); },
+    show: function (v) { return v == null ? "" : (v >= 70 ? "good" : (v <= 50 ? "bad" : "warn")); },
+    resp: function (v) { return v == null ? "" : (v <= 30 ? "good" : "bad"); }
+  };
+  function dot(tone, big) { return tone ? '<span class="rag' + (big ? " big" : "") + " rag-" + tone + '"></span>' : ""; }
   function renderScoreboard(d) {
     var t = d.totals, cards = d.cards || {};
     var behind = t.behind || 0;
@@ -122,11 +130,13 @@
     var resp = cards.avg_response_mins;
     var pctS = function (v) { return v == null ? "—" : v + "%"; };
     var cardHtml =
-      scard(cards.avg_meetings_per_client + ' <small>of ' + d.per_client_target + "</small>",
-            "average meetings per client", cards.avg_meetings_per_client < d.pace_mark ? "warn" : "") +
-      scard(pctS(cards.pos_to_booked_pct), "positive reply → booked call", "") +
-      scard(pctS(cards.show_up_pct), "show-up rate", "") +
-      scard(resp == null ? "—" : num(resp), "average response time (mins) · excluding out-of-hours", "");
+      scard(cards.avg_meetings_per_client + ' <small>of ' + d.per_client_target + "</small>" +
+            dot(RAG.meetings(cards.avg_meetings_per_client), true), "average meetings per client", "") +
+      scard(pctS(cards.pos_to_booked_pct) + dot(RAG.p2b(cards.pos_to_booked_pct), true),
+            "positive reply → booked call", "") +
+      scard(pctS(cards.show_up_pct) + dot(RAG.show(cards.show_up_pct), true), "show-up rate", "") +
+      scard((resp == null ? "—" : num(resp)) + dot(RAG.resp(resp), true),
+            "average response time (mins) · excluding out-of-hours", "");
     var rowsHtml = (d.clients || []).map(function (c) {
       if (!c.scored) {
         return '<div class="trow unscored"><div class="cn">' + esc(c.name) + "</div>" +
@@ -134,15 +144,16 @@
           '<div class="num mut">—</div><div class="num mut rate">—</div><div class="num mut rate">—</div>' +
           '<div><span class="badge muted">' + esc(c.status) + "</span></div></div>";
       }
-      var p2b = c.positives > 0 ? Math.round(100 * c.meetings / c.positives) + "%" : "—";
+      var p2bN = c.positives > 0 ? Math.round(100 * c.meetings / c.positives) : null;
       var suDen = (c.attended || 0) + (c.no_show || 0);
-      var su = suDen > 0 ? Math.round(100 * c.attended / suDen) + "%" : "—";
+      var suN = suDen > 0 ? Math.round(100 * c.attended / suDen) : null;
       return '<div class="trow"><div class="cn">' + esc(c.name) + "</div>" +
         '<div class="num pos-col">' + num(c.positives) + "</div>" +
         '<div class="num">' + num(c.said_yes) + "</div>" +
         '<div class="num">' + num(c.booked) + "</div>" +
         '<div class="num">' + num(c.attended) + "</div>" +
-        '<div class="num rate">' + p2b + '</div><div class="num rate">' + su + "</div>" +
+        '<div class="num rate">' + (p2bN == null ? "—" : p2bN + "%" + dot(RAG.p2b(p2bN))) + "</div>" +
+        '<div class="num rate">' + (suN == null ? "—" : suN + "%" + dot(RAG.show(suN))) + "</div>" +
         '<div><span class="badge ' + esc(c.tone) + '">' + esc(c.status) + "</span></div></div>";
     }).join("");
     var mx = (d.booked_chart || []).reduce(function (m, x) { return Math.max(m, x.value); }, 0);
@@ -179,7 +190,9 @@
   var BOARD_COLS = [
     {key: "said_yes", title: "Meeting-ready", sub: "said yes, waiting to book"},
     {key: "booked", title: "Booked", sub: "scheduled, still to happen"},
-    {key: "attended", title: "Attended", sub: "happened this month"}];
+    {key: "attended", title: "Attended", sub: "happened this month"},
+    {key: "no_show", title: "No-show", sub: "booked but didn't attend"},
+    {key: "cancelled", title: "Cancelled", sub: "called off before it happened"}];
   var PILL_COLORS = [
     {bg: "#E7EFFB", fg: "#1E40AF"}, {bg: "#E4F4EA", fg: "#166534"},
     {bg: "#F3E8FD", fg: "#6B21A8"}, {bg: "#FCE7EF", fg: "#9D174D"},
@@ -215,6 +228,10 @@
       else if (m.date) pills += '<span class="mtag grey">' + esc(fmtDate(m.date)) + "</span>";
     } else if (m.status === "attended") {
       pills += '<span class="mtag green">attended' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
+    } else if (m.status === "no_show") {
+      pills += '<span class="mtag red">no-show' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
+    } else if (m.status === "cancelled") {
+      pills += '<span class="mtag grey">cancelled' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
     }
     var action = m.status === "said_yes" ? '<button class="mk" data-act="quickbook">Mark booked</button>'
       : m.status === "booked" ? '<button class="mk attend" data-act="confirmattended">Confirmed attended</button>' : "";
