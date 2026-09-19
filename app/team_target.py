@@ -27,7 +27,7 @@ from datetime import date, datetime, timedelta
 import server
 
 WORKSPACE = "navreo"
-_EXCLUDE_LABELS = {"", "Navreo", "Acme"}
+_EXCLUDE_LABELS = {"", "Navreo", "Acme", "navreo", "acme"}   # Navreo-own / demo, any case
 _COUNTS = ("attended",)                      # only these count toward target
 _GOT_MEETING = {"booked", "attended", "no_show", "cancelled", "not_fit"}
 STATUSES = ("said_yes", "booked", "attended", "no_show", "cancelled", "not_fit")
@@ -518,6 +518,20 @@ def scoreboard(force: bool = False) -> dict:
             "total_meetings": total_meetings,
             "zero_meeting_clients": sum(1 for r in scored if r["meetings"] == 0),
             "days_left": cal["left"],
+            # the four headline stat cards
+            "avg_meetings_per_client": round(total_meetings / len(rows), 1) if rows else 0.0,
+            "attended": base["totals"]["counted"],
+            # run-rate differential: where this month's pace projects us to finish
+            # minus the target (negative = short of target at today's pace)
+            "runrate_diff": base["totals"]["pace"] - base["totals"]["target"],
+            "avg_response_mins": base["metrics"]["reply_time_mins"],
+            # cross-agency conversion rates (aggregate across every client)
+            "total_positives": sum(r["positives"] for r in rows),
+            "pos_to_booked_pct": (round(100 * total_meetings / sum(r["positives"] for r in rows))
+                                  if sum(r["positives"] for r in rows) else None),
+            "show_up_pct": base["metrics"]["show_up_pct"],
+            "show_up_num": base["metrics"]["show_up_num"],
+            "show_up_den": base["metrics"]["show_up_den"],
         },
         "clients": rows,
         "booked_chart": sorted(({"name": r["name"], "value": r["meetings"]} for r in scored),
