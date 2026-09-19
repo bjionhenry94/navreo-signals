@@ -211,43 +211,72 @@
   var ICON_DOC = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true">' +
     '<path d="M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8l-5-5z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>' +
     '<path d="M14 3v5h5" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>';
+  var ICON_PHONE = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6.6 10.8a15 15 0 006.6 6.6l2.2-2.2a1 1 0 011-.24 11 11 0 003.5.56 1 1 0 011 1V20a1 1 0 01-1 1A17 17 0 013 4a1 1 0 011-1h3.5a1 1 0 011 1 11 11 0 00.56 3.5 1 1 0 01-.24 1l-2.2 2.3z" fill="currentColor"/></svg>';
+  var ICON_MAIL = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M4 7l8 6 8-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
+  var ICON_WEB = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/><path d="M3 12h18M12 3c2.5 2.5 3.5 6 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-6-3.5-9s1-6.5 3.5-9z" stroke="currentColor" stroke-width="1.7"/></svg>';
+  function webFromEmail(email) {
+    var at = String(email || "").split("@")[1];
+    if (!at) return "";
+    at = at.toLowerCase().trim();
+    if (/^(gmail|googlemail|outlook|hotmail|yahoo|ymail|icloud|aol|protonmail|proton|gmx|mail|live|msn|me|comcast|verizon)\./.test(at + ".")) return "";
+    return at;
+  }
+  function setterLink(email) { return email ? "setter.html#/r/" + encodeURIComponent(email) : ""; }
 
   function boardCard(m) {
     var d = document.createElement("div");
     d.className = "mcard" + (m.overdue ? " overdue" : "");
     d.setAttribute("data-id", m.id);
     d.setAttribute("data-status", m.status);
-    var pills = clientPill(m.client);
-    if (m.source && m.source.indexOf("auto") === 0) pills += '<span class="mtag auto">Auto</span>';
-    if (m.status === "said_yes") {
-      var late = m.waiting_days >= 7;
-      pills += '<span class="mtag ' + (late ? "amber" : "grey") + '">' +
-        (m.waiting_days <= 0 ? "said yes today" : "waiting " + m.waiting_days + "d") + "</span>";
-    } else if (m.status === "booked") {
-      if (m.overdue) pills += '<span class="mtag red">⚠ overdue' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
-      else if (m.date) pills += '<span class="mtag grey">' + esc(fmtDate(m.date)) + "</span>";
-    } else if (m.status === "attended") {
-      pills += '<span class="mtag green">attended' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
-    } else if (m.status === "no_show") {
-      pills += '<span class="mtag red">no-show' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
-    } else if (m.status === "cancelled") {
-      pills += '<span class="mtag grey">cancelled' + (m.date ? " · " + esc(fmtDate(m.date)) : "") + "</span>";
-    }
+
+    // dates — the meeting/status date, coloured by state
+    var dateTxt = "", dateCls = "";
+    if (m.status === "booked") {
+      if (m.overdue) { dateTxt = "⚠ was " + fmtDate(m.date); dateCls = "od"; }
+      else if (m.date) dateTxt = "Meeting " + fmtDate(m.date);
+    } else if (m.status === "attended") { dateTxt = m.date ? "Attended " + fmtDate(m.date) : "Attended"; dateCls = "gd"; }
+    else if (m.status === "no_show") { dateTxt = m.date ? "No-show " + fmtDate(m.date) : "No-show"; dateCls = "od"; }
+    else if (m.status === "cancelled") dateTxt = m.date ? "Cancelled " + fmtDate(m.date) : "Cancelled";
+    else if (m.status === "said_yes" && m.said_yes_on) dateTxt = "Said yes " + fmtDate(m.said_yes_on);
+
+    var domain = webFromEmail(m.email);
+    var url = setterLink(m.email);
+
+    // low hierarchy — client, auto, waiting
+    var lows = "";
+    if (m.client) lows += clientPill(m.client);
+    if (m.source && m.source.indexOf("auto") === 0) lows += '<span class="lowtag">Auto</span>';
+    if (m.status === "said_yes") lows += '<span class="lowtag' + (m.waiting_days >= 7 ? " late" : "") +
+      '">waiting ' + m.waiting_days + "d</span>";
+
     var action = m.status === "said_yes" ? '<button class="mk" data-act="quickbook">Mark booked</button>'
       : m.status === "booked" ? '<button class="mk attend" data-act="confirmattended">Confirmed attended</button>' : "";
-    var by = m.by ? '<span class="mcard-by">' + esc(m.by) + " · " + ago(m.at) + "</span>" : "";
+    var by = m.by ? '<span class="mcard-by">' + esc(m.by) + "</span>" : "";
+
     d.innerHTML =
       '<button class="mcard-del" data-act="dismiss" title="Remove from board">×</button>' +
       '<div class="mcard-t"><span class="mcard-ic">' + ICON_DOC + "</span><span>" + esc(m.person || "(no name)") + "</span></div>" +
       (m.company ? '<div class="mcard-co">' + esc(m.company) + "</div>" : "") +
-      '<div class="mcard-tags">' + pills + "</div>" +
+      (domain ? '<a class="mcard-web" href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + ICON_WEB + " " + esc(domain) + "</a>" : "") +
+      (dateTxt ? '<div class="mcard-date ' + dateCls + '">' + esc(dateTxt) + "</div>" : "") +
+      (url ? '<div class="mcard-contacts">' +
+          '<a class="cbtn" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter to call">' + ICON_PHONE + " Call</a>" +
+          '<a class="cbtn" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter to reply">' + ICON_MAIL + " Email</a></div>" : "") +
+      (lows ? '<div class="mcard-low">' + lows + "</div>" : "") +
       (action || by ? '<div class="mcard-foot">' + (action || "<span></span>") + by + "</div>" : "");
+
     d.querySelector(".mcard-t").onclick = function () { openChooser(d, m); };
     var qb = d.querySelector('[data-act="quickbook"]');
     if (qb) qb.onclick = function (e) { e.stopPropagation(); setStatus(m, "booked"); };
     var ca = d.querySelector('[data-act="confirmattended"]');
     if (ca) ca.onclick = function (e) { e.stopPropagation(); setStatus(m, "attended"); };
     d.querySelector('[data-act="dismiss"]').onclick = function (e) { e.stopPropagation(); dismiss(m); };
+    // contact/website links open in a new tab; never start a drag or open the chooser
+    Array.prototype.forEach.call(d.querySelectorAll("a"), function (a) {
+      a.draggable = false;
+      a.addEventListener("click", function (e) { e.stopPropagation(); });
+      a.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    });
     return d;
   }
   function openChooser(rowEl, m) {
