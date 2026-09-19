@@ -192,7 +192,7 @@
     {key: "booked", title: "Booked", sub: "scheduled, still to happen"},
     {key: "attended", title: "Attended", sub: "happened this month"},
     {key: "no_show", title: "No-show", sub: "booked but didn't attend"},
-    {key: "cancelled", title: "Cancelled", sub: "called off before it happened"}];
+    {key: "cancelled", title: "Cancelled/Closed-Lost", sub: "called off or closed-lost"}];
   var PILL_COLORS = [
     {bg: "#E7EFFB", fg: "#1E40AF"}, {bg: "#E4F4EA", fg: "#166534"},
     {bg: "#F3E8FD", fg: "#6B21A8"}, {bg: "#FCE7EF", fg: "#9D174D"},
