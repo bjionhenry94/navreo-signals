@@ -32,9 +32,14 @@ _COUNTS = ("attended",)                      # only these count toward target
 _GOT_MEETING = {"booked", "attended", "no_show", "cancelled", "not_fit"}
 STATUSES = ("said_yes", "booked", "attended", "no_show", "cancelled", "not_fit")
 PER_CLIENT_TARGET = 4
+# App-wide positive-reply set (mirrors server._AH_POSITIVE_CATS). Used by the
+# Scoreboard's "Positive replies, clean" column/chart — a unique-lead count, not
+# the meetings pipeline.
+_POSITIVE_CATS = ("Interested", "Call Booked", "Meeting Request", "Information Request")
 
 _CACHE = {"ts": 0.0, "data": None}
 _CACHE_TTL_S = 45
+_SB_CACHE = {"ts": 0.0, "data": None}         # scoreboard read model (own 45 s cache)
 
 
 # ── time helpers ────────────────────────────────────────────────────────────
@@ -223,7 +228,8 @@ def data(force: bool = False) -> dict:
     cur_ym = cur_month[:7]
 
     def _bucket():
-        return {"attended": 0, "booked": 0, "said_yes": 0, "didnt": 0, "waiting": []}
+        return {"attended": 0, "booked": 0, "said_yes": 0, "didnt": 0,
+                "no_show": 0, "cancelled": 0, "not_fit": 0, "waiting": []}
 
     per = {c: _bucket() for c in (set(active) | {l["client"] for l in auto.values()})
            if c and c not in _EXCLUDE_LABELS}
@@ -329,6 +335,8 @@ def _tally(bucket, status, wait, row, key):
                                   "id": row["id"], "waiting_days": wait})
     else:  # no_show / cancelled / not_fit
         bucket["didnt"] += 1
+        if status in ("no_show", "cancelled", "not_fit"):
+            bucket[status] += 1
 
 
 def _assemble(today, cur_month, wk, active, per, meetings):
@@ -363,6 +371,11 @@ def _assemble(today, cur_month, wk, active, per, meetings):
                        key=lambda kv: (kv[1]["attended"], -len(kv[1]["waiting"]), kv[0])):
         clients.append({"name": c, "attended": b["attended"], "booked": b["booked"],
                         "said_yes": b["said_yes"], "didnt": b["didnt"],
+                        "no_show": b["no_show"], "cancelled": b["cancelled"],
+                        "not_fit": b["not_fit"],
+                        # meetings that reached the calendar (a no-show was still a
+                        # booking); not_fit never was a real meeting so it is out.
+                        "meetings": b["attended"] + b["booked"] + b["no_show"] + b["cancelled"],
                         "target": PER_CLIENT_TARGET,
                         "waiting_names": [w["person"] or "(no name)" for w in
                                           sorted(b["waiting"], key=lambda w: w["waiting_days"],
@@ -408,6 +421,115 @@ def _assemble(today, cur_month, wk, active, per, meetings):
     }
 
 
+# ── scoreboard read model (Scoreboard tab) ──────────────────────────────────
+def _positive_counts(cur_iso: str, cid_client: dict) -> dict:
+    """{client: N} — UNIQUE leads with a positive-category reply this month,
+    attributed by campaign (client campaigns only, same as the meetings pull).
+    Mirrors the app-wide positive set so the number agrees with Analytics."""
+    cats = urllib.parse.quote(",".join(_POSITIVE_CATS))
+    rows = server.sb_get_all(
+        "replies?select=smartlead_campaign_id,email,category,replied_at"
+        "&category=in.(%s)&replied_at=gte.%s&order=id" % (cats, cur_iso)) or []
+    seen: dict = {}
+    for r in rows:
+        cl = cid_client.get(str(r.get("smartlead_campaign_id")))
+        if not cl or cl in _EXCLUDE_LABELS:
+            continue
+        em = (r.get("email") or "").strip().lower()
+        if not em:
+            continue
+        seen.setdefault(cl, set()).add(em)
+    return {cl: len(s) for cl, s in seen.items()}
+
+
+def _cal_days(d: date) -> dict:
+    """Calendar days for the human-facing 'days left' card + KPI subtitle
+    (the pace MARK stays weekday-based to agree with the hero bar)."""
+    first = _month_start(d)
+    nxt = (first.replace(day=28) + timedelta(days=4)).replace(day=1)
+    total = (nxt - first).days
+    gone = (d - first).days + 1                # today counts as elapsed
+    return {"total": total, "gone": gone, "left": max(0, total - gone)}
+
+
+def _client_status(meetings: int, positives: int, pace_mark: float) -> tuple:
+    """(label, tone) ladder for a client row. tone ∈ good|warn|bad|muted."""
+    if positives == 0 and meetings == 0:
+        return "Not scored yet", "muted"          # launched, nothing landed yet
+    if meetings >= PER_CLIENT_TARGET:
+        return "On target", "good"
+    if meetings == 0:
+        return "No meetings yet", "bad"           # positives but nothing booked
+    if meetings >= pace_mark:
+        return "On pace", "good"
+    return "Behind pace", "warn"
+
+
+def scoreboard(force: bool = False) -> dict:
+    """Read model for /app/scoreboard.html. Reuses data() for the meetings
+    pipeline (so the hero bar and Team Target never disagree) and adds the
+    per-client positive-reply count + the scoreboard aggregates/charts."""
+    now = time.time()
+    if not force and _SB_CACHE["data"] is not None and (now - _SB_CACHE["ts"]) < _CACHE_TTL_S:
+        return _SB_CACHE["data"]
+
+    base = data(force=force)
+    today = date.fromisoformat(base["today"])
+    cur_iso = _iso_month(today)
+    cid_client = _campaign_client_map()
+    pos = _positive_counts(cur_iso, cid_client)
+    wk = base["weekdays"]
+    cal = _cal_days(today)
+    pace_mark = round(PER_CLIENT_TARGET * wk["gone"] / wk["inMonth"], 1) if wk["inMonth"] else 0.0
+
+    rows = []
+    for c in base["clients"]:
+        meetings = c["meetings"]
+        positives = pos.get(c["name"], 0)
+        label, tone = _client_status(meetings, positives, pace_mark)
+        rows.append({
+            "name": c["name"], "positives": positives, "meetings": meetings,
+            "attended": c["attended"], "booked": c["booked"], "said_yes": c["said_yes"],
+            "no_show": c["no_show"], "target": PER_CLIENT_TARGET,
+            "scored": bool(positives or meetings), "status": label, "tone": tone,
+        })
+    # scored clients first (most meetings, then most positives), not-scored last
+    rows.sort(key=lambda r: (0 if r["scored"] else 1, -r["meetings"], -r["positives"],
+                             r["name"].lower()))
+
+    scored = [r for r in rows if r["scored"]]
+    total_meetings = sum(r["meetings"] for r in rows)
+    return_data = {
+        "month": base["month"],
+        "month_iso": base["month_iso"],
+        "today": base["today"],
+        "generated_at": datetime.utcnow().isoformat() + "Z",
+        "per_client_target": PER_CLIENT_TARGET,
+        "pace_mark": pace_mark,
+        "cal_days": cal,
+        "weekdays": wk,
+        # hero bar reuses the SAME totals as Team Target (attended / booked /
+        # said-yes-open pipeline against the 4×clients target)
+        "totals": base["totals"],
+        "cards": {
+            "clients_on_target": sum(1 for r in rows if r["meetings"] >= PER_CLIENT_TARGET),
+            "scored_clients": len(scored),
+            "total_clients": len(rows),
+            "total_meetings": total_meetings,
+            "zero_meeting_clients": sum(1 for r in scored if r["meetings"] == 0),
+            "days_left": cal["left"],
+        },
+        "clients": rows,
+        "booked_chart": sorted(({"name": r["name"], "value": r["meetings"]} for r in scored),
+                               key=lambda x: -x["value"]),
+        "positives_chart": sorted(({"name": r["name"], "value": r["positives"]} for r in scored),
+                                  key=lambda x: -x["value"]),
+        "team": base.get("team", {}),
+    }
+    _SB_CACHE.update(ts=now, data=return_data)
+    return return_data
+
+
 # ── writers ─────────────────────────────────────────────────────────────────
 def _uid() -> str:
     import uuid
@@ -441,6 +563,7 @@ def add_meeting(payload: dict, who: str) -> tuple:
     if _write_failed(res):
         return {"error": "could not save"}, 502
     _CACHE["data"] = None
+    _SB_CACHE["data"] = None
     return {"ok": True, "id": row["id"]}, 200
 
 
@@ -460,6 +583,7 @@ def set_status(payload: dict, who: str) -> tuple:
         if _write_failed(res):
             return {"error": "could not save"}, 502
         _CACHE["data"] = None
+        _SB_CACHE["data"] = None
         return {"ok": True}, 200
     # an auto lead → upsert an override keyed by (workspace, lead_email)
     email = (payload.get("email") or "").strip().lower()
@@ -481,4 +605,5 @@ def set_status(payload: dict, who: str) -> tuple:
     if _write_failed(res):
         return {"error": "could not save"}, 502
     _CACHE["data"] = None
+    _SB_CACHE["data"] = None
     return {"ok": True}, 200
