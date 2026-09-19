@@ -14,6 +14,10 @@
   var MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
   var num = function (n) { return Number(n || 0).toLocaleString("en-GB"); };
   var clamp = function (n) { return Math.max(0, Math.min(100, n)); };
+  function fmtReply(mins) {
+    if (mins == null) return "—";
+    return mins < 90 ? Math.round(mins) + " min" : (mins / 60).toFixed(1) + " h";
+  }
   function ago(iso) {
     if (!iso) return "";
     var t = Date.parse(String(iso).replace(" ", "T").replace(/Z?$/, "Z"));
@@ -142,6 +146,7 @@
         return '<div class="trow unscored"><div class="cn">' + esc(c.name) + "</div>" +
           '<div class="num mut pos-col">—</div><div class="num mut">—</div><div class="num mut">—</div>' +
           '<div class="num mut">—</div><div class="num mut rate">—</div><div class="num mut rate">—</div>' +
+          '<div class="num mut rate">—</div>' +
           '<div><span class="badge muted">' + esc(c.status) + "</span></div></div>";
       }
       var p2bN = c.positives > 0 ? Math.round(100 * c.meetings / c.positives) : null;
@@ -154,10 +159,11 @@
         '<div class="num">' + num(c.attended) + "</div>" +
         '<div class="num rate">' + (p2bN == null ? "—" : p2bN + "%" + dot(RAG.p2b(p2bN))) + "</div>" +
         '<div class="num rate">' + (suN == null ? "—" : suN + "%" + dot(RAG.show(suN))) + "</div>" +
+        '<div class="num rate">' + (c.reply_mins == null ? "—" : fmtReply(c.reply_mins) + dot(RAG.resp(c.reply_mins))) + "</div>" +
         '<div><span class="badge ' + esc(c.tone) + '">' + esc(c.status) + "</span></div></div>";
     }).join("");
-    var mx = (d.booked_chart || []).reduce(function (m, x) { return Math.max(m, x.value); }, 0);
-    var anyClip = (d.booked_chart || []).some(function (r) {
+    var mx = (d.attended_chart || []).reduce(function (m, x) { return Math.max(m, x.value); }, 0);
+    var anyClip = (d.attended_chart || []).some(function (r) {
       return r.value > Math.max(d.per_client_target + 1, Math.min(d.per_client_target * 2, mx)); });
     var b = document.createElement("div");
     b.innerHTML =
@@ -170,19 +176,15 @@
       heroBar(t) +
       '<div class="cards">' + cardHtml + "</div>" +
       '<div class="sec"><h2>Client scoreboard</h2>' +
-        '<p class="desc">Ready = said yes, waiting to book · Booked = scheduled and upcoming · Attended = happened. ' +
-        "Pos→Booked = positive replies that became a booked call · Show-up = attended of the calls that were due.</p>" +
         '<div class="tbl-scroll"><div class="tbl">' +
           '<div class="trow head"><div>Client</div><div class="h-pos pos-col">Positives</div>' +
-            "<div>Ready</div><div>Booked</div><div>Attended</div><div>Pos→Booked</div><div>Show-up</div><div>Status</div></div>" +
+            '<div>Ready</div><div>Booked</div><div>Attended</div><div>Pos→Booked</div><div>Show-up</div>' +
+            '<div title="Business hours only — excludes out-of-hours">Avg reply</div><div>Status</div></div>' +
           rowsHtml + "</div></div></div>" +
-      '<div class="sec"><h2>Meetings booked vs target</h2>' +
-        '<p class="desc">Dashed line is the ' + d.per_client_target + "-meeting target." +
+      '<div class="sec"><h2>Meetings attended vs target</h2>' +
+        '<p class="desc">Dashed line is the ' + d.per_client_target + "-attended-meeting target." +
           (anyClip ? " A runaway leader is clipped at the axis edge — the number is exact." : "") + "</p>" +
-        '<div class="chart">' + chart(d.booked_chart || [], {target: d.per_client_target}) + "</div></div>" +
-      '<div class="sec"><h2>Positive replies, clean</h2>' +
-        '<p class="desc">Unique leads with a positive reply this month (Interested, Meeting Request, Call Booked, Information Request).</p>' +
-        '<div class="chart">' + chart(d.positives_chart || [], {cls: "pos"}) + "</div></div>";
+        '<div class="chart">' + chart(d.attended_chart || [], {target: d.per_client_target}) + "</div></div>";
     return b;
   }
 
