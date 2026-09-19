@@ -273,7 +273,8 @@
 
     var action = m.status === "said_yes" ? '<button class="mk" data-act="quickbook">Mark booked</button>'
       : m.status === "booked" ? '<button class="mk attend" data-act="confirmattended">Confirmed attended</button>' : "";
-    var by = m.by ? '<span class="mcard-by">' + esc(m.by) + "</span>" : "";
+    // hide the added-by line for Bjion / the admin (self-added, just noise)
+    var by = (m.by && !/bjion|admin@navreo/i.test(m.by)) ? '<span class="mcard-by">' + esc(m.by) + "</span>" : "";
 
     d.innerHTML =
       '<div class="mcard-head">' +
