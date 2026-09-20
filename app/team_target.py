@@ -742,8 +742,17 @@ def set_status(payload: dict, who: str) -> tuple:
     now_iso = datetime.utcnow().isoformat() + "Z"
     if mid.startswith("man:"):                       # a hand-added meeting
         patch = {"status": status, "updated_by": who, "updated_at": now_iso}
+        # a full edit (from the card dialog) also carries person / company / client
+        if payload.get("client"):
+            patch["client_label"] = payload["client"].strip()
+        if payload.get("person") is not None:
+            patch["person"] = (payload.get("person") or "").strip()
+        if payload.get("company") is not None:
+            patch["company"] = (payload.get("company") or "").strip()
         if payload.get("date"):
             patch["meeting_date"] = payload["date"]
+        if payload.get("said_yes_on") is not None:
+            patch["said_yes_on"] = payload.get("said_yes_on") or None
         res = server.sb("PATCH", "team_meetings?id=eq.%s" % urllib.parse.quote(mid), patch)
         if _write_failed(res):
             return {"error": "could not save"}, 502

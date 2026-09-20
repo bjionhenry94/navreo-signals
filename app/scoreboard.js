@@ -7,7 +7,7 @@
   var el = function (id) { return document.getElementById(id); };
   el("rail").outerHTML = renderRail("target");
 
-  var TAB = "scoreboard", SB = null, TT = null, DRAG = null, BOARD_CLIENT = "";
+  var TAB = "scoreboard", SB = null, TT = null, DRAG = null, BOARD_CLIENT = "", EDITING = null;
 
   var esc = function (s) { return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
     return {"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"}[c]; }); };
@@ -268,8 +268,11 @@
     var band = whenVal ? ('<div class="mcard-band ' + whenCls + '">' + (whenCls === "od" ? ICON_WARN : ICON_CAL) +
       '<span class="bl">' + whenLbl + '</span><span class="bv">' + esc(whenVal) + "</span></div>") : "";
 
-    var action = m.status === "said_yes" ? '<button class="mk" data-act="quickbook">Mark booked</button>'
-      : m.status === "booked" ? '<button class="mk attend" data-act="confirmattended">Confirmed attended</button>' : "";
+    // status dropdown — switch the lead's stage right from the card
+    var statusSel = '<select class="mcard-status" data-act="status">' +
+      BOARD_COLS.map(function (c) {
+        return '<option value="' + c.key + '"' + (c.key === m.status ? " selected" : "") + ">" + esc(c.title) + "</option>";
+      }).join("") + "</select>";
     // hide the added-by line for Bjion / the admin (self-added, just noise)
     var by = (m.by && !/bjion|admin@navreo/i.test(m.by)) ? '<span class="mcard-by">' + esc(m.by) + "</span>" : "";
 
@@ -284,14 +287,14 @@
       (url ? '<div class="mcard-crows">' +
           '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter — dial from the multi-number picker">' + ICON_PHONE + "<span>Call</span>" + ICON_EXT + "</a>" +
           '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open the lead in the setter to reply">' + ICON_MAIL + '<span class="cval">' + esc(m.email) + "</span>" + ICON_EXT + "</a></div>" : "") +
-      (action || by ? '<div class="mcard-foot">' + (action || "<span></span>") + by + "</div>" : "");
+      '<div class="mcard-foot">' + statusSel + by + "</div>";
 
-    // click anywhere on the card (except the links/buttons, which stop propagation) to edit its status
-    d.onclick = function () { openChooser(d, m); };
-    var qb = d.querySelector('[data-act="quickbook"]');
-    if (qb) qb.onclick = function (e) { e.stopPropagation(); setStatus(m, "booked"); };
-    var ca = d.querySelector('[data-act="confirmattended"]');
-    if (ca) ca.onclick = function (e) { e.stopPropagation(); setStatus(m, "attended"); };
+    // click anywhere on the card (except the dropdown / links / ×) opens the edit dialog
+    d.onclick = function () { openEdit(m); };
+    var ss = d.querySelector('[data-act="status"]');
+    ss.onchange = function () { setStatus(m, ss.value); };
+    ss.addEventListener("click", function (e) { e.stopPropagation(); });
+    ss.addEventListener("mousedown", function (e) { e.stopPropagation(); });
     d.querySelector('[data-act="dismiss"]').onclick = function (e) { e.stopPropagation(); dismiss(m); };
     // contact/website links open in a new tab; never start a drag or open the chooser
     Array.prototype.forEach.call(d.querySelectorAll("a"), function (a) {
@@ -411,25 +414,57 @@
     return b;
   }
 
-  /* ---------- add modal ---------- */
+  /* ---------- add / edit modal ---------- */
+  function fillClients(sel) {
+    var cs = (TT.clients_all && TT.clients_all.length ? TT.clients_all
+      : (TT.clients || []).map(function (c) { return c.name; })).slice();
+    if (sel && cs.indexOf(sel) < 0) cs.unshift(sel);
+    el("f-client").innerHTML = cs.map(function (c) {
+      return '<option' + (c === sel ? " selected" : "") + ">" + esc(c) + "</option>";
+    }).join("");
+  }
   function openAdd(stage) {
     if (!TT) return;
-    var clients = TT.clients_all && TT.clients_all.length ? TT.clients_all
-      : (TT.clients || []).map(function (c) { return c.name; });
-    el("f-client").innerHTML = clients.map(function (c) { return "<option>" + esc(c) + "</option>"; }).join("");
+    EDITING = null;
+    fillClients("");
     el("f-person").value = ""; el("f-company").value = ""; el("f-date").value = TT.today;
     if (el("f-stage")) el("f-stage").value = typeof stage === "string" ? stage : "booked";
+    el("tt-ov-title").textContent = "Add to the board";
+    el("f-save").textContent = "Add";
+    el("tt-ov").classList.add("on");
+  }
+  function openEdit(m) {
+    if (!TT) return;
+    EDITING = m;
+    fillClients(m.client || "");
+    el("f-person").value = m.person || "";
+    el("f-company").value = m.company || "";
+    el("f-date").value = String((m.status === "said_yes" ? m.said_yes_on : m.date) || "").slice(0, 10);
+    if (el("f-stage")) el("f-stage").value = m.status;
+    el("tt-ov-title").textContent = "Edit meeting";
+    el("f-save").textContent = "Save";
     el("tt-ov").classList.add("on");
   }
   el("sb-addbtn").onclick = function () { openAdd(); };
-  el("f-cancel").onclick = function () { el("tt-ov").classList.remove("on"); };
-  el("tt-ov").onclick = function (e) { if (e.target === el("tt-ov")) el("tt-ov").classList.remove("on"); };
+  el("f-cancel").onclick = function () { el("tt-ov").classList.remove("on"); EDITING = null; };
+  el("tt-ov").onclick = function (e) { if (e.target === el("tt-ov")) { el("tt-ov").classList.remove("on"); EDITING = null; } };
   el("f-save").onclick = function () {
     var person = el("f-person").value.trim();
     if (!person) { el("f-person").focus(); return; }
-    post("/api/team-target/meeting", {client: el("f-client").value, person: person,
-      company: el("f-company").value.trim(), date: el("f-date").value || null, status: el("f-stage").value},
-      function () { el("tt-ov").classList.remove("on"); });
+    var status = el("f-stage").value, date = el("f-date").value || null;
+    var client = el("f-client").value, company = el("f-company").value.trim();
+    if (EDITING) {
+      var m = EDITING;
+      post("/api/team-target/status", {id: m.id, email: m.email, client: client, person: person,
+        company: company, status: status,
+        date: status === "said_yes" ? null : date,
+        said_yes_on: status === "said_yes" ? date : (m.said_yes_on || null)},
+        function () { el("tt-ov").classList.remove("on"); EDITING = null; });
+    } else {
+      post("/api/team-target/meeting", {client: client, person: person,
+        company: company, date: date, status: status},
+        function () { el("tt-ov").classList.remove("on"); });
+    }
   };
 
   loadAll();

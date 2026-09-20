@@ -172,10 +172,8 @@
 .mtag.green{background:#E2F1E9;color:#2E7D5B}
 .mtag.auto{background:#F1F0ED;color:var(--ink-4);font-weight:600;letter-spacing:.05em;text-transform:uppercase;font-size:9.5px;padding:3px 7px}
 .mcard-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:11px 13px 0}
-.mcard-foot .mk{margin:0;background:var(--ink);border-color:var(--ink);color:#fff}
-.mcard-foot .mk:hover{background:#000;border-color:#000}
-.mcard-foot .mk.attend{background:var(--ink);border-color:var(--ink);color:#fff}
-.mcard-foot .mk.attend:hover{background:#000;border-color:#000}
+.mcard-status{font:600 12px var(--font-sans);color:var(--ink);background:#fff;border:1px solid var(--line-2);border-radius:8px;padding:5px 8px;cursor:pointer;max-width:100%}
+.mcard-status:hover{border-color:var(--ink-3)}
 .mcard-by{color:var(--ink-4);font-size:11px;text-align:right;flex:1}
 .mcard-del{flex:none;background:0;border:0;color:var(--ink-4);font-size:16px;line-height:1;cursor:pointer;padding:0 3px;border-radius:6px;opacity:.4;transition:opacity .12s,background .12s,color .12s;margin:-1px -4px 0 0}
 .mcard:hover .mcard-del{opacity:.9}
@@ -233,7 +231,7 @@
 
 <div class="ov" id="tt-ov">
   <div class="card">
-    <h3>Add to the board</h3>
+    <h3 id="tt-ov-title">Add to the board</h3>
     <label>Stage</label><select id="f-stage">
       <option value="said_yes">Meeting-ready · said yes</option>
       <option value="booked" selected>Booked</option>
