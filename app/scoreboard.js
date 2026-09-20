@@ -228,6 +228,7 @@
   var ICON_MAIL = '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M4 7l8 6 8-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
   var ICON_WEB = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.7"/><path d="M3 12h18M12 3c2.5 2.5 3.5 6 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-6-3.5-9s1-6.5 3.5-9z" stroke="currentColor" stroke-width="1.7"/></svg>';
   var ICON_EXT = '<svg class="ext" width="12" height="12" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17L17 7M9 7h8v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+  var ICON_CARET = '<svg class="car" width="13" height="13" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>';
   var ICON_CAL = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><rect x="3" y="5" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.8"/><path d="M3 10h18M8 3v4M16 3v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
   var ICON_WARN = '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3l9 16H3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4M12 17v.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>';
   function webFromEmail(email) {
@@ -276,6 +277,25 @@
     // hide the added-by line for Bjion / the admin (self-added, just noise)
     var by = (m.by && !/bjion|admin@navreo|zapier/i.test(m.by)) ? '<span class="mcard-by">' + esc(m.by) + "</span>" : "";
 
+    // Call row: the real number(s) for one-tap dial when we hold them (setter
+    // enrichment); a dropdown when there are several; else open the setter dialer.
+    var phones = m.phones || [];
+    var telOf = function (n) { return "tel:" + String(n).replace(/[^+\d]/g, ""); };
+    var callHtml;
+    if (phones.length === 1) {
+      callHtml = '<a class="crow" href="' + telOf(phones[0].number) + '" title="Call ' + esc(phones[0].number) + '">' + ICON_PHONE + '<span class="cval">' + esc(phones[0].number) + "</span></a>";
+    } else if (phones.length > 1) {
+      callHtml = '<details class="pdrop"><summary>' + ICON_PHONE + '<span class="cval">' + esc(phones[0].number) +
+        '</span><span class="pmore">' + phones.length + " numbers</span>" + ICON_CARET + '</summary><div class="plist">' +
+        phones.map(function (p) {
+          return '<a href="' + telOf(p.number) + '"><b>' + esc(p.kind || "phone") + "</b>" + esc(p.number) + "</a>";
+        }).join("") + "</div></details>";
+    } else {
+      callHtml = url ? '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="No number on file — open the setter to dial">' + ICON_PHONE + "<span>Call</span>" + ICON_EXT + "</a>" : "";
+    }
+    var mailHtml = url ? '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open the lead in the setter to reply">' + ICON_MAIL + '<span class="cval">' + esc(m.email) + "</span>" + ICON_EXT + "</a>" : "";
+    var contactsHtml = (callHtml || mailHtml) ? '<div class="mcard-crows">' + callHtml + mailHtml + "</div>" : "";
+
     d.innerHTML =
       '<div class="mcard-head">' +
         '<div class="mcard-t"><span>' + esc(m.person || "(no name)") + "</span></div>" +
@@ -284,9 +304,7 @@
       "</div>" +
       idline +
       band +
-      (url ? '<div class="mcard-crows">' +
-          '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter — dial from the multi-number picker">' + ICON_PHONE + "<span>Call</span>" + ICON_EXT + "</a>" +
-          '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open the lead in the setter to reply">' + ICON_MAIL + '<span class="cval">' + esc(m.email) + "</span>" + ICON_EXT + "</a></div>" : "") +
+      contactsHtml +
       '<div class="mcard-foot">' + statusSel + by + "</div>";
 
     // click anywhere on the card (except the dropdown / links / ×) opens the edit dialog
@@ -301,6 +319,11 @@
       a.draggable = false;
       a.addEventListener("click", function (e) { e.stopPropagation(); });
       a.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    });
+    // the multi-number dropdown toggles on its own; keep the click off the card/drag
+    Array.prototype.forEach.call(d.querySelectorAll("summary"), function (s) {
+      s.addEventListener("click", function (e) { e.stopPropagation(); });
+      s.addEventListener("mousedown", function (e) { e.stopPropagation(); });
     });
     return d;
   }

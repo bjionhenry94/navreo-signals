@@ -164,6 +164,19 @@
 .mcard-crows .crow .cval{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
 .mcard-crows .crow .ext{margin-left:auto;color:var(--ink-4);flex:none}
 .mcard-crows .crow:hover .ext{color:var(--orange,#FF4D00)}
+.mcard-crows .pdrop summary{list-style:none;display:flex;align-items:center;gap:9px;padding:8px;border-radius:8px;font:600 13px var(--font-sans);color:var(--ink);cursor:pointer}
+.mcard-crows .pdrop summary::-webkit-details-marker{display:none}
+.mcard-crows .pdrop summary:hover{background:var(--bg-sunken)}
+.mcard-crows .pdrop summary > svg:first-child{color:var(--ink-3);flex:none}
+.mcard-crows .pdrop .cval{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mcard-crows .pdrop .pmore{margin-left:auto;font-size:11px;color:var(--ink-4);font-weight:500}
+.mcard-crows .pdrop .car{color:var(--ink-4);flex:none;transition:transform .15s}
+.mcard-crows .pdrop[open] .car{transform:rotate(180deg)}
+.mcard-crows .pdrop[open] .pmore{opacity:0}
+.mcard-crows .pdrop .plist{display:flex;flex-direction:column;margin-top:1px;padding-left:26px}
+.mcard-crows .pdrop .plist a{display:flex;align-items:baseline;gap:9px;font:500 12.5px var(--font-sans);color:var(--ink-2);padding:5px 8px;border-radius:6px;text-decoration:none}
+.mcard-crows .pdrop .plist a:hover{background:var(--bg-sunken);color:var(--orange,#FF4D00)}
+.mcard-crows .pdrop .plist a b{color:var(--ink-4);font:600 10px var(--font-sans);text-transform:uppercase;letter-spacing:.04em;min-width:46px;flex:none}
 .mcard-tags{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .mtag{display:inline-block;border-radius:6px;padding:2px 8px;font:600 11.5px var(--font-sans);white-space:nowrap}
 .mtag.grey{background:#EFEFEC;color:var(--ink-2)}
