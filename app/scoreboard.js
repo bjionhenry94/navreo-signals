@@ -64,7 +64,7 @@
     var bn = TT ? TT.meetings.length : "";
     el("sb-tabs").innerHTML =
       '<button class="tt-tab ' + (TAB === "scoreboard" ? "on" : "") + '" data-tab="scoreboard">Scoreboard</button>' +
-      '<button class="tt-tab ' + (TAB === "board" ? "on" : "") + '" data-tab="board">Board' +
+      '<button class="tt-tab ' + (TAB === "board" ? "on" : "") + '" data-tab="board">Leads' +
         (bn !== "" ? ' <span class="b">' + bn + "</span>" : "") + "</button>";
     Array.prototype.forEach.call(el("sb-tabs").children, function (b) {
       b.onclick = function () { TAB = b.getAttribute("data-tab"); render(); };
@@ -256,20 +256,15 @@
     var domain = webFromEmail(m.email);
     var url = setterLink(m.email);
 
-    // company · website — one quiet identity line
-    var idbits = [];
-    if (m.company) idbits.push(esc(m.company));
-    if (domain) idbits.push('<a href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + esc(domain) + "</a>");
-    var idline = idbits.length ? '<div class="mcard-idline">' + idbits.join('<span class="sep">·</span>') + "</div>" : "";
+    // identity — company name hyperlinked to the website (saves a line vs showing both)
+    var idline = "";
+    if (m.company) idline = '<div class="mcard-idline">' + (domain
+        ? '<a href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + esc(m.company) + "</a>"
+        : esc(m.company)) + "</div>";
+    else if (domain) idline = '<div class="mcard-idline"><a href="https://' + esc(domain) + '" target="_blank" rel="noopener">' + esc(domain) + "</a></div>";
     // the hero: a meeting band, tinted by state (od = red alert, gd = green done)
     var band = whenVal ? ('<div class="mcard-band ' + whenCls + '">' + (whenCls === "od" ? ICON_WARN : ICON_CAL) +
       '<span class="bl">' + whenLbl + '</span><span class="bv">' + esc(whenVal) + "</span></div>") : "";
-
-    // low hierarchy — auto, waiting (client pill now lives top-right)
-    var lows = "";
-    if (m.source && m.source.indexOf("auto") === 0) lows += '<span class="lowtag">Auto</span>';
-    if (m.status === "said_yes") lows += '<span class="lowtag' + (m.waiting_days >= 7 ? " late" : "") +
-      '">waiting ' + m.waiting_days + "d</span>";
 
     var action = m.status === "said_yes" ? '<button class="mk" data-act="quickbook">Mark booked</button>'
       : m.status === "booked" ? '<button class="mk attend" data-act="confirmattended">Confirmed attended</button>' : "";
@@ -287,10 +282,10 @@
       (url ? '<div class="mcard-crows">' +
           '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open in the setter — dial from the multi-number picker">' + ICON_PHONE + "<span>Call</span>" + ICON_EXT + "</a>" +
           '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open the lead in the setter to reply">' + ICON_MAIL + '<span class="cval">' + esc(m.email) + "</span>" + ICON_EXT + "</a></div>" : "") +
-      (lows ? '<div class="mcard-low">' + lows + "</div>" : "") +
       (action || by ? '<div class="mcard-foot">' + (action || "<span></span>") + by + "</div>" : "");
 
-    d.querySelector(".mcard-t").onclick = function () { openChooser(d, m); };
+    // click anywhere on the card (except the links/buttons, which stop propagation) to edit its status
+    d.onclick = function () { openChooser(d, m); };
     var qb = d.querySelector('[data-act="quickbook"]');
     if (qb) qb.onclick = function (e) { e.stopPropagation(); setStatus(m, "booked"); };
     var ca = d.querySelector('[data-act="confirmattended"]');
@@ -337,7 +332,7 @@
     if (BOARD_CLIENT && clientList.indexOf(BOARD_CLIENT) < 0) BOARD_CLIENT = "";
     var match = function (m) { return !BOARD_CLIENT || m.client === BOARD_CLIENT; };
     var head = document.createElement("div"); head.className = "board-head";
-    head.innerHTML = '<div class="h4">Board <span class="hint">' +
+    head.innerHTML = '<div class="h4">Leads <span class="hint">' +
       "drag a card between columns, or tap a name · + Add to create, × to remove</span></div>" +
       '<label class="bfilter">Client <select id="b-client"><option value="">All clients</option>' +
       clientList.map(function (c) {
