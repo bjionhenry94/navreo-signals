@@ -138,6 +138,37 @@ def _names_for(emails: set) -> dict:
     return out
 
 
+def _attach_phones(meetings: list) -> None:
+    """Surface the phone numbers we ALREADY hold for each lead (the setter
+    enrichment cache) onto the board cards, so a setter can one-tap dial from the
+    card. No new provider spend — reads the cache and reuses the setter's own
+    `_harvest_phones`. Sets m['phones'] = [{number, kind, source}] (may be [])."""
+    for m in meetings:
+        m["phones"] = []
+    emails = sorted({(m.get("email") or "").strip().lower() for m in meetings if m.get("email")})
+    if not emails:
+        return
+    try:
+        from setter import _harvest_phones
+    except Exception:
+        return
+    enr_by = {}
+    for i in range(0, len(emails), 200):
+        enc = ",".join(urllib.parse.quote(e, safe="") for e in emails[i:i + 200])
+        rows = server.sb("GET", "setter_lead_enrichment"
+                                "?select=lead_email,phone,phone_source,payload"
+                                "&lead_email=in.(%s)" % enc) or []
+        for r in rows or []:
+            enr_by[(r.get("lead_email") or "").strip().lower()] = r
+    for m in meetings:
+        enr = enr_by.get((m.get("email") or "").strip().lower())
+        if enr:
+            try:
+                m["phones"] = _harvest_phones(enr, "") or []
+            except Exception:
+                m["phones"] = []
+
+
 # ── reply-time (avg speed we reply after a lead's positive reply) ────────────
 def _et_tz():
     """US Eastern tz (DST-aware); falls back to a fixed EDT offset without tzdata."""
@@ -404,6 +435,7 @@ def data(force: bool = False) -> dict:
                         "person": ov.get("person") or person,
                         "company": ov.get("company") or company, "source": "auto"})
 
+    _attach_phones(meetings)
     result = _assemble(today, cur_month, wk, active, per, meetings, removed)
     _CACHE.update(ts=now, data=result)
     return result
