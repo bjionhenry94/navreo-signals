@@ -555,6 +555,14 @@ input.ob-inp:focus { outline:none; box-shadow:var(--focus); }
 .ob-demo button:hover { color:var(--ink); }
 
 /* ---------- offers section (teach → pick) ---------- */
+dl.ofr-v3{display:grid;grid-template-columns:92px minmax(0,1fr);gap:6px 12px;margin:10px 0 0;text-align:left}
+dl.ofr-v3 dt{font-size:11px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);padding-top:3px}
+dl.ofr-v3 dd{margin:0;font-size:14px;color:var(--ink-2)}
+dl.ofr-v3.lead dd{font-size:15.5px;color:var(--ink);line-height:1.45}
+.ofr-money{background:var(--bg-sunken,#f6f5f2);border:1px solid var(--line-2);border-radius:9px;padding:9px 12px;margin:12px 0 2px;font-size:14px;color:var(--ink-2);text-align:left}
+.ofr-money b{display:block;font-size:11px;letter-spacing:.05em;text-transform:uppercase;color:var(--ink-3);margin-bottom:2px}
+.ofr-fill{background:#fff1c2;color:#4a3600;border-bottom:2px solid #d9a800;padding:0 4px;border-radius:3px 3px 0 0;white-space:nowrap}
+@media(max-width:560px){dl.ofr-v3{grid-template-columns:minmax(0,1fr);gap:1px 0}dl.ofr-v3 dd{margin-bottom:7px}}
 .ofr-kick { text-align:center; font-size:12px; font-weight:700; letter-spacing:.1em;
   text-transform:uppercase; color:var(--orange-700); margin-bottom:6px; }
 .ofr-vid { position:relative; width:100%; padding:0; font:inherit; margin-top:4px; border-radius:14px;
@@ -1527,6 +1535,8 @@ function deTag(s){return String(s||"")
    NOTHING; the CSM signs them off. Each card carries a dropdown with the full copy
    we'd likely say. Empty when a client has no drafted ideas yet (page shows just the
    teaching intro until Claude drafts them). */
+/* Bracketed figures ([14 days], [price per order]) are suggestions the client confirms on the call. */
+function ofill(s){return oesc(s).replace(/\[([^\[\]]{1,60})\]/g,'<span class="ofr-fill">[$1]</span>');}
 function offersDrafted(){
  if(!Array.isArray(S.ideas))return "";
  /* Only real offer objects: a botched hand-edit ([null], [""]) must not blank the page,
@@ -1540,7 +1550,20 @@ function offersDrafted(){
   return '<div class="ofr-card ofr-ro">'
    +'<div class="top"><span class="ofr-badge '+oatt(o.mech)+'">'+oesc(OMECH[o.mech]||o.mech)+'</span>'+(o.rec?'<span class="ofr-rec">Most start here</span>':'')+'</div>'
    +'<div class="nm">'+oesc(deTag(o.name))+'</div>'
-   +'<div class="ln">'+oesc(deTag(o.line))+'</div>'
+   +(o.they_get
+     /* offer format v3 (Offer Maker, 2026-09-21): They get / The deal / how it makes you money / the rows */
+     ? ('<dl class="ofr-v3 lead"><dt>They get</dt><dd>'+ofill(deTag(o.they_get))+'</dd>'
+        +(o.the_deal?'<dt>The deal</dt><dd>'+ofill(deTag(o.the_deal))+'</dd>':'')+'</dl>'
+        +(o.back_end?'<div class="ofr-money"><b>How this makes you money</b>'+ofill(deTag(o.back_end))+'</div>':'')
+        +'<dl class="ofr-v3">'
+        +(o.first_step?'<dt>First step</dt><dd>'+ofill(deTag(o.first_step))+'</dd>':'')
+        +(o.buyer?'<dt>For</dt><dd>'+oesc(deTag(o.buyer))+'</dd>':'')
+        +(o.pricing?'<dt>Price</dt><dd>'+ofill(deTag(o.pricing))+'</dd>':'')
+        +(o.risk_reversal?'<dt>Their risk</dt><dd>'+ofill(deTag(o.risk_reversal))+'</dd>':'')
+        +(o.stipulation?'<dt>Condition</dt><dd>'+ofill(deTag(o.stipulation))+'</dd>':'')
+        +(o.proof?'<dt>Proof</dt><dd>'+oesc(deTag(o.proof))+'</dd>':'')
+        +'</dl>')
+     : '<div class="ln">'+oesc(deTag(o.line))+'</div>')
    +more+'</div>';
  }).join("");
  return '<div class="ofr-kick" style="margin-top:64px">Offers we think might work for you</div>'
