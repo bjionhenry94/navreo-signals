@@ -291,7 +291,7 @@
           return '<a href="' + telOf(p.number) + '"><b>' + esc(p.kind || "phone") + "</b>" + esc(p.number) + "</a>";
         }).join("") + "</div></details>";
     } else {
-      callHtml = url ? '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="No number on file — open the setter to dial">' + ICON_PHONE + "<span>Call</span>" + ICON_EXT + "</a>" : "";
+      callHtml = "";   // no number on file → no Call option at all
     }
     var mailHtml = url ? '<a class="crow" href="' + url + '" target="_blank" rel="noopener" title="Open the lead in the setter to reply">' + ICON_MAIL + '<span class="cval">' + esc(m.email) + "</span>" + ICON_EXT + "</a>" : "";
     var contactsHtml = (callHtml || mailHtml) ? '<div class="mcard-crows">' + callHtml + mailHtml + "</div>" : "";
