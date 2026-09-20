@@ -25414,8 +25414,37 @@ OFFER_WINNING_EXAMPLES = """\
 # validators) lives in navreo_voice.py so any tool can reuse the exact logic.
 # offer_email() below calls build_email_prompt() + validate_email() from it.
 
-OFFER_FIELDS = ("name", "problem", "differentiator", "pricing", "risk_reversal",
-                "mechanism", "stipulation", "opener", "why_cold_email")
+OFFER_FIELDS = ("name", "they_get", "the_deal", "back_end", "first_step", "buyer", "problem",
+                "differentiator", "pricing", "risk_reversal", "mechanism", "stipulation", "proof",
+                "opener", "why_cold_email")
+# Offer format v3 (Bjion, 2026-09-21, chosen after a blind test of 36 drafts): every offer reads as
+# "They get / The deal / How it makes the seller money / First step / For / Price / Their risk /
+# Condition / Proof". The v2 fields stay in the contract because lilly-strategy and offer_email()
+# read them. `proof` is the only field allowed to be empty (no real proof on the pages = none cited).
+# Form examples in format v3, deliberately for kinds of business unlike most visitors', so the model
+# copies the FORM and cannot copy content. All four shapes were approved in the owner's blind test.
+OFFER_FORMAT_EXAMPLES = """\
+A. (pay_after_result, a web design studio) they_get: "We design and build your whole new website within [21 days]." the_deal: "You pay nothing until it is live and you are happy with it." back_end: "The studio is paid its [fixed fee] once the site is live, so the only risk is a client who never approves. It takes on firms whose brief is clear, and most stay on for [monthly fee] upkeep." first_step: "They send their current site and receive the homepage design to look over."
+B. (pay_per_result, a video ad studio) they_get: "We make [10 finished video ads] from your own product footage and run them for [30 days]." the_deal: "You pay [price per order] for each order they bring in, and nothing else." back_end: "Income is [price per order] on every order from ads the studio runs, so it grows with the account. It stays profitable by only taking shops with healthy margins and proven demand." first_step: "They send product footage and receive the first finished ads to approve."
+C. (lead_magnet, a grant writing firm) they_get: "We write your full application for the next funding round, ready to submit, within [14 days]." the_deal: "The first application is free, with no obligation to continue." back_end: "Charities that win with the free application come back for the next ones at [price per application]. One application takes about a day, so the cost of winning a client stays low." first_step: "They name the fund and receive the finished draft."
+D. (guarantee_refund, a leadership consultancy) they_get: "We work with your executive team for [90 days] on who decides what and how they hold each other to it." the_deal: "If your own leaders do not say accountability improved, the fee is refunded in full." back_end: "The fee is paid up front, so the work is funded from day one. Refunds should be rare because the team itself is the judge, and good programmes lead to work with the next layer of leaders." first_step: "The chief executive has a short conversation about the team and receives the [90 days] plan."
+"""
+
+OFFER_OPTIONAL = ("proof",)
+OFFER_REQUIRED = tuple(f for f in OFFER_FIELDS if f not in OFFER_OPTIONAL)
+_OFFER_BRACKET = re.compile(r"\[([^\[\]]{1,60})\]")
+
+
+def _offer_fill(s: str) -> str:
+    """Bracketed figures are suggestions for the owner to confirm ([14 days], [price per order]).
+    Email copy must read naturally, so the email writer gets them filled in: [14 days] -> 14 days,
+    [price per order] -> a fixed price per order."""
+    def _f(m):
+        inner = m.group(1).strip()
+        if re.match(r"\d", inner) or re.match(r"(?:a |an |one |the )?(?:fixed|flat|set)\b", inner, re.I):
+            return inner
+        return "a fixed " + inner
+    return re.sub(r"\b(a|one|the) a fixed ", r"\1 fixed ", _OFFER_BRACKET.sub(_f, str(s or "")))
 # Exactly ONE mechanism per offer - a lead magnet OR one of the three risk
 # reversals. Never stacked (user ruling 2026-07-16: no guarantee inside a
 # lead-magnet offer).
@@ -25549,7 +25578,7 @@ def _offer_sense_sweep(key: str, brief: dict, audience: str, offers: list):
     between name and body, garbled sentences. Best-effort: any failure returns
     the offers untouched with a note, never an error."""
     try:
-        payload = [{f: o[f] for f in OFFER_FIELDS} for o in offers]
+        payload = [{f: o.get(f, "") for f in OFFER_FIELDS} for o in offers]
         aud = audience or brief.get("who_they_sell_to") or ""
         prompt = f"""You are a strict SENSE-CHECKER for cold-email offers. A vendor is about to send these offers to buyers. Read each one as a stranger seeing it cold.
 
@@ -25568,7 +25597,7 @@ OFFERS (JSON):
 
 Reply with ONLY a JSON array of the same length and order, one verdict per offer, no fences:
 [{{"verdict": "ok"}} or {{"verdict": "fixed", "offer": {{...the corrected offer, ALL of the same fields...}}}} or {{"verdict": "drop"}}]
-Fixing rules: change as little as possible, NEVER change the mechanism, keep every field one short sentence in plain English, no em-dashes. Use "drop" only when an offer is nonsense at its core and cannot be fixed by rewording."""
+Fixing rules: change as little as possible, NEVER change the mechanism, keep every field short and in plain English (back_end may be two sentences), keep square-bracket figures such as [14 days] exactly as they are, leave "proof" exactly as given (it may be empty), no em-dashes. Use "drop" only when an offer is nonsense at its core and cannot be fixed by rewording."""
         r = http_json("POST", "https://api.openai.com/v1/chat/completions",
                       {"Authorization": f"Bearer {key}"},
                       {"model": "gpt-5-mini", "reasoning_effort": "low",
@@ -25590,8 +25619,8 @@ Fixing rules: change as little as possible, NEVER change the mechanism, keep eve
             if verdict == "fixed":
                 f = (v or {}).get("offer") or {}
                 if f.get("mechanism") == o["mechanism"] and \
-                        all(str(f.get(k) or "").strip() for k in OFFER_FIELDS):
-                    out.append({**{k: _offer_scrub(f[k]) for k in OFFER_FIELDS},
+                        all(str(f.get(k) or "").strip() for k in OFFER_REQUIRED):
+                    out.append({**{k: _offer_scrub(f.get(k)) for k in OFFER_FIELDS},
                                 "appeal": o["appeal"]})
                     fixed += 1
                     continue
@@ -25634,9 +25663,9 @@ def _offer_llm(site: dict, audience: str = "", seed: dict | None = None):
         mix_line = "All 5 offers use the seed mechanism above."
         n_expect = "5 objects"
     else:
-        count_line = "Generate EXACTLY 15 distinct offer ideas this business could use in cold emails to win NEW customers."
-        mix_line = "Across the 15 offers, EVERY one of the four mechanisms must appear at least 3 times."
-        n_expect = "15 objects"
+        count_line = "Generate EXACTLY 8 distinct offer ideas this business could put in front of strangers by cold email to win new customers."
+        mix_line = "Across the 8 offers, EVERY one of the four mechanisms must appear exactly 2 times."
+        n_expect = "8 objects"
     prompt = f"""You are an expert at designing cold-email OFFERS for a B2B lead-generation agency.
 
 A business owner pasted their website. Here is what it says:
@@ -25658,51 +25687,56 @@ STEP 3 - RATE EACH OFFER. After writing the offers, put yourself in the target b
 GROUNDING RULE: every offer must be rooted in something concrete from the pages above - a named service, a named client type, a stated result, a pricing fact. An offer that could apply to any business in any industry is wrong; rewrite it until it could only belong to THIS business.
 REAL SERVICES ONLY: every offer sells a service or product this business ACTUALLY provides according to the pages. NEVER invent a new line of business for them - a freight company does not "run outreach" or "deliver qualified leads", a cleaning company does not win tenders for its customers. The offers help them win new customers FOR WHAT THEY ALREADY SELL. Proof lines may only use results actually stated on the pages.
 
-THE OFFER FRAMEWORK (every offer must have all four):
-(a) PROBLEM: the specific NEW BUSINESS the recipient is MISSING OUT ON, and what that gap costs them. Phrase it as money they are NOT winning, e.g. "You are missing [new customers / new orders / new contracts / new tenants] because [reason], which costs you [amount] in sales you never make." Do NOT phrase the problem as a current operational pain, a risk of loss, downtime, wasted spend, or something breaking - if the problem is not about missed NEW revenue, the offer is wrong.
-(b) DIFFERENTIATOR: what this business would do about it AND an explicit comparison to the usual way (the words "instead of" or "unlike" or "most" should appear: e.g. "unlike agencies that charge a retainer", "instead of waiting weeks for quotes", "most suppliers make you...").
-(c) PRICING: a pricing angle that favours the buyer (fixed price, pay less than the alternative, price tied to results, free first step). For a lead_magnet offer the pricing angle IS the free first step.
-(d) MECHANISM: exactly ONE per offer. {mix_line}
-   - lead_magnet: you make something small, useful and FREE and offer to SEND it. The magnet must be SERVICE-BASED - a small worked piece of the actual service, done for them (a sample deliverable, a worked plan for their exact situation, a done-for-you example, a short Loom showing their solution built). NEVER an audit, review, assessment, health check, or consultation - offers to inspect their stuff do not get replies; a ready-made taste of the service does. No strings attached.
-   - pay_after_result: buyer pays nothing until the work is delivered or the result shows up.
-   - pay_per_result: buyer pays per unit of result (per lead, per sale, per placement), not a retainer.
-   - guarantee_refund: a concrete promise (number + deadline) with a full refund if missed. The word "refund" (or "money back") MUST appear in the risk_reversal field of every guarantee_refund offer.
-The risk_reversal field spells the chosen mechanism out as a promise in the buyer's words (for lead_magnet: what the free thing is and that it costs nothing).
+WHAT MAKES AN OFFER WORK ON STRANGERS (distilled from three people who run cold email at scale, then tested blind on an agency owner - check EVERY offer against all eight):
+1. CLEAR FIRST. Someone outside this industry understands on first read what the buyer gets and what it costs. Short sentences, everyday words, one idea per sentence. No insider labels ("conversion-ready", "ready-to-run", "deliverable", "asset", "itemised", "uplift", "pathway").
+2. BIG ENOUGH TO MATTER. What the buyer PAYS for is the whole job or a serious part of it (the full range, the full campaign, the full report), never a token slice. A FREE first piece may be small, as long as it is finished real work on their own business and leads straight into the whole job (their best seller's listing rebuilt, their product feed rebuilt, the first campaign run).
+3. TRUE TO WHAT THEY DO. Say the real benefit of the real service. If it honestly brings in new money, or removes about 90 percent of a cost or a block of time, lead with that. If it does not, lead with the real benefit in plain words. NEVER bolt a revenue claim onto a service that does not directly produce revenue, and never twist the service into something else to reach one.
+4. THE BUYER'S RISK IS HANDLED INSIDE THE OFFER, BY ONE THING: the mechanism below. Never two.
+5. PROMISE ONLY WHAT THE SELLER DELIVERS AND CAN COUNT: work completed, things live, meetings booked, leads to an agreed definition, orders from ads the seller itself runs, a saving that shows on the buyer's own bill from the seller's product. Never the buyer's own sales, closed deals, contracts won or company growth. Never platform metrics nobody can verify. Keep every figure modest and honest.
+6. AN EASY FIRST STEP THAT HANDS THE BUYER SOMETHING. Never a calendar link, a demo, a meeting about the seller, or "let us look at your X and tell you what to fix" (that is an audit, and finished work beats it every time). NEVER an audit, review, assessment, health check or consultation anywhere - do not use those words.
+7. PROOF IS REAL OR ABSENT. The `proof` field is one line copied word for word from the pages above - a customer result, a customer's own words about the work, or named customers - or an empty string. NEVER a slogan, a heading, a menu item or a description of the business. A result from a company like the reader beats a famous name. Never name a customer or a result that is not on the pages.
+8. NEVER "delivered by a date or the fee is refunded". A refund for lateness says nothing about whether the work is any good. A guarantee is about a result the seller produces and can count, or about the buyer's own judgement of the work.
 
-ONE MECHANISM ONLY (as important as the new-money rule): each offer picks its ONE mechanism and NOTHING from the other three appears anywhere in that offer. BANNED STACKING, no exceptions: a guarantee or refund inside a lead_magnet offer; a free sample or free resource bolted onto a pay_per_result or guarantee_refund offer; a guarantee added to a pay_after_result offer; any offer whose pricing, risk_reversal, opener or stipulation mentions a second mechanism. Simple offers get replies; stacked offers read as too good to be true and get deleted.
-WATCH THE PRICING FIELD - it is where stacking sneaks in:
-- lead_magnet pricing is ALWAYS a single sentence of the form "The <thing> costs nothing and there is no obligation." (vary the wording slightly, keep the meaning identical). NEVER a number, a currency symbol, a fee, a rate, a plan, or how any paid service would be priced - if a paid price appears in a lead_magnet offer, the offer is WRONG.
-- guarantee_refund pricing is a normal fee paid the normal way; the refund is the safety net. NEVER also delay, waive or condition the payment (that would be pay_after_result on top).
+SHAPES THAT WORK (use the ones that genuinely fit this business, and vary them):
+- lead_magnet: one finished piece of the real paid work, free | step one of the normal delivery, free (the storyboard before the video, customer calls before the report) | something the market already pays other companies for (a list, data, an estimate) | full use of the product with no card and no sales call | what only this business's position lets it see, shared in a short conversation with something written to keep. The free thing is a ready-made taste of the service, made for them, never a generic guide.
+- pay_after_result: they pay nothing until it is live, or nothing unless a number moves that shows on their own account from work the seller runs.
+- pay_per_result: a fixed price per unit the seller produces (per meeting held, per order from ads the seller runs, per placement), or a share of what the seller's own work produces. No retainer.
+- guarantee_refund: a concrete result the seller produces and can count (a number and a deadline), or the buyer's own team judging that it worked, with a full refund if not. The word "refund" (or "money back") MUST appear in risk_reversal. Never a refund for lateness alone.
+- When the pages give a real result from a similar customer, an offer may open on it ("the same work that took [a named customer] from A to B") inside any of the four mechanisms.
+
+THE FOUR MECHANISMS - exactly ONE per offer. {mix_line}
+ONE MECHANISM ONLY: nothing from the other three appears anywhere in that offer. BANNED STACKING, no exceptions: a guarantee or refund inside a lead_magnet offer; a free sample bolted onto a pay_per_result or guarantee_refund offer; a guarantee added to a pay_after_result offer; never more than two kinds of fee. Simple offers get replies; stacked offers read as too good to be true.
+- lead_magnet pricing says the free thing costs nothing and carries no obligation. It may then name what the full job costs as a bracket LABEL only ("The listing is free. The full launch is [monthly fee]."), NEVER a number or a currency symbol.
+- guarantee_refund pricing is a normal fee paid the normal way; the refund is the safety net. NEVER also delay, waive or condition the payment.
 - pay_after_result and pay_per_result pricing never mention a refund or a free deliverable.
-(A Loom or one-pager that merely EXPLAINS the offer is a CTA, not a second mechanism - that is fine.)
-WATCH THE OPENER TOO: in pay_after_result, pay_per_result and guarantee_refund offers, the small thing the opener offers to send may only DESCRIBE the offer (a short Loom about it, a one-page plan of what we would do). NEVER offer a free sample, free unit, free trial or free version of the deliverable itself ("a sample of the work we'd build for you", "the exact posts we'd publish", "an example lead we'd deliver", "the checklist we use") - a free taste of the deliverable or a standalone useful asset IS the lead_magnet mechanism and belongs only in lead_magnet offers.
+- In pay_after_result, pay_per_result and guarantee_refund offers, the small thing the opener offers to send may only DESCRIBE the offer ("the details", "a short breakdown"). A free taste of the work itself IS the lead_magnet mechanism and belongs only there.
 
-DELIVERABILITY LAW (the sender must be able to keep every promise):
-- The PROBLEM names the new money the recipient is missing. The PROMISE (risk_reversal, opener, pricing trigger) names ONLY what the sender delivers and can measure itself: work completed, stock landed, a space made viewing-ready, meetings booked, leads delivered to agreed criteria.
-- Unless winning customers is literally this business's service (a lead-generation or marketing agency), NEVER promise or gate payment on the recipient's own sales outcomes - their orders won, contracts signed, tenants moved in, store opened, bookings taken. Promise the deliverable that unlocks those, not the outcome itself. Even a lead-gen agency's deliverable ends at leads or booked meetings - never "customers won" or "closed deals" (closing is the client's job).
-- NEVER promise platform metrics that cannot be verified per person (impressions, followers, views by job title), and NEVER guarantee counted results from ORGANIC social content (inbound replies or messages from posts) - organic reach is not controllable. A content service either uses the lead_magnet mechanism, or promises the publishing deliverable itself (posts written and published on schedule).
-- Repeat business, rebookings, renewals and upsells from EXISTING customers are NOT new money - only brand-new customers, orders and contracts count.
-- Keep every number modest and honest: a promise the business would miss more often than hit is a broken offer.
-- Recovery framing is BANNED everywhere: "stop losing", "recover lost", "recover missed", "win back", income "leaking". The benefit is always new money coming in, said that way.
+THE FORMAT (every offer has every field; this is the offer, NOT the email - no greeting, no question and no call to action in any field except `opener`):
+- they_get: ONE short plain sentence, max 24 words: what the buyer gets, at a size that matters, and by when.
+- the_deal: ONE short plain sentence, max 22 words: what it costs, or how their risk is handled. they_get + the_deal must read as the whole offer to an outsider. No colon, no semicolon.
+- back_end: HOW THE SELLER MAKES MONEY from this offer, for the seller's eyes only. Two plain sentences, max 45 words: what the buyer pays for next and when that is raised, and why this first piece leads into it. If the front end is free, say what has to happen for it to pay back. If it is already paid, say where the money comes from.
+- first_step: the SMALLEST thing the buyer agrees to or receives first, described as a thing, max 20 words ("They send their product list and receive the launch plan."). The buyer must RECEIVE something in it.
+- buyer: the ONE defined kind of buyer this is for and the situation that makes it relevant, max 22 words.
+- problem: the buyer's real problem today that this fixes, in their own words, ONE sentence, max 18 words. Never their doubts about suppliers.
+- differentiator: what this business does and why it beats the usual way, ONE sentence, max 22 words (the words "instead of", "unlike" or "most" should appear).
+- pricing, risk_reversal, stipulation: ONE short sentence each, max 16 words. risk_reversal spells the mechanism out as a promise in the buyer's words. stipulation is one fair condition that protects the seller.
+- proof: one line word for word from the pages, or "".
+- BRACKETS: any count, time window or percentage the pages do not state is the owner's to decide, so put the figure you would SUGGEST in square brackets for them to confirm or change: [14 days], [25 orders], [10 to 15 meetings], [90 percent]. Money amounts are never suggested, only labelled: [price per order], [monthly fee], [fixed fee]. Figures that ARE on the pages are used as they are. At most four brackets per offer. The `opener` is example email copy, so write its figures plainly with no brackets.
+- PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. A 12-year-old should understand every sentence. NEVER use an em-dash, and NEVER use a hyphen or dash in place of a comma. English only. Numbers in names must match the body.
+- WHO THE EMAIL GOES TO: cold email is business-to-business. If this business sells to consumers, aim every offer at business buyers instead (retailers, distributors, corporate accounts, partners).
+- name: what the offer literally is, 3-8 plain words, no numbers, never a branded or clever name.
+- opener: ONE sentence, 20 words or fewer, the first line of a cold email from this business to its buyer, offering to SEND something small named in three plain words or fewer ("the details", "a short breakdown", "a short Loom") - never "book a call". For lead_magnet offers the free thing IS what it offers to send, named properly. Use {{{{company}}}} where the prospect's company name would go.
+- why_cold_email: one or two plain sentences for a beginner on WHY this works on cold strangers.
+- FINAL SELF-CHECK: re-read every offer. Would an outsider understand it on first read? Is what they pay for big enough to matter? Is it true to what this business really does? Exactly one mechanism? Anything promised that the seller does not itself deliver? A lateness refund? Fix or replace any offer that fails.
 
-HARD RULES:
-- BREVITY LAW (a buyer must grasp the offer at a glance): every field is ONE short sentence. problem max 15 words. differentiator max 20 words. pricing max 12 words. risk_reversal max 14 words. stipulation max 14 words. problem + differentiator together must read in UNDER 40 WORDS. If a field needs a second sentence, the offer is too complicated - simplify the offer, don't add words.
-- NEW MONEY ONLY (the single most important rule): every offer must promise the RECIPIENT brand-new revenue - new customers, new sales, new orders, new markets, new booked work, new tenants, new contracts they currently lose. The main benefit to the recipient must be MORE MONEY COMING IN, never money saved or a loss avoided. BANNED offer types, no matter how the business is described: preventing downtime, avoiding losses, cutting or saving costs, staying compliant, protecting or keeping existing revenue, reducing risk on things they already do, optimising/auditing/refreshing/speeding up/tidying up something they already run. Recovering money the recipient is already owed (tax refunds, duty drawbacks, rebates, overcharges, chargebacks) is NOT new money - it is found money, and it is BANNED as an offer. If this business sells repairs, maintenance, logistics, cleaning, compliance, efficiency or cost-saving, you MUST recast every offer as a NEW-revenue win for the recipient. Example: a handyman must NOT offer "emergency repairs to prevent downtime" (that is avoiding a loss); instead offer "get your empty units rented faster by making them move-in ready in 48 hours" (that is NEW rental income). A logistics firm must NOT offer "cut your shipping costs" (saving); instead offer "get your product onto shelves in three new states" (NEW orders).
-- FINAL SELF-CHECK before you answer: re-read every offer and ask TWO questions. One: "does the recipient make NEW money from this, or does it only save money / avoid a loss / keep what they have?" If it is not clearly NEW money coming in, DELETE that offer and replace it. Two: "does this offer contain exactly ONE mechanism, or has a second one crept in anywhere?" If any part of the offer mentions a second mechanism, strip it out or replace the offer. Every offer in your final answer must pass both tests.
-- WHO THE EMAIL GOES TO: cold email is business-to-business. If this business sells to consumers, aim every offer at business buyers instead (retailers who could stock the product, distributors, corporate accounts, partners), never at individual consumers.
-- LOW-RISK CTA: the example opener must offer to SEND something small, named in three plain words or fewer ("the details", "a short breakdown", "a short Loom") - never "book a call" or "hop on a call". NEVER describe what the artifact shows or contains: "a one-page plan showing the campaigns we would run" or "an offer sheet showing the terms" reads as a SECOND free offer stacked on the first. "Can I send over the details?" is the model. (lead_magnet offers are the exception - there the free thing IS the offer, name it properly.)
-- STIPULATION: each offer includes one fair condition that protects the seller (e.g. "leads must match an agreed target list", "guarantee starts after onboarding is complete", "capped at N per month").
-- PLAIN ENGLISH: no marketing jargon and no industry shorthand. Banned words and phrases: synergy, ROI, ROI-driven, cutting-edge, leverage, solutions, streamline, seamless, robust, scalable, best-in-class, end-to-end, ICP, SDR, BDR, GTM, go-to-market, pipeline, funnel, outbound, conversion, engagement. Say it the way a shop owner would: "your ideal customers", "a salesperson", "steady flow of new deals". A 12-year-old should understand every sentence. NEVER use an em-dash anywhere, and NEVER use a hyphen or dash in place of a comma (write "nothing needed from you, we build it" NOT "nothing needed from you - we build it"). Use commas.
-- ENGLISH ONLY: every single word in every field is English. Numbers in names must match the numbers in the body of the offer. Never leave a placeholder like "X days" or "N leads" - always pick a real, sensible number.
-- The opener is ONE sentence, 20 words or fewer, written as the first line of a cold email from this business to its buyer. Use {{{{company}}}} where the prospect's company name would go.
-- why_cold_email: one or two plain sentences explaining to a beginner WHY this offer works on cold strangers (e.g. it removes their risk, it asks for a tiny yes, it names their exact problem).
-- opener writing rule: the opener is the FIRST line of the email and must offer to SEND something small (a short Loom, a one-page plan, a sample). The page wraps it into a full ready-to-send email around it, so make it read as a natural, complete opening line.
+FORM EXAMPLES (other kinds of business - copy the FORM: how plainly it is said, how the risk is handled, how back_end explains the money. Never copy the content):
+{OFFER_FORMAT_EXAMPLES}
 
-REAL OFFER LINES THAT GOT POSITIVE REPLIES (mined from real campaigns - match this energy and concreteness, do not copy them word for word unless they genuinely fit):
+REAL OFFER LINES THAT GOT POSITIVE REPLIES (mined from real campaigns - match this energy and concreteness, do not copy them):
 {OFFER_WINNING_EXAMPLES}
 
 Reply with ONLY a JSON object, no fences, no commentary:
-{{"brief": {{"what_they_do": "<1-2 sentences>", "who_they_sell_to": "<one line>", "proof_signals": ["<fact>"], "angles": ["<angle>"]}}, "offers": [<exactly {n_expect}, each: {{"name": "<what the offer literally is, said as simply as possible in 3-8 plain words, e.g. 'Free sample of four LinkedIn posts' or 'Pay per booked meeting'. NEVER a branded, clever or campaign-style name - no product names, no titles like 'Booking Boost' or 'Growth Sprint', just a plain description a stranger understands instantly>", "problem": "<the specific high-consequence problem, 1-2 sentences>", "differentiator": "<what you do and why it beats the usual way, 1-2 sentences>", "pricing": "<the buyer-favouring pricing angle, 1 sentence>", "risk_reversal": "<the one mechanism written out as a promise, 1 sentence>", "mechanism": "<lead_magnet|pay_after_result|pay_per_result|guarantee_refund>", "stipulation": "<the fair protective condition, 1 sentence>", "opener": "<one-line example cold email opener, max 20 words>", "why_cold_email": "<plain-English reason this works on cold email, 1-2 sentences>", "appeal": <integer 1-10, how likely the target buyer is to reply>}}>]}}"""
+{{"brief": {{"what_they_do": "<1-2 sentences>", "who_they_sell_to": "<one line>", "proof_signals": ["<fact>"], "angles": ["<angle>"]}}, "offers": [<exactly {n_expect}, each: {{"name": "<what the offer literally is, 3-8 plain words, e.g. 'Free best seller listing' or 'Pay per booked meeting'. NEVER a branded or package-style name such as 'Growth Sprint' or 'Listing Refresh Package'>", "they_get": "<one sentence>", "the_deal": "<one sentence>", "back_end": "<how the seller makes money, two sentences>", "first_step": "<the buyer's smallest yes>", "buyer": "<who it is for and their situation>", "problem": "<one sentence>", "differentiator": "<one sentence>", "pricing": "<one sentence>", "risk_reversal": "<the one mechanism as a promise, one sentence. For guarantee_refund this sentence MUST contain the word refund>", "mechanism": "<lead_magnet|pay_after_result|pay_per_result|guarantee_refund>", "stipulation": "<one sentence>", "proof": "<one line word for word from the pages, or empty>", "opener": "<one-line example cold email opener, max 20 words>", "why_cold_email": "<1-2 sentences>", "appeal": <integer 1-10, how likely the target buyer is to reply>}}>]}}"""
     offers = None
     err = ""
     for attempt in (1, 2):  # one retry on a malformed reply
@@ -25722,16 +25756,17 @@ Reply with ONLY a JSON object, no fences, no commentary:
             doc = json.loads(m.group(0) if m else text)
             brief_raw = doc.get("brief") or {}
             cand = doc.get("offers")
-            lo, hi = (4, 6) if seed else (12, 18)
+            lo, hi = (4, 6) if seed else (7, 10)   # format v3 carries more per offer, so fewer offers keep one call under the proxy timeout
             if not isinstance(cand, list) or not lo <= len(cand) <= hi:
                 raise ValueError(f"got {len(cand) if isinstance(cand, list) else 'non-list'} offers")
             if not str(brief_raw.get("what_they_do") or "").strip() \
                     or not str(brief_raw.get("who_they_sell_to") or "").strip():
                 raise ValueError("brief missing what_they_do / who_they_sell_to")
             for o in cand:
-                for f in OFFER_FIELDS:
+                for f in OFFER_REQUIRED:
                     if not str(o.get(f) or "").strip():
                         raise ValueError(f"offer missing {f}")
+                o["proof"] = str(o.get("proof") or "").strip()
                 if o["mechanism"] not in OFFER_MECHANISMS:
                     raise ValueError(f"bad mechanism {o['mechanism']!r}")
                 try:
@@ -25743,24 +25778,40 @@ Reply with ONLY a JSON object, no fences, no commentary:
                 o["appeal"] = appeal
                 # Anti-stacking guard: a lead-magnet offer must never carry a
                 # paid price - that is a second mechanism sneaking in.
-                if o["mechanism"] == "lead_magnet" and re.search(
-                        r"[£$€]|\bbilled|\b(?:fixed|one.off|weekly|monthly) (?:price|fee|rate)|(?<!no )\bfee\b",
-                        str(o.get("pricing") or ""), re.I):
-                    raise ValueError(f"lead_magnet offer {o.get('name','')!r} has paid pricing")
+
             # Deterministic anti-stacking drops (the model occasionally leaks a
             # second mechanism despite the prompt; one bad offer must not sink
             # the whole generation, so drop the offender instead):
             def _stacked(o):
+                # A lead-magnet offer must never carry a paid price - that is a second mechanism
+                # sneaking in (what gets paid for later lives in back_end). Dropped, not fatal.
+                if o["mechanism"] == "lead_magnet" and re.search(
+                        r"[£$€]\s?\d|\b\d[\d,.]*\s?(?:usd|gbp|eur|dollars|pounds|euros|k\b)|\bbilled\b",
+                        _OFFER_BRACKET.sub(" ", str(o.get("pricing") or "")), re.I):
+                    return "lead magnet with a paid price"
                 # User law 2026-07-16: audits never work as offers - drop any
                 # offer built around one (service-based lead magnets instead).
                 if re.search(r"\baudit(?:s|ed|ing)?\b",
                              " ".join(str(o.get(f) or "") for f in OFFER_FIELDS), re.I):
                     return "audit offer"
+                if re.search(r"\b(?:teardown|assessment|health check|consultation|review of|critique)\b",
+                             " ".join(str(o.get(f) or "") for f in ("name", "they_get", "the_deal")), re.I):
+                    return "audit by another name"
                 # Brevity law: the visible offer (problem + differentiator) must
                 # be scannable. Drop bloated offers rather than failing the run.
                 if len(str(o.get("problem") or "").split()) \
-                        + len(str(o.get("differentiator") or "").split()) > 44:
+                        + len(str(o.get("differentiator") or "").split()) > 48:
                     return "too wordy"
+                # Format v3: the offer itself is two short plain sentences, never email copy.
+                if len(str(o.get("they_get") or "").split()) > 30 or len(str(o.get("the_deal") or "").split()) > 28:
+                    return "offer sentences too long"
+                if re.search(r"[?;:]", str(o.get("they_get") or "") + str(o.get("the_deal") or "")):
+                    return "question or colon inside the offer"
+                # Owner finding 2026-09-21: a refund for LATENESS is the one kind of offer he rejects.
+                if re.search(r"\b(?:late|miss(?:ed)? the (?:date|deadline)|not (?:delivered|live|ready) (?:on time|by|within))\b",
+                             " ".join(str(o.get(f) or "") for f in ("the_deal", "risk_reversal", "pricing")), re.I) \
+                        and re.search(r"refund|money.?back", " ".join(str(o.get(f) or "") for f in ("the_deal", "risk_reversal", "pricing")), re.I):
+                    return "lateness refund"
                 blob = " ".join(str(o.get(f) or "") for f in
                                 ("pricing", "risk_reversal", "opener", "stipulation"))
                 if o["mechanism"] != "lead_magnet" and re.search(
@@ -25800,12 +25851,21 @@ Reply with ONLY a JSON object, no fences, no commentary:
                     raise ValueError("too few clean seed offers after drops")
             else:
                 mechs = {o["mechanism"] for o in cand}
-                if mechs != set(OFFER_MECHANISMS):
+                if len(mechs) < 3:
                     raise ValueError(f"missing mechanisms: {set(OFFER_MECHANISMS) - mechs}")
-                if len(cand) < 10:
+                if len(cand) < 6:
                     raise ValueError(f"only {len(cand)} clean offers after drops")
+            # Proof is real or absent: every figure in a proof line must be on the pages we read.
+            _pages_text = " ".join([str(site.get("title") or ""), str(site.get("description") or ""), str(site.get("text") or "")]
+                                   + [str(pg.get("text") or "") for pg in site.get("pages", [])])
+            for o in cand:
+                if o["proof"] and any(n.rstrip(".,") not in _pages_text for n in re.findall(r"\d[\d,.]*", o["proof"])):
+                    o["proof"] = ""
+                if o["proof"] and not re.search(r"\d|\b(?:helped|grew|grown|took|increased|doubled|tripled|delivered|achieved|saved|generated|booked|"
+                                                r"made our|clients? like|brands? like|customers? like|worked with|trusted by|including)\b", o["proof"], re.I):
+                    o["proof"] = ""
             cand.sort(key=lambda o: -o["appeal"])  # buyer-appeal rank, best first
-            offers = [{**{f: _offer_scrub(o[f]) for f in OFFER_FIELDS},
+            offers = [{**{f: _offer_scrub(o.get(f)) for f in OFFER_FIELDS},
                        "appeal": o["appeal"]} for o in cand]
             brief = {"what_they_do": _offer_scrub(brief_raw.get("what_they_do")),
                      "who_they_sell_to": _offer_scrub(brief_raw.get("who_they_sell_to")),
@@ -25831,7 +25891,7 @@ Reply with ONLY a JSON object, no fences, no commentary:
     return 200, {"ok": True, "domain": site["domain"], "site_name": site["title"],
                  "audience": audience, "brief": brief,
                  "pages_read": ["/"] + [p["path"] for p in site.get("pages", [])],
-                 "sweep": sweep_note, "offers": offers}
+                 "sweep": sweep_note, "format": 3, "offers": offers}
 
 
 def _offer_site_from_description(desc: str, url: str = ""):
@@ -25900,7 +25960,7 @@ def offer_email(p: dict, ip: str):
     if not key:
         return 502, {"ok": False, "message": "The email writer isn't available right now. Please try again later."}
     o = p.get("offer") or {}
-    fields = {k: str(o.get(k) or "").strip()[:600] for k in
+    fields = {k: _offer_fill(str(o.get(k) or "").strip())[:600] for k in
               ("name", "problem", "differentiator", "pricing", "risk_reversal", "mechanism", "stipulation", "opener")}
     if not fields["problem"] or not fields["opener"]:
         return 400, {"ok": False, "message": "That offer looks incomplete, please generate the offers again."}
