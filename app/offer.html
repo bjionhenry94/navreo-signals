@@ -81,6 +81,18 @@
   .card .offerline { font-size: 16px; color: var(--ink); line-height: 1.45; margin-bottom: 8px; }
   .card .fixline { font-size: 14px; color: var(--ink-2); margin-bottom: 12px; }
   .card .fixline b { color: var(--ink-3); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; margin-right: 4px; }
+  .card dl.lead { display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 8px 14px; margin: 0 0 14px; }
+  .card dl.lead dt, .card dl.rows dt { font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); font-weight: 600; padding-top: 3px; }
+  .card dl.lead dd { margin: 0; font-size: 16.5px; line-height: 1.45; color: var(--ink); }
+  .card dl.rows { display: grid; grid-template-columns: 96px minmax(0,1fr); gap: 7px 14px; margin: 0 0 12px; }
+  .card dl.rows dd { margin: 0; font-size: 14.5px; color: var(--ink-2); }
+  .card .money { background: var(--bg-sunken); border: 1px solid var(--line); border-radius: 9px; padding: 10px 14px; margin-bottom: 14px; }
+  .card .money b { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-3); font-weight: 600; margin-bottom: 3px; }
+  .card .money b span { text-transform: none; letter-spacing: 0; font-weight: 400; }
+  .card .money p { font-size: 14.5px; color: var(--ink-2); margin: 0; }
+  .fill { background: #fff1c2; color: #4a3600; border-bottom: 2px solid #d9a800; padding: 0 4px; border-radius: 3px 3px 0 0; white-space: nowrap; font-size: 0.94em; }
+  .bracketnote { font-size: 13px; color: var(--ink-3); margin: -8px 0 16px; }
+  @media (max-width: 560px) { .card dl.lead, .card dl.rows { grid-template-columns: minmax(0,1fr); gap: 2px 0; } .card dl.lead dd, .card dl.rows dd { margin-bottom: 8px; } }
   .card .emailfield { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
   .card .field { margin-bottom: 10px; font-size: 14.5px; color: var(--ink-2); }
   .card .field b { display: block; font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.05em;
@@ -134,10 +146,11 @@
     <details class="how">
       <summary>What makes a good offer?</summary>
       <ol>
-        <li><b>A real problem.</b> New business your buyer is missing out on.</li>
-        <li><b>What you'd do about it.</b> And why your way beats the usual way.</li>
-        <li><b>Pricing that favours the buyer.</b> Cheaper than the alternative, or tied to results.</li>
-        <li><b>One simple promise.</b> A free thing first, pay after the work, pay per result, or a refund if we miss. Always just one, never stacked.</li>
+        <li><b>Clear on first read.</b> A stranger outside your industry understands what they get and what it costs.</li>
+        <li><b>Big enough to matter.</b> The whole job or a serious part of it. A free first piece can be small, as long as it is real finished work.</li>
+        <li><b>True to what you do.</b> The real benefit of your real service, never a claim bolted on.</li>
+        <li><b>One simple promise.</b> A free thing first, pay after the work, pay per result, or a refund if the result is missed. Just one, never stacked, and never a refund only for being late.</li>
+        <li><b>It makes you money too.</b> Every offer shows how the free or low-risk start turns into paid work.</li>
       </ol>
     </details>
   </div>
@@ -155,6 +168,7 @@
       <button class="ghost" onclick="copyAll()">Copy everything</button>
       <span class="note">Nothing is saved. Download before you leave.</span>
     </div>
+    <p class="bracketnote">Figures in <span class="fill">[brackets]</span> are our suggestions. Change them to what you can really deliver before you use an offer.</p>
     <div class="filters" id="filters"></div>
     <div id="cards"></div>
   </div>
@@ -172,7 +186,7 @@
 <div class="toast" id="toast"></div>
 
 <script>
-const FIELDS = ["name","problem","differentiator","pricing","risk_reversal","mechanism","appeal","stipulation","opener","why_cold_email"];
+const FIELDS = ["name","they_get","the_deal","back_end","first_step","buyer","pricing","risk_reversal","stipulation","proof","mechanism","appeal","problem","differentiator","opener","why_cold_email"];
 let FILTER = "all";
 const MECH = {
   lead_magnet:      "Free thing first",
@@ -189,6 +203,8 @@ let SOURCE = {};        // {url} or {description} - what this run was built from
 let FROM_DESC = false;  // true when offers came from a typed description
 
 function esc(s){ const d=document.createElement("div"); d.textContent=s??""; return d.innerHTML; }
+// Bracketed figures are suggestions for the owner to confirm: show them as highlighted chips.
+function fills(s){ return esc(s).replace(/\[([^\[\]]{1,60})\]/g, '<span class="fill">[$1]</span>'); }
 function toast(msg){ const t=document.getElementById("toast"); t.textContent=msg;
   t.classList.add("show"); setTimeout(()=>t.classList.remove("show"), 2600); }
 
@@ -325,12 +341,22 @@ function cardHtml(o, i){
   return `
     <div class="head"><span class="badge ${esc(o.mechanism)}">${esc(MECH[o.mechanism]||o.mechanism)}</span><h3>${esc(o.name)}</h3>${o.appeal
       ? `<span class="appeal" title="How likely your buyer is to reply, scored 1-10"><b>${esc(o.appeal)}</b>/10 buyer appeal</span>` : ""}</div>
-    <p class="offerline">${esc(o.differentiator)}</p>
-    <p class="fixline"><b>Fixes:</b> ${esc(o.problem)}</p>
-    <details class="why"><summary>Full details</summary>
-      <div class="field"><b>The promise</b>${esc(o.risk_reversal)}</div>
-      <div class="field"><b>The pricing angle</b>${esc(o.pricing)}</div>
-      <div class="field"><b>One fair condition</b>${esc(o.stipulation)}</div>
+    <dl class="lead">
+      <dt>They get</dt><dd>${fills(o.they_get || o.differentiator)}</dd>
+      ${o.the_deal ? `<dt>The deal</dt><dd>${fills(o.the_deal)}</dd>` : ""}
+    </dl>
+    ${o.back_end ? `<div class="money"><b>How this makes you money <span>(for your eyes only, never in the email)</span></b><p>${fills(o.back_end)}</p></div>` : ""}
+    <dl class="rows">
+      ${o.first_step ? `<dt>First step</dt><dd>${fills(o.first_step)}</dd>` : ""}
+      ${o.buyer ? `<dt>For</dt><dd>${esc(o.buyer)}</dd>` : ""}
+      <dt>Price</dt><dd>${fills(o.pricing)}</dd>
+      <dt>Their risk</dt><dd>${fills(o.risk_reversal)}</dd>
+      <dt>Condition</dt><dd>${fills(o.stipulation)}</dd>
+      <dt>Proof</dt><dd>${o.proof ? esc(o.proof) : `<span style="color:var(--ink-3)">None found on your site, so none cited. Add a real result of your own.</span>`}</dd>
+    </dl>
+    <details class="why"><summary>Why this works</summary>
+      <div class="field"><b>The problem it fixes</b>${esc(o.problem)}</div>
+      <div class="field"><b>Why your way is better</b>${esc(o.differentiator)}</div>
       <div class="field"><b>Why this works on cold email</b>${esc(o.why_cold_email)}</div>
     </details>
     <div class="field emailfield"><b>The cold email you'd send</b>
@@ -392,8 +418,8 @@ async function moreLike(i){
 
 function csvCell(s){ s = String(s??""); return '"' + s.replace(/"/g,'""') + '"'; }
 function downloadCsv(){
-  const header = ["Offer name","The problem","What you'd do and why it's better","Pricing angle",
-                  "The promise","Mechanism","Buyer appeal (1-10)","One fair condition","Example first line","Why this works on cold email","Full cold email"];
+  const header = ["Offer name","They get","The deal","How this makes you money","First step","Who it is for","Price","Their risk","Condition","Proof",
+                  "Mechanism","Buyer appeal (1-10)","The problem it fixes","Why your way is better","Example first line","Why this works on cold email","Full cold email"];
   const rows = [header.join(",")];
   for(const o of OFFERS){ rows.push(FIELDS.map(f => csvCell(f==="mechanism" ? (MECH[o[f]]||o[f]) : o[f])).concat(csvCell(exportEmail(o))).join(",")); }
   const blob = new Blob(["﻿" + rows.join("\r\n")], {type: "text/csv;charset=utf-8"});
@@ -406,11 +432,17 @@ function downloadCsv(){
 
 function offerText(o, i){
   return `OFFER ${i+1}: ${o.name} [${MECH[o.mechanism]||o.mechanism}${o.appeal?", buyer appeal "+o.appeal+"/10":""}]
-The problem: ${o.problem}
-What you'd do, and why it's better: ${o.differentiator}
-Pricing angle: ${o.pricing}
-The promise: ${o.risk_reversal}
-One fair condition: ${o.stipulation}
+They get: ${o.they_get || ""}
+The deal: ${o.the_deal || ""}
+How this makes you money: ${o.back_end || ""}
+First step: ${o.first_step || ""}
+For: ${o.buyer || ""}
+Price: ${o.pricing}
+Their risk: ${o.risk_reversal}
+Condition: ${o.stipulation}
+Proof: ${o.proof || "none cited"}
+The problem it fixes: ${o.problem}
+Why your way is better: ${o.differentiator}
 Why this works on cold email: ${o.why_cold_email}
 
 The cold email you'd send:
