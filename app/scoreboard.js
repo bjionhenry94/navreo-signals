@@ -143,6 +143,7 @@
   function renderScoreboard(d) {
     var t = d.totals, cards = d.cards || {};
     var behind = t.behind || 0;
+    var pot = (t.counted || 0) + (t.booked || 0) + (t.said_yes_open || 0);
     var vClass = behind > 0 ? "behind" : "ok";
     var vTxt = behind > 0 ? "Behind by " + behind : (behind < 0 ? "Ahead by " + (-behind) : "On track");
     var resp = cards.avg_response_mins;
@@ -181,7 +182,8 @@
       '<div class="eyebrow">Meetings this month</div>' +
       '<div class="hero"><div class="big">' + t.counted + ' <small>of ' + t.target + "</small></div>" +
         '<div class="rt"><span class="verdict ' + vClass + '">' + vTxt + "</span>" +
-          '<p class="pace">At this pace we finish on ' + t.pace + ". Target " + t.target + ".</p></div></div>" +
+          '<p class="pace">At this pace we finish on ' + t.pace + ". Target " + t.target + ".</p>" +
+          '<p class="potential"><b>' + pot + '</b> total potential meetings <span class="pnote">meeting-ready + booked + attended</span></p></div></div>' +
       heroBar(t) +
       '<div class="cards">' + cardHtml + "</div>" +
       '<div class="sec"><h2>Client scoreboard</h2>' +
