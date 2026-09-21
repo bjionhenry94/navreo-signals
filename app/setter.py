@@ -9157,6 +9157,7 @@ NAVREO_HOSTED_CLIENTS = (
     {"token": "revive",      "client_id": "revive",       "label": "REViVE",       "shared": "C0BP9A6D28H", "fresh_lane": "app"},    # #revive-navreo
     {"token": "greenshift",  "client_id": "greenshift",   "label": "Greenshift",   "shared": "C0BQ954RBAL", "fresh_lane": "app"},    # #greenshift-navreo
     {"token": "remission",   "client_id": "remission",    "label": "Remission",    "shared": "C0BUYT673Q8", "fresh_lane": "app"},    # #remission-navreo
+    {"token": "adverio",     "client_id": "adverio",      "label": "Adverio",      "shared": "C0BTSTD9ZGV", "fresh_lane": "app"},    # #adverio-navreo
 )
 
 # Campaign-name markers that mean "a client, not Navreo-own" (internal lane
