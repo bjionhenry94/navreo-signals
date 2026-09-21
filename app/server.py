@@ -25502,6 +25502,37 @@ def _offer_fetch_extra_pages(base: str, homepage_html: str):
     return [{"path": p, "text": results[p]} for p in candidates if p in results]
 
 
+def _offer_parallel_extract(urls: list, timeout: int = 25) -> dict:
+    """Read pages through Parallel's Extract API (renders JavaScript sites and
+    gets past bot walls our plain fetch can't). Returns {url: clean text}.
+    Best-effort: no key, an error or a timeout just returns {} and the caller
+    falls back to the plain fetch."""
+    key = os.environ.get("PARALLEL_API_KEY", "").strip()
+    if not key or not urls:
+        return {}
+    try:
+        req = urllib.request.Request(
+            "https://api.parallel.ai/v1/extract",
+            data=json.dumps({"urls": urls,
+                             "objective": "What this company sells, who it sells to, pricing, results and named customers"}).encode(),
+            headers={"x-api-key": key, "Content-Type": "application/json",
+                     "User-Agent": "Mozilla/5.0 (compatible; NavreoOfferMaker)"})
+        with urllib.request.urlopen(req, timeout=timeout, context=SSL_CTX) as resp:
+            data = json.loads(resp.read().decode("utf-8", "ignore"))
+    except Exception:  # noqa: BLE001 — best-effort, never fatal
+        return {}
+    out = {}
+    for r in data.get("results") or []:
+        text = r.get("full_content") or "\n".join(r.get("excerpts") or [])
+        text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)   # markdown links/images -> their label
+        text = re.sub(r"https?://\S+", " ", text)
+        text = re.sub(r"[#*_>|`]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > 150:
+            out[(r.get("url") or "").rstrip("/")] = {"text": text, "title": (r.get("title") or "").strip()}
+    return out
+
+
 def _offer_fetch_site(url: str, deep: bool = True):
     """Fetch the homepage (and, when deep=True, a handful of subpages) and strip
     to text. Raises ValueError with a plain-English message on anything
@@ -25525,21 +25556,41 @@ def _offer_fetch_site(url: str, deep: bool = True):
         ip = ipaddress.ip_address(info[4][0])
         if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
             raise ValueError(f"We couldn't reach {domain}. Check the address and try again.")
+    base = url.split("//", 1)[0] + "//" + host
+    # Parallel reads the homepage in the background (it renders JavaScript
+    # sites and gets past bot walls) while the plain fetch below runs too.
+    px: dict = {}
+    px_thread = threading.Thread(target=lambda: px.update(_offer_parallel_extract([url], timeout=15)), daemon=True)
+    px_thread.start()
+    raw, fetch_err = "", ""
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0 (compatible; NavreoOfferMaker)"})
         with urllib.request.urlopen(req, timeout=15, context=SSL_CTX) as resp:
             raw = resp.read(500_000).decode("utf-8", "ignore")
     except Exception as e:  # noqa: BLE001
-        raise ValueError(f"We couldn't open {domain} ({str(e)[:80]}). "
-                         "Check the address works in your browser, then try again.")
+        fetch_err = str(e)[:80]
     title = re.search(r"<title[^>]*>([^<]+)</title>", raw, re.I)
     desc = re.search(r'<meta[^>]+(?:name|property)=["\'](?:og:)?description["\'][^>]+content=["\']([^"\']+)', raw, re.I)
     text = _offer_strip_html(raw)
+    pages = _offer_fetch_extra_pages(base, raw) if (deep and raw) else []
+    px_thread.join(16)
+    home = px.get(url.rstrip("/")) or px.get(base)
+    if home and len(home["text"]) > len(text):
+        text = home["text"]
+    if deep and not pages and home:
+        # Our own fetch couldn't read the subpages, so let Parallel try the two
+        # that matter most. Dead addresses are slow there, hence only two.
+        for u, r in _offer_parallel_extract([base + "/about", base + "/pricing"], timeout=15).items():
+            if u.startswith(base) and u[len(base):]:
+                pages.append({"path": u[len(base):], "text": r["text"][:2_000]})
     if len(text) < 200:
+        if fetch_err:
+            raise ValueError(f"We couldn't open {domain} ({fetch_err}). "
+                             "Check the address works in your browser, then try again.")
         raise ValueError(f"We reached {domain} but couldn't read enough of the page to work with. "
                          "If your site is mostly images or loads with JavaScript, email us the address instead.")
-    base = url.split("//", 1)[0] + "//" + host
-    pages = _offer_fetch_extra_pages(base, raw) if deep else []
+    if not title and home and home.get("title"):
+        title = re.match(r"(.+)", home["title"])
     return {"domain": domain,
             "title": (title.group(1).strip() if title else domain),
             "description": (desc.group(1).strip() if desc else ""),
