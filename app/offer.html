@@ -63,11 +63,6 @@
   .actions button.ghost { background: #fff; color: var(--ink); }
   .actions button:hover { opacity: 0.88; }
   .actions .note { font-size: 13px; color: var(--ink-3); }
-  .filters { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
-  .filters button { font: inherit; font-size: 13px; font-weight: 600; padding: 7px 14px;
-    border-radius: 20px; border: 1.5px solid var(--line-2); background: #fff; color: var(--ink-2); cursor: pointer; }
-  .filters button:hover { border-color: var(--ink-3); }
-  .filters button.on { background: var(--ink); border-color: var(--ink); color: #fff; }
   .appeal { margin-left: auto; font-size: 12.5px; font-weight: 600; color: var(--ink-3); white-space: nowrap; }
   .appeal b { color: var(--ink); font-size: 14px; }
   .card { border: 1px solid var(--line-2); border-radius: var(--radius); padding: 20px; margin-bottom: 14px; background: var(--card); }
@@ -169,7 +164,6 @@
       <span class="note">Nothing is saved. Download before you leave.</span>
     </div>
     <p class="bracketnote">Figures in <span class="fill">[brackets]</span> are our suggestions. Change them to what you can really deliver before you use an offer.</p>
-    <div class="filters" id="filters"></div>
     <div id="cards"></div>
   </div>
 
@@ -187,7 +181,6 @@
 
 <script>
 const FIELDS = ["name","they_get","the_deal","back_end","first_step","buyer","pricing","risk_reversal","stipulation","proof","mechanism","appeal","problem","differentiator","opener","why_cold_email"];
-let FILTER = "all";
 const MECH = {
   lead_magnet:      "Free thing first",
   pay_after_result: "Pay after the work",
@@ -315,7 +308,6 @@ async function doGenerate(payload, phases, btnId){
     BRIEF = d.brief || null; PAGES = d.pages_read || [];
     FROM_DESC = !!d.from_description;
     SOURCE = payload.description ? {description: payload.description} : {url: payload.url};
-    FILTER = "all";
     document.getElementById("hero").classList.add("done");
     render();
   } catch(e) {
@@ -339,7 +331,7 @@ function whoHeader(){
 
 function cardHtml(o, i){
   return `
-    <div class="head"><span class="badge ${esc(o.mechanism)}">${esc(MECH[o.mechanism]||o.mechanism)}</span><h3>${esc(o.name)}</h3>${o.appeal
+    <div class="head"><h3>${esc(o.name)}</h3>${o.appeal
       ? `<span class="appeal" title="How likely your buyer is to reply, scored 1-10"><b>${esc(o.appeal)}</b>/10 buyer appeal</span>` : ""}</div>
     <dl class="lead">
       <dt>They get</dt><dd>${fills(o.they_get || o.differentiator)}</dd>
@@ -366,24 +358,11 @@ function cardHtml(o, i){
     <button class="morebtn" id="more-${i}" onclick="moreLike(${i})">More like this</button>`;
 }
 
-function setFilter(f){ FILTER = f; render(false); }
-
-function renderFilters(){
-  const wrap = document.getElementById("filters");
-  const opts = [["all", "All offers", OFFERS.length]].concat(
-    Object.keys(MECH).map(k => [k, MECH[k], OFFERS.filter(o=>o.mechanism===k).length])
-      .filter(([,,n]) => n > 0));
-  wrap.innerHTML = opts.map(([k, label, n]) =>
-    `<button class="${FILTER===k?"on":""}" onclick="setFilter('${k}')">${esc(label)} (${n})</button>`).join("");
-}
-
 function render(scroll = true){
   const wrap = document.getElementById("cards");
   document.getElementById("whoheader").innerHTML = whoHeader();
-  renderFilters();
   wrap.innerHTML = "";
   OFFERS.forEach((o, i) => {
-    if(FILTER !== "all" && o.mechanism !== FILTER) return;
     const c = document.createElement("div"); c.className = "card"; c.id = "card-" + i;
     c.innerHTML = cardHtml(o, i);
     wrap.appendChild(c);
@@ -431,7 +410,7 @@ function downloadCsv(){
 }
 
 function offerText(o, i){
-  return `OFFER ${i+1}: ${o.name} [${MECH[o.mechanism]||o.mechanism}${o.appeal?", buyer appeal "+o.appeal+"/10":""}]
+  return `OFFER ${i+1}: ${o.name} ${o.appeal?"[buyer appeal "+o.appeal+"/10]":""}
 They get: ${o.they_get || ""}
 The deal: ${o.the_deal || ""}
 How this makes you money: ${o.back_end || ""}
