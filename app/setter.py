@@ -8925,6 +8925,7 @@ NAVREO_HOSTED_CLIENTS = (
     {"token": "altius",      "client_id": "altius reach", "shared": "C0BKF872NUV", "fresh_lane": "make"},   # #altiusreach-navreo
     {"token": "revive",      "client_id": "revive",       "shared": "C0BP9A6D28H", "fresh_lane": "app"},    # #revive-navreo
     {"token": "greenshift",  "client_id": "greenshift",   "shared": "C0BQ954RBAL", "fresh_lane": "app"},    # #greenshift-navreo
+    {"token": "adverio",     "client_id": "adverio",      "shared": "C0BTSTD9ZGV", "fresh_lane": "app"},    # #adverio-navreo
 )
 
 # Campaign-name markers that mean "a client, not Navreo-own" (internal lane
