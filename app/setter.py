@@ -16497,6 +16497,13 @@ def _redraft_sync(payload):
                                     str(ident.get("lead_email") or "").strip().lower(),
                                     str(ident.get("message_id") or ""))
             if not row:
+                # A timed-out Supabase read returns None, not [] — that is a
+                # transient failure, not a missing reply, and must not be
+                # reported as "Queue row not found" (which reads as "your
+                # reply is gone" and sends the reviewer hunting). Live 2026-09-22:
+                # every table was timing out while this 404 was on screen.
+                if rows is None and _SB:
+                    return 503, {"error": "The database is slow right now — try that again in a moment."}
                 return 404, {"error": "Queue row not found."}
             qid = row.get("id")
         _stage("load_row", _t)
