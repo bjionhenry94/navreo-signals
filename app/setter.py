@@ -16485,7 +16485,20 @@ def _redraft_sync(payload):
         rows = _SB("GET", f"{QUEUE_TABLE}?id=eq.{qid}&select=*") if _SB else None
         row = rows[0] if isinstance(rows, list) and rows else None
         if not row:
-            return 404, {"error": "Queue row not found."}
+            # A stale id is not a missing reply: re-intake DELETES a queue row
+            # and re-inserts it under a NEW id, so a tab open across that swap
+            # regenerates against a dead id ("Couldn't regenerate the draft:
+            # Queue row not found", owner report 2026-09-22). Send and dismiss
+            # already re-resolve on the reply's own identity; do the same here.
+            ident = payload.get("identity")
+            if isinstance(ident, dict):
+                row = _existing_row(ident.get("workspace") or WORKSPACE,
+                                    ident.get("smartlead_campaign_id"),
+                                    str(ident.get("lead_email") or "").strip().lower(),
+                                    str(ident.get("message_id") or ""))
+            if not row:
+                return 404, {"error": "Queue row not found."}
+            qid = row.get("id")
         _stage("load_row", _t)
         _t = _time.time()
         if _agent_th and str(row.get("agent_id") or "") == agent_hint:

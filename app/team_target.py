@@ -39,8 +39,11 @@ PER_CLIENT_TARGET = 4
 _POSITIVE_CATS = ("Interested", "Call Booked", "Meeting Request", "Information Request")
 
 _CACHE = {"ts": 0.0, "data": None}
-_CACHE_TTL_S = 45
-_SB_CACHE = {"ts": 0.0, "data": None}         # scoreboard read model (own 45 s cache)
+# Lazy request-driven cache (no background timer): re-reads Supabase only when the
+# page is loaded AND the cached copy is older than this. 5 min trims repeat reads
+# on active refresh; a new meeting request shows within this window (owner 2026-09-22).
+_CACHE_TTL_S = 300
+_SB_CACHE = {"ts": 0.0, "data": None}         # scoreboard read model (shares _CACHE_TTL_S)
 
 
 # ── time helpers ────────────────────────────────────────────────────────────

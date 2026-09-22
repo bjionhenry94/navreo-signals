@@ -2367,6 +2367,29 @@ def test_route_queue_action_recovers_a_stale_row_id():
          s2 == 404, (s2, r2))
 
 
+def test_route_queue_redraft_recovers_a_stale_row_id():
+    """Owner report 2026-09-22: "Couldn't regenerate the draft: Queue row not
+    found". Same re-intake id swap the send path already survives - redraft
+    must re-resolve on the identity too, and must still 404 without one."""
+    sb, http = fresh_setter()
+    ident = {"workspace": "navreo", "smartlead_campaign_id": 222,
+             "lead_email": "regen@y.com", "message_id": "m-regen"}
+    sb.queue.append({"id": 951, "status": "needs_review", "reply_body": "sure, send it",
+                     "reply_subject": "hi", "agent_id": None, **ident})
+
+    s404, r404 = setter._redraft_sync({"id": 950})
+    check("stale id: redraft with no identity 404s as before",
+         s404 == 404 and r404 == {"error": "Queue row not found."}, (s404, r404))
+
+    s2, r2 = setter._redraft_sync({"id": 950, "identity": {**ident, "message_id": "no-such-mid"}})
+    check("stale id: redraft on an unmatched identity 404s rather than drafting someone else's reply",
+         s2 == 404, (s2, r2))
+
+    s3, r3 = setter._redraft_sync({"id": 950, "identity": ident})
+    check("stale id: redraft re-resolves onto the reply's current row",
+         not (s3 == 404 and isinstance(r3, dict) and r3.get("error") == "Queue row not found."), (s3, r3))
+
+
 # ── real Smartlead sub-sequence enrolment ───────────────────────────────────
 
 def _subsequence_fixture(sb, http, campaign_id=3591996, sub_id=3633403, lead_id=42,
