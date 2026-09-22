@@ -15728,11 +15728,13 @@ def _heyreach_sync_bg():
         _HEYREACH_SYNC_LOCK.release()
 
 
-# ── Smartlead mailbox → Supabase daily sweep (pg_cron → pg_net → POST
-# /api/cron/mailbox-sync). Was a render.yaml cron job, but this service isn't
-# Blueprint-managed so that job never existed in Render — it ran exactly once
-# (the manual 2026-07-08 test) and then never again. Same fix as the signal
-# autopull: schedule it through the mechanism that provably fires here.
+# ── Smartlead mailbox → Supabase daily sweep. RUNS ONLY as the Render cron job
+# `navreo-mailbox-sync` (crn-d973uaeq1p3s738c5mgg, 04:30 UTC — it fires daily,
+# see its logs / app_activity_log). The in-process runner below used to be
+# started by a pg_cron → pg_net POST to /api/cron/mailbox-sync at the same
+# minute; that endpoint was RETIRED 2026-09-22 after the two runs raced and
+# zeroed campaign_count fleet-wide (see the handler). Lock + runner kept only
+# for a deliberate manual revert.
 _MAILBOX_SYNC_LOCK = threading.Lock()
 # ── Backstop reply-sync (pg_cron → pg_net → POST /api/cron/reply-sync, ~3 min) ─
 # Pulls the Smartlead master inbox for replies since a stored watermark and
@@ -18045,8 +18047,25 @@ def _fleet_capacity_build(days: int) -> dict:
             rows = resp
             break
         time.sleep(0.8)
+    degraded = None
     if rows is None:
-        raise RuntimeError(f"fleet_capacity_daily: no rows after retries ({type(resp).__name__})")
+        if isinstance(resp, list):
+            # The RPC answered cleanly with ZERO rows. It joins on
+            # mailboxes.campaign_count > 0, so this is the mirror reporting no
+            # attached box in ANY workspace — a sync fault, not a DB hiccup.
+            # 2026-09-22: two 04:30 syncs raced and one pruned campaign_count
+            # to 0 fleet-wide; raising here 502'd this endpoint all morning and
+            # the Mailboxes hub's Actively-sending / Total-capacity columns read
+            # "—". Serve an empty base instead: the caller overlays the daily
+            # cap-cron history blob + live pools on top, so every recorded day
+            # keeps its real ceiling. Flagged so the cache holds it only
+            # briefly and the payload says so.
+            print("[fleet-capacity] WARNING fleet_capacity_daily returned 0 rows "
+                  "(mirror has no attached mailboxes?) — serving history-only base",
+                  file=sys.stderr)
+            rows, degraded = [], "rpc_empty"
+        else:
+            raise RuntimeError(f"fleet_capacity_daily: no rows after retries ({type(resp).__name__})")
     per_ws: dict = {}
     for r in rows:
         if not isinstance(r, dict):
@@ -18075,8 +18094,11 @@ def _fleet_capacity_build(days: int) -> dict:
                 seen[i] = True
         cap[ws] = arr
     cap["__all"] = [total[i] if seen[i] else None for i in range(len(axis))]
-    return {"days": axis, "capacity": cap,
-            "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
+    out = {"days": axis, "capacity": cap,
+           "asof": _dtmod.datetime.utcnow().isoformat() + "Z"}
+    if degraded:
+        out["degraded"] = degraded
+    return out
 
 
 _CLIENT_CAP = {"data": {}, "ts": 0.0}
@@ -19001,8 +19023,27 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
             else:
                 return {"error": "capacity_unavailable", "message": str(e)[:200]}, 502
         else:
-            with _FLEET_CAP_LOCK:
-                _FLEET_CAP[days] = {"data": base, "ts": time.time()}
+            today_iso = _dtmod.date.today().isoformat()
+            cached_real = bool(ent) and not ent["data"].get("degraded") \
+                and (ent["data"].get("days") or [None])[-1] == today_iso
+            if base.get("degraded") and cached_real:
+                # The RPC just came back empty but we still hold a real series
+                # whose axis ends today: keep serving THAT one — flagged, so
+                # consumers can tell — and re-check the RPC in ~5 min, not on
+                # every call. Once its axis is a day old the fresh history-only
+                # base takes over instead, so a stale axis is never pinned.
+                keep = ent["data"]
+                base = dict(keep)
+                base["degraded"] = "rpc_empty_pinned"
+                ts = time.time() - (_FLEET_CAP_TTL_S - 300)
+                with _FLEET_CAP_LOCK:
+                    _FLEET_CAP[days] = {"data": keep, "ts": ts}
+            else:
+                # A history-only base is cached ~5 min, not the full hour, so
+                # the real series returns as soon as the mirror does.
+                ts = time.time() - (_FLEET_CAP_TTL_S - 300) if base.get("degraded") else time.time()
+                with _FLEET_CAP_LOCK:
+                    _FLEET_CAP[days] = {"data": base, "ts": ts}
     # per-client caps ride outside the 1h series cache so they populate as soon
     # as the restore sweep warms (own 10-min cache).
     out = dict(base)
@@ -27947,11 +27988,30 @@ class Handler(SimpleHTTPRequestHandler):
                                  daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
             if path == "/api/cron/mailbox-sync":
-                if _MAILBOX_SYNC_LOCK.locked():
-                    return self._json({"ok": True, "started": False, "busy": True}, 200)
-                log_activity(path, actor="cron", action="sync", entity="mailboxes")
-                threading.Thread(target=_mailbox_sync_bg, daemon=True).start()
-                return self._json({"ok": True, "started": True}, 202)
+                # RETIRED 2026-09-22. The Smartlead→Supabase mailbox sync runs
+                # as the Render cron job `navreo-mailbox-sync` (render.yaml,
+                # 04:30 UTC, on its own box). A pg_cron job still POSTs here at
+                # the SAME minute, and this block used to run a second,
+                # identical ~25-min sweep INSIDE the web process. The two raced
+                # on the mirror: each stamps rows with its own start time, and
+                # whichever wrote last made the other's "stale-attached" prune
+                # (last_synced_at < my stamp) match every attached box. On
+                # 2026-09-22 that zeroed campaign_count fleet-wide (12,041
+                # boxes), emptied the fleet_capacity_daily RPC and blanked the
+                # Mailboxes hub's capacity columns all morning; the in-app run
+                # had been losing the same race (exit 1) on other days too. It
+                # was also exactly the kind of heavy in-process job the web box
+                # must not run. Answered and logged rather than 404'd so the
+                # retirement is visible in the activity feed. To run a sync by
+                # hand, trigger the Render cron job. To revert: delete this
+                # block (the runner _mailbox_sync_bg is still defined).
+                log_activity(path, payload={"retired": True,
+                                            "superseded_by": "render cron navreo-mailbox-sync"},
+                             actor="cron", action="mailbox-sync-retired",
+                             entity="mailboxes")
+                return self._json({"ok": True, "retired": True, "started": False,
+                                   "message": "Superseded by the Render cron job "
+                                              "navreo-mailbox-sync (04:30 UTC)."}, 200)
             if path == "/api/cron/reply-caps":
                 # RETIRED 2026-07-28. This used to hand Outlook cap tiering to
                 # the standalone audit service. That engine ignores the
