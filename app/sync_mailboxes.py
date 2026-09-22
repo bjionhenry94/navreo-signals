@@ -486,10 +486,17 @@ def prune_stale_attached(now_iso, ws_pulled, ws_failed, supabase_url, supabase_k
         # A live fleet never sheds most of its attached boxes between two daily
         # syncs. A prune that would zero half or more of what is attached right
         # now is a fault (truncated or duplicate run), not dead boxes — refuse
-        # it and say so loudly; the next clean run re-evaluates.
+        # it and say so loudly; the next clean run re-evaluates. The absolute
+        # floor keeps a 2-box workspace prunable when 1 box really leaves: a
+        # mass-zeroing is by definition large.
         attached = verify_count("mailboxes", f"workspace=eq.{wid}&campaign_count=gt.0",
-                                supabase_url, supabase_key) or 0
-        if attached and stale * 2 >= attached:
+                                supabase_url, supabase_key)
+        if attached is None:
+            # The guard's own count failed: fail CLOSED. Never zero anything on
+            # a count we could not take — the next clean run re-evaluates.
+            log(f"[{wid}] prune SKIPPED — could not count attached mailboxes, refusing to prune blind")
+            continue
+        if attached and stale >= PRUNE_REFUSE_MIN and stale * 2 >= attached:
             log(f"[{wid}] prune REFUSED — {stale} of {attached} attached mailbox(es) read as stale "
                 "(>= 50%); implausible for a live fleet, campaign_count left untouched")
             continue
@@ -503,6 +510,8 @@ def prune_stale_attached(now_iso, ws_pulled, ws_failed, supabase_url, supabase_k
 # A mirror row refreshed within this window of the run start is alive — by
 # this run or by one overlapping it — and is never "stale-attached".
 STALE_GRACE = timedelta(hours=6)
+# The >= 50% refusal only arms at this many stale boxes (see prune_stale_attached).
+PRUNE_REFUSE_MIN = 10
 
 # Rows untouched for this long are treated as gone from Smartlead and deleted.
 # Generous on purpose: a single truncated pull (Smartlead paginates short under
@@ -677,18 +686,22 @@ def main():
             # URL-encode the timestamp: its "+00:00" offset reads as a space
             # in a query string and 400s the request.
             from urllib.parse import quote as _q
-            # gte, not eq: a sync overlapping this one re-stamps rows a few
-            # seconds later, and that must not read as "this run wrote nothing"
-            # (2026-09-22 — exactly how the losing run paged as exit 1). Rows
-            # stamped at or after our start are fresh whichever run wrote them.
+            # Fresh = stamped within STALE_GRACE of this run's start — the same
+            # cutoff the prune uses. Anchoring on our OWN stamp is wrong under
+            # overlap: both runs upsert every row and the last writer's stamp
+            # wins per row, so a run whose rows were re-stamped seconds later by
+            # another run counted 0 "written" and paged as exit 1 (2026-09-22).
+            # A truncated write still fails: rows our batches never reached
+            # carry yesterday's stamp, well before the cutoff.
+            fresh_since = _q((now - STALE_GRACE).isoformat())
             m_run = verify_count("mailboxes",
-                                 f"workspace=eq.{wid}&last_synced_at=gte.{_q(now_iso_str)}",
+                                 f"workspace=eq.{wid}&last_synced_at=gte.{fresh_since}",
                                  supabase_url, supabase_key)
             s_total = verify_count("mailbox_stats_daily",
                                    f"stat_date=eq.{today_str}&workspace=eq.{wid}",
                                    supabase_url, supabase_key)
             skipped_stats = wid in stats_skipped
-            log(f"[{wid}] pulled={pulled} mailboxes_written_this_run={m_run} "
+            log(f"[{wid}] pulled={pulled} mailboxes_fresh={m_run} "
                 f"stats_total_today={s_total}"
                 f"{' (metrics unavailable this run — stats left at last-known)' if skipped_stats else ''}")
             # caps/roster must reconcile (at least our pulled count must be fresh;

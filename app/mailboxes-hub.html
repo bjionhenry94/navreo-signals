@@ -1530,13 +1530,20 @@ table.heat tr.heat-all + tr td{padding-top:9px}
   // /api/fleet-capacity → { client_caps:{Name:cap/day}, capacity:{ws:[series]}, days }.
   // The SAME source the Analytics page uses for real daily send capacity — feeds
   // the heat map's Capacity-used column (sent/day ÷ capacity/day).
-  var capTries = 0;
+  var capTries = 0, capDegradedPolls = 0;
   function loadCap() {
     return fetch("/api/fleet-capacity?days=30", { credentials: "same-origin" })
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
-        if (j && (j.client_caps || j.capacity)) { capTries = 0; S.cap = j; renderHeat(); }
-        else capRetry();
+        if (!(j && (j.client_caps || j.capacity))) return capRetry();
+        S.cap = j;
+        try { renderHeat(); } catch (e) { console.error("renderHeat", e); }   // a render fault must never become a refetch loop
+        if (j.degraded) {
+          // History-only or pinned series (the server's capacity RPC is empty):
+          // keep re-polling every 60s for up to an hour so the real series
+          // lands without a reload once the mailbox mirror recovers.
+          if (capDegradedPolls < 60) { capDegradedPolls++; setTimeout(loadCap, 60000); }
+        } else { capTries = 0; capDegradedPolls = 0; }
       })
       .catch(capRetry);
   }

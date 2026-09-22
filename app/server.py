@@ -15728,11 +15728,13 @@ def _heyreach_sync_bg():
         _HEYREACH_SYNC_LOCK.release()
 
 
-# ── Smartlead mailbox → Supabase daily sweep (pg_cron → pg_net → POST
-# /api/cron/mailbox-sync). Was a render.yaml cron job, but this service isn't
-# Blueprint-managed so that job never existed in Render — it ran exactly once
-# (the manual 2026-07-08 test) and then never again. Same fix as the signal
-# autopull: schedule it through the mechanism that provably fires here.
+# ── Smartlead mailbox → Supabase daily sweep. RUNS ONLY as the Render cron job
+# `navreo-mailbox-sync` (crn-d973uaeq1p3s738c5mgg, 04:30 UTC — it fires daily,
+# see its logs / app_activity_log). The in-process runner below used to be
+# started by a pg_cron → pg_net POST to /api/cron/mailbox-sync at the same
+# minute; that endpoint was RETIRED 2026-09-22 after the two runs raced and
+# zeroed campaign_count fleet-wide (see the handler). Lock + runner kept only
+# for a deliberate manual revert.
 _MAILBOX_SYNC_LOCK = threading.Lock()
 # ── Backstop reply-sync (pg_cron → pg_net → POST /api/cron/reply-sync, ~3 min) ─
 # Pulls the Smartlead master inbox for replies since a stored watermark and
@@ -19021,17 +19023,27 @@ def fleet_capacity_get(days: int = 30) -> tuple[dict, int]:
             else:
                 return {"error": "capacity_unavailable", "message": str(e)[:200]}, 502
         else:
-            if base.get("degraded") and ent and not ent["data"].get("degraded"):
-                # The RPC just came back empty but we still hold a real series:
-                # keep serving that one (re-checked in ~5 min, not every call).
-                base = ent["data"]
+            today_iso = _dtmod.date.today().isoformat()
+            cached_real = bool(ent) and not ent["data"].get("degraded") \
+                and (ent["data"].get("days") or [None])[-1] == today_iso
+            if base.get("degraded") and cached_real:
+                # The RPC just came back empty but we still hold a real series
+                # whose axis ends today: keep serving THAT one — flagged, so
+                # consumers can tell — and re-check the RPC in ~5 min, not on
+                # every call. Once its axis is a day old the fresh history-only
+                # base takes over instead, so a stale axis is never pinned.
+                keep = ent["data"]
+                base = dict(keep)
+                base["degraded"] = "rpc_empty_pinned"
                 ts = time.time() - (_FLEET_CAP_TTL_S - 300)
+                with _FLEET_CAP_LOCK:
+                    _FLEET_CAP[days] = {"data": keep, "ts": ts}
             else:
                 # A history-only base is cached ~5 min, not the full hour, so
                 # the real series returns as soon as the mirror does.
                 ts = time.time() - (_FLEET_CAP_TTL_S - 300) if base.get("degraded") else time.time()
-            with _FLEET_CAP_LOCK:
-                _FLEET_CAP[days] = {"data": base, "ts": ts}
+                with _FLEET_CAP_LOCK:
+                    _FLEET_CAP[days] = {"data": base, "ts": ts}
     # per-client caps ride outside the 1h series cache so they populate as soon
     # as the restore sweep warms (own 10-min cache).
     out = dict(base)
