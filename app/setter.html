@@ -7697,6 +7697,11 @@ async function doRedraft(btn, feedback, scope) {
   const hintRow = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
                   ALL_ROWS.find((r) => String(r.id) === String(id));
   if (hintRow && hintRow.agent_id) payload.agent_hint = hintRow.agent_id;
+  // Identity, so a regenerate survives a re-intake id swap the same way
+  // Approve/Send/Dismiss do (owner report 2026-09-22: "Couldn't regenerate
+  // the draft: Queue row not found" on a tab open across a re-intake).
+  const regenIdent = trayIdentity(id);
+  if (regenIdent) payload.identity = regenIdent;
   if (feedback) payload.feedback = feedback;
   // scope: "remember" persists this feedback into the agent's own memory, so
   // every future draft applies it too - not just this one regeneration.
@@ -7787,8 +7792,11 @@ async function doDraftAnyway(btn) {
   // since a row with no draft has no stored classification either.
   const hintRow2 = QUEUE_ROWS.find((r) => String(r.id) === String(id)) ||
                    ALL_ROWS.find((r) => String(r.id) === String(id));
-  const res = await runRedraftJob(hintRow2 && hintRow2.agent_id
-      ? { id: Number(id), agent_hint: hintRow2.agent_id } : { id: Number(id) }, null,
+  const draftPayload = { id: Number(id) };
+  if (hintRow2 && hintRow2.agent_id) draftPayload.agent_hint = hintRow2.agent_id;
+  const draftIdent = trayIdentity(id);      // same stale-id rescue as Regenerate
+  if (draftIdent) draftPayload.identity = draftIdent;
+  const res = await runRedraftJob(draftPayload, null,
     hintRow2 ? { draft_body: hintRow2.draft_body, draft_subject: hintRow2.draft_subject } : null);
   stopTick();
   restore();
