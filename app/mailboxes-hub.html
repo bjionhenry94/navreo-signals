@@ -1536,9 +1536,17 @@ table.heat tr.heat-all + tr td{padding-top:9px}
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (j) {
         if (j && (j.client_caps || j.capacity)) { capTries = 0; S.cap = j; renderHeat(); }
-        else if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); }   // transient miss — retry, don't leave the column blank
+        else capRetry();
       })
-      .catch(function () { if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); } });
+      .catch(capRetry);
+  }
+  // Transient miss — retry, don't leave the column blank: 8 quick tries, then
+  // keep polling every 30s for ~10 min, so a page opened while the server is
+  // restarting or the capacity feed is recovering (2026-09-22: it 502'd for
+  // hours) fills in on its own instead of needing a manual reload.
+  function capRetry() {
+    if (capTries < 8) { capTries++; setTimeout(loadCap, 3000); }
+    else if (capTries < 28) { capTries++; setTimeout(loadCap, 30000); }
   }
 
   // /api/warmup-capacity → { perWorkspace:{ws:{capacityPerDay,boxes,byProvider}} }

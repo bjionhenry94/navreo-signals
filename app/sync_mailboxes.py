@@ -463,6 +463,15 @@ def prune_stale_attached(now_iso, ws_pulled, ws_failed, supabase_url, supabase_k
     whose pull looks truncated (< 70% of its current mirror rows) or that failed,
     so a partial/failed fetch can NEVER zero live boxes (Sol step 3, 2026-08-22)."""
     from urllib.parse import quote as _q
+    # "Not refreshed this run" means last stamped well BEFORE this run began.
+    # The cutoff sits STALE_GRACE behind the run start, not AT it: when a second
+    # sync overlaps this one (2026-09-22 — the Render cron and the in-app
+    # pg_cron runner both fired at 04:30) the two stamp rows seconds apart, and
+    # the run that wrote FIRST then saw every attached box as "stale" against
+    # its own later stamp: 12,041 boxes zeroed, capacity RPC empty, hub blank.
+    # Runs are daily, so anything refreshed in the last few hours is alive.
+    run_start = datetime.fromisoformat(now_iso)
+    cutoff = _q((run_start - STALE_GRACE).isoformat())
     for wid, pulled in ws_pulled.items():
         if wid in (ws_failed or []):
             continue
@@ -470,9 +479,19 @@ def prune_stale_attached(now_iso, ws_pulled, ws_failed, supabase_url, supabase_k
         if not total or pulled < 0.7 * total:
             log(f"[{wid}] prune SKIPPED — pulled {pulled} < 70% of {total} mirror rows (treating as incomplete)")
             continue
-        filt = f"workspace=eq.{wid}&campaign_count=gt.0&last_synced_at=lt.{_q(now_iso)}"
+        filt = f"workspace=eq.{wid}&campaign_count=gt.0&last_synced_at=lt.{cutoff}"
         stale = verify_count("mailboxes", filt, supabase_url, supabase_key)
         if not stale:
+            continue
+        # A live fleet never sheds most of its attached boxes between two daily
+        # syncs. A prune that would zero half or more of what is attached right
+        # now is a fault (truncated or duplicate run), not dead boxes — refuse
+        # it and say so loudly; the next clean run re-evaluates.
+        attached = verify_count("mailboxes", f"workspace=eq.{wid}&campaign_count=gt.0",
+                                supabase_url, supabase_key) or 0
+        if attached and stale * 2 >= attached:
+            log(f"[{wid}] prune REFUSED — {stale} of {attached} attached mailbox(es) read as stale "
+                "(>= 50%); implausible for a live fleet, campaign_count left untouched")
             continue
         try:
             server.sb("PATCH", f"mailboxes?{filt}", {"campaign_count": 0})
@@ -480,6 +499,10 @@ def prune_stale_attached(now_iso, ws_pulled, ws_failed, supabase_url, supabase_k
         except Exception as e:  # noqa: BLE001 — pruning is hygiene, never fail the sync on it
             log(f"[{wid}] prune FAILED (non-fatal): {e}")
 
+
+# A mirror row refreshed within this window of the run start is alive — by
+# this run or by one overlapping it — and is never "stale-attached".
+STALE_GRACE = timedelta(hours=6)
 
 # Rows untouched for this long are treated as gone from Smartlead and deleted.
 # Generous on purpose: a single truncated pull (Smartlead paginates short under
@@ -654,8 +677,12 @@ def main():
             # URL-encode the timestamp: its "+00:00" offset reads as a space
             # in a query string and 400s the request.
             from urllib.parse import quote as _q
+            # gte, not eq: a sync overlapping this one re-stamps rows a few
+            # seconds later, and that must not read as "this run wrote nothing"
+            # (2026-09-22 — exactly how the losing run paged as exit 1). Rows
+            # stamped at or after our start are fresh whichever run wrote them.
             m_run = verify_count("mailboxes",
-                                 f"workspace=eq.{wid}&last_synced_at=eq.{_q(now_iso_str)}",
+                                 f"workspace=eq.{wid}&last_synced_at=gte.{_q(now_iso_str)}",
                                  supabase_url, supabase_key)
             s_total = verify_count("mailbox_stats_daily",
                                    f"stat_date=eq.{today_str}&workspace=eq.{wid}",
@@ -664,11 +691,12 @@ def main():
             log(f"[{wid}] pulled={pulled} mailboxes_written_this_run={m_run} "
                 f"stats_total_today={s_total}"
                 f"{' (metrics unavailable this run — stats left at last-known)' if skipped_stats else ''}")
-            # caps/roster must reconcile; the stats count only needs to reconcile
-            # when we actually rewrote stats (a skipped-metrics workspace keeps its
-            # last-known stats and must NOT fail the run — the caps/roster refresh
-            # is the thing that matters for the capacity chart).
-            if not (m_run == pulled and (skipped_stats or (s_total or 0) >= pulled)):
+            # caps/roster must reconcile (at least our pulled count must be fresh;
+            # an overlapping run may add rows); the stats count only needs to
+            # reconcile when we actually rewrote stats (a skipped-metrics workspace
+            # keeps its last-known stats and must NOT fail the run — the caps/roster
+            # refresh is the thing that matters for the capacity chart).
+            if not ((m_run or 0) >= pulled and (skipped_stats or (s_total or 0) >= pulled)):
                 ver_ok = False
 
         # Null-rate check (in-memory, matches what was written)
