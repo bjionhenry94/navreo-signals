@@ -5302,7 +5302,7 @@ function companySectionHtml(row) {
   // row repeating the name already in the header - the panel read it as a
   // half-loaded page. When nothing but the name would survive, drop the whole
   // section. Client only; the owner keeps the dashes and the full table.
-  if (CLIENT_MODE && !role && !name && !site && !hc && !loc && !descShown) return "";
+  if (CLIENT_MODE && !role && !name && !site && !hc && !loc && !descShown && personalLoc === dash) return "";
 
   return `<div class="lp-section lp-company" id="lpCompany">
     ${verdictHtml}
@@ -5312,8 +5312,11 @@ function companySectionHtml(row) {
       ${fact("Role", role ? esc(role) : dash)}
       ${/* R5: call-timing aids for an SDR, and the tz-derived "Personal
             Location" openly contradicts "Company HQ" on the same card. */ ""}
-      ${CLIENT_MODE ? "" : fact("Personal Location", personalLoc)}
-      ${CLIENT_MODE ? "" : fact("Local time", localTime)}
+      ${/* Client view shows these too (owner ask 2026-09-23: "include the
+            information about the prospect as you do with the internal
+            version"); blank ones still fold away via fact(). */ ""}
+      ${fact("Personal Location", personalLoc)}
+      ${fact("Local time", localTime)}
 
       ${fact("Company", name ? `${esc(name)}${site ? ` <span class="muted small">· <a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a></span>` : ""}` : (site ? `<a href="${esc(siteHref)}" target="_blank" rel="noopener">${esc(site)}</a>` : dash))}
       ${fact("Size", hc ? esc(hc) : dash)}
