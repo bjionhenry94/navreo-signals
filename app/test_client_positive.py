@@ -184,8 +184,8 @@ def test_client_positive_alerts_once():
           and "smartlead.ai" not in txt and "---" not in txt, txt)
     check("1g reply body rides the threaded child field", body.get("reply_text") == "how much do u charge?", str(body))
     mbody = (http.posts[1][1] or {}) if len(http.posts) > 1 else {}
-    check("1g2 mirror goes to #client-interested-replies (C0B96LNPWDB)",
-          mbody.get("channel") == "C0B96LNPWDB", str(mbody))
+    check("1g2 mirror goes to #appointment-setter (C0BQVHS8NR2)",
+          mbody.get("channel") == "C0BQVHS8NR2", str(mbody))
     check("1g3 mirror is the same positive card as the client post",
           (mbody.get("text") or "").split("\n")[:2] == txt.split("\n")[:2]
           and (mbody.get("text") or "").startswith("*\U0001F389 New positive reply"),
@@ -219,8 +219,8 @@ def test_unmapped_client_uses_default_channel():
     res = setter.run_client_positive_alerts()
     body = (http.posts[0][1] or {}) if http.posts else {}
     check("4a unmapped client still alerts", res.get("alerted") == 1)
-    check("4b unmapped client routes to #client-interested-replies (C0B96LNPWDB)",
-          body.get("channel") == "C0B96LNPWDB", str(body))
+    check("4b unmapped client routes to #appointment-setter (C0BQVHS8NR2)",
+          body.get("channel") == "C0BQVHS8NR2", str(body))
     check("4c unmapped client posts once (no mirror)", len(http.posts) == 1)
 
 
@@ -363,7 +363,7 @@ def test_interested_lead_replying_again_is_not_new():
     mtxt = mbody.get("text") or ""
     check("11g internal mirror wears the same re-reply header",
           mtxt.startswith("*" + setter.RE_REPLY_HEADER) and "New positive reply" not in mtxt
-          and mbody.get("channel") == "C0B96LNPWDB", mtxt[:120])
+          and mbody.get("channel") == "C0BQVHS8NR2", mtxt[:120])
     check("11h reply body rides the thread child",
           body.get("reply_text") == GEORGI_AGAIN["reply_body"], str(body))
     row = sb._row(38238)
@@ -482,7 +482,7 @@ def test_unmapped_client_re_reply_posts_once_internally():
     res = setter.run_client_positive_alerts()
     body = _first_post(http)
     check("17 unmapped client re-reply: one internal post, re-reply header",
-          len(http.posts) == 1 and body.get("channel") == "C0B96LNPWDB"
+          len(http.posts) == 1 and body.get("channel") == "C0BQVHS8NR2"
           and (body.get("text") or "").startswith("*" + setter.RE_REPLY_HEADER)
           and res.get("re_replies") == 1, str(body)[:200])
 
