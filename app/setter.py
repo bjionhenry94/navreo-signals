@@ -9117,10 +9117,10 @@ EP_POST_CAP = 10              # tripwire per tick; leftovers retry next tick, lo
 # ThunderBird, Altius Reach, …) carry no Smartlead client_id (client/save
 # 500s server-side), so their alerts used to masquerade as Navreo-own.
 # Ruling 2026-08-18: #interested-replies is Navreo-own ONLY — client-related
-# alerts go to #client-interested-replies. The Make categoriser (9251436,
+# alerts go to #appointment-setter. The Make categoriser (9251436,
 # modules 33/51) applies the same rule via campaign-name markers; this is
 # the sweep-side half.
-CLIENT_INTERNAL_CHANNEL = "C0B96LNPWDB"   # #client-interested-replies
+CLIENT_INTERNAL_CHANNEL = "C0BQVHS8NR2"   # #appointment-setter
 # ONE registry for every client HOSTED IN the navreo Smartlead workspace
 # (Bjion 2026-09-16: "whenever we onboard any client, they're also onboarded to
 # this" — ThunderBird's Komal Vaish re-reply reached #client-interested-replies
@@ -9164,7 +9164,7 @@ NAVREO_HOSTED_CLIENTS = (
 )
 
 # Campaign-name markers that mean "a client, not Navreo-own" (internal lane
-# override → #client-interested-replies). Derived from the registry.
+# override → #appointment-setter). Derived from the registry.
 CLIENT_NAME_MARKERS = tuple(c["token"] for c in NAVREO_HOSTED_CLIENTS)
 
 # Campaign-name marker -> the client_id a CLIENT SHARE token scopes to. The same
@@ -9501,7 +9501,7 @@ def _ep_channel_override(workspace, campaign_id):
     hosted in the navreo workspace. A campaign whose name carries a
     FLIP_NAME_CHANNELS marker routes its churn flip to that client's own
     (internal) channel; otherwise Supabase registry client_id or a
-    CLIENT_NAME_MARKER routes to #client-interested-replies. None -> the hook's
+    CLIENT_NAME_MARKER routes to #appointment-setter. None -> the hook's
     default (#interested-replies). Fails open to the default; never raises."""
     if not campaign_id:
         return None
@@ -9862,7 +9862,7 @@ CLIENT_ALERT_CHANNELS = {
     "krg": "C0A7EJ4DL9K",     # #krg-advisors-navreo
 }
 
-# Workspaces whose positives ALSO post to the internal #client-interested-replies
+# Workspaces whose positives ALSO post to the internal #appointment-setter
 # (Bjion 2026-09-11, Asad: "set up Grout's alert in Client-Interested-Reply now
 # ... we are handling it now"). The Navreo team works Grout's positives from the
 # setter, so it needs the internal card in the same lane every other client's
@@ -9878,7 +9878,7 @@ CLIENT_INTERNAL_MIRROR = frozenset({"grout"})
 # alert channel. An alert composed for one of these carries the client's share
 # link, not the login-only owner permalink (Bjion 2026-09-05: "whichever chat
 # it is for, that is the client - it should only show their messages").
-# #client-interested-replies and #interested-replies are internal and absent.
+# #appointment-setter and #interested-replies are internal and absent.
 CLIENT_FACING_CHANNELS = (frozenset(POSITIVE_SHARED_CHANNELS.values())
                           | frozenset(FLIP_NAME_CHANNELS.values())
                           | frozenset(CLIENT_ALERT_CHANNELS.values()))
@@ -10057,7 +10057,7 @@ def run_client_positive_alerts() -> dict:
             cname = names.get(str(cid or "")) or (f"campaign {cid}" if cid else "unknown campaign")
             link = ""   # Smartlead link dropped from alerts (Bjion 2026-09-07)
             # Mapped workspace -> its own channel; every other client workspace
-            # -> #client-interested-replies (ruling 2026-08-18: the hook's
+            # -> #appointment-setter (ruling 2026-08-18: the hook's
             # #interested-replies default is Navreo-own only).
             chan = CLIENT_ALERT_CHANNELS.get(ws) or CLIENT_INTERNAL_CHANNEL
             # A lead who already replied positively is coming BACK, not
@@ -10084,7 +10084,7 @@ def run_client_positive_alerts() -> dict:
             if posted and ws in CLIENT_INTERNAL_MIRROR \
                     and chan != CLIENT_INTERNAL_CHANNEL:
                 # Internal mirror (CLIENT_INTERNAL_MIRROR): the same positive
-                # into #client-interested-replies with the owner link.
+                # into #appointment-setter with the owner link.
                 mtext = _cp_compose(row, cname, link, channel=CLIENT_INTERNAL_CHANNEL,
                                     prior=prior)
                 mpayload = {"event_type": "EVER_POSITIVE_ALERT", "text": mtext,
