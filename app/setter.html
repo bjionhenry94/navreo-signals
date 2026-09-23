@@ -5302,7 +5302,12 @@ function companySectionHtml(row) {
   // row repeating the name already in the header - the panel read it as a
   // half-loaded page. When nothing but the name would survive, drop the whole
   // section. Client only; the owner keeps the dashes and the full table.
-  if (CLIENT_MODE && !role && !name && !site && !hc && !loc && !descShown && personalLoc === dash) return "";
+  if (CLIENT_MODE && !role && !name && !site && !hc && !loc && !descShown && personalLoc === dash) {
+    // Keep an empty, hidden anchor: hydrateLeadContact swaps #lpCompany by id,
+    // so returning "" here meant enrichment that arrived after first paint
+    // never appeared (owner 2026-09-23, melissalo.com had name + site).
+    return `<div class="lp-section lp-company" id="lpCompany" style="display:none"></div>`;
+  }
 
   return `<div class="lp-section lp-company" id="lpCompany">
     ${verdictHtml}
