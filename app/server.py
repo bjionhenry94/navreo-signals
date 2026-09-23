@@ -25543,7 +25543,76 @@ def _offer_fetch_extra_pages(base: str, homepage_html: str):
     return [{"path": p, "text": results[p]} for p in candidates if p in results]
 
 
+def _offer_scrapfly_one(url: str, key: str, deadline: float):
+    """One page through Scrapfly: markdown (1 credit) -> text (1 credit; markdown
+    sometimes keeps only the <title>) -> render_js markdown (6 credits). Returns
+    (text, title) or None. Failed scrapes are not billed by Scrapfly."""
+    for fmt, js in (("markdown", False), ("text", False), ("markdown", True)):
+        left = deadline - time.time()
+        if left < 3:
+            return None
+        q = {"key": key, "url": url, "format": fmt, "timeout": int(min(left, 30) * 1000), "retry": "false"}
+        if js:
+            q["render_js"] = "true"
+        try:
+            with urllib.request.urlopen("https://api.scrapfly.io/scrape?" + urllib.parse.urlencode(q),
+                                        timeout=min(left, 60), context=SSL_CTX) as resp:
+                data = json.loads(resp.read().decode("utf-8", "ignore"))
+        except urllib.error.HTTPError as e:
+            if e.code in (401, 402):
+                raise  # account problem: let the caller fall back to Parallel
+            continue
+        except Exception:  # noqa: BLE001 — best-effort, never fatal
+            continue
+        raw = (data.get("result") or {}).get("content") or ""
+        title = ""
+        m = re.search(r"^#\s+(.+)$", raw, re.M)
+        if m:
+            title = m.group(1).strip()
+        text = re.sub(r"\[\[Image[^\]]*\]\](\([^)]*\))?", " ", raw)       # text-format image markers
+        text = re.sub(r"!?\[([^\]]*)\]\([^)]*\)", r"\1", text)              # markdown links/images -> their label
+        text = re.sub(r"https?://\S+", " ", text)
+        text = re.sub(r"[#*_>|`]+", " ", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if len(text) > 150:
+            return text, title
+    return None
+
+
 def _offer_parallel_extract(urls: list, timeout: int = 25) -> dict:
+    """Read pages for the offer maker when our plain fetch can't (JavaScript
+    sites, bot walls). Returns {url: {"text", "title"}}. Scrapfly since
+    2026-09-23 (about 5x cheaper than Parallel, 93/100 homepages readable in
+    the benchmark); Parallel only when SCRAPFLY_API_KEY is unset or the
+    Scrapfly account is down. Best-effort: {} just means the caller keeps
+    its plain-fetch text."""
+    key = os.environ.get("SCRAPFLY_API_KEY", "").strip()
+    if not key or not urls:
+        return _offer_parallel_extract_legacy(urls, timeout)
+    deadline = time.time() + timeout
+    out, account_down = {}, []
+
+    def one(u):
+        try:
+            r = _offer_scrapfly_one(u, key, deadline)
+        except urllib.error.HTTPError:
+            account_down.append(u)
+            return
+        if r:
+            out[u.rstrip("/")] = {"text": r[0], "title": r[1]}
+
+    threads = [threading.Thread(target=one, args=(u,), daemon=True) for u in urls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(max(0.1, deadline - time.time()))
+    if account_down:
+        print(f"offer extract: Scrapfly account error, falling back to Parallel for {len(account_down)} url(s)", flush=True)
+        out.update(_offer_parallel_extract_legacy(account_down, max(5, int(deadline - time.time()))))
+    return out
+
+
+def _offer_parallel_extract_legacy(urls: list, timeout: int = 25) -> dict:
     """Read pages through Parallel's Extract API (renders JavaScript sites and
     gets past bot walls our plain fetch can't). Returns {url: clean text}.
     Best-effort: no key, an error or a timeout just returns {} and the caller
