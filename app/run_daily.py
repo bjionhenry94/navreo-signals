@@ -92,40 +92,23 @@ def run_optimiser_refresh() -> None:
 
 
 def main():
-    campaigns = {str(c.get("id")): c for c in server.read_json_list(server.CAMPAIGN_DRAFTS)
-                 if not c.get("deleted_at")}  # soft-deleted campaigns never pull
-    source_ids = [d["id"] for d in server.read_drafts()
-                  if d.get("active", True) and not d.get("deleted_at")
-                  and str(d.get("campaign_id")) in campaigns]
-    run = {"ts": datetime.now().isoformat(timespec="seconds"), "sources": []}
-    print(f"daily run · {len(source_ids)} active sources")
-
-    for sid in source_ids:
-        entry = {"id": sid}
-        try:
-            with server.drafts_lock():  # same mutex the HTTP writers use
-                r = server.pull_source({"id": sid})
-            entry["pull"] = r.get("note") or r.get("message") or ""
-            entry["ok"] = bool(r.get("ok"))
-            drafts = server.read_drafts()  # the pull rewrote the file
-            src = next((d for d in drafts if d.get("id") == sid), None)
-            camp = campaigns.get(str((src or {}).get("campaign_id"))) or {}
-            entry["campaign"] = camp.get("name")
-            if src and camp.get("autopilot"):
-                with server.drafts_lock():
-                    drafts = server.read_drafts()  # re-read under the lock
-                    src = next((d for d in drafts if d.get("id") == sid), src)
-                    pushed = server.auto_push_new_leads(src)
-                    server.write_source(src)  # only this source's push stamps changed
-                entry["autopushed"] = [p for p in pushed if p["ok"]]
-                entry["push_failed"] = [p for p in pushed if not p["ok"]]
-            else:
-                entry["autopilot"] = False  # leads wait for manual ✓
-        except Exception as e:  # noqa: BLE001 — one bad source must not kill the run
-            entry["error"] = str(e)[:200]
-        run["sources"].append(entry)
-        n_push = len(entry.get("autopushed") or [])
-        print(f"  {sid} · {entry.get('pull') or entry.get('error') or ''}"
+    # The batch pull is server.cron_pull_all() - the ONE implementation (2026-09-23).
+    # This cron used to run its own loop (pull_source + a full read_drafts() per
+    # source) while the web ran cron_pull_all on the same tick; the copies raced,
+    # and the full-source reads (54 MB each) OOM-killed this 512 MB instance on
+    # every run within ~2 min, so nothing after the pull (register, router
+    # webhooks, client windows, monthly stats...) ever ran. cron_pull_all reads
+    # slim meta + one campaign's docs, skips fixed lists, time-boxes each source,
+    # auto-pushes autopilot campaigns and writes its own signal_cron_runs row.
+    out = server.cron_pull_all()
+    run = {"ts": datetime.now().isoformat(timespec="seconds"), "sources": out.get("sources") or []}
+    print(f"daily run · {len(run['sources'])} active sources · {out.get('leads', 0)} leads · "
+          f"{out.get('errors', 0)} error(s) · {out.get('deferred', 0)} deferred · "
+          f"{out.get('total_secs')}s")
+    for entry in run["sources"]:
+        n_push = entry.get("autopushed") or 0
+        print(f"  {entry.get('id')} · "
+              + str(entry.get("note") or entry.get("error") or entry.get("deferred") or "")[:160]
               + (f" · {n_push} auto-pushed" if n_push else "")
               + (" · manual (awaiting review)" if entry.get("autopilot") is False else ""))
 

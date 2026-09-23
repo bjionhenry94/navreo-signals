@@ -15032,10 +15032,58 @@ def pull_hiring_source(src: dict, drafts: list) -> dict:
                     + (f" · {drop_note}" if drop_note else "")}
 
 
+def _read_one_source(sid) -> dict | None:
+    """One full source doc (with prospects) by id, or None on miss/failure."""
+    if not sid:
+        return None
+    rows = sb("GET", f"sources?id=eq.{urllib.parse.quote(str(sid), safe='')}&select=doc")
+    if isinstance(rows, list) and rows and isinstance(rows[0].get("doc"), dict):
+        return rows[0]["doc"]
+    return None
+
+
+def _pull_sources_context(sid) -> list | None:
+    """The source list a pull of `sid` needs, WITHOUT every source's prospects.
+
+    OOM root cause (2026-09-23): pull_source read_drafts()-ed all 255 source
+    docs (54 MB; 205k prospects live inside them) just to find one, ~36 times
+    per 3-hourly tick. One full read is ~500 MB transient in Python and a
+    54 MB response the 1 GB Postgres builds in memory - the web box was
+    OOM-killed ~20x in 2 days and Postgres crashed 17x in 3 days, each within
+    minutes of a pull tick. A pull only needs FULL docs for its own campaign
+    (hiring dedupe walks same-campaign prospects); every other source is read
+    for meta fields only (_daily_lead_share counts active hiring sources).
+    So: all docs from the sources_meta view (no prospects, ~0.4 MB) with this
+    campaign's docs swapped for full ones. None on any failure -> the caller
+    falls back to read_drafts(), exactly the old behaviour."""
+    meta = sb("GET", "sources_meta?select=doc")
+    if not isinstance(meta, list):
+        return None
+    meta = [r["doc"] for r in meta if isinstance(r, dict) and isinstance(r.get("doc"), dict)]
+    me = next((d for d in meta if d.get("id") == sid), None)
+    if not me:
+        return None
+    cid = me.get("campaign_id")
+    if cid in (None, ""):
+        one = _read_one_source(sid)
+        full = [one] if one else None
+    else:
+        rows = sb("GET", "sources?select=doc&doc->>campaign_id=eq."
+                         + urllib.parse.quote(str(cid), safe=""))
+        full = ([r["doc"] for r in rows if isinstance(r, dict) and isinstance(r.get("doc"), dict)]
+                if isinstance(rows, list) else None)
+    if not full:
+        return None
+    by_id = {d.get("id"): d for d in full}
+    if sid not in by_id:
+        return None
+    return [by_id.get(d.get("id"), d) for d in meta]
+
+
 def pull_source(p: dict) -> dict:
     """Simulate the daily pull: fetch real prospects for a source using its
     own targeting, fill its icebreaker per person, store on the source."""
-    drafts = read_drafts()
+    drafts = _pull_sources_context(p.get("id")) or read_drafts()
     src = next((d for d in drafts if d.get("id") == p.get("id")), None)
     if not src:
         return {"ok": False, "message": "Source not found"}
@@ -15432,7 +15480,10 @@ def cron_pull_all():
     # run leaves it alone entirely. Only one carrying a saved re-pull spec
     # (params.repull) is even eligible, and never on the daily tick — it's a
     # deliberate, paid re-pull the user asks for on the row.
-    _active = [d for d in read_drafts()
+    # Meta only (no prospects): this loop reads id/active/campaign/mechanism/
+    # last_pull, never prospects - the full read was 54 MB (OOM fix 2026-09-23).
+    _listing = _pg_docs("sources", meta_view="sources_meta")
+    _active = [d for d in (_listing if _listing is not None else (read_drafts() or []))
                if d.get("active", True) and not d.get("deleted_at")
                and str(d.get("campaign_id")) in campaigns
                and not is_fixed_list(d)]
@@ -15466,8 +15517,11 @@ def cron_pull_all():
                 entry["leads"] = len(r.get("prospects") or [])
                 out["signals"] += entry["signals"]
                 out["leads"] += entry["leads"]
-                drafts = read_drafts()  # pull_source rewrote it; re-read for the push
-                src = next((d for d in drafts if d.get("id") == sid), None)
+                # pull_source rewrote this one doc; re-read just it for the push
+                # (was a full 54 MB read_drafts() per source - OOM fix 2026-09-23).
+                src = _read_one_source(sid)
+                if src is None:
+                    entry["push_note"] = "push skipped: source re-read failed (next tick retries)"
                 camp = campaigns.get(str((src or {}).get("campaign_id"))) or {}
                 entry["campaign"] = camp.get("name")
                 if src and camp.get("autopilot"):
@@ -15500,6 +15554,17 @@ def cron_pull_all():
 _CRON_LOCK = threading.Lock()  # one batch pull at a time; overlapping ticks no-op
 
 
+def _cron_ridealong_bg():
+    """The web-side half of the 3-hourly tick: cache ride-alongs only, no pull
+    (the pull runs in the Render cron since 2026-09-23 - see the route)."""
+    if not _CRON_LOCK.acquire(blocking=False):
+        return
+    try:
+        _cron_ridealongs()
+    finally:
+        _CRON_LOCK.release()
+
+
 def _cron_pull_bg():
     if not _CRON_LOCK.acquire(blocking=False):
         return  # a prior tick is still running — skip this one
@@ -15510,6 +15575,10 @@ def _cron_pull_bg():
         # the pull writes leads/sources — invalidate the UI read caches NOW
         # (at completion), not at kick time when nothing had changed yet
         _clear_ui_caches()
+    _cron_ridealongs()
+
+
+def _cron_ridealongs():
     try:
         # analytics hub book insights ride the same daily tick — fingerprint
         # cache inside makes the 3-hourly extra calls a cheap no-op
@@ -28347,11 +28416,21 @@ class Handler(SimpleHTTPRequestHandler):
                 log_activity(path, actor="cron", action="sync", entity="heyreach")
                 threading.Thread(target=_heyreach_sync_bg, daemon=True).start()
                 return self._json({"ok": True, "started": True}, 202)
+            # /api/cron/pull-all. The batch source PULL moved out of the web box
+            # (2026-09-23): it ran here AND in the Render cron navreo-signals-daily
+            # every tick, and the web copy's full-source reads were OOM-killing
+            # this 2 GB instance (~20x in 2 days). The pull now runs only in the
+            # cron (run_daily -> cron_pull_all, its own instance). This tick
+            # keeps the web-side cache ride-alongs (analytics freshness, tag
+            # performance), which warm THIS process's caches. To revert: point
+            # the thread back at _cron_pull_bg (still defined).
             if _CRON_LOCK.locked():
                 return self._json({"ok": True, "started": False, "busy": True}, 200)
-            log_activity(path, actor="cron", action="pull", entity="signals_batch")
-            threading.Thread(target=_cron_pull_bg, daemon=True).start()
-            return self._json({"ok": True, "started": True}, 202)
+            log_activity(path, actor="cron", action="pull-ridealong", entity="signals_batch",
+                         payload={"pull": "render cron navreo-signals-daily"})
+            threading.Thread(target=_cron_ridealong_bg, daemon=True).start()
+            return self._json({"ok": True, "started": True,
+                               "pull": "moved to render cron navreo-signals-daily"}, 202)
         if path == "/api/setter/inbound":
             # Smartlead campaign webhook (EMAIL_REPLY) — instant Setter intake.
             # The token travels in the registered webhook URL's query string
