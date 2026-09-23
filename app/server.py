@@ -25544,19 +25544,22 @@ def _offer_fetch_extra_pages(base: str, homepage_html: str):
 
 
 def _offer_scrapfly_one(url: str, key: str, deadline: float):
-    """One page through Scrapfly: markdown (1 credit) -> text (1 credit; markdown
-    sometimes keeps only the <title>) -> render_js markdown (6 credits). Returns
+    """One page through Scrapfly: text (1 credit; markdown sometimes keeps only
+    the <title> and the offer maker strips formatting anyway) -> markdown (1 credit)
+    -> render_js markdown (6 credits, only if the budget allows). Returns
     (text, title) or None. Failed scrapes are not billed by Scrapfly."""
-    for fmt, js in (("markdown", False), ("text", False), ("markdown", True)):
+    for fmt, js in (("text", False), ("markdown", False), ("markdown", True)):
         left = deadline - time.time()
-        if left < 3:
-            return None
-        q = {"key": key, "url": url, "format": fmt, "timeout": int(min(left, 30) * 1000), "retry": "false"}
+        if left < 3 or (js and left < 25):
+            return None  # a JS render can't come back inside the caller's budget: don't spend 6 credits on it
+        # Scrapfly rejects out-of-range timeouts with a 400 (plain: 15-150 s, render_js: 30-60 s)
+        t_ms = 30000 if js else int(max(15, min(left, 30)) * 1000)
+        q = {"key": key, "url": url, "format": fmt, "timeout": t_ms, "retry": "false"}
         if js:
             q["render_js"] = "true"
         try:
             with urllib.request.urlopen("https://api.scrapfly.io/scrape?" + urllib.parse.urlencode(q),
-                                        timeout=min(left, 60), context=SSL_CTX) as resp:
+                                        timeout=t_ms / 1000 + 5, context=SSL_CTX) as resp:
                 data = json.loads(resp.read().decode("utf-8", "ignore"))
         except urllib.error.HTTPError as e:
             if e.code in (401, 402):
