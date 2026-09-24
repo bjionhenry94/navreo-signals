@@ -14786,8 +14786,10 @@ def resolve_lead_website_traced(lead: dict, email: str):
     try:
         lead = lead if isinstance(lead, dict) else {}
         # 1. the Smartlead lead's own website - free, so it runs before the cache
+        # A freemail value is a mailbox, not a site: uploads have written the
+        # email's domain ("gmail.com") into website/custom `domain` - skip it.
         d = _norm_domain(lead.get("website"))
-        if d:
+        if d and not _is_freemail(d):
             return d, "lead_website"
         # 2. custom fields, any casing/spacing ("Website", "Company Website")
         cf = lead.get("custom_fields")
@@ -14799,7 +14801,7 @@ def resolve_lead_website_traced(lead: dict, email: str):
                     low[lk] = v
             for k in _WEBSITE_CF_KEYS:
                 d = _norm_domain(low.get(k))
-                if d:
+                if d and not _is_freemail(d):
                     return d, "custom_field:" + k
         key = str(email or "").strip().lower()
         if not key:
@@ -14816,6 +14818,8 @@ def resolve_lead_website_traced(lead: dict, email: str):
                                   "&select=company_domain&limit=1")
                 if isinstance(rows, list) and rows:
                     out = _norm_domain((rows[0] or {}).get("company_domain"))
+                    if out and _is_freemail(out):
+                        out = ""
                     if out:
                         src = "enrichment"
         except Exception:  # noqa: BLE001 - a Supabase blip just falls through
@@ -15640,8 +15644,8 @@ def route_lead_contact_get(params):
                 if slug:
                     out["linkedin"] = slug if slug.startswith("http") \
                         else f"https://www.linkedin.com/in/{slug}"
-                dom = (ppl[0].get("company_domain") or "").strip()
-                if dom:
+                dom = _norm_domain(ppl[0].get("company_domain"))
+                if dom and not _is_freemail(dom):
                     out["website"] = dom
         except Exception:  # noqa: BLE001 - Supabase miss just falls through to Smartlead
             pass
@@ -15650,8 +15654,14 @@ def route_lead_contact_get(params):
         try:
             resp = _sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
             if isinstance(resp, dict):
-                out["linkedin"] = out["linkedin"] or (resp.get("linkedin_profile") or "").strip()
-                out["website"] = out["website"] or (resp.get("website") or "").strip()
+                # Smartlead is the source of truth (owner 2026-09-24): its stored
+                # profile/website OUTRANK the people-table guesses above.
+                sl_li = (resp.get("linkedin_profile") or "").strip()
+                if sl_li:
+                    out["linkedin"] = sl_li if sl_li.startswith("http") else "https://" + sl_li
+                sl_site = _norm_domain(resp.get("website"))
+                if sl_site and not _is_freemail(sl_site):
+                    out["website"] = sl_site
                 out["company_name"] = (resp.get("company_name") or "").strip()
                 sl_phone = str(resp.get("phone_number") or "").strip()
                 out["phone"] = sl_phone
