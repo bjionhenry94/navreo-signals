@@ -305,7 +305,8 @@
       idline +
       band +
       contactsHtml +
-      (m.notes ? '<div class="mcard-notes" title="Setter notes">' + esc(m.notes) + "</div>" : "") +
+      (m.email ? '<div class="mcard-notes"><textarea data-act="note" rows="2" placeholder="Add a note…" title="Setter notes, shared with the setter · saves as you type">' +
+        esc(m.notes || "") + '</textarea><span class="mcard-nsave"></span></div>' : "") +
       '<div class="mcard-foot">' + statusSel + by + "</div>";
 
     // click anywhere on the card (except the dropdown / links / ×) opens the edit dialog
@@ -314,6 +315,8 @@
     ss.onchange = function () { setStatus(m, ss.value); };
     ss.addEventListener("click", function (e) { e.stopPropagation(); });
     ss.addEventListener("mousedown", function (e) { e.stopPropagation(); });
+    var nt = d.querySelector('[data-act="note"]');
+    if (nt) wireNote(nt, m);
     d.querySelector('[data-act="dismiss"]').onclick = function (e) { e.stopPropagation(); dismiss(m); };
     // contact/website links open in a new tab; never start a drag or open the chooser
     Array.prototype.forEach.call(d.querySelectorAll("a"), function (a) {
@@ -327,6 +330,29 @@
       s.addEventListener("mousedown", function (e) { e.stopPropagation(); });
     });
     return d;
+  }
+  // Auto-saving note on a card: debounced save while typing, flush on blur.
+  // Saves WITHOUT re-rendering the board so the caret never jumps.
+  function wireNote(ta, m) {
+    var tag = ta.parentNode.querySelector(".mcard-nsave"), timer = null, last = m.notes || "";
+    function fit() { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, 180) + "px"; }
+    function save() {
+      clearTimeout(timer); timer = null;
+      var v = ta.value;
+      if (v === last) return;
+      tag.textContent = "Saving…"; tag.className = "mcard-nsave";
+      fetch("/api/team-target/note", {method: "POST", credentials: "same-origin",
+        headers: {"Content-Type": "application/json"}, body: JSON.stringify({email: m.email, notes: v})})
+        .then(function (r) { if (!r.ok) throw 0; last = v; m.notes = v.trim(); tag.textContent = "Saved"; })
+        .catch(function () { tag.textContent = "Not saved, retrying"; tag.className = "mcard-nsave err"; timer = setTimeout(save, 3000); });
+    }
+    ["click", "mousedown", "keydown", "dragstart"].forEach(function (ev) {
+      ta.addEventListener(ev, function (e) { e.stopPropagation(); });
+    });
+    ta.addEventListener("input", function () { fit(); tag.textContent = ""; clearTimeout(timer); timer = setTimeout(save, 700); });
+    ta.addEventListener("focus", function () { var c = ta.closest(".mcard"); if (c) { c.dataset.drag = c.draggable ? "1" : ""; c.draggable = false; } });
+    ta.addEventListener("blur", function () { var c = ta.closest(".mcard"); if (c && c.dataset.drag) c.draggable = true; save(); });
+    setTimeout(fit, 0);
   }
   function openChooser(rowEl, m) {
     var ex = rowEl.nextSibling;

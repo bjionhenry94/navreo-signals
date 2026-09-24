@@ -159,7 +159,12 @@
 .mcard-band.gd svg,.mcard-band.gd .bl{color:#2E7D5B}
 .mcard-crows{display:flex;flex-direction:column;gap:1px;margin:10px 8px 0}
 .mcard-crows .crow{display:flex;align-items:center;gap:9px;padding:8px;border-radius:8px;font:600 13px var(--font-sans);color:var(--ink);text-decoration:none;cursor:pointer}
-.mcard-notes{margin:8px 0 2px;padding:8px 10px;border-radius:8px;background:var(--bg-sunken);font:400 12.5px/1.45 var(--font-sans);color:var(--ink-2);white-space:pre-wrap;word-break:break-word;max-height:9.5em;overflow:auto}
+.mcard-notes{position:relative;margin:8px 0 2px}
+.mcard-notes textarea{display:block;width:100%;box-sizing:border-box;resize:none;border:1px solid transparent;border-radius:8px;padding:8px 10px;background:var(--bg-sunken);font:400 12.5px/1.45 var(--font-sans);color:var(--ink-2);min-height:34px;max-height:180px;overflow:auto;outline:none}
+.mcard-notes textarea:hover{border-color:var(--line,#e5e5e5)}
+.mcard-notes textarea:focus{border-color:var(--ink-3);background:var(--bg,#fff);color:var(--ink)}
+.mcard-nsave{position:absolute;right:8px;bottom:-15px;font:500 10.5px var(--font-sans);color:var(--ink-3)}
+.mcard-nsave.err{color:#c0392b}
 .mcard-crows .crow:hover{background:var(--bg-sunken)}
 .mcard-crows .crow > svg:first-child{color:var(--ink-3);flex:none}
 .mcard-crows .crow .cval{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}

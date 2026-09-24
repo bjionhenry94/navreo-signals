@@ -753,6 +753,24 @@ def dismiss(payload: dict, who: str) -> tuple:
     return {"ok": True, "mode": "removed"}, 200
 
 
+def set_note(payload: dict, who: str) -> tuple:
+    """Edit the lead's shared setter note from a board card. Writes through the
+    setter's own endpoint (same setter_lead_enrichment row the setter sidebar
+    edits), then patches the cached board in place so a reload inside the cache
+    window shows the new note instead of the old one."""
+    from setter import route_lead_note_post
+    email = (payload.get("email") or "").strip().lower()
+    notes = str(payload.get("notes") or "")
+    status, body = route_lead_note_post({"email": email, "notes": notes})
+    if status == 200:
+        for cache in (_CACHE, _SB_CACHE):
+            d = cache.get("data") or {}
+            for m in (d.get("meetings") or []) if isinstance(d, dict) else []:
+                if (m.get("email") or "").strip().lower() == email:
+                    m["notes"] = notes.strip()
+    return body, status
+
+
 def restore(payload: dict, who: str) -> tuple:
     """Undo a soft-remove: delete the override so the auto lead reverts to its
     live status. (Hand-added rows were hard-deleted and can't be restored.)"""
