@@ -305,6 +305,7 @@
       idline +
       band +
       contactsHtml +
+      (m.notes ? '<div class="mcard-notes" title="Setter notes">' + esc(m.notes) + "</div>" : "") +
       '<div class="mcard-foot">' + statusSel + by + "</div>";
 
     // click anywhere on the card (except the dropdown / links / ×) opens the edit dialog
