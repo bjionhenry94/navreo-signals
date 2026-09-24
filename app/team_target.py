@@ -145,9 +145,11 @@ def _attach_phones(meetings: list) -> None:
     """Surface the phone numbers we ALREADY hold for each lead (the setter
     enrichment cache) onto the board cards, so a setter can one-tap dial from the
     card. No new provider spend — reads the cache and reuses the setter's own
-    `_harvest_phones`. Sets m['phones'] = [{number, kind, source}] (may be [])."""
+    `_harvest_phones`. Sets m['phones'] = [{number, kind, source}] (may be []),
+    plus m['notes'] = the setter's shared note on the lead (may be '')."""
     for m in meetings:
         m["phones"] = []
+        m["notes"] = ""
     emails = sorted({(m.get("email") or "").strip().lower() for m in meetings if m.get("email")})
     if not emails:
         return
@@ -159,13 +161,15 @@ def _attach_phones(meetings: list) -> None:
     for i in range(0, len(emails), 200):
         enc = ",".join(urllib.parse.quote(e, safe="") for e in emails[i:i + 200])
         rows = server.sb("GET", "setter_lead_enrichment"
-                                "?select=lead_email,phone,phone_source,payload"
+                                "?select=lead_email,phone,phone_source,payload,notes"
                                 "&lead_email=in.(%s)" % enc) or []
         for r in rows or []:
             enr_by[(r.get("lead_email") or "").strip().lower()] = r
     for m in meetings:
         enr = enr_by.get((m.get("email") or "").strip().lower())
         if enr:
+            # The setter sidebar's shared free-text note on this lead.
+            m["notes"] = str(enr.get("notes") or "").strip()
             try:
                 m["phones"] = _harvest_phones(enr, "") or []
             except Exception:
