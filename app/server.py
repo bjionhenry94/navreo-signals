@@ -27844,13 +27844,14 @@ class Handler(SimpleHTTPRequestHandler):
         if path.startswith("/api/qa-gate/") and path != "/api/qa-gate/runs" and self._qa_token_ok():
             return self._qa_gate_post(path)
         if path in ("/api/team-target/meeting", "/api/team-target/status",
-                    "/api/team-target/dismiss", "/api/team-target/restore"):
+                    "/api/team-target/dismiss", "/api/team-target/restore",
+                    "/api/team-target/note"):
             # Team meetings board writes — logged-in teammates only. Who-did-it
             # is stamped from the session, never the payload.
             email = self._authed_email()
             if not email:
                 return self._json({"error": "sign in first"}, 401)
-            if int(self.headers.get("Content-Length") or 0) > 8192:
+            if int(self.headers.get("Content-Length") or 0) > (65536 if path.endswith("/note") else 8192):
                 return self._json({"error": "payload too large"}, 413)
             try:
                 p = json.loads(self._post_body.decode() or "{}")
@@ -27859,9 +27860,10 @@ class Handler(SimpleHTTPRequestHandler):
             who = team_display_names().get(email.lower()) or email
             import team_target
             _tt_fns = {"meeting": team_target.add_meeting, "status": team_target.set_status,
-                       "dismiss": team_target.dismiss, "restore": team_target.restore}
+                       "dismiss": team_target.dismiss, "restore": team_target.restore,
+                       "note": team_target.set_note}
             body, status = _tt_fns[path.rsplit("/", 1)[1]](p, who)
-            log_activity(path, {k: p.get(k) for k in ("client", "status", "id")},
+            log_activity(path, {k: p.get(k) for k in ("client", "status", "id", "email")},
                          action=path.rsplit("/", 1)[1], entity="team_target")
             return self._json(body, status)
         # Client copy-edit from a share link (strategy-session-share): allowed
