@@ -5015,8 +5015,11 @@ function callButtonHtml(primary, phones) {
 function leadQuickLinksHtml(row) {
   const rawDomain = row.company_domain || "";
   const realDomain = (rawDomain && !FREEMAIL_RE.test(rawDomain)) ? rawDomain : "";
-  const domain = realDomain || domainFromUrl(row.company_website);
-  const site = domain ? `https://${esc(domain)}` : (row.company_website ? esc(ensureHttps(row.company_website)) : "");
+  // Smartlead's stored website (arrives via hydrateLeadContact) outranks the
+  // row's email-derived domain; a freemail value is never a website.
+  const slDomain = domainFromUrl(row.company_website);
+  const domain = (slDomain && !FREEMAIL_RE.test(slDomain)) ? slDomain : realDomain;
+  const site = domain ? `https://${esc(domain)}` : "";
   const websiteBtn = site
     ? `<a class="lp-qbtn" href="${site}" target="_blank" rel="noopener" title="${esc(domain || row.company_website)}">${ICON_GLOBE}<span>Website</span></a>` : "";
   const li = leadLinkedIn(row);
@@ -5468,7 +5471,7 @@ async function hydrateLeadContact(row) {
   const haveLi = row.lead_linkedin || row.linkedin_url || row.linkedin;
   // A freemail company_domain is NOT a usable site - keep fetching until the
   // enrichment layer's real domain (or Smartlead's stored website) arrives.
-  const haveSite = (row.company_domain && !FREEMAIL_RE.test(row.company_domain)) || row.company_website;
+  const haveSite = row.company_website && !FREEMAIL_RE.test(domainFromUrl(row.company_website));
   const haveMap = row.lead_map_id;
   // Warm-call fields ride the same fetch (owner ask 2026-08-15): even when
   // every quick link is already known, one fetch still runs per row so the
@@ -5485,7 +5488,7 @@ async function hydrateLeadContact(row) {
   if (!res.ok || !res.data) { LEAD_CONTACT_TRIED.delete(String(row.id)); return; }
   let changed = false;
   if (res.data.linkedin && !haveLi) { row.lead_linkedin = res.data.linkedin; changed = true; }
-  if (res.data.website && !haveSite) { row.company_website = res.data.website; changed = true; }
+  if (res.data.website && res.data.website !== row.company_website) { row.company_website = res.data.website; changed = true; }
   if (res.data.lead_map && !haveMap) { row.lead_map_id = res.data.lead_map; changed = true; }
   // Warm-call payload: stash by EMAIL (refresh-proof) and swap ONLY the
   // sideboard blocks that render it - never the whole panel (a category pick
