@@ -55,6 +55,13 @@
     var method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
     var k = key(url);
     if (!/^\/api\//.test(pathOnly(k))) return realFetch(input, init);
+    if (method === "GET" && pathOnly(k) === "/api/setter/lead-contact") {
+      // Per-prospect Profile data (role, company, size, HQ), keyed by queue row id.
+      var lid = (k.split("id=")[1] || "").split("&")[0];
+      var lf = "fx/lead-contact.json";
+      if (!cache[lf]) cache[lf] = realFetch(BASE + lf + "?v=" + (window.__FX_VERSION || "2"), { cache: "no-cache" }).then(function (r) { return r.text(); });
+      return cache[lf].then(function (t) { var m = {}; try { m = JSON.parse(t); } catch (e) {} return jsonResponse(JSON.stringify(m[decodeURIComponent(lid)] || {})); });
+    }
     if (method === "GET") {
       var file = resolve(k);
       if (file) {

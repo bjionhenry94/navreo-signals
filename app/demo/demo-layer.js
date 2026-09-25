@@ -85,9 +85,13 @@
     var map = EXPLAIN[PK] || {};
     Object.keys(map).forEach(function (sel) {
       var el = document.querySelector(sel);
-      if (!el || el.__nvEx) return;
+      if (!el || (el.__nvEx && el.__nvEx.isConnected)) return;
       var ex = document.createElement("div"); ex.className = "nv-ex"; ex.innerHTML = map[sel];
-      el.insertAdjacentElement("afterend", ex); el.__nvEx = ex;
+      // In a flex-row / grid parent a sibling note becomes its own full-height column
+      // (and outlives a hidden pane), so put it inside the element instead.
+      var ps = el.parentElement && getComputedStyle(el.parentElement);
+      var inRow = ps && ((ps.display.indexOf("flex") > -1 && ps.flexDirection.indexOf("row") === 0) || ps.display.indexOf("grid") > -1);
+      el.insertAdjacentElement(inRow ? "afterbegin" : "afterend", ex); el.__nvEx = ex;
     });
   }
   function setExplain(on) {
