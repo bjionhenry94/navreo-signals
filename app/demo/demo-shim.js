@@ -90,6 +90,17 @@
     var method = ((init && init.method) || (input && input.method) || "GET").toUpperCase();
     var k = key(url);
     if (!/^\/api\//.test(pathOnly(k))) return realFetch(input, init);
+    if (method === "GET" && pathOnly(k) === "/api/setter/thread") {
+      // Single-thread refresh: serve it from the recorded batch so the demo never
+      // shows a "couldn't reach the mail server" line.
+      var tid = decodeURIComponent((k.split("id=")[1] || "").split("&")[0]);
+      var bf = resolve("/api/setter/thread/batch");
+      if (!cache[bf]) cache[bf] = realFetch(BASE + bf + "?v=" + (window.__FX_VERSION || "2"), { cache: "no-cache" }).then(function (r) { return r.text(); });
+      return cache[bf].then(function (t) {
+        var th = []; try { th = (JSON.parse(retime("/api/setter/thread/batch", t)).threads || {})[tid] || []; } catch (e) {}
+        return jsonResponse(JSON.stringify({ thread: th, stale: false }));
+      });
+    }
     if (method === "GET" && pathOnly(k) === "/api/setter/lead-contact") {
       // Per-prospect Profile data (role, company, size, HQ), keyed by queue row id.
       var lid = (k.split("id=")[1] || "").split("&")[0];
