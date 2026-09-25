@@ -2,6 +2,7 @@
    Injected first in <head>. window.__FX_INDEX maps request keys to fixture files. */
 (function () {
   var IDX = window.__FX_INDEX || {};
+  var OVR = window.__FX_OVR || {};   // page-scoped fixtures (fx-deliv-index.js) win over the shared index
   var BASE = (function () {
     var s = document.currentScript && document.currentScript.src;
     if (!s) return "";
@@ -19,6 +20,7 @@
   }
   function pathOnly(k) { return k.split("?")[0]; }
   function resolve(k) {
+    if (OVR[k]) return OVR[k];
     if (IDX[k]) return IDX[k];
     var p = pathOnly(k);
     // same path, ignore query (live-status ids, queue filters, thread batches)
@@ -61,6 +63,52 @@
       }
     } catch (e) {}
     return t;
+  }
+  /* Keep a page's recording "current": when the page sets __FX_ANCHOR (the capture
+     date), every date moves forward so the recording ends today. Day-aligned series
+     move by whole weeks so weekend lulls stay on weekends; timestamps that would land
+     in the future read as a few minutes ago. */
+  var SHIFT = (function () {
+    if (!window.__FX_ANCHOR) return 0;
+    var a = Date.parse(window.__FX_ANCHOR + "T00:00:00Z"), n = new Date();
+    var t = Date.UTC(n.getFullYear(), n.getMonth(), n.getDate());
+    return Math.max(0, Math.round((t - a) / 864e5));
+  })();
+  var DATE = /"(\d{4}-\d{2}-\d{2})((?:T[0-9:.]+)?(?:Z|[+-]\d{2}:\d{2})?)"/g;
+  function realign(o, s) {
+    if (Array.isArray(o)) { o.forEach(function (x) { realign(x, s); }); return; }
+    if (!o || typeof o !== "object") return;
+    var d = o.days;
+    if (Array.isArray(d) && d.length && /^\d{4}-\d{2}-\d{2}/.test(String(d[0]))) {
+      var N = d.length;
+      (function walk(x) {
+        if (Array.isArray(x)) {
+          if (x !== d && x.length === N && typeof x[0] !== "string") {
+            var old = x.slice();
+            for (var i = 0; i < N; i++) { var j = i >= s ? i - s : i - s + 7; x[i] = j < N ? old[j] : 0; }
+          } else x.forEach(walk);
+        } else if (x && typeof x === "object") for (var kk in x) if (x[kk] !== d) walk(x[kk]);
+      })(o);
+      return;
+    }
+    for (var k in o) realign(o[k], s);
+  }
+  function freshen(k, t) {
+    var p = pathOnly(k);
+    if (!SHIFT || /^\/api\/setter\//.test(p)) return t;
+    var s = (7 * Math.ceil(SHIFT / 7) - SHIFT) % 7;
+    if (s) { try { var o = JSON.parse(t); realign(o, s); t = JSON.stringify(o); } catch (e) {} }
+    var now = Date.now();
+    return t.replace(DATE, function (m, day, rest) {
+      var ms = Date.parse(day + "T00:00:00Z");
+      if (isNaN(ms)) return m;
+      var nd = new Date(ms + SHIFT * 864e5).toISOString().slice(0, 10);
+      if (!rest) return '"' + nd + '"';
+      var v = Date.parse(nd + (rest.charAt(0) === "T" ? rest : "T00:00:00" + rest));
+      if (isNaN(v)) return '"' + nd + rest + '"';
+      if (v > now) { var h = 0; for (var i = 0; i < m.length; i++) h = (h * 31 + m.charCodeAt(i)) % 997; v = now - (6 + h % 50) * 60000; }
+      return JSON.stringify(new Date(v).toISOString());
+    });
   }
   function jsonResponse(text, status) {
     return new Response(text, { status: status || 200, headers: { "Content-Type": "application/json" } });
@@ -112,7 +160,7 @@
       var file = resolve(k);
       if (file) {
         if (!cache[file]) cache[file] = realFetch(BASE + file + "?v=" + (window.__FX_VERSION || "2"), { cache: "no-cache" }).then(function (r) { return r.text(); });
-        return cache[file].then(function (t) { return jsonResponse(retime(k, t)); });
+        return cache[file].then(function (t) { return jsonResponse(freshen(k, retime(k, t))); });
       }
     }
     return Promise.resolve(jsonResponse(synth(k, method)));
