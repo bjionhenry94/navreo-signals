@@ -7,7 +7,7 @@
   var PK = isDetail ? "campaign" : PAGE.replace(".html", "");
 
   var STEPS = [
-    ["deliverability.html", "#ah-databar", "Every client, every number, one page", "This is the page our team opens first each morning: sends, replies, interested, meetings and bounces across every campaign we run, refreshed hourly from the sending platform and the inbox. Acme is the client selected here."],
+    ["deliverability.html", "section.hero", "Every client, every number, one page", "This is the page our team opens first each morning: sends, replies, interested, meetings and bounces across every campaign we run, refreshed hourly from the sending platform and the inbox. Acme is the client selected here."],
     ["deliverability.html", "#ah-filterbar", "One click to scope", "We see every client side by side and flip between 7, 14 and 30 days. Each client gets this same page scoped to their own account."],
     ["deliverability.html", "#lane-improve", "Where can we improve the most?", "For every client we find the single funnel step losing the most people and say what we are doing about it. That becomes the week's optimisation."],
     ["deliverability.html", "#lane-leads", "Lead runway", "How many prospects are queued per campaign, how fast they burn, and the date each runs dry. We top up before that date, never after."],
@@ -35,7 +35,7 @@
 
   var EXPLAIN = {
     deliverability: {
-      "#ah-databar": "<b>The five numbers we judge every client on.</b> Each carries a comparison to the previous window so a dip shows the day it starts, on any account.",
+      "section.hero": "<b>The five numbers we judge every client on.</b> Each carries a comparison to the previous window so a dip shows the day it starts, on any account.",
       "#lane-improve": "The step highlighted in orange is losing the most people. It becomes that client's optimisation for the week and appears in their Monday report as <b>what we're doing about it</b>.",
       "#lane-leads": "<b>Runway</b> is how many sending days of leads remain. We schedule top-ups before the run-out date so a good campaign never goes quiet.",
       "#lane-sent": "Sends per day against capacity, with weekday pattern and bounce. Bounce above 3% pauses a campaign automatically, on every account.",
@@ -114,60 +114,55 @@
     var t = target.split("#")[0].split("?")[0];
     var hash = target.indexOf("#") >= 0 ? "#" + target.split("#")[1] : "";
     if (t !== PAGE) return false;
-    if (hash && location.hash !== hash) return false;
+    if (hash && /^#\/c\//.test(hash)) return /^#\/c\//.test(location.hash);   // any campaign's page
+    if (hash && hash.charAt(1) === "/" && location.hash !== hash) return false;   // route hashes must match; anchors (#access) don't
     if (!hash && PAGE === "campaigns.html" && /^#\/c\//.test(location.hash)) return false;
     return true;
   }
+  // Tour is per page: "Show me around" walks only the steps that live on the
+  // page you're on, so it starts instantly and never navigates away.
+  var MINE = [];
+  function pageSteps() { MINE = []; STEPS.forEach(function (st, k) { if (samePage(pageOf(st))) MINE.push(k); }); }
   function gotoStep(i) {
-    if (i < 0 || i >= STEPS.length) { endTour(); return; }
-    var s = STEPS[i];
-    try { sessionStorage.setItem("nv-tour", String(i)); } catch (e) {}
-    if (!samePage(pageOf(s))) {
-      var target = pageOf(s);
-      if (target.split("#")[0].split("?")[0] === PAGE && target.indexOf("#") >= 0) { location.hash = "#" + target.split("#")[1]; si = i; setTimeout(function () { showWhenReady(i); }, 300); return; }
-      location.href = target;
-      return;
-    }
+    if (i < 0 || i >= MINE.length) { endTour(); return; }
     si = i; showWhenReady(i);
   }
   function showWhenReady(i, tries) {
     tries = tries || 0;
-    var el = document.querySelector(STEPS[i][1]);
-    if ((!el || el.offsetHeight < 8) && tries < 60) { setTimeout(function () { showWhenReady(i, tries + 1); }, 250); return; }
-    if (!el) { gotoStep(i + 1); return; }
+    var el = document.querySelector(STEPS[MINE[i]][1]);
+    // an element that isn't in the DOM after ~2s is skipped; one that exists
+    // but is still rendering gets up to ~10s
+    if ((!el || el.offsetHeight < 8) && tries < (el ? 40 : 8)) { setTimeout(function () { showWhenReady(i, tries + 1); }, 250); return; }
+    if (!el || el.offsetHeight < 8) { if (si === i) gotoStep(i + 1); return; }
     if (hi) hi.classList.remove("nv-hi"); hi = el; el.classList.add("nv-hi");
     el.scrollIntoView({ block: "center" });
     setTimeout(place, 150);
   }
   function place() {
     if (si < 0) return;
-    var el = document.querySelector(STEPS[si][1]); if (!el) return;
+    var el = document.querySelector(STEPS[MINE[si]][1]); if (!el) return;
     var r = el.getBoundingClientRect();
     spot.style.cssText = "display:block;left:" + (r.left - 8) + "px;top:" + (r.top - 8) + "px;width:" + (r.width + 16) + "px;height:" + (r.height + 16) + "px";
-    document.getElementById("nv-st").textContent = "Step " + (si + 1) + " of " + STEPS.length;
-    document.getElementById("nv-t").textContent = STEPS[si][2];
-    document.getElementById("nv-b").textContent = STEPS[si][3];
+    document.getElementById("nv-st").textContent = "Step " + (si + 1) + " of " + MINE.length;
+    document.getElementById("nv-t").textContent = STEPS[MINE[si]][2];
+    document.getElementById("nv-b").textContent = STEPS[MINE[si]][3];
     document.getElementById("nv-prev").disabled = si === 0;
-    document.getElementById("nv-next").textContent = si === STEPS.length - 1 ? "Finish" : "Next";
+    document.getElementById("nv-next").textContent = si === MINE.length - 1 ? "Finish" : "Next";
     card.style.display = "block";
     var cw = 350, ch = card.offsetHeight, left = r.right + 16, top = Math.max(56, r.top);
     if (left + cw > window.innerWidth - 12) { left = Math.max(12, Math.min(r.left, window.innerWidth - cw - 12)); top = r.bottom + 16; }
     if (top + ch > window.innerHeight - 12) { top = Math.max(56, r.top - ch - 16); if (top + ch > window.innerHeight - 12) top = window.innerHeight - ch - 12; }
     card.style.left = left + "px"; card.style.top = top + "px";
   }
-  function endTour() { si = -1; spot.style.display = "none"; card.style.display = "none"; if (hi) hi.classList.remove("nv-hi"); try { sessionStorage.removeItem("nv-tour"); } catch (e) {} }
+  function endTour() { si = -1; spot.style.display = "none"; card.style.display = "none"; if (hi) hi.classList.remove("nv-hi"); }
   document.getElementById("nv-next").onclick = function () { gotoStep(si + 1); };
   document.getElementById("nv-prev").onclick = function () { gotoStep(si - 1); };
   document.getElementById("nv-exit").onclick = endTour;
-  document.getElementById("nv-tour").onclick = function () { gotoStep(0); };
+  document.getElementById("nv-tour").onclick = function () { endTour(); pageSteps(); gotoStep(0); };
   window.addEventListener("resize", place); window.addEventListener("scroll", place, { passive: true });
   document.addEventListener("keydown", function (e) { if (si < 0) return; if (e.key === "Escape") endTour(); if (e.key === "ArrowRight") gotoStep(si + 1); if (e.key === "ArrowLeft") gotoStep(si - 1); });
   window.addEventListener("hashchange", function () { if (si >= 0) setTimeout(place, 200); });
-  try {
-    var saved = sessionStorage.getItem("nv-tour");
-    if (saved !== null) { var i = parseInt(saved, 10); if (samePage(pageOf(STEPS[i]))) { si = i; setTimeout(function () { showWhenReady(i); }, 600); } }
-  } catch (e) {}
-  if (new URLSearchParams(location.search).get("tour") === "1") setTimeout(function () { gotoStep(0); }, 800);
+  if (new URLSearchParams(location.search).get("tour") === "1") setTimeout(function () { pageSteps(); gotoStep(0); }, 800);
 
   if (PAGE === "deliverability.html") {
     var n = 0; var t = setInterval(function () {
