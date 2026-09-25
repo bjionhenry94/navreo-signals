@@ -10131,6 +10131,12 @@ CLIENT_NOTIFY_MODES = ("slack", "email", "both", "none")
 CLIENT_NOTIFY_CACHE_ID = "client_notify_prefs"
 CE_FRESH_CATEGORIES = ("Interested", "Meeting Request", "Information Request",
                        "Call Booked")        # re-replies are not "new" positives
+# Clients in the navreo workspace that are NOT in NAVREO_HOSTED_CLIENTS (they
+# carry a real Smartlead client_id, no shared-channel routing) but still get
+# the email option: (campaign-name marker, key, label).
+CLIENT_NOTIFY_EXTRA = (("amplif", "amplifyy", "Amplifyy"),
+                       ("arnic", "arnic", "Arnic"),
+                       ("qwintiq", "qwintiq", "QwintiQ"))
 CE_LOOKBACK_HOURS = 72
 CE_POST_CAP = 10
 _CN_CACHE = {"at": 0.0, "prefs": None}
@@ -10216,7 +10222,10 @@ def client_notify_key(workspace, campaign_id):
         return None
     if ws != "navreo":
         return ws
-    return _ep_name_marker(POSITIVE_SHARED_CHANNELS, ws, campaign_id)
+    markers = dict.fromkeys(POSITIVE_SHARED_CHANNELS)
+    markers.update({m: k for m, k, _l in CLIENT_NOTIFY_EXTRA})
+    m = _ep_name_marker(markers, ws, campaign_id)
+    return (markers.get(m) or m) if m else None
 
 
 def smtp_configured() -> bool:
@@ -10414,7 +10423,8 @@ def client_notify_test_email(client_key: str, to: list) -> dict:
         return {"ok": False, "message": "Email sending isn't set up yet: add NOTIFY_SMTP_PASSWORD (admin@navreo.ai app password) on Render."}
     cats = ",".join(quote(c, safe="") for c in CE_FRESH_CATEGORIES)
     key = str(client_key or "").lower()
-    ws_filter = f"workspace=eq.{key}" if key not in POSITIVE_SHARED_CHANNELS else "workspace=eq.navreo"
+    navreo_keys = set(POSITIVE_SHARED_CHANNELS) | {k for _m, k, _l in CLIENT_NOTIFY_EXTRA}
+    ws_filter = "workspace=eq.navreo" if key in navreo_keys else f"workspace=eq.{key}"
     rows = _SB("GET", f"replies?{ws_filter}&category=in.({cats})"
                       f"&select=id,workspace,smartlead_campaign_id,email,replied_at,"
                       f"category,reply_body,smartlead_message_id"
