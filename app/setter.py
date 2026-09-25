@@ -10220,7 +10220,7 @@ def client_notify_key(workspace, campaign_id):
 
 
 def smtp_configured() -> bool:
-    return bool(os.environ.get("NOTIFY_SMTP_PASSWORD"))
+    return bool((os.environ.get("NOTIFY_SMTP_PASSWORD") or "").strip())
 
 
 def _send_client_email(to: list, subject: str, text: str, html: str) -> None:
@@ -10230,7 +10230,8 @@ def _send_client_email(to: list, subject: str, text: str, html: str) -> None:
     import ssl as _ssl
     from email.message import EmailMessage
     user = os.environ.get("NOTIFY_SMTP_USER") or "admin@navreo.ai"
-    pw = os.environ.get("NOTIFY_SMTP_PASSWORD")
+    # Google shows app passwords as "abcd efgh ijkl mnop" — accept it pasted either way
+    pw = "".join((os.environ.get("NOTIFY_SMTP_PASSWORD") or "").split())
     if not pw:
         raise RuntimeError("NOTIFY_SMTP_PASSWORD not set")
     msg = EmailMessage()
