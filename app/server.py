@@ -27326,6 +27326,8 @@ class Handler(SimpleHTTPRequestHandler):
             for c in setter.NAVREO_HOSTED_CLIENTS:
                 clients.append({"key": c["token"], "label": c["label"], "kind": "hosted",
                                 "slack": True, "make_lane": c["fresh_lane"] == "make"})
+            for _m, k, lbl in setter.CLIENT_NOTIFY_EXTRA:
+                clients.append({"key": k, "label": lbl, "kind": "hosted", "slack": False})
             for c in clients:
                 p = prefs.get(c["key"]) or {}
                 c["mode"] = setter.client_notify_mode(c["key"])
