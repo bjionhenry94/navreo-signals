@@ -187,6 +187,37 @@ def test_registry_failure_keeps_drafts():
     check("6a registry read failure keeps the drafts-based scope", "3879940" in m.get("revive", ()) and "krg" not in m)
 
 
+def test_about_is_a_thread_child():
+    """Bjion 2026-09-26: the "About <company>" bio is its own thread child
+    (`about_text`), never part of the parent card; internal lanes get none."""
+    wire()
+    orig = (setter._company_about, setter.hydrate_lead)
+    setter._company_about = lambda email, linkedin="": {
+        "name": "Hoppier", "industry": "Software", "employee_range": "11-50",
+        "location": {"city": "Toronto", "country": "Canada"}, "description": "Gift cards for teams."}
+    setter.hydrate_lead = lambda *a, **k: (False, None, None)
+    try:
+        krg = {"email": "j@krg-lead.com", "smartlead_message_id": "", "smartlead_campaign_id": 3421811,
+               "category": "Meeting Request", "replied_at": "2026-09-05T10:00:00+00:00", "workspace": "krg",
+               "reply_body": "Sure, send it over."}
+        chan = setter.CLIENT_ALERT_CHANNELS["krg"]
+        t = setter._cp_compose(krg, "KRG - GLP-1", "", channel=chan)
+        check("7a parent card carries no bio / About block", "About " not in t and "company bio" not in t, t)
+        f = setter._ep_thread_fields(krg, channel=chan)
+        at = f.get("about_text") or ""
+        check("7b client channel -> about_text thread field with the bio",
+              at.startswith("\U0001F3E2 *About Hoppier*") and "Gift cards for teams." in at, at)
+        check("7c reply child still posts", f.get("reply_text") == "Sure, send it over.", f)
+        f2 = setter._ep_thread_fields(krg, channel=setter.CLIENT_INTERNAL_CHANNEL)
+        check("7d internal lane -> no about_text", "about_text" not in f2, f2)
+        check("7e no channel (hook default) -> no about_text", "about_text" not in setter._ep_thread_fields(krg), "")
+        setter._company_about = lambda email, linkedin="": {}
+        check("7f Prospeo miss -> no about_text, never an empty child",
+              "about_text" not in setter._ep_thread_fields(krg, channel=chan), "")
+    finally:
+        setter._company_about, setter.hydrate_lead = orig
+
+
 if __name__ == "__main__":
     test_map_two_sources()
     test_client_id_of()
@@ -195,6 +226,7 @@ if __name__ == "__main__":
     test_client_chat_link()
     test_composers()
     test_registry_failure_keeps_drafts()
+    test_about_is_a_thread_child()
     failed = [n for n, ok in RESULTS if not ok]
     print(f"\n{len(RESULTS) - len(failed)}/{len(RESULTS)} pass")
     sys.exit(1 if failed else 0)
