@@ -15925,6 +15925,15 @@ def _reply_sync_bg():
         # card fired, TouchPoint client card did not). Those misses now log to
         # app_activity_log; this re-drives any that never recovered, keyed on
         # campaign+email so a card that already posted is never re-sent.
+        # Client EMAIL lane (Settings → Clients, 2026-09-25): opted-in
+        # clients get each new positive by email from admin@navreo.ai.
+        res6 = setter.run_client_positive_emails()
+        if not res6.get("skipped") and (res6.get("emailed") or not res6.get("ok")):
+            sb("POST", "app_activity_log",
+               {"actor": "cron", "endpoint": "/api/cron/reply-sync",
+                "action": ("client_email_done" if res6.get("ok")
+                           else "client_email_failed"),
+                "entity": "replies", "payload": res6})
         res5 = client_card_backfill_sweep()
         if res5.get("missed") or not res5.get("ok"):
             sb("POST", "app_activity_log",
@@ -16052,6 +16061,14 @@ def positive_card_notify(campaign_id, email: str, category: str) -> dict:
     card_sent, so it can never double-post a card."""
     cid_s = str(campaign_id or "").strip()
     email_n = (email or "").strip().lower()
+    try:
+        ckey = setter.client_notify_key("navreo", campaign_id)
+    except Exception:  # noqa: BLE001 — a routing miss keeps today's behaviour
+        ckey = None
+    if ckey and not setter.client_slack_enabled(ckey):
+        # Settings → Clients: this client opted out of Slack cards.
+        return {"ok": True, "suppressed": True, "client": ckey,
+                "reason": "client Slack notifications off"}
     lead = None
     for attempt in range(3):
         lead_resp = setter._sl_get("/leads/", {"email": email}, campaign_id=campaign_id)
@@ -27296,6 +27313,28 @@ class Handler(SimpleHTTPRequestHandler):
                                "render_instance_id": os.environ.get("RENDER_INSTANCE_ID"),
                                "on_render": _ON_RENDER,
                                "uptime_seconds": round(time.time() - _BOOT_AT)})
+        if path == "/api/settings/client-notify":
+            # Settings → Clients: every client + how new positives reach them.
+            prefs = setter.client_notify_prefs(force=True)
+            clients = []
+            for w in ws_all():
+                wid = w.get("id")
+                if wid and wid not in setter.EP_WORKSPACES:
+                    clients.append({"key": wid, "label": w.get("display_label") or w.get("name") or wid,
+                                    "kind": "workspace",
+                                    "slack": bool(setter.CLIENT_ALERT_CHANNELS.get(wid))})
+            for c in setter.NAVREO_HOSTED_CLIENTS:
+                clients.append({"key": c["token"], "label": c["label"], "kind": "hosted",
+                                "slack": True, "make_lane": c["fresh_lane"] == "make"})
+            for c in clients:
+                p = prefs.get(c["key"]) or {}
+                c["mode"] = setter.client_notify_mode(c["key"])
+                c["emails"] = p.get("emails") or []
+                c["updated_at"] = p.get("updated_at")
+            clients.sort(key=lambda c: c["label"].lower())
+            return self._json({"ok": True, "clients": clients,
+                               "smtp_configured": setter.smtp_configured(),
+                               "sender": os.environ.get("NOTIFY_SMTP_USER") or "admin@navreo.ai"})
         if path == "/api/settings/ui":
             # respect the 30s TTL (hot path); the Settings save POST busts it
             # via _ui_prefs_set, so a toggle still shows on the next read
@@ -28017,6 +28056,30 @@ class Handler(SimpleHTTPRequestHandler):
             body, status = (api_workspaces_delete(p) if path.endswith("/delete")
                             else api_workspaces_add(p))
             return self._json(body, status)
+        if path in ("/api/settings/client-notify", "/api/settings/client-notify/test"):
+            # Settings → Clients notification channel save / test email.
+            try:
+                p = json.loads(self._post_body.decode() or "{}")
+            except ValueError:
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            if not isinstance(p, dict):
+                return self._json({"ok": False, "message": "invalid JSON body"}, 400)
+            if path.endswith("/test"):
+                to = [e.strip().lower() for e in re.split(r"[,;\s]+", str(p.get("to") or "")) if e.strip()]
+                if not to:
+                    return self._json({"ok": False, "message": "no test recipient"}, 400)
+                res = setter.client_notify_test_email(p.get("client_key"), to)
+                log_activity("/api/settings/client-notify/test",
+                             {"client": p.get("client_key"), "to": to, "ok": res.get("ok")},
+                             action="test", entity="settings")
+                return self._json(res, 200 if res.get("ok") else 400)
+            res = setter.client_notify_set(p.get("client_key"), p.get("mode"),
+                                           p.get("emails"), actor="settings")
+            if res.get("ok"):
+                log_activity("/api/settings/client-notify",
+                             {"client": p.get("client_key"), **res["pref"]},
+                             action="set", entity="settings")
+            return self._json(res, 200 if res.get("ok") else 400)
         if path == "/api/settings/ui":
             # Settings UI prefs — a PARTIAL keyed patch (Settings → Clients
             # "Show demo clients", Settings → General auto-mover switch and

@@ -104,6 +104,15 @@ table.ws tr:last-child td { border-bottom: none; }
       <div id="ws-table"><div class="loading">Loading workspaces…</div></div>
     </section>
 
+    <section class="section" id="notify-section">
+      <h2>Positive reply notifications</h2>
+      <p class="sub">How each client hears about a new positive reply: Slack (their
+      shared channel), an email from <strong id="cn-sender">admin@navreo.ai</strong>,
+      both, or neither. Our internal #appointment-setter alerts are unaffected.</p>
+      <div id="cn-warn" class="hint" style="display:none;color:#b45309;margin-bottom:10px"></div>
+      <div id="cn-table"><div class="loading">Loading clients…</div></div>
+    </section>
+
     <section class="section" id="demo-section">
       <h2>Demo clients</h2>
       <p class="sub">A demo client (<strong>Acme</strong>) lives in the tool with
@@ -275,6 +284,66 @@ document.getElementById("rm-go").addEventListener("click", async () => {
   toast(`Workspace removed${bits.length ? " — deleted " + bits.join(", ") : ""}.`, 7000);
   load();
 });
+
+// ── Positive reply notifications (per client) ───────────────────────────────
+const CN_MODES = [["slack","Slack"],["email","Email"],["both","Both"],["none","None"]];
+async function loadNotify() {
+  const box = document.getElementById("cn-table");
+  let b;
+  try {
+    const r = await fetch("/api/settings/client-notify", { cache: "no-store" });
+    b = await r.json();
+    if (!b.ok) throw new Error(b.message || "load failed");
+  } catch (e) {
+    box.innerHTML = `<div class="empty">Could not load (${esc(String(e))}). Refresh to retry.</div>`;
+    return;
+  }
+  document.getElementById("cn-sender").textContent = b.sender;
+  const warn = document.getElementById("cn-warn");
+  if (!b.smtp_configured) {
+    warn.style.display = "block";
+    warn.textContent = "Email sending isn't connected yet — preferences save, but no email goes out until the admin@navreo.ai app password is added on Render (NOTIFY_SMTP_PASSWORD).";
+  }
+  box.innerHTML = `<table class="ws"><thead><tr><th>Client</th><th>Notify via</th><th>Email recipients</th><th></th></tr></thead><tbody>${
+    b.clients.map(c => `<tr data-key="${esc(c.key)}">
+      <td><div class="ws-name">${esc(c.label)}</div><div class="ws-slug">${esc(c.key)}</div></td>
+      <td><select class="cn-mode">${CN_MODES.map(([v,l]) =>
+        `<option value="${v}"${v===c.mode?" selected":""}>${l}</option>`).join("")}</select></td>
+      <td><input class="cn-emails" type="text" style="width:100%;min-width:220px"
+        placeholder="name@client.com, other@client.com" value="${esc((c.emails||[]).join(", "))}"
+        ${c.mode==="email"||c.mode==="both"?"":"disabled"}></td>
+      <td style="white-space:nowrap"><button class="btn sm primary cn-save">Save</button>
+        <button class="btn sm cn-test" title="Send a preview of this client's email to you">Test</button></td>
+    </tr>`).join("")}</tbody></table>`;
+  box.querySelectorAll("tr[data-key]").forEach(tr => {
+    const key = tr.dataset.key, mode = tr.querySelector(".cn-mode"), em = tr.querySelector(".cn-emails");
+    mode.addEventListener("change", () => { em.disabled = !(mode.value==="email"||mode.value==="both"); });
+    tr.querySelector(".cn-save").addEventListener("click", async () => {
+      try {
+        const r = await fetch("/api/settings/client-notify", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ client_key: key, mode: mode.value, emails: em.value }) });
+        const x = await r.json();
+        if (!x.ok) throw new Error(x.message || ("HTTP " + r.status));
+        em.value = (x.pref.emails||[]).join(", ");
+        toast(`Saved — ${tr.querySelector(".ws-name").textContent}: ${mode.options[mode.selectedIndex].text}.`);
+      } catch (e) { toast("Couldn't save: " + String(e.message || e)); }
+    });
+    tr.querySelector(".cn-test").addEventListener("click", async () => {
+      const to = prompt("Send a test email to:", "bjion@navreo.ai");
+      if (!to) return;
+      try {
+        const r = await fetch("/api/settings/client-notify/test", { method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ client_key: key, to }) });
+        const x = await r.json();
+        if (!x.ok) throw new Error(x.message || ("HTTP " + r.status));
+        toast(`Test sent to ${x.to.join(", ")}.`, 6000);
+      } catch (e) { toast(String(e.message || e), 8000); }
+    });
+  });
+}
+loadNotify();
 
 // ── Demo clients toggle ─────────────────────────────────────────────────────
 const demoSwitch = document.getElementById("demo-switch");
