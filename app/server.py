@@ -32,6 +32,52 @@ import urllib.parse
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+
+# ── glibc allocator tuning (OOM fix 2026-09-25) ─────────────────────────────
+# The web box was OOM-killed ~10x/day at 2 GiB while live Python data stayed
+# small: tracemalloc showed 14 MB live / 100 MB transient peak while RSS rose
+# 88 MB in the same 3 minutes, and malloc_trim(0) handed back 105 MB. That is
+# glibc keeping freed memory: one malloc arena per thread (ThreadingHTTPServer
+# spawns a thread per request; up to 8x cores arenas), each holding its own
+# high-water, and a dynamic mmap threshold that parks big buffers (multi-MB
+# JSON responses) in those arenas instead of returning them. Must run before
+# any thread starts, so it lives right after the stdlib imports.
+#   M_ARENA_MAX=2       - two arenas total instead of one per busy thread
+#   M_MMAP_THRESHOLD    - fixed 128 KiB: big buffers always mmap'd, so a free
+#                         goes straight back to the OS (fixed value also turns
+#                         off glibc's dynamic threshold growth)
+#   M_TRIM_THRESHOLD    - trim the heap top once 128 KiB is free
+# Plus malloc_trim(0) every 60 s to release free pages inside the arenas.
+# Linux/glibc only; a no-op anywhere else (macOS dev boxes).
+def _tune_malloc():
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        import ctypes
+        libc = ctypes.CDLL("libc.so.6")
+        ok = [libc.mallopt(-8, 2),            # M_ARENA_MAX
+              libc.mallopt(-3, 128 * 1024),   # M_MMAP_THRESHOLD
+              libc.mallopt(-1, 128 * 1024)]   # M_TRIM_THRESHOLD
+        return libc if all(r == 1 for r in ok) else libc  # mallopt returns 1 on success; trim works either way
+    except Exception:  # noqa: BLE001 — tuning is best-effort, never fatal
+        return None
+
+
+_LIBC = _tune_malloc()
+
+
+def _malloc_trim_loop():
+    while True:
+        time.sleep(60)
+        try:
+            _LIBC.malloc_trim(0)
+        except Exception:  # noqa: BLE001
+            return
+
+
+if _LIBC is not None:
+    threading.Thread(target=_malloc_trim_loop, name="malloc-trim", daemon=True).start()
+
 import certifi
 
 import mock_deliv  # DELIV_MOCK — in-memory fake fleet, only ever called when DELIV_MOCK=1
@@ -26411,6 +26457,7 @@ def _mem_report(gc_types: bool = False, trim: bool = False, tm: str = "") -> dic
     import gc
     t0 = time.time()
     rep = {"commit": _GIT_COMMIT or None, "uptime_seconds": round(time.time() - _BOOT_AT),
+           "malloc_tuned": _LIBC is not None,
            "proc": _proc_status_mb(), "python_blocks": sys.getallocatedblocks()}
     names: dict = {}
     for th in threading.enumerate():
