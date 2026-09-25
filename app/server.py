@@ -26407,7 +26407,7 @@ def _approx_size(root) -> tuple[int, bool]:
     return total, truncated
 
 
-def _mem_report(gc_types: bool = False, trim: bool = False) -> dict:
+def _mem_report(gc_types: bool = False, trim: bool = False, tm: str = "") -> dict:
     import gc
     t0 = time.time()
     rep = {"commit": _GIT_COMMIT or None, "uptime_seconds": round(time.time() - _BOOT_AT),
@@ -26421,7 +26421,13 @@ def _mem_report(gc_types: bool = False, trim: bool = False) -> dict:
     skip = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type,
             types.MethodType)
     rows = []
-    for modname, g in (("server", globals()), ("setter", vars(setter))):
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    mods = [("server", globals())]
+    for mn, mod in list(sys.modules.items()):
+        f = getattr(mod, "__file__", None) or ""
+        if f and os.path.dirname(os.path.abspath(f)) == app_dir and mod is not sys.modules.get("__main__"):
+            mods.append((mn, vars(mod)))
+    for modname, g in mods:
         for name, val in list(g.items()):
             if name.startswith("__") or isinstance(val, skip) or callable(val):
                 continue
@@ -26440,6 +26446,29 @@ def _mem_report(gc_types: bool = False, trim: bool = False) -> dict:
                          "len": n, "mb": round(size / 1048576, 1), "approx": trunc})
     rows.sort(key=lambda r: -r["mb"])
     rep["caches_top"] = rows[:40]
+    # What each thread is doing and how much its in-flight frames hold (a
+    # long-running loop's locals are invisible to the module walk above).
+    frames = sys._current_frames()
+    th_rows = []
+    for th in threading.enumerate():
+        fr = frames.get(th.ident)
+        if fr is None:
+            continue
+        stack, held, f = [], 0, fr
+        depth = 0
+        while f is not None and depth < 25:
+            code = f.f_code
+            if app_dir in os.path.abspath(code.co_filename):
+                stack.append(f"{os.path.basename(code.co_filename)}:{code.co_name}:{f.f_lineno}")
+                try:
+                    held += _approx_size(dict(f.f_locals))[0]
+                except Exception:  # noqa: BLE001
+                    pass
+            f = f.f_back
+            depth += 1
+        th_rows.append({"thread": th.name, "held_mb": round(held / 1048576, 1), "stack": stack[:4]})
+    th_rows.sort(key=lambda r: -r["held_mb"])
+    rep["thread_frames"] = th_rows[:12]
     rep["caches_total_mb"] = round(sum(r["mb"] for r in rows), 1)
     if gc_types:
         counts: dict = {}
@@ -26457,6 +26486,25 @@ def _mem_report(gc_types: bool = False, trim: bool = False) -> dict:
             freed = f"unavailable: {str(e)[:80]}"
         rep["trim"] = {"rss_before_mb": before, "rss_after_mb": _proc_status_mb().get("VmRSS"),
                        "malloc_trim_returned": freed}
+    if tm:
+        import tracemalloc
+        if tm == "start" and not tracemalloc.is_tracing():
+            tracemalloc.start(1)
+            rep["tracemalloc"] = "started"
+        elif tm == "stop" and tracemalloc.is_tracing():
+            tracemalloc.stop()
+            rep["tracemalloc"] = "stopped"
+        elif tm == "top" and tracemalloc.is_tracing():
+            snap = tracemalloc.take_snapshot()
+            stats = snap.statistics("lineno")
+            cur, peak = tracemalloc.get_traced_memory()
+            rep["tracemalloc"] = {"traced_mb": round(cur / 1048576, 1), "peak_mb": round(peak / 1048576, 1),
+                                  "top": [{"where": f"{os.path.basename(st.traceback[0].filename)}:{st.traceback[0].lineno}",
+                                           "mb": round(st.size / 1048576, 2), "blocks": st.count}
+                                          for st in stats[:30]]}
+            del snap, stats
+        else:
+            rep["tracemalloc"] = {"tracing": tracemalloc.is_tracing()}
     rep["report_secs"] = round(time.time() - t0, 2)
     return rep
 
@@ -27500,7 +27548,8 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(_mem_report(gc_types=(q.get("gc") or ["0"])[0] == "1",
-                                          trim=(q.get("trim") or ["0"])[0] == "1"))
+                                          trim=(q.get("trim") or ["0"])[0] == "1",
+                                          tm=(q.get("tm") or [""])[0]))
         if path == "/api/version":
             # Deploy verification: which commit/instance is actually serving.
             return self._json({"commit": _GIT_COMMIT or None,
