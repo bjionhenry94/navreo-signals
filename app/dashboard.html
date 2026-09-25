@@ -328,9 +328,30 @@ html,body{overflow-x:hidden;background:var(--bg)}
   .ah .ocol{grid-template-columns:1fr 62px 62px;gap:6px}
   .ah .hero{padding:16px 14px 12px}
 }
+/* first-load loader: the API can take 25-70 s on a cold start, so show a
+   ring + elapsed timer + plain-English stage instead of a blank page */
+.ld{min-height:70vh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:24px 16px;text-align:center;font-family:var(--font-sans);color:var(--ink-2)}
+.ld-ring{position:relative;width:88px;height:88px}
+.ld-ring svg{width:88px;height:88px;transform:rotate(-90deg)}
+.ld-ring .trk{fill:none;stroke:var(--line);stroke-width:6}
+.ld-ring .arc{fill:none;stroke:var(--ink);stroke-width:6;stroke-linecap:round;stroke-dasharray:238.76;stroke-dashoffset:238.76;transition:stroke-dashoffset .4s ease-out}
+.ld{transition:opacity .3s}
+.ld-msg{font-size:15px;color:var(--ink);font-weight:500}
+.ld-sub{font-size:13px;color:var(--ink-3);max-width:340px;line-height:1.45}
+@media (prefers-reduced-motion:reduce){.ld-ring .arc{transition:none}}
 </style>
 </head>
 <body>
+<div class="ld" id="ld" role="status" aria-live="polite">
+  <div class="ld-ring"><svg viewBox="0 0 88 88"><circle class="trk" cx="44" cy="44" r="38"/><circle class="arc" id="ld-arc" cx="44" cy="44" r="38"/></svg></div>
+  <div class="ld-msg" id="ld-msg">Loading your campaign dashboard…</div>
+  <div class="ld-sub" id="ld-sub">Pulling your latest numbers.</div>
+</div>
+<script>
+(function(){var t0=Date.now(),steps=[[0,"Loading your campaign dashboard…","Pulling your latest numbers."],[6,"Gathering month-by-month results…","Adding up every campaign since your first send."],[15,"Checking live replies and meetings…","The first load of the day takes a little longer, usually under a minute."],[35,"Almost there…","Still building your numbers. Thanks for waiting."]];
+window.__ldTimer=setInterval(function(){var s=(Date.now()-t0)/1000,e=document.getElementById("ld-arc");if(!e)return;e.style.strokeDashoffset=238.76*(1-0.95*(1-Math.exp(-s/18)));for(var i=steps.length-1;i>=0;i--){if(s>=steps[i][0]){document.getElementById("ld-msg").textContent=steps[i][1];document.getElementById("ld-sub").textContent=steps[i][2];break;}}},250);})();
+function __ldDone(){clearInterval(window.__ldTimer);var l=document.getElementById("ld");if(l)l.remove();}
+</script>
 <div class="ah" id="page" style="display:none">
 
   <!-- ══ page header — who this report is for + the exact window ══ -->
@@ -1435,6 +1456,7 @@ loadJSON(url)
       if (I1 < 0) { I1 = R.days.length - 1; for (var j = R.days.length - 1; j >= 0; j--) { if (R.days[j] <= R.end) { I1 = j; break; } } }
       if (I1 < I0) I1 = I0;
     }
+    __ldDone();
     $("page").style.display = "";
     renderMonths();
     renderCampaigns();
@@ -1484,7 +1506,7 @@ loadJSON(url)
     }
     window.addEventListener("resize", function () { mHide(); hideTip(); });
   })
-  .catch(function () { $("gone").style.display = ""; });
+  .catch(function () { __ldDone(); $("gone").style.display = ""; });
 
 })();
 </script>

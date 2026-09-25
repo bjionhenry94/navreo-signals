@@ -310,14 +310,12 @@ async function loadNotify() {
       <td><select class="cn-mode">${CN_MODES.map(([v,l]) =>
         `<option value="${v}"${v===c.mode?" selected":""}>${l}</option>`).join("")}</select></td>
       <td><input class="cn-emails" type="text" style="width:100%;min-width:220px"
-        placeholder="name@client.com, other@client.com" value="${esc((c.emails||[]).join(", "))}"
-        ${c.mode==="email"||c.mode==="both"?"":"disabled"}></td>
+        placeholder="name@client.com, other@client.com" value="${esc((c.emails||[]).join(", "))}"></td>
       <td style="white-space:nowrap"><button class="btn sm primary cn-save">Save</button>
         <button class="btn sm cn-test" title="Send a preview of this client's email to you">Test</button></td>
     </tr>`).join("")}</tbody></table>`;
   box.querySelectorAll("tr[data-key]").forEach(tr => {
     const key = tr.dataset.key, mode = tr.querySelector(".cn-mode"), em = tr.querySelector(".cn-emails");
-    mode.addEventListener("change", () => { em.disabled = !(mode.value==="email"||mode.value==="both"); });
     tr.querySelector(".cn-save").addEventListener("click", async () => {
       try {
         const r = await fetch("/api/settings/client-notify", { method: "POST",

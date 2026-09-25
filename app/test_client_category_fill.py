@@ -397,6 +397,54 @@ def test_no_supabase_skips():
     check("12 skipped without Supabase", res["skipped"] and res["ok"], res)
 
 
+# ── 14. TypeSafe auto-reply gate ──
+AUTOACK = "Hi Customer, thank you for reaching out. We will get back to you within 24 hours."
+
+
+def _ts_http(p=None, fail=False, verdict=None):
+    http = FakeHTTP(verdict=verdict or {"category": "Interested", "confidence": 0.9})
+    inner = http.__call__
+    http.ts_calls = []
+
+    def call(method, url, headers=None, body=None, timeout=60):
+        if "api.typesafe.ai" in url:
+            http.ts_calls.append(body)
+            if fail:
+                raise OSError("typesafe down")
+            return {"answers": {"automated": {"type": "noul", "noul": p}}}
+        return inner(method, url, headers, body, timeout)
+    return http, call
+
+
+def _wire_ts(call, key="ts-key"):
+    setter.configure(sb=FakeSB(WS, []), http_json=call,
+                     keys={"OPENAI_API_KEY": "test-openai", "TYPESAFE_API_KEY": key},
+                     log_activity=lambda *a, **k: None)
+
+
+def test_typesafe_gate():
+    http, call = _ts_http(p=0.95)
+    _wire_ts(call)
+    check("14a automated positive -> Out Of Office",
+          setter._classify_client_reply(AUTOACK) == ("Out Of Office", 0.9))
+    http, call = _ts_http(p=0.2)
+    _wire_ts(call)
+    check("14b human positive stays positive",
+          setter._classify_client_reply(POSITIVE) == ("Interested", 0.9))
+    http, call = _ts_http(p=0.95, verdict={"category": "Not Interested", "confidence": 0.9})
+    _wire_ts(call)
+    check("14c non-positive untouched, TypeSafe not asked",
+          setter._classify_client_reply(AUTOACK) == ("Not Interested", 0.9) and not http.ts_calls)
+    http, call = _ts_http(fail=True)
+    _wire_ts(call)
+    check("14d TypeSafe down -> gpt label kept",
+          setter._classify_client_reply(AUTOACK) == ("Interested", 0.9))
+    http, call = _ts_http(p=0.95)
+    _wire_ts(call, key="")
+    check("14e no TypeSafe key -> gpt label kept, no call",
+          setter._classify_client_reply(AUTOACK) == ("Interested", 0.9) and not http.ts_calls)
+
+
 # ── 13. helper edges ──
 def test_helper_edges():
     http = FakeHTTP(verdict={"category": "Banana", "confidence": 0.99})
@@ -418,7 +466,7 @@ if __name__ == "__main__":
                test_low_confidence_left_and_not_reasked, test_model_failure_is_loud_and_retried_later,
                test_other_workspaces_untouched, test_model_cap_per_tick, test_bodyless_left_alone,
                test_monitor_only_workspace_never_writes_smartlead, test_legacy_label_is_uncategorised,
-               test_no_supabase_skips, test_helper_edges):
+               test_no_supabase_skips, test_helper_edges, test_typesafe_gate):
         try:
             fn()
         except Exception as e:  # noqa: BLE001 - a crashing case is a failing case

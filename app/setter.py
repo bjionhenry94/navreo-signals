@@ -8479,6 +8479,54 @@ def _category_id_for_name(catmap: dict, name: str):
     return None
 
 
+# TypeSafe auto-reply gate (2026-09-25, same gate as every Make categoriser):
+# gpt labels helpdesk acknowledgements ("thanks, we'll reply within 48h",
+# "X reacted to your message") as positives. TypeSafe answers one typed
+# question - was this written by a machine? - and a positive it scores
+# >= 0.7 becomes Out Of Office. 200-reply replay: 10/12 auto-acks caught,
+# 0 of 188 real positives touched. Fails OPEN: no key / error -> 0.0.
+TS_GATE_URL = "https://api.typesafe.ai/v1/systemone"
+TS_GATE_THRESHOLD = 0.7
+TS_GATE_POSITIVE = frozenset({"Interested", "Meeting Request",
+                              "Information Request", "Call Booked"})
+TS_GATE_QUESTION = {"automated": {
+    "type": "noul",
+    "instructions": ("Was `reply` written by an automated system (auto-responder, "
+                     "ticket/inquiry receipt, 'we received your message and will "
+                     "respond within X hours', newsletter/promotion, out-of-office, "
+                     "reaction notification) rather than typed by a human personally "
+                     "responding to the cold email?"),
+    "criteria": {
+        "true": ("Automated: generic acknowledgement or template that would be sent "
+                 "to anyone who emails this address; addresses the sender generically "
+                 "(e.g. 'Hi Customer', 'Hello there'); promises a response within a "
+                 "time window; is a marketing/stock announcement; or is a reaction "
+                 "notification. No personal reaction to the specific offer."),
+        "false": ("A human wrote it personally in response to this cold email: agrees, "
+                  "asks a question, asks for price/info/video, proposes times, declines, "
+                  "redirects, or comments on the offer, even if very short (e.g. 'yes', "
+                  "'sure', 'ok', 'send it')."),
+    }}}
+
+
+def _typesafe_automated_p(text: str) -> float:
+    """TypeSafe's probability that `text` is machine-written, or 0.0 when the
+    key is missing or the call fails — the gate never blocks a real positive."""
+    try:
+        key = _KEYS.get("TYPESAFE_API_KEY")
+        if not key or not (text or "").strip():
+            return 0.0
+        r = _HTTP("POST", TS_GATE_URL, {"Authorization": f"Bearer {key}"},
+                  {"model": "jev-latest", "questions": TS_GATE_QUESTION,
+                   "state": {"reply": text[:2000]}})
+        p = (((r or {}).get("answers") or {}).get("automated") or {}).get("noul")
+        return float(p) if p is not None else 0.0
+    except Exception as e:  # noqa: BLE001 — fail open
+        print(f"[setter] typesafe gate failed: {type(e).__name__}: {str(e)[:120]}",
+              file=sys.stderr)
+        return 0.0
+
+
 def _classify_client_reply(body: str):
     """(category, confidence) for one client reply from the house categoriser
     prompt, or None when the model is unavailable, times out or answers
@@ -8512,6 +8560,8 @@ def _classify_client_reply(body: str):
             conf = float(data.get("confidence"))
         except (TypeError, ValueError):
             conf = 0.0
+        if cat in TS_GATE_POSITIVE and _typesafe_automated_p(text) >= TS_GATE_THRESHOLD:
+            cat = "Out Of Office"
         return cat, max(0.0, min(1.0, conf))
     except Exception as e:  # noqa: BLE001 — never load-bearing
         print(f"[setter] client categorise failed: {type(e).__name__}: {str(e)[:120]}",
@@ -9361,7 +9411,8 @@ def _fmt_day(iso) -> str:
 
 def _card_text(header: str, company: str, name: str, title: str, email: str,
                website: str, linkedin: str, campaign=None, replied_at=None,
-               chat_url: str = "", extra=None, dashboard_url: str = "") -> str:
+               chat_url: str = "", extra=None, dashboard_url: str = "",
+               about: str = "") -> str:
     """The ONE positive-alert card shape. A missing fact is omitted, never
     placeholdered. No workspace labels, no raw URLs, no divider."""
     lines = [f"*{header}" + (f" \u00b7 {company}" if company else "") + "*"]
@@ -9388,6 +9439,8 @@ def _card_text(header: str, company: str, name: str, title: str, email: str,
         # (client-campaign-dashboard step 4a).
         if dashboard_url:
             lines.append(f"\U0001F4CA <{dashboard_url}|Open your campaign dashboard>")
+    if about:
+        lines.extend(["", about])
     lines.append(_CARD_SEPARATOR)
     return "\n".join(lines)
 
@@ -9438,6 +9491,68 @@ def _alert_lead_facts(campaign_id, email: str) -> dict:
     return out
 
 
+_ABOUT_CACHE = {}          # email -> (ts, company dict)
+_ABOUT_TTL_S = 86400
+
+
+def _company_about(email: str, linkedin: str = "") -> dict:
+    """Prospeo /enrich-person company block for one lead — the SAME lookup the
+    Make client-card scenario (8946472, module 5) uses for its "About company"
+    thread, so every client card reads alike. Cached per email for a day.
+    Never raises; {} on any miss."""
+    key = (email or "").strip().lower()
+    hit = _ABOUT_CACHE.get(key)
+    if hit and (_time.time() - hit[0]) < _ABOUT_TTL_S:
+        return hit[1]
+    comp = {}
+    try:
+        pk = (_KEYS or {}).get("PROSPEO_API_KEY") or os.environ.get("PROSPEO_API_KEY")
+        if pk and (key or linkedin):
+            data = {"linkedin_url": linkedin} if linkedin else {"email": key}
+            r = _HTTP("POST", "https://api.prospeo.io/enrich-person",
+                      {"X-KEY": pk}, {"data": data}) or {}
+            c = r.get("company") or (r.get("response") or {}).get("company") or {}
+            comp = c if isinstance(c, dict) else {}
+    except Exception as e:  # noqa: BLE001 — decoration, never load-bearing
+        print(f"[setter] company about failed: {type(e).__name__}: {e}", file=sys.stderr)
+    _ABOUT_CACHE[key] = (_time.time(), comp)
+    if len(_ABOUT_CACHE) > 2000:
+        for k in sorted(_ABOUT_CACHE, key=lambda x: _ABOUT_CACHE[x][0])[:500]:
+            _ABOUT_CACHE.pop(k, None)
+    return comp
+
+
+def _about_fields(email: str, linkedin: str = "", company: str = "") -> dict:
+    """{name, industry, size, location, founded, bio} — an em dash for a missing
+    fact, exactly as the Make card renders. {} when Prospeo knows nothing."""
+    c = _company_about(email, linkedin)
+    if not c:
+        return {}
+    loc = c.get("location") if isinstance(c.get("location"), dict) else {}
+    city, country = loc.get("city") or "", loc.get("country") or ""
+    dash = "—"
+    return {"name": c.get("name") or company or "",
+            "industry": c.get("industry") or dash,
+            "size": str(c.get("employee_range") or c.get("employee_count") or dash),
+            "location": (city or dash) + (f", {country}" if country else ""),
+            "founded": str(c.get("founded") or dash),
+            "bio": (c.get("description") or c.get("description_ai")
+                    or c.get("description_seo") or "").strip()}
+
+
+def _about_block(email: str, linkedin: str = "", company: str = "") -> str:
+    """The Slack "About <company>" block, same wording as the Make card."""
+    a = _about_fields(email, linkedin, company)
+    if not a:
+        return ""
+    out = (f"\U0001F3E2 *About {a['name']}*\n"
+           f"*Industry:* {a['industry']}   |   *Size:* {a['size']}\n"
+           f"*Location:* {a['location']}   |   *Founded:* {a['founded']}")
+    if a["bio"]:
+        out += f"\n\n*Their company bio:*\n{a['bio']}"
+    return out
+
+
 def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = None,
                              channel: str = None) -> str:
     """Client-facing positive alert for a shared channel — ZERO internal
@@ -9458,7 +9573,9 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
                       campaign=None,            # client channel — dropped
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
-                      dashboard_url=_alert_dashboard_link(row, channel))
+                      dashboard_url=_alert_dashboard_link(row, channel),
+                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
+                             if channel in CLIENT_FACING_CHANNELS else ""))
 
 
 def _ep_thread_fields(row: dict, re_reply: bool = False) -> dict:
@@ -9650,7 +9767,9 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
                       dashboard_url=_alert_dashboard_link(row, channel),
-                      extra=extra)
+                      extra=extra,
+                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
+                             if channel in CLIENT_FACING_CHANNELS else ""))
 
 
 def run_ever_positive_alerts() -> dict:
@@ -10006,7 +10125,9 @@ def _cp_compose(row: dict, cname: str, link: str, channel: str = None,
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
                       dashboard_url=_alert_dashboard_link(row, channel),
-                      extra=extra)
+                      extra=extra,
+                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
+                             if channel in CLIENT_FACING_CHANNELS else ""))
 
 
 def run_client_positive_alerts() -> dict:
@@ -10131,6 +10252,12 @@ CLIENT_NOTIFY_MODES = ("slack", "email", "both", "none")
 CLIENT_NOTIFY_CACHE_ID = "client_notify_prefs"
 CE_FRESH_CATEGORIES = ("Interested", "Meeting Request", "Information Request",
                        "Call Booked")        # re-replies are not "new" positives
+# Clients in the navreo workspace that are NOT in NAVREO_HOSTED_CLIENTS (they
+# carry a real Smartlead client_id, no shared-channel routing) but still get
+# the email option: (campaign-name marker, key, label).
+CLIENT_NOTIFY_EXTRA = (("amplif", "amplifyy", "Amplifyy"),
+                       ("arnic", "arnic", "Arnic"),
+                       ("qwintiq", "qwintiq", "QwintiQ"))
 CE_LOOKBACK_HOURS = 72
 CE_POST_CAP = 10
 _CN_CACHE = {"at": 0.0, "prefs": None}
@@ -10216,7 +10343,10 @@ def client_notify_key(workspace, campaign_id):
         return None
     if ws != "navreo":
         return ws
-    return _ep_name_marker(POSITIVE_SHARED_CHANNELS, ws, campaign_id)
+    markers = dict.fromkeys(POSITIVE_SHARED_CHANNELS)
+    markers.update({m: k for m, k, _l in CLIENT_NOTIFY_EXTRA})
+    m = _ep_name_marker(markers, ws, campaign_id)
+    return (markers.get(m) or m) if m else None
 
 
 def smtp_configured() -> bool:
@@ -10291,6 +10421,13 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
         text += ["", f"Open the conversation: {chat}"]
     if dash:
         text += [f"Your campaign dashboard: {dash}"]
+    ab = _about_fields(email, f.get("linkedin"), company)
+    if ab:
+        text += ["", f"About {ab['name']}",
+                 f"Industry: {ab['industry']}  |  Size: {ab['size']}",
+                 f"Location: {ab['location']}  |  Founded: {ab['founded']}"]
+        if ab["bio"]:
+            text += ["", "Their company bio:", ab["bio"]]
     text += ["", "— Navreo"]
     e = _html.escape
     rows_html = "".join(
@@ -10305,12 +10442,22 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
                  f'<blockquote style="margin:0;padding:10px 14px;border-left:3px solid #10b981;'
                  f'background:#f9fafb;white-space:pre-wrap">{e(snippet)}</blockquote>'
                  if snippet else "")
+    about_html = ""
+    if ab:
+        about_html = (f'<div style="margin:20px 0 0;padding:12px 14px;background:#f9fafb;'
+                      f'border-radius:6px"><p style="margin:0 0 6px"><strong>'
+                      f'\U0001F3E2 About {e(ab["name"])}</strong></p>'
+                      f'<p style="margin:0;color:#374151">Industry: {e(ab["industry"])} &nbsp;|&nbsp; '
+                      f'Size: {e(ab["size"])}<br>Location: {e(ab["location"])} &nbsp;|&nbsp; '
+                      f'Founded: {e(ab["founded"])}</p>'
+                      + (f'<p style="margin:10px 0 0"><strong>Their company bio:</strong><br>'
+                         f'{e(ab["bio"])}</p>' if ab["bio"] else "") + '</div>')
     html = (f'<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-size:14px;'
             f'color:#111827;max-width:560px">'
             f'<h2 style="font-size:18px;margin:0 0 12px">\U0001F389 New positive reply</h2>'
             f'<p style="margin:0 0 12px"><strong>{e(who)}</strong> just replied positively '
             f'to your campaign.</p><table style="border-collapse:collapse">{rows_html}</table>'
-            f'{snip_html}{btn}{dash_html}'
+            f'{snip_html}{btn}{dash_html}{about_html}'
             f'<p style="color:#9ca3af;font-size:12px;margin-top:24px">Sent by Navreo</p></div>')
     return subject, "\n".join(text), html
 
@@ -10414,7 +10561,8 @@ def client_notify_test_email(client_key: str, to: list) -> dict:
         return {"ok": False, "message": "Email sending isn't set up yet: add NOTIFY_SMTP_PASSWORD (admin@navreo.ai app password) on Render."}
     cats = ",".join(quote(c, safe="") for c in CE_FRESH_CATEGORIES)
     key = str(client_key or "").lower()
-    ws_filter = f"workspace=eq.{key}" if key not in POSITIVE_SHARED_CHANNELS else "workspace=eq.navreo"
+    navreo_keys = set(POSITIVE_SHARED_CHANNELS) | {k for _m, k, _l in CLIENT_NOTIFY_EXTRA}
+    ws_filter = "workspace=eq.navreo" if key in navreo_keys else f"workspace=eq.{key}"
     rows = _SB("GET", f"replies?{ws_filter}&category=in.({cats})"
                       f"&select=id,workspace,smartlead_campaign_id,email,replied_at,"
                       f"category,reply_body,smartlead_message_id"
