@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
-<head><script src="fx-index.js?v=3"></script><script src="demo-shim.js?v=5"></script><link rel="stylesheet" href="demo-layer.css?v=3">
+<head><script src="fx-index.js?v=3"></script><script src="demo-shim.js?v=6"></script><link rel="stylesheet" href="demo-layer.css?v=3">
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Setter · Demo</title>
@@ -5303,7 +5303,7 @@ function convoHtml(row) {
   } else if (row._thread_verdict === "fresh" || (row._thread_pending && weSpokeLast)) {
     latestLoading = `<div class="thread-verdict uptodate muted small" style="padding:8px 0 2px">`
       + `&#10003; Up to date — you're seeing the latest message.</div>`;
-  } else if (row._thread_verdict === "stalled") {
+  } else if (row._thread_verdict === "stalled" && !window.__demo) {
     latestLoading = `<div class="thread-verdict stalled small" style="padding:8px 0 2px;color:#b45309">`
       + `&#9888; Couldn't reach the mail server — showing the last saved copy. `
       + `<a href="#" class="thread-retry" data-id="${esc(row.id)}">Retry</a></div>`;
@@ -8538,6 +8538,16 @@ document.addEventListener("click", (e) => {
   };
   new MutationObserver(clampConvo).observe(document.body, { childList: true, subtree: true });
   clampConvo();
+})();
+</script>
+<script>
+/* Demo: always open on a conversation - the first reply in the list. */
+(function () {
+  var n = 0, t = setInterval(function () {
+    if (++n > 100 || selectedRowId) return clearInterval(t);
+    var first = (typeof QUEUE_ROWS !== "undefined" && QUEUE_ROWS && QUEUE_ROWS[0]);
+    if (first) { clearInterval(t); selectRow(first.id); }
+  }, 100);
 })();
 </script>
 <script src="demo-layer.js?v=5"></script></body>
