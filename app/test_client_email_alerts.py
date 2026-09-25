@@ -67,6 +67,21 @@ check("marked in activity log", LOG and LOG[0]["action"] == "client_positive_ema
 res2 = setter.run_client_positive_emails()
 check("second tick never re-sends", res2["emailed"] == 0 and len(SENT) == 1, res2)
 
+# a lead already positive replies again -> emailed as "replied again"
+REPLIES.append({"id": 4, "workspace": "grout", "smartlead_campaign_id": 11, "email": "a@x.com",
+                "replied_at": iso(2), "category": "positive-re-reply", "reply_body": "Tuesday works",
+                "smartlead_message_id": "m4"})
+_orig_sb = setter._SB
+setter._SB = lambda m, p, b=None, prefer=None: (
+    [{"category": "Interested", "replied_at": iso(5)}]
+    if p.startswith("replies?") and "replied_at=lt." in p and "a%40x.com" in p
+    else _orig_sb(m, p, b, prefer))
+res3 = setter.run_client_positive_emails()
+check("re-reply is emailed", res3["emailed"] == 1 and len(SENT) == 2, res3)
+check("re-reply subject says replied again", SENT[-1][1] == "Ann Lee at Acme replied again", SENT[-1][1])
+check("re-reply body says ongoing conversation", "ongoing conversation" in SENT[-1][2])
+setter._SB = _orig_sb
+
 setter.client_notify_set("grout", "both", ["bjion@navreo.ai"])
 check("both keeps Slack on", setter.client_slack_enabled("grout"))
 setter.client_notify_set("grout", "none", [])

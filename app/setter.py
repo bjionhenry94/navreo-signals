@@ -10251,7 +10251,7 @@ def run_client_positive_alerts() -> dict:
 CLIENT_NOTIFY_MODES = ("slack", "email", "both", "none")
 CLIENT_NOTIFY_CACHE_ID = "client_notify_prefs"
 CE_FRESH_CATEGORIES = ("Interested", "Meeting Request", "Information Request",
-                       "Call Booked")        # re-replies are not "new" positives
+                       "Call Booked", _RE_REPLY_LABEL)   # re-replies email too, as "replied again"
 # Clients in the navreo workspace that are NOT in NAVREO_HOSTED_CLIENTS (they
 # carry a real Smartlead client_id, no shared-channel routing) but still get
 # the email option: (campaign-name marker, key, label).
@@ -10394,7 +10394,7 @@ def _ce_reply_snippet(body: str, limit: int = 600) -> str:
     return (txt[:limit].rstrip() + "…") if len(txt) > limit else txt
 
 
-def _ce_compose(row: dict, client_label: str = "") -> tuple:
+def _ce_compose(row: dict, client_label: str = "", prior: dict = None) -> tuple:
     """(subject, text, html) for one client positive-reply email. Client-safe:
     no internal labels, categories or campaign names."""
     import html as _html
@@ -10404,7 +10404,8 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
     name = f.get("name") or email
     company = f.get("company") or ""
     who = f"{name} at {company}" if company else name
-    subject = f"New positive reply: {who}"
+    since = _fmt_day((prior or {}).get("replied_at")) if prior else ""
+    subject = (f"{who} replied again" if prior else f"New positive reply: {who}")
     chat = _client_chat_link(email, cid, row.get("smartlead_message_id") or "")
     dash = _client_dashboard_link(cid)
     snippet = _ce_reply_snippet(row.get("reply_body") or "")
@@ -10413,7 +10414,9 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
              ("Website", f.get("website")), ("LinkedIn", f.get("linkedin")),
              ("Replied", _fmt_day(row.get("replied_at")))]
     facts = [(k, v) for k, v in facts if v]
-    text = [f"Good news: {who} just replied positively to your campaign.", ""]
+    text = ([f"{who} replied again in an ongoing conversation"
+             + (f" (interested since {since})." if since else "."), ""] if prior
+            else [f"Good news: {who} just replied positively to your campaign.", ""])
     text += [f"{k}: {v}" for k, v in facts]
     if snippet:
         text += ["", "Their reply:", snippet]
@@ -10442,6 +10445,10 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
                  f'<blockquote style="margin:0;padding:10px 14px;border-left:3px solid #10b981;'
                  f'background:#f9fafb;white-space:pre-wrap">{e(snippet)}</blockquote>'
                  if snippet else "")
+    h2 = "\U0001F501 Replied again" if prior else "\U0001F389 New positive reply"
+    lede = (f"<strong>{e(who)}</strong> replied again in an ongoing conversation"
+            + (f" (interested since {e(since)})." if since else ".") if prior
+            else f"<strong>{e(who)}</strong> just replied positively to your campaign.")
     about_html = ""
     if ab:
         about_html = (f'<div style="margin:20px 0 0;padding:12px 14px;background:#f9fafb;'
@@ -10454,9 +10461,8 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
                          f'{e(ab["bio"])}</p>' if ab["bio"] else "") + '</div>')
     html = (f'<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-size:14px;'
             f'color:#111827;max-width:560px">'
-            f'<h2 style="font-size:18px;margin:0 0 12px">\U0001F389 New positive reply</h2>'
-            f'<p style="margin:0 0 12px"><strong>{e(who)}</strong> just replied positively '
-            f'to your campaign.</p><table style="border-collapse:collapse">{rows_html}</table>'
+            f'<h2 style="font-size:18px;margin:0 0 12px">{h2}</h2>'
+            f'<p style="margin:0 0 12px">{lede}</p><table style="border-collapse:collapse">{rows_html}</table>'
             f'{snip_html}{btn}{dash_html}{about_html}'
             f'<p style="color:#9ca3af;font-size:12px;margin-top:24px">Sent by Navreo</p></div>')
     return subject, "\n".join(text), html
@@ -10529,16 +10535,13 @@ def run_client_positive_emails() -> dict:
             if en and rt and rt < en:
                 continue
             email = (row.get("email") or "").strip()
-            if _ep_prior_positive(row.get("workspace"), email, row.get("replied_at") or ""):
-                _ce_mark(rid, "client_positive_email_skipped",
-                         {"client": key, "reason": "re-reply", "lead": email})
-                summary["skipped_rows"] += 1
-                continue
+            prior = _ep_prior_positive(row.get("workspace"), email,
+                                       row.get("replied_at") or "")
             if summary["emailed"] >= CE_POST_CAP:
                 summary.update(capped=True, ok=False)
                 continue
             try:
-                subj, text, html = _ce_compose(row)
+                subj, text, html = _ce_compose(row, prior=prior)
                 _send_client_email(pref["emails"], subj, text, html)
             except Exception as e:  # noqa: BLE001 — retry next tick
                 summary["failed"] += 1
@@ -10546,7 +10549,8 @@ def run_client_positive_emails() -> dict:
                 summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
                 continue
             _ce_mark(rid, "client_positive_email_sent",
-                     {"client": key, "to": pref["emails"], "lead": email})
+                     {"client": key, "to": pref["emails"], "lead": email,
+                      "re_reply": bool(prior)})
             summary["emailed"] += 1
         return summary
     except Exception as e:  # noqa: BLE001 — never crash the cron thread
