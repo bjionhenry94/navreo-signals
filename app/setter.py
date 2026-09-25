@@ -8479,6 +8479,54 @@ def _category_id_for_name(catmap: dict, name: str):
     return None
 
 
+# TypeSafe auto-reply gate (2026-09-25, same gate as every Make categoriser):
+# gpt labels helpdesk acknowledgements ("thanks, we'll reply within 48h",
+# "X reacted to your message") as positives. TypeSafe answers one typed
+# question - was this written by a machine? - and a positive it scores
+# >= 0.7 becomes Out Of Office. 200-reply replay: 10/12 auto-acks caught,
+# 0 of 188 real positives touched. Fails OPEN: no key / error -> 0.0.
+TS_GATE_URL = "https://api.typesafe.ai/v1/systemone"
+TS_GATE_THRESHOLD = 0.7
+TS_GATE_POSITIVE = frozenset({"Interested", "Meeting Request",
+                              "Information Request", "Call Booked"})
+TS_GATE_QUESTION = {"automated": {
+    "type": "noul",
+    "instructions": ("Was `reply` written by an automated system (auto-responder, "
+                     "ticket/inquiry receipt, 'we received your message and will "
+                     "respond within X hours', newsletter/promotion, out-of-office, "
+                     "reaction notification) rather than typed by a human personally "
+                     "responding to the cold email?"),
+    "criteria": {
+        "true": ("Automated: generic acknowledgement or template that would be sent "
+                 "to anyone who emails this address; addresses the sender generically "
+                 "(e.g. 'Hi Customer', 'Hello there'); promises a response within a "
+                 "time window; is a marketing/stock announcement; or is a reaction "
+                 "notification. No personal reaction to the specific offer."),
+        "false": ("A human wrote it personally in response to this cold email: agrees, "
+                  "asks a question, asks for price/info/video, proposes times, declines, "
+                  "redirects, or comments on the offer, even if very short (e.g. 'yes', "
+                  "'sure', 'ok', 'send it')."),
+    }}}
+
+
+def _typesafe_automated_p(text: str) -> float:
+    """TypeSafe's probability that `text` is machine-written, or 0.0 when the
+    key is missing or the call fails — the gate never blocks a real positive."""
+    try:
+        key = _KEYS.get("TYPESAFE_API_KEY")
+        if not key or not (text or "").strip():
+            return 0.0
+        r = _HTTP("POST", TS_GATE_URL, {"Authorization": f"Bearer {key}"},
+                  {"model": "jev-latest", "questions": TS_GATE_QUESTION,
+                   "state": {"reply": text[:2000]}})
+        p = (((r or {}).get("answers") or {}).get("automated") or {}).get("noul")
+        return float(p) if p is not None else 0.0
+    except Exception as e:  # noqa: BLE001 — fail open
+        print(f"[setter] typesafe gate failed: {type(e).__name__}: {str(e)[:120]}",
+              file=sys.stderr)
+        return 0.0
+
+
 def _classify_client_reply(body: str):
     """(category, confidence) for one client reply from the house categoriser
     prompt, or None when the model is unavailable, times out or answers
@@ -8512,6 +8560,8 @@ def _classify_client_reply(body: str):
             conf = float(data.get("confidence"))
         except (TypeError, ValueError):
             conf = 0.0
+        if cat in TS_GATE_POSITIVE and _typesafe_automated_p(text) >= TS_GATE_THRESHOLD:
+            cat = "Out Of Office"
         return cat, max(0.0, min(1.0, conf))
     except Exception as e:  # noqa: BLE001 — never load-bearing
         print(f"[setter] client categorise failed: {type(e).__name__}: {str(e)[:120]}",
