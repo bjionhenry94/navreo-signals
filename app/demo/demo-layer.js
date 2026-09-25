@@ -77,8 +77,7 @@
   var bar = document.createElement("div"); bar.id = "nv-bar";
   bar.innerHTML = '<b>Inside the platform</b><span class="tag">Demo · example client Acme</span><span class="grow"></span>' +
     '<button id="nv-explain" aria-pressed="false">Explain mode</button>' +
-    '<button id="nv-tour" class="pri">Show me around</button>' +
-    '<a href="index.html">Overview</a>';
+    '<button id="nv-tour" class="pri">Show me around</button>';
   document.body.appendChild(bar);
 
   function applyExplain() {
@@ -135,6 +134,7 @@
     if ((!el || el.offsetHeight < 8) && tries < (el ? 40 : 8)) { setTimeout(function () { showWhenReady(i, tries + 1); }, 250); return; }
     if (!el || el.offsetHeight < 8) { if (si === i) gotoStep(i + 1); return; }
     if (hi) hi.classList.remove("nv-hi"); hi = el; el.classList.add("nv-hi");
+    document.body.classList.add("nv-touring");
     el.scrollIntoView({ block: "center" });
     setTimeout(place, 150);
   }
@@ -154,7 +154,7 @@
     if (top + ch > window.innerHeight - 12) { top = Math.max(56, r.top - ch - 16); if (top + ch > window.innerHeight - 12) top = window.innerHeight - ch - 12; }
     card.style.left = left + "px"; card.style.top = top + "px";
   }
-  function endTour() { si = -1; spot.style.display = "none"; card.style.display = "none"; if (hi) hi.classList.remove("nv-hi"); }
+  function endTour() { si = -1; document.body.classList.remove("nv-touring"); spot.style.display = "none"; card.style.display = "none"; if (hi) hi.classList.remove("nv-hi"); }
   document.getElementById("nv-next").onclick = function () { gotoStep(si + 1); };
   document.getElementById("nv-prev").onclick = function () { gotoStep(si - 1); };
   document.getElementById("nv-exit").onclick = endTour;

@@ -4,6 +4,10 @@
 #nv-bar .grow{flex:1}
 #nv-bar a,#nv-bar button{color:#fff;text-decoration:none;font:inherit;background:none;border:1px solid rgba(255,255,255,.28);border-radius:8px;padding:6px 11px;cursor:pointer;font-weight:600}
 #nv-bar .pri{background:#FF4D00;border-color:#FF4D00}
+/* "Show me around" pulses to invite the first click; it stops while the tour is running */
+@keyframes nv-pulse{0%{box-shadow:0 0 0 0 rgba(255,77,0,.7)}70%{box-shadow:0 0 0 10px rgba(255,77,0,0)}100%{box-shadow:0 0 0 0 rgba(255,77,0,0)}}
+body:not(.nv-touring) #nv-tour{animation:nv-pulse 1.8s ease-out infinite}
+@media (prefers-reduced-motion:reduce){body:not(.nv-touring) #nv-tour{animation:none}}
 #nv-bar button[aria-pressed="true"]{background:#fff;color:#14110E;border-color:#fff}
 body.nv-demo{padding-top:44px!important}
 body.nv-demo #rail,body.nv-demo .rail,body.nv-demo aside.rail{top:44px!important}
