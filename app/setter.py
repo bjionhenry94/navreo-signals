@@ -9697,6 +9697,8 @@ def run_ever_positive_alerts() -> dict:
                 marker = _ep_name_marker(POSITIVE_SHARED_CHANNELS, ws,
                                          row.get("smartlead_campaign_id"))
                 shared = POSITIVE_SHARED_CHANNELS.get(marker) if marker else None
+                if shared and not client_slack_enabled(marker):
+                    shared = None   # Settings → Clients: Slack off for this client
                 if shared and cat != _RE_REPLY_LABEL \
                         and marker in POSITIVE_FRESH_MAKE_OWNED:
                     # Fresh positive on a client whose card Make 8946472
@@ -10061,6 +10063,10 @@ def run_client_positive_alerts() -> dict:
             # -> #appointment-setter (ruling 2026-08-18: the hook's
             # #interested-replies default is Navreo-own only).
             chan = CLIENT_ALERT_CHANNELS.get(ws) or CLIENT_INTERNAL_CHANNEL
+            if chan != CLIENT_INTERNAL_CHANNEL and not client_slack_enabled(ws):
+                # Settings → Clients: this client opted out of Slack (email
+                # only / none) — the card stays internal, never their channel.
+                chan = CLIENT_INTERNAL_CHANNEL
             # A lead who already replied positively is coming BACK, not
             # arriving: the ever-positive predicate (any earlier positive row
             # for this email, same workspace, any campaign — alerted or not).
@@ -10111,6 +10117,317 @@ def run_client_positive_alerts() -> dict:
         summary["errors"] += 1
         summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
         return summary
+
+
+# ── Client positive-reply notification channel (Settings → Clients) ─────────
+# Bjion 2026-09-25: per client, choose how a NEW positive reply reaches them —
+# Slack, email (from admin@navreo.ai), both, or neither. Stored as one blob in
+# deliverability_audit_cache (id=client_notify_prefs) so no schema change is
+# needed. A client with no stored row reads as "slack" = today's behaviour.
+# Keys: an own workspace id (grout, krg, asteri…) or a NAVREO_HOSTED_CLIENTS
+# token (revive, greenshift…). The internal #appointment-setter lane is never
+# affected by this setting — only what the CLIENT receives.
+CLIENT_NOTIFY_MODES = ("slack", "email", "both", "none")
+CLIENT_NOTIFY_CACHE_ID = "client_notify_prefs"
+CE_FRESH_CATEGORIES = ("Interested", "Meeting Request", "Information Request",
+                       "Call Booked")        # re-replies are not "new" positives
+CE_LOOKBACK_HOURS = 72
+CE_POST_CAP = 10
+_CN_CACHE = {"at": 0.0, "prefs": None}
+_CN_TTL_S = 30.0
+_EMAIL_RE = re.compile(r"^[^@\s,;]+@[^@\s,;]+\.[^@\s,;]+$")
+
+
+def client_notify_prefs(force: bool = False) -> dict:
+    """{client_key: {mode, emails, email_enabled_at, updated_at, updated_by}}.
+    A read miss returns the last good copy (or {}). Never raises."""
+    if not force and _CN_CACHE["prefs"] is not None \
+            and (_time.time() - _CN_CACHE["at"]) < _CN_TTL_S:
+        return dict(_CN_CACHE["prefs"])
+    try:
+        rows = _SB("GET", f"deliverability_audit_cache?id=eq.{CLIENT_NOTIFY_CACHE_ID}"
+                          f"&select=blob") or []
+        blob = rows[0].get("blob") if rows and isinstance(rows[0], dict) else {}
+        clients = (blob or {}).get("clients") if isinstance(blob, dict) else {}
+        _CN_CACHE.update({"at": _time.time(),
+                          "prefs": clients if isinstance(clients, dict) else {}})
+    except Exception:  # noqa: BLE001 — keep the last good copy
+        if _CN_CACHE["prefs"] is None:
+            return {}
+    return dict(_CN_CACHE["prefs"] or {})
+
+
+def client_notify_mode(client_key) -> str:
+    p = client_notify_prefs().get(str(client_key or "")) or {}
+    m = p.get("mode")
+    return m if m in CLIENT_NOTIFY_MODES else "slack"
+
+
+def client_slack_enabled(client_key) -> bool:
+    """False only when the client chose email-only or none."""
+    return client_notify_mode(client_key) in ("slack", "both")
+
+
+def client_notify_set(client_key: str, mode: str, emails, actor: str = "app") -> dict:
+    """Validate + read-modify-write one client's preference. Returns
+    {"ok": bool, "message"?, "pref"?}."""
+    key = str(client_key or "").strip().lower()
+    if not key or key in EP_WORKSPACES:
+        return {"ok": False, "message": "unknown client"}
+    if mode not in CLIENT_NOTIFY_MODES:
+        return {"ok": False, "message": f"mode must be one of {', '.join(CLIENT_NOTIFY_MODES)}"}
+    if isinstance(emails, str):
+        emails = re.split(r"[,;\s]+", emails)
+    clean = []
+    for e in emails or []:
+        e = str(e or "").strip().lower()
+        if not e:
+            continue
+        if not _EMAIL_RE.match(e):
+            return {"ok": False, "message": f"not a valid email: {e}"}
+        if e not in clean:
+            clean.append(e)
+    if mode in ("email", "both") and not clean:
+        return {"ok": False, "message": "add at least one email address for email notifications"}
+    cur = client_notify_prefs(force=True)
+    old = cur.get(key) or {}
+    now = _dt.datetime.now(_dt.timezone.utc).isoformat()
+    had_email = old.get("mode") in ("email", "both")
+    wants_email = mode in ("email", "both")
+    pref = {"mode": mode, "emails": clean,
+            # email only covers positives AFTER it was switched on — flipping
+            # it on never back-mails three days of history
+            "email_enabled_at": (old.get("email_enabled_at") if had_email and wants_email
+                                 else (now if wants_email else None)),
+            "updated_at": now, "updated_by": actor}
+    cur[key] = pref
+    _SB("POST", "deliverability_audit_cache?on_conflict=id",
+        {"id": CLIENT_NOTIFY_CACHE_ID, "blob": {"clients": cur}, "ts": now},
+        prefer="resolution=merge-duplicates,return=minimal")
+    _CN_CACHE.update({"at": 0.0, "prefs": None})
+    return {"ok": True, "pref": pref}
+
+
+def client_notify_key(workspace, campaign_id):
+    """Which client a reply belongs to: an own workspace is its own key; a
+    navreo campaign resolves by name marker to a hosted client; Navreo-own → None."""
+    ws = (workspace or "").lower()
+    if not ws or ws == "opan-test":
+        return None
+    if ws != "navreo":
+        return ws
+    return _ep_name_marker(POSITIVE_SHARED_CHANNELS, ws, campaign_id)
+
+
+def smtp_configured() -> bool:
+    return bool(os.environ.get("NOTIFY_SMTP_PASSWORD"))
+
+
+def _send_client_email(to: list, subject: str, text: str, html: str) -> None:
+    """Send one email from admin@navreo.ai (Google Workspace SMTP + app
+    password in NOTIFY_SMTP_PASSWORD). Raises on failure."""
+    import smtplib
+    import ssl as _ssl
+    from email.message import EmailMessage
+    user = os.environ.get("NOTIFY_SMTP_USER") or "admin@navreo.ai"
+    pw = os.environ.get("NOTIFY_SMTP_PASSWORD")
+    if not pw:
+        raise RuntimeError("NOTIFY_SMTP_PASSWORD not set")
+    msg = EmailMessage()
+    msg["From"] = f"Navreo <{user}>"
+    msg["To"] = ", ".join(to)
+    msg["Subject"] = subject
+    msg["Reply-To"] = user
+    msg.set_content(text)
+    msg.add_alternative(html, subtype="html")
+    try:
+        import certifi
+        ctx = _ssl.create_default_context(cafile=certifi.where())
+    except Exception:  # noqa: BLE001
+        ctx = _ssl.create_default_context()
+    host = os.environ.get("NOTIFY_SMTP_HOST") or "smtp.gmail.com"
+    with smtplib.SMTP_SSL(host, 465, context=ctx, timeout=20) as s:
+        s.login(user, pw)
+        s.send_message(msg)
+
+
+def _ce_reply_snippet(body: str, limit: int = 600) -> str:
+    """The lead's own words: drop the quoted thread below 'On … wrote:' / '>'."""
+    out = []
+    for line in (body or "").replace("\r", "").split("\n"):
+        s = line.strip()
+        if s.startswith(">") or re.match(r"^(On .+wrote:|From:\s|-----Original)", s):
+            break
+        out.append(line.rstrip())
+    txt = re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
+    return (txt[:limit].rstrip() + "…") if len(txt) > limit else txt
+
+
+def _ce_compose(row: dict, client_label: str = "") -> tuple:
+    """(subject, text, html) for one client positive-reply email. Client-safe:
+    no internal labels, categories or campaign names."""
+    import html as _html
+    email = (row.get("email") or "").strip()
+    cid = row.get("smartlead_campaign_id")
+    f = _alert_lead_facts(cid, email)
+    name = f.get("name") or email
+    company = f.get("company") or ""
+    who = f"{name} at {company}" if company else name
+    subject = f"New positive reply: {who}"
+    chat = _client_chat_link(email, cid, row.get("smartlead_message_id") or "")
+    dash = _client_dashboard_link(cid)
+    snippet = _ce_reply_snippet(row.get("reply_body") or "")
+    facts = [("Name", f.get("name")), ("Title", f.get("title")),
+             ("Company", company), ("Email", email),
+             ("Website", f.get("website")), ("LinkedIn", f.get("linkedin")),
+             ("Replied", _fmt_day(row.get("replied_at")))]
+    facts = [(k, v) for k, v in facts if v]
+    text = [f"Good news: {who} just replied positively to your campaign.", ""]
+    text += [f"{k}: {v}" for k, v in facts]
+    if snippet:
+        text += ["", "Their reply:", snippet]
+    if chat:
+        text += ["", f"Open the conversation: {chat}"]
+    if dash:
+        text += [f"Your campaign dashboard: {dash}"]
+    text += ["", "— Navreo"]
+    e = _html.escape
+    rows_html = "".join(
+        f'<tr><td style="padding:3px 12px 3px 0;color:#6b7280">{e(k)}</td>'
+        f'<td style="padding:3px 0">{e(str(v))}</td></tr>' for k, v in facts)
+    btn = (f'<p style="margin:20px 0"><a href="{e(chat)}" style="background:#111827;'
+           f'color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none">'
+           f'Open the conversation</a></p>') if chat else ""
+    dash_html = (f'<p style="margin:0 0 16px"><a href="{e(dash)}">Your campaign dashboard</a></p>'
+                 if dash else "")
+    snip_html = (f'<p style="margin:16px 0 4px;color:#6b7280">Their reply</p>'
+                 f'<blockquote style="margin:0;padding:10px 14px;border-left:3px solid #10b981;'
+                 f'background:#f9fafb;white-space:pre-wrap">{e(snippet)}</blockquote>'
+                 if snippet else "")
+    html = (f'<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-size:14px;'
+            f'color:#111827;max-width:560px">'
+            f'<h2 style="font-size:18px;margin:0 0 12px">\U0001F389 New positive reply</h2>'
+            f'<p style="margin:0 0 12px"><strong>{e(who)}</strong> just replied positively '
+            f'to your campaign.</p><table style="border-collapse:collapse">{rows_html}</table>'
+            f'{snip_html}{btn}{dash_html}'
+            f'<p style="color:#9ca3af;font-size:12px;margin-top:24px">Sent by Navreo</p></div>')
+    return subject, "\n".join(text), html
+
+
+def _ce_handled_ids(ids) -> set:
+    """Reply ids already emailed (or deliberately skipped) — the dedupe marker
+    lives in app_activity_log so no schema change was needed."""
+    ids = [str(i) for i in ids if i]
+    if not ids:
+        return set()
+    rows = _SB("GET", "app_activity_log?action=in.(client_positive_email_sent,"
+                      "client_positive_email_skipped)&entity=eq.replies"
+                      f"&entity_id=in.({','.join(ids)})&select=entity_id&limit=1000")
+    if not isinstance(rows, list):
+        raise RuntimeError("dedupe read failed")
+    return {str(r.get("entity_id")) for r in rows if isinstance(r, dict)}
+
+
+def _ce_mark(rid, action: str, payload: dict):
+    if callable(_LOG):
+        _LOG("/api/cron/reply-sync", payload, actor="cron", action=action,
+             entity="replies", entity_id=str(rid))
+
+
+def run_client_positive_emails() -> dict:
+    """Email every client who opted in (mode email|both) about each NEW
+    positive reply, from admin@navreo.ai. Rides the reply-sync tick after the
+    Slack lanes. Fail-closed: a reply is marked only after SMTP accepted it.
+    Never raises."""
+    summary = {"ok": True, "skipped": False, "checked": 0, "emailed": 0,
+               "skipped_rows": 0, "failed": 0, "capped": False}
+    try:
+        prefs = {k: p for k, p in client_notify_prefs(force=True).items()
+                 if isinstance(p, dict) and p.get("mode") in ("email", "both")
+                 and p.get("emails")}
+        if not prefs or not _SB:
+            summary["skipped"] = True
+            return summary
+        if not smtp_configured():
+            summary.update(ok=False, skipped=True, error="NOTIFY_SMTP_PASSWORD not set")
+            return summary
+        now = _dt.datetime.now(_dt.timezone.utc)
+        floor = now - _dt.timedelta(hours=CE_LOOKBACK_HOURS)
+        starts = [_parse_iso(p.get("email_enabled_at")) for p in prefs.values()]
+        starts = [s for s in starts if s]
+        since = max(floor, min(starts)) if starts else floor
+        cats = ",".join(quote(c, safe="") for c in CE_FRESH_CATEGORIES)
+        rows = _SB("GET", f"replies?category=in.({cats})"
+                          f"&replied_at=gte.{quote(since.isoformat(), safe='')}"
+                          f"&workspace=neq.opan-test"
+                          f"&select=id,workspace,smartlead_campaign_id,email,replied_at,"
+                          f"category,reply_body,smartlead_message_id"
+                          f"&order=replied_at.asc&limit=200")
+        if not isinstance(rows, list):
+            summary.update(ok=False, error="replies read returned non-list")
+            return summary
+        summary["checked"] = len(rows)
+        done = _ce_handled_ids([r.get("id") for r in rows if isinstance(r, dict)])
+        for row in rows:
+            rid = row.get("id") if isinstance(row, dict) else None
+            if not rid or str(rid) in done:
+                continue
+            key = client_notify_key(row.get("workspace"), row.get("smartlead_campaign_id"))
+            pref = prefs.get(key) if key else None
+            if not pref:
+                continue            # not an email client — never marked, cheap to re-check
+            rt = _parse_iso(row.get("replied_at"))
+            en = _parse_iso(pref.get("email_enabled_at"))
+            if en and rt and rt < en:
+                continue
+            email = (row.get("email") or "").strip()
+            if _ep_prior_positive(row.get("workspace"), email, row.get("replied_at") or ""):
+                _ce_mark(rid, "client_positive_email_skipped",
+                         {"client": key, "reason": "re-reply", "lead": email})
+                summary["skipped_rows"] += 1
+                continue
+            if summary["emailed"] >= CE_POST_CAP:
+                summary.update(capped=True, ok=False)
+                continue
+            try:
+                subj, text, html = _ce_compose(row)
+                _send_client_email(pref["emails"], subj, text, html)
+            except Exception as e:  # noqa: BLE001 — retry next tick
+                summary["failed"] += 1
+                summary["ok"] = False
+                summary["error"] = f"{type(e).__name__}: {str(e)[:200]}"
+                continue
+            _ce_mark(rid, "client_positive_email_sent",
+                     {"client": key, "to": pref["emails"], "lead": email})
+            summary["emailed"] += 1
+        return summary
+    except Exception as e:  # noqa: BLE001 — never crash the cron thread
+        summary.update(ok=False, error=f"{type(e).__name__}: {str(e)[:200]}")
+        return summary
+
+
+def client_notify_test_email(client_key: str, to: list) -> dict:
+    """Send `to` a real preview of the email `client_key` would get, built
+    from that client's latest positive reply. Never marks the reply."""
+    if not smtp_configured():
+        return {"ok": False, "message": "Email sending isn't set up yet: add NOTIFY_SMTP_PASSWORD (admin@navreo.ai app password) on Render."}
+    cats = ",".join(quote(c, safe="") for c in CE_FRESH_CATEGORIES)
+    key = str(client_key or "").lower()
+    ws_filter = f"workspace=eq.{key}" if key not in POSITIVE_SHARED_CHANNELS else "workspace=eq.navreo"
+    rows = _SB("GET", f"replies?{ws_filter}&category=in.({cats})"
+                      f"&select=id,workspace,smartlead_campaign_id,email,replied_at,"
+                      f"category,reply_body,smartlead_message_id"
+                      f"&order=replied_at.desc&limit=100") or []
+    row = next((r for r in rows if isinstance(r, dict) and
+                client_notify_key(r.get("workspace"), r.get("smartlead_campaign_id")) == key), None)
+    if not row:
+        return {"ok": False, "message": "No positive reply on record for this client to preview."}
+    subj, text, html = _ce_compose(row)
+    try:
+        _send_client_email(to, "[TEST] " + subj, text, html)
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"Send failed: {type(e).__name__}: {str(e)[:200]}"}
+    return {"ok": True, "subject": "[TEST] " + subj, "to": to}
 
 
 def _convert_uncat_row(row: dict, category: str, source: str, settings: dict = None) -> dict:
