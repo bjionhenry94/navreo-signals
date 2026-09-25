@@ -9361,7 +9361,8 @@ def _fmt_day(iso) -> str:
 
 def _card_text(header: str, company: str, name: str, title: str, email: str,
                website: str, linkedin: str, campaign=None, replied_at=None,
-               chat_url: str = "", extra=None, dashboard_url: str = "") -> str:
+               chat_url: str = "", extra=None, dashboard_url: str = "",
+               about: str = "") -> str:
     """The ONE positive-alert card shape. A missing fact is omitted, never
     placeholdered. No workspace labels, no raw URLs, no divider."""
     lines = [f"*{header}" + (f" \u00b7 {company}" if company else "") + "*"]
@@ -9388,6 +9389,8 @@ def _card_text(header: str, company: str, name: str, title: str, email: str,
         # (client-campaign-dashboard step 4a).
         if dashboard_url:
             lines.append(f"\U0001F4CA <{dashboard_url}|Open your campaign dashboard>")
+    if about:
+        lines.extend(["", about])
     lines.append(_CARD_SEPARATOR)
     return "\n".join(lines)
 
@@ -9438,6 +9441,68 @@ def _alert_lead_facts(campaign_id, email: str) -> dict:
     return out
 
 
+_ABOUT_CACHE = {}          # email -> (ts, company dict)
+_ABOUT_TTL_S = 86400
+
+
+def _company_about(email: str, linkedin: str = "") -> dict:
+    """Prospeo /enrich-person company block for one lead — the SAME lookup the
+    Make client-card scenario (8946472, module 5) uses for its "About company"
+    thread, so every client card reads alike. Cached per email for a day.
+    Never raises; {} on any miss."""
+    key = (email or "").strip().lower()
+    hit = _ABOUT_CACHE.get(key)
+    if hit and (_time.time() - hit[0]) < _ABOUT_TTL_S:
+        return hit[1]
+    comp = {}
+    try:
+        pk = (_KEYS or {}).get("PROSPEO_API_KEY") or os.environ.get("PROSPEO_API_KEY")
+        if pk and (key or linkedin):
+            data = {"linkedin_url": linkedin} if linkedin else {"email": key}
+            r = _HTTP("POST", "https://api.prospeo.io/enrich-person",
+                      {"X-KEY": pk}, {"data": data}) or {}
+            c = r.get("company") or (r.get("response") or {}).get("company") or {}
+            comp = c if isinstance(c, dict) else {}
+    except Exception as e:  # noqa: BLE001 — decoration, never load-bearing
+        print(f"[setter] company about failed: {type(e).__name__}: {e}", file=sys.stderr)
+    _ABOUT_CACHE[key] = (_time.time(), comp)
+    if len(_ABOUT_CACHE) > 2000:
+        for k in sorted(_ABOUT_CACHE, key=lambda x: _ABOUT_CACHE[x][0])[:500]:
+            _ABOUT_CACHE.pop(k, None)
+    return comp
+
+
+def _about_fields(email: str, linkedin: str = "", company: str = "") -> dict:
+    """{name, industry, size, location, founded, bio} — an em dash for a missing
+    fact, exactly as the Make card renders. {} when Prospeo knows nothing."""
+    c = _company_about(email, linkedin)
+    if not c:
+        return {}
+    loc = c.get("location") if isinstance(c.get("location"), dict) else {}
+    city, country = loc.get("city") or "", loc.get("country") or ""
+    dash = "—"
+    return {"name": c.get("name") or company or "",
+            "industry": c.get("industry") or dash,
+            "size": str(c.get("employee_range") or c.get("employee_count") or dash),
+            "location": (city or dash) + (f", {country}" if country else ""),
+            "founded": str(c.get("founded") or dash),
+            "bio": (c.get("description") or c.get("description_ai")
+                    or c.get("description_seo") or "").strip()}
+
+
+def _about_block(email: str, linkedin: str = "", company: str = "") -> str:
+    """The Slack "About <company>" block, same wording as the Make card."""
+    a = _about_fields(email, linkedin, company)
+    if not a:
+        return ""
+    out = (f"\U0001F3E2 *About {a['name']}*\n"
+           f"*Industry:* {a['industry']}   |   *Size:* {a['size']}\n"
+           f"*Location:* {a['location']}   |   *Founded:* {a['founded']}")
+    if a["bio"]:
+        out += f"\n\n*Their company bio:*\n{a['bio']}"
+    return out
+
+
 def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = None,
                              channel: str = None) -> str:
     """Client-facing positive alert for a shared channel — ZERO internal
@@ -9458,7 +9523,9 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
                       campaign=None,            # client channel — dropped
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
-                      dashboard_url=_alert_dashboard_link(row, channel))
+                      dashboard_url=_alert_dashboard_link(row, channel),
+                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
+                             if channel in CLIENT_FACING_CHANNELS else ""))
 
 
 def _ep_thread_fields(row: dict, re_reply: bool = False) -> dict:
@@ -9650,7 +9717,9 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
                       dashboard_url=_alert_dashboard_link(row, channel),
-                      extra=extra)
+                      extra=extra,
+                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
+                             if channel in CLIENT_FACING_CHANNELS else ""))
 
 
 def run_ever_positive_alerts() -> dict:
@@ -10006,7 +10075,9 @@ def _cp_compose(row: dict, cname: str, link: str, channel: str = None,
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
                       dashboard_url=_alert_dashboard_link(row, channel),
-                      extra=extra)
+                      extra=extra,
+                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
+                             if channel in CLIENT_FACING_CHANNELS else ""))
 
 
 def run_client_positive_alerts() -> dict:
@@ -10300,6 +10371,13 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
         text += ["", f"Open the conversation: {chat}"]
     if dash:
         text += [f"Your campaign dashboard: {dash}"]
+    ab = _about_fields(email, f.get("linkedin"), company)
+    if ab:
+        text += ["", f"About {ab['name']}",
+                 f"Industry: {ab['industry']}  |  Size: {ab['size']}",
+                 f"Location: {ab['location']}  |  Founded: {ab['founded']}"]
+        if ab["bio"]:
+            text += ["", "Their company bio:", ab["bio"]]
     text += ["", "— Navreo"]
     e = _html.escape
     rows_html = "".join(
@@ -10314,12 +10392,22 @@ def _ce_compose(row: dict, client_label: str = "") -> tuple:
                  f'<blockquote style="margin:0;padding:10px 14px;border-left:3px solid #10b981;'
                  f'background:#f9fafb;white-space:pre-wrap">{e(snippet)}</blockquote>'
                  if snippet else "")
+    about_html = ""
+    if ab:
+        about_html = (f'<div style="margin:20px 0 0;padding:12px 14px;background:#f9fafb;'
+                      f'border-radius:6px"><p style="margin:0 0 6px"><strong>'
+                      f'\U0001F3E2 About {e(ab["name"])}</strong></p>'
+                      f'<p style="margin:0;color:#374151">Industry: {e(ab["industry"])} &nbsp;|&nbsp; '
+                      f'Size: {e(ab["size"])}<br>Location: {e(ab["location"])} &nbsp;|&nbsp; '
+                      f'Founded: {e(ab["founded"])}</p>'
+                      + (f'<p style="margin:10px 0 0"><strong>Their company bio:</strong><br>'
+                         f'{e(ab["bio"])}</p>' if ab["bio"] else "") + '</div>')
     html = (f'<div style="font-family:-apple-system,Segoe UI,Arial,sans-serif;font-size:14px;'
             f'color:#111827;max-width:560px">'
             f'<h2 style="font-size:18px;margin:0 0 12px">\U0001F389 New positive reply</h2>'
             f'<p style="margin:0 0 12px"><strong>{e(who)}</strong> just replied positively '
             f'to your campaign.</p><table style="border-collapse:collapse">{rows_html}</table>'
-            f'{snip_html}{btn}{dash_html}'
+            f'{snip_html}{btn}{dash_html}{about_html}'
             f'<p style="color:#9ca3af;font-size:12px;margin-top:24px">Sent by Navreo</p></div>')
     return subject, "\n".join(text), html
 
