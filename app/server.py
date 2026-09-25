@@ -19,6 +19,7 @@ Run:  python3 app/server.py [port]     (default 7901)
 import contextlib
 import copy
 import threading
+import types
 import json
 import os
 import re
@@ -26273,6 +26274,140 @@ def _is_lilly_path(path: str) -> bool:
         or path.startswith(_LILLY_PATHS[2])
 
 
+
+# ── Memory diagnostic (OOM hunt 2026-09-25) ─────────────────────────────────
+# The web box is OOM-killed ~10x/day at 2 GiB with memory creeping ~+1 GB/h
+# after boot. This reports where it sits: RSS vs an estimate of every
+# module-level cache in server.py + setter.py. Sampled walk (bounded CPU), so
+# sizes are estimates; a big RSS-minus-caches gap points at allocator
+# fragmentation rather than a growing cache.
+
+def _proc_status_mb() -> dict:
+    out = {}
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                k, _, v = line.partition(":")
+                if k in ("VmRSS", "VmHWM", "RssAnon", "RssFile", "Threads"):
+                    parts = v.split()
+                    out[k] = (round(int(parts[0]) / 1024, 1) if len(parts) > 1 else int(parts[0]))
+    except OSError:
+        try:
+            out["VmRSS"] = round(int(os.popen(f"ps -o rss= -p {os.getpid()}").read()) / 1024, 1)
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+_MEM_SAMPLE = 300          # elements measured per big container before extrapolating
+_MEM_NODE_BUDGET = 150000  # objects visited per global before giving up (flagged approx)
+
+
+def _approx_size(root) -> tuple[int, bool]:
+    """(bytes, truncated). Deep sys.getsizeof with a seen-set, sampling big
+    containers and extrapolating, and a hard node budget per root."""
+    seen = set()
+    total = 0
+    budget = _MEM_NODE_BUDGET
+    truncated = False
+    stack = [(root, 1.0)]
+    atoms = (str, bytes, bytearray, int, float, bool, type(None))
+    while stack:
+        obj, mult = stack.pop()
+        oid = id(obj)
+        if oid in seen:
+            continue
+        seen.add(oid)
+        budget -= 1
+        if budget <= 0:
+            truncated = True
+            break
+        try:
+            total += int(sys.getsizeof(obj) * mult)
+        except Exception:  # noqa: BLE001
+            continue
+        if isinstance(obj, atoms):
+            continue
+        if isinstance(obj, dict):
+            items = list(obj.items())
+            n = len(items)
+            if n > _MEM_SAMPLE:
+                m = mult * n / _MEM_SAMPLE
+                items = items[:_MEM_SAMPLE]
+            else:
+                m = mult
+            for k, v in items:
+                stack.append((k, m))
+                stack.append((v, m))
+        elif isinstance(obj, (list, tuple, set, frozenset)) or type(obj).__name__ == "deque":
+            seq = list(obj)
+            n = len(seq)
+            if n > _MEM_SAMPLE:
+                m = mult * n / _MEM_SAMPLE
+                seq = seq[:_MEM_SAMPLE]
+            else:
+                m = mult
+            for v in seq:
+                stack.append((v, m))
+        elif hasattr(obj, "__dict__") and not isinstance(obj, (type, types.ModuleType)) \
+                and not callable(obj) and not isinstance(obj, threading.Thread):
+            stack.append((vars(obj), mult))
+    return total, truncated
+
+
+def _mem_report(gc_types: bool = False, trim: bool = False) -> dict:
+    import gc
+    t0 = time.time()
+    rep = {"commit": _GIT_COMMIT or None, "uptime_seconds": round(time.time() - _BOOT_AT),
+           "proc": _proc_status_mb(), "python_blocks": sys.getallocatedblocks()}
+    names: dict = {}
+    for th in threading.enumerate():
+        key = (th.name or "?").split("-")[0].rstrip("0123456789 ") or "?"
+        names[key] = names.get(key, 0) + 1
+    rep["threads"] = {"count": threading.active_count(),
+                      "by_name": dict(sorted(names.items(), key=lambda kv: -kv[1])[:15])}
+    skip = (types.ModuleType, types.FunctionType, types.BuiltinFunctionType, type,
+            types.MethodType)
+    rows = []
+    for modname, g in (("server", globals()), ("setter", vars(setter))):
+        for name, val in list(g.items()):
+            if name.startswith("__") or isinstance(val, skip) or callable(val):
+                continue
+            if isinstance(val, (str, bytes, int, float, bool, type(None))):
+                continue
+            if isinstance(val, (threading.Thread,)) or "lock" in type(val).__name__.lower():
+                continue
+            size, trunc = _approx_size(val)
+            if size < 256 * 1024:
+                continue
+            try:
+                n = len(val) if hasattr(val, "__len__") else len(getattr(val, "cache", None) or getattr(val, "entries", None) or {})
+            except Exception:  # noqa: BLE001
+                n = None
+            rows.append({"name": f"{modname}.{name}", "type": type(val).__name__,
+                         "len": n, "mb": round(size / 1048576, 1), "approx": trunc})
+    rows.sort(key=lambda r: -r["mb"])
+    rep["caches_top"] = rows[:40]
+    rep["caches_total_mb"] = round(sum(r["mb"] for r in rows), 1)
+    if gc_types:
+        counts: dict = {}
+        for o in gc.get_objects():
+            tn = type(o).__name__
+            counts[tn] = counts.get(tn, 0) + 1
+        rep["gc_top_types"] = dict(sorted(counts.items(), key=lambda kv: -kv[1])[:25])
+    if trim:
+        before = _proc_status_mb().get("VmRSS")
+        freed = None
+        try:
+            import ctypes
+            freed = ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except Exception as e:  # noqa: BLE001
+            freed = f"unavailable: {str(e)[:80]}"
+        rep["trim"] = {"rss_before_mb": before, "rss_after_mb": _proc_status_mb().get("VmRSS"),
+                       "malloc_trim_returned": freed}
+    rep["report_secs"] = round(time.time() - t0, 2)
+    return rep
+
 class Handler(SimpleHTTPRequestHandler):
     # S3: HTTP/1.1 keep-alive. Safe only because every response-writing path in
     # this handler goes through one of: self._json() (always sets Content-Length,
@@ -27306,6 +27441,14 @@ class Handler(SimpleHTTPRequestHandler):
             from urllib.parse import parse_qs, urlparse
             q = parse_qs(urlparse(self.path).query)
             return self._json(api_recontact_job((q.get("id") or [""])[0]))
+        if path == "/api/_debug/mem":
+            # Read-only memory diagnostic (OOM hunt 2026-09-25). Login-gated like
+            # every /api path. ?gc=1 adds object counts by type; ?trim=1 asks
+            # glibc to hand freed heap back to the OS and reports RSS before/after.
+            from urllib.parse import parse_qs, urlparse
+            q = parse_qs(urlparse(self.path).query)
+            return self._json(_mem_report(gc_types=(q.get("gc") or ["0"])[0] == "1",
+                                          trim=(q.get("trim") or ["0"])[0] == "1"))
         if path == "/api/version":
             # Deploy verification: which commit/instance is actually serving.
             return self._json({"commit": _GIT_COMMIT or None,
