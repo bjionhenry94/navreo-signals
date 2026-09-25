@@ -27,6 +27,41 @@
     if (best) return IDX[best];
     return null;
   }
+  /* Keep the setter inbox "live": each conversation's reply lands a realistic, un-rounded
+     few minutes to a few hours before page load (never over a day). Every timestamp on the
+     row and in its thread shifts by the same amount so the story stays consistent. */
+  var OFFS = [14, 23, 37, 52, 68, 86, 113, 137, 164, 211, 252, 306, 408, 503, 19, 31, 46, 71, 97, 128, 157, 193, 238, 284, 331, 377, 432, 486, 547, 612, 689, 754, 823, 901, 987, 1063, 1149, 1236, 1318];
+  var DELTA = {}, NEXT = 0, T0 = Date.now();
+  var ISO = /"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)"/g;
+  function shiftStr(str, d) {
+    return str.replace(ISO, function (m, v) { var t = Date.parse(v); return isNaN(t) ? m : JSON.stringify(new Date(t + d).toISOString()); });
+  }
+  function retime(k, t) {
+    var p = pathOnly(k);
+    try {
+      if (p === "/api/setter/queue" || p === "/api/setter/subsequence/unresolved") {
+        var d = JSON.parse(t);
+        (d.rows || []).forEach(function (r) {
+          var id = String(r.id);
+          if (DELTA[id] == null) {
+            var rep = Date.parse(r.replied_at || r.sent_at || r.created_at);
+            if (isNaN(rep)) return;
+            var off = OFFS[NEXT++ % OFFS.length] * 60000 + (r.id % 53) * 1000;
+            DELTA[id] = (T0 - off) - rep;
+          }
+          var nr = JSON.parse(shiftStr(JSON.stringify(r), DELTA[id]));
+          Object.keys(nr).forEach(function (kk) { r[kk] = nr[kk]; });
+        });
+        return JSON.stringify(d);
+      }
+      if (p === "/api/setter/thread/batch") {
+        var b = JSON.parse(t), th = b.threads || {};
+        Object.keys(th).forEach(function (id) { if (DELTA[id] != null) th[id] = JSON.parse(shiftStr(JSON.stringify(th[id]), DELTA[id])); });
+        return JSON.stringify(b);
+      }
+    } catch (e) {}
+    return t;
+  }
   function jsonResponse(text, status) {
     return new Response(text, { status: status || 200, headers: { "Content-Type": "application/json" } });
   }
@@ -66,7 +101,7 @@
       var file = resolve(k);
       if (file) {
         if (!cache[file]) cache[file] = realFetch(BASE + file + "?v=" + (window.__FX_VERSION || "2"), { cache: "no-cache" }).then(function (r) { return r.text(); });
-        return cache[file].then(function (t) { return jsonResponse(t); });
+        return cache[file].then(function (t) { return jsonResponse(retime(k, t)); });
       }
     }
     return Promise.resolve(jsonResponse(synth(k, method)));
