@@ -29309,7 +29309,9 @@ def _boot_warmup():
         ("sources", _cached_sources_full),
         ("campaign-drafts", _cached_campaign_drafts),
         ("clients", _cached_clients),
-        ("drafts-read", _cached_read_drafts),
+        # "drafts-read" (_cached_read_drafts) removed 2026-09-25: it loaded all
+        # sources in full (54 MB, ~500 MB transient) on every boot and nothing
+        # web-side reads that cache any more (#388).
         ("outreach-destinations", lambda: outreach_destinations({"refresh": False})),
     ]
     for name, fn in steps:
@@ -29322,7 +29324,11 @@ def _boot_warmup():
     # Supabase read per key.
     try:
         counts = api_lead_counts()
-        cids = sorted(c for c in counts if not str(c).startswith("_"))
+        # Only campaigns that actually have leads (14 of 256 on 2026-09-25):
+        # warming all 256 cost two Supabase reads each on every restart, for
+        # empty answers, right when the DB is busiest.
+        cids = sorted(c for c, v in counts.items() if not str(c).startswith("_")
+                      and isinstance(v, dict) and (v.get("leads") or 0) > 0)
         for cid in cids:
             try:
                 api_leads(cid)
