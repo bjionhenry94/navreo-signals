@@ -3065,6 +3065,37 @@ def _cached_read_drafts() -> list:
     return _DRAFTS_READ_SWR.get()
 
 
+# Web-side reads that never touch prospects use the slim view instead of the
+# full 54 MB table (OOM hunt 2026-09-25: _DRAFTS_READ_SWR held the full list in
+# the 2 GiB web box and every refresh was a ~500 MB transient + a 54 MB
+# response the 1 GB Postgres builds in memory). Same raw docs as read_drafts()
+# minus `prospects`; falls back to the base table only if the view is missing.
+def _read_sources_meta() -> list | None:
+    return _pg_docs("sources", meta_view="sources_meta")
+
+
+_SOURCES_META_SWR = _SWRCache(_read_sources_meta, _DRAFTS_READ_TTL_S,
+                              is_degraded=lambda p: not p, name="sources-meta")
+
+
+def _cached_sources_meta() -> list:
+    return _SOURCES_META_SWR.get() or []
+
+
+def _campaign_sources_with_prospects(campaign_id) -> list:
+    """FULL docs (with prospects) for one campaign only - the leads tab maps
+    signal_leads rows onto that campaign's prospects. Not cached: a campaign's
+    docs are at most a few MB, and caching per campaign would slowly rebuild
+    the whole 54 MB table in memory."""
+    cid = str(campaign_id or "")
+    if not cid:
+        return []
+    rows = sb("GET", "sources?select=doc&doc->>campaign_id=eq." + urllib.parse.quote(cid, safe=""))
+    if not isinstance(rows, list):
+        return []
+    return [r["doc"] for r in rows if isinstance(r, dict) and isinstance(r.get("doc"), dict)]
+
+
 # Column-trimmed select: only the fields the UI (leads tab + list-view activity
 # chart) actually reads - source_id/pulled_at/campaign_id come via the local
 # `srcs` join below, so this list is what's pulled straight off each row.
@@ -3116,7 +3147,8 @@ def _leads_page_for_campaign(campaign_id: str, offset: int, limit: int) -> list:
     campaign_id = str(campaign_id or "")
     if not campaign_id:
         return []
-    srcs = [d for d in _cached_read_drafts() if str(d.get("campaign_id")) == campaign_id]
+    srcs = [d for d in _campaign_sources_with_prospects(campaign_id)
+            if str(d.get("campaign_id")) == campaign_id]
     if not srcs:
         return []
     offset = max(0, int(offset))
@@ -3134,7 +3166,8 @@ _LEADS_TTL_S = 30  # mirrors _LEAD_COUNTS_TTL_S - the leads tab/dashboard poll t
 
 
 def _compute_leads_for_campaign(campaign_id: str) -> list:
-    srcs = [d for d in _cached_read_drafts() if str(d.get("campaign_id")) == campaign_id]
+    srcs = [d for d in _campaign_sources_with_prospects(campaign_id)
+            if str(d.get("campaign_id")) == campaign_id]
     return _leads_for_sources(srcs) if srcs else []  # unmatched id -> [] with no Supabase call
 
 
@@ -3222,7 +3255,7 @@ def _compute_signals_daily() -> dict:
     # list pulls (recontact batches, fixed lists) whose 3k-row spikes drown the
     # daily signal lines — those aren't "signals found", so they stay out of
     # this chart.
-    drafts = _cached_read_drafts()
+    drafts = _cached_sources_meta()
     allowed = {str(d.get("id")) for d in drafts if is_signal_source(d)}
     names = {str(d.get("id")): (d.get("name") or "Source") for d in drafts}
     by_day: dict = {}
@@ -3424,6 +3457,7 @@ def _clear_ui_caches():
     _LEAD_COUNTS_SWR.mark_stale()
     _LEADS_SWR.mark_stale()
     _DRAFTS_READ_SWR.mark_stale()
+    _SOURCES_META_SWR.mark_stale()
     _NOTIFICATIONS_SWR.mark_stale()
 
 
@@ -8755,15 +8789,33 @@ def _ensure_source_list(src: dict):
 
 def _backfill_source_lists():
     """One-shot boot backfill: every live source with prospects but no
-    (valid) list gets its mirror list created."""
+    (valid) list gets its mirror list created.
+
+    OOM/DB fix 2026-09-25: this used to read EVERY source in full (54 MB,
+    205k prospects) and call _ensure_source_list on each, which deletes and
+    re-inserts the whole list mirror - ~205k list_rows rewritten on every web
+    restart (deploys + OOM kills, ~10+/day), a write storm on the 1 GB
+    Postgres and a ~500 MB spike here. Now: slim meta, one bulk check of which
+    list_ids still exist, and a full read only of sources that need a list."""
     try:
         n = 0
-        for src in read_drafts():
-            if src.get("deleted_at"):
-                continue
-            if (src.get("prospects") and _ensure_source_list(src)):
+        meta = [d for d in (_read_sources_meta() or []) if not d.get("deleted_at")]
+        have = {str(d.get("list_id")) for d in meta if d.get("list_id")}
+        alive = set()
+        ids = sorted(have)
+        for i in range(0, len(ids), 100):
+            rows = sb("GET", "lists?select=id&id=in.(" + ",".join(ids[i:i + 100]) + ")")
+            if not isinstance(rows, list):
+                print("[source-list] backfill skipped: lists check failed", flush=True)
+                return
+            alive.update(str(r.get("id")) for r in rows if isinstance(r, dict))
+        need = [d["id"] for d in meta if d.get("id") and str(d.get("list_id") or "") not in alive]
+        for sid in need:
+            src = _read_one_source(sid)
+            if src and src.get("prospects") and _ensure_source_list(src):
                 n += 1
-        print(f"[source-list] backfill done: {n} sources linked", flush=True)
+        print(f"[source-list] backfill done: {n} sources linked "
+              f"({len(need)} checked, {len(meta) - len(need)} already linked)", flush=True)
     except Exception as e:  # noqa: BLE001
         print(f"[source-list] backfill failed: {e}", flush=True)
 
@@ -9442,7 +9494,7 @@ def _campaign_source_ids(smartlead_id) -> list:
                  if str((d.get("destination") or {}).get("smartlead_campaign_id") or "") == sid and d.get("id")}
     if not draft_ids:
         return []
-    srcs = read_drafts() or []
+    srcs = _cached_sources_meta()
     return [str(s.get("id")) for s in srcs
             if str(s.get("campaign_id") or "") in draft_ids and s.get("id")]
 
@@ -12051,7 +12103,7 @@ def _campaign_sources_full(sid) -> list:
     draft_ids = _campaign_draft_ids_for_sl(sid)
     if not draft_ids:
         return []
-    srcs = _cached_read_drafts() or []
+    srcs = _cached_sources_meta()
     return [s for s in srcs if str(s.get("campaign_id") or "") in draft_ids
             and s.get("id") and not s.get("deleted_at")]
 
@@ -14214,7 +14266,7 @@ def _dms_rate_from_history(source_id: str | None) -> float | None:
         comps = _sb_count(f"signals?source=eq.theirstack&detail->>source_id=eq.{source_id}")
         leads = _sb_count(f"signal_leads?source_id=eq.{source_id}")
     else:
-        ids = [d["id"] for d in read_drafts()
+        ids = [d["id"] for d in _cached_sources_meta()
                if (d.get("mechanism") or d.get("type")) == "hiring" and not d.get("deleted_at")]
         if not ids:
             return None
@@ -27143,7 +27195,7 @@ class Handler(SimpleHTTPRequestHandler):
             # exactly one cache instead of two.
             if (q.get("slim") or [""])[0].lower() not in ("1", "true", "yes"):
                 by_id = {str(d.get("id")): d.get("prospects")
-                         for d in (_cached_read_drafts() or [])
+                         for d in (read_drafts() or [])   # uncached: no page uses the non-slim form
                          if d.get("prospects") is not None}
                 srcs = [({**s, "prospects": by_id[str(s.get("id"))]}
                          if str(s.get("id")) in by_id else s) for s in srcs]
