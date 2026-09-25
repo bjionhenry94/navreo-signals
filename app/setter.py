@@ -9411,8 +9411,7 @@ def _fmt_day(iso) -> str:
 
 def _card_text(header: str, company: str, name: str, title: str, email: str,
                website: str, linkedin: str, campaign=None, replied_at=None,
-               chat_url: str = "", extra=None, dashboard_url: str = "",
-               about: str = "") -> str:
+               chat_url: str = "", extra=None, dashboard_url: str = "") -> str:
     """The ONE positive-alert card shape. A missing fact is omitted, never
     placeholdered. No workspace labels, no raw URLs, no divider."""
     lines = [f"*{header}" + (f" \u00b7 {company}" if company else "") + "*"]
@@ -9439,8 +9438,6 @@ def _card_text(header: str, company: str, name: str, title: str, email: str,
         # (client-campaign-dashboard step 4a).
         if dashboard_url:
             lines.append(f"\U0001F4CA <{dashboard_url}|Open your campaign dashboard>")
-    if about:
-        lines.extend(["", about])
     lines.append(_CARD_SEPARATOR)
     return "\n".join(lines)
 
@@ -9573,21 +9570,32 @@ def _ep_positive_shared_text(row: dict, cname: str, link: str, header: str = Non
                       campaign=None,            # client channel — dropped
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
-                      dashboard_url=_alert_dashboard_link(row, channel),
-                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
-                             if channel in CLIENT_FACING_CHANNELS else ""))
+                      dashboard_url=_alert_dashboard_link(row, channel))
 
 
-def _ep_thread_fields(row: dict, re_reply: bool = False) -> dict:
+def _ep_thread_fields(row: dict, re_reply: bool = False, channel: str = None) -> dict:
     """Extra payload fields that make the ever-positive alert thread like the
     gold-standard categoriser: Make 9558449 posts a `Reply:` child from
     `reply_text` and an original-email child from `original_email` /
     `original_label` (each only when present). A fresh positive shows the FIRST
     cold email ("First Email Sent"); a re-reply shows the last thing we sent
     before it ("In reply to"). Best-effort — a Smartlead miss just drops the
-    original-email child; the reply child always posts. Never raises."""
+    original-email child; the reply child always posts. Never raises.
+
+    A client-facing `channel` also gets `about_text` — the "About <company>"
+    block, posted as its own thread child, never inside the parent card
+    (Bjion 2026-09-26: the bio belongs in the thread)."""
     out = {"reply_text": clean_body(row.get("reply_body") or "").strip()[:1500]
            or "(no body archived)"}
+    if channel in CLIENT_FACING_CHANNELS:
+        try:
+            email = (row.get("email") or "").strip()
+            f = _alert_lead_facts(row.get("smartlead_campaign_id"), email)
+            about = _about_block(email, f.get("linkedin"), f.get("company"))
+            if about:
+                out["about_text"] = about
+        except Exception as e:  # noqa: BLE001 — decoration, never load-bearing
+            print(f"[setter] ep about fetch failed: {type(e).__name__}", file=sys.stderr)
     try:
         cid = row.get("smartlead_campaign_id")
         email = (row.get("email") or "").strip()
@@ -9767,9 +9775,7 @@ def _ep_compose(row: dict, prior: dict, camp_names: dict, channel: str = None) -
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
                       dashboard_url=_alert_dashboard_link(row, channel),
-                      extra=extra,
-                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
-                             if channel in CLIENT_FACING_CHANNELS else ""))
+                      extra=extra)
 
 
 def run_ever_positive_alerts() -> dict:
@@ -9861,7 +9867,7 @@ def run_ever_positive_alerts() -> dict:
                                                            prior, names, channel=chan)}
                             if chan:
                                 payload["channel"] = chan
-                            payload.update(_ep_thread_fields(row, re_reply=True))
+                            payload.update(_ep_thread_fields(row, re_reply=True, channel=chan))
                             if _ep_post(payload, summary):
                                 _ep_stamp(rid, "re-reply-flip-alerted")
                                 summary["alerted"] += 1
@@ -9885,7 +9891,8 @@ def run_ever_positive_alerts() -> dict:
                         header=header, channel=shared)
                     _sp = {"event_type": "EVER_POSITIVE_ALERT",
                            "text": text, "channel": shared}
-                    _sp.update(_ep_thread_fields(row, re_reply=(cat == _RE_REPLY_LABEL)))
+                    _sp.update(_ep_thread_fields(row, re_reply=(cat == _RE_REPLY_LABEL),
+                                                  channel=shared))
                     if _ep_post(_sp, summary):
                         _ep_stamp(rid, kind)
                         summary["alerted"] += 1
@@ -9917,7 +9924,7 @@ def run_ever_positive_alerts() -> dict:
             chan = _ep_channel_override(ws, row.get("smartlead_campaign_id"))
             text = _ep_compose(row, prior, names, channel=chan)
             payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
-            payload.update(_ep_thread_fields(row, re_reply=True))
+            payload.update(_ep_thread_fields(row, re_reply=True, channel=chan))
             if chan:
                 payload["channel"] = chan   # client campaign — default is #interested-replies
             posted = False
@@ -10125,9 +10132,7 @@ def _cp_compose(row: dict, cname: str, link: str, channel: str = None,
                       replied_at=row.get("replied_at"),
                       chat_url=_alert_chat_link(row, channel),
                       dashboard_url=_alert_dashboard_link(row, channel),
-                      extra=extra,
-                      about=(_about_block(email, f.get("linkedin"), f.get("company"))
-                             if channel in CLIENT_FACING_CHANNELS else ""))
+                      extra=extra)
 
 
 def run_client_positive_alerts() -> dict:
@@ -10199,7 +10204,7 @@ def run_client_positive_alerts() -> dict:
             text = _cp_compose(row, cname, link, channel=chan, prior=prior)
             payload = {"event_type": "EVER_POSITIVE_ALERT", "text": text}
             payload["channel"] = chan
-            payload.update(_ep_thread_fields(row, re_reply=re_reply))
+            payload.update(_ep_thread_fields(row, re_reply=re_reply, channel=chan))
             posted = False
             try:
                 _HTTP("POST", EVER_POSITIVE_HOOK, {}, payload)
