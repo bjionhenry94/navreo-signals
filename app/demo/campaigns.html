@@ -3047,8 +3047,6 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
     ["pestco", "PestCo"],
     ["valsoft", "Valsoft"],
     ["corporate development", "Valsoft"],
-    ["byteplus", "BytePlus"],
-    ["bytedance", "BytePlus"],
     ["pushgroup", "Push Group"],
     ["push group", "Push Group"],
     ["wordbank", "Wordbank"],
@@ -3075,7 +3073,7 @@ window.__scEarly = fetch("/api/campaign-scorecard", { credentials: "same-origin"
        server's client label (same source the analytics page uses). A REAL
        client label wins; 'Acme' and '__unassigned' fall through to the finer
        name map below, which deliberately splits Navreo's own book into the
-       sub-clients campaigns are run FOR (Valsoft, BytePlus, ...) — detail the
+       sub-clients campaigns are run FOR (...) — detail the
        analytics dimension intentionally doesn't have. */
     if (c.client && c.client !== "Acme" && c.client !== "__unassigned") return c.client;
     var n = String(c.name || "").toLowerCase();
